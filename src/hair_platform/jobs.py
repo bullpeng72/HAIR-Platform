@@ -8,6 +8,10 @@ vendor/import되지 않았다(SPEC.md §12 오픈 이슈) — `default_stub_gene
 하나의 `job`은 브리프 단위 생성 배치이고, `job_items`는 Task(=역할) 단위 결과다.
 전부 성공하면 job.status=succeeded, 전부 실패하면 failed, 섞이면 partial —
 "실패 역할만 재시도"(NF6)는 실패한 job_item만 골라 재실행한다.
+
+Phase 4 검증에서 발견: NF7(동일 역할 동시 생성요청 시 idempotency로 중복생성 방지)이
+SPEC에는 결정돼 있었으나 실제로 구현되지 않았던 갭이었다 — `_existing_active_item`이
+이를 메운다(같은 task에 이미 running/succeeded인 job_item이 있으면 재사용한다).
 """
 
 from __future__ import annotations
@@ -31,21 +35,37 @@ def default_stub_generator(role_name: str, required_skills: list[str]) -> dict:
     }
 
 
+def _status_from_rows(rows: list[sqlite3.Row]) -> str:
+    statuses = {row["status"] for row in rows}
+    if not statuses or statuses == {"succeeded"}:
+        return "succeeded"
+    if statuses == {"failed"}:
+        return "failed"
+    if statuses <= {"succeeded", "failed"}:
+        return "partial"
+    return "running"
+
+
 def _recompute_job_status(conn: sqlite3.Connection, job_id: int) -> str:
     items = conn.execute(
         "SELECT status FROM job_items WHERE job_id = ?", (job_id,)
     ).fetchall()
-    statuses = {row["status"] for row in items}
-    if statuses == {"succeeded"}:
-        status = "succeeded"
-    elif statuses == {"failed"}:
-        status = "failed"
-    elif statuses <= {"succeeded", "failed"}:
-        status = "partial"
-    else:
-        status = "running"
+    status = _status_from_rows(items)
     conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
     return status
+
+
+def _existing_active_item(conn: sqlite3.Connection, task_id: int) -> sqlite3.Row | None:
+    """NF7 — 같은 역할(task)에 이미 진행 중이거나 성공한 job_item이 있으면 반환한다.
+
+    동시/반복 생성 요청이 같은 역할에 대해 Agent를 중복 생성하는 것을 막는다
+    (Pool 경합 방지). task_id가 자연스러운 idempotency key 역할을 한다.
+    """
+    return conn.execute(
+        "SELECT * FROM job_items WHERE task_id = ? AND status IN ('running', 'succeeded') "
+        "ORDER BY id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
 
 
 def _run_item(
@@ -121,7 +141,22 @@ def create_and_run_job(
     assert job_id is not None
     audit.record(conn, created_by, "agent_generation_started", "job", job_id)
 
+    item_ids: list[int] = []
     for task_id in task_ids:
+        existing = _existing_active_item(conn, task_id)
+        if existing is not None:
+            # NF7: 이미 진행 중이거나 완료된 역할은 다시 생성하지 않고 재사용한다.
+            audit.record(
+                conn,
+                created_by,
+                "agent_generation_deduplicated",
+                "task",
+                task_id,
+                after={"reused_item_id": existing["id"]},
+            )
+            item_ids.append(existing["id"])
+            continue
+
         task_row = conn.execute(
             "SELECT * FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
@@ -132,10 +167,13 @@ def create_and_run_job(
         item_id = item_cur.lastrowid
         assert item_id is not None
         _run_item(conn, item_id, task_row, created_by, generator)
+        item_ids.append(item_id)
 
-    status = _recompute_job_status(conn, job_id)
+    rows = _fetch_items(conn, item_ids)
+    status = _status_from_rows(rows)
+    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
     conn.commit()
-    return {"job_id": job_id, "status": status, "items": _serialize_items(conn, job_id)}
+    return {"job_id": job_id, "status": status, "items": _serialize_rows(rows)}
 
 
 def retry_failed_item(
@@ -167,12 +205,18 @@ def retry_failed_item(
     return {"job_id": job_id, "status": status, "items": _serialize_items(conn, job_id)}
 
 
-def _serialize_items(conn: sqlite3.Connection, job_id: int) -> list[dict]:
-    rows = conn.execute(
+def _fetch_items(conn: sqlite3.Connection, item_ids: list[int]) -> list[sqlite3.Row]:
+    if not item_ids:
+        return []
+    placeholders = ",".join("?" * len(item_ids))
+    return conn.execute(
         "SELECT id, task_id, status, result, error, retry_count FROM job_items "
-        "WHERE job_id = ?",
-        (job_id,),
+        f"WHERE id IN ({placeholders})",
+        item_ids,
     ).fetchall()
+
+
+def _serialize_rows(rows: list[sqlite3.Row]) -> list[dict]:
     return [
         {
             "id": row["id"],
@@ -184,3 +228,12 @@ def _serialize_items(conn: sqlite3.Connection, job_id: int) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def _serialize_items(conn: sqlite3.Connection, job_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, task_id, status, result, error, retry_count FROM job_items "
+        "WHERE job_id = ?",
+        (job_id,),
+    ).fetchall()
+    return _serialize_rows(rows)

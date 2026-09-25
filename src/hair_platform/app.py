@@ -30,7 +30,16 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from starlette.middleware.sessions import SessionMiddleware
 
 from hair_platform import approvals as approvals_mod
-from hair_platform import assignments, audit, cost, db, jobs, performance, pool
+from hair_platform import (
+    assignments,
+    audit,
+    cost,
+    db,
+    fairness,
+    jobs,
+    performance,
+    pool,
+)
 from hair_platform.assignment import match_candidates
 from hair_platform.auth import Role, authenticate, get_current_user, require_role
 from hair_platform.models import (
@@ -404,6 +413,13 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     ):
         """F10 — 비용 조회(Admin·매니저 전용, RBAC 매트릭스)."""
         return cost.report(conn)
+
+    @app.get("/api/fairness-report")
+    def get_fairness_report(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """Phase 4 검증 — 배정 공정성 지표(NF4). 사람·Agent 반려율 격차를 계산한다."""
+        return fairness.report(conn)
 
     @app.get("/api/org-chart")
     def get_org_chart(user: sqlite3.Row = Depends(get_current_user)):

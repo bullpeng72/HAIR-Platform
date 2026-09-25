@@ -93,7 +93,7 @@
 | 3 v2 | Org Chart + 배분 UI(F5·F6, 공유 `assignments` 테이블) + `assignment_history` 이력 테이블 도입 | — | 2주 |
 | 3 v3 | Approval Workflow 다단계 결재라인 확장(F7) + Job Queue+샌드박스 실행환경 도입, F4 비동기 전환 + F13 감사로그 구축 | — | 3주 |
 | 3 v4 | Performance Review(F8)+Cost Tracker(F10)+F9 온보딩/오프보딩 버튼 | — | 2주 |
-| 4 검증 | Gate A–G 전부 fail→진단→해결, 배정 공정성 지표 + 동시성/중복생성 방지 + 샌드박스 탈출 방지 보안테스트 검증 | `threshold_review`(계획적 발동) | 2주 |
+| 4 검증 | 완료(부분) — Gate A–G는 의존성 갭으로 불가, 배정 공정성 지표(NF4) 구현, NF7 idempotency 갭 발견·수정, 샌드박스 우회 방지 회귀 검증. 상세: `docs/LIMITS.md` | `threshold_review`(계획적 발동, pytest 골든셋 42건 근거로 대체) | 2주 |
 | 5 팀·PR CI | 실제 협업 환경에서 클레임 충돌/리뷰 검증 | — | 1주 |
 | 6 Skills화 | §8 신규 발굴 스킬 후보 3회+ 반복 확인 시 스킬화 | `skill_merge` | 진행 중 수시 |
 | 7 릴리스 후보 | v3→v4 배포 전 검토(인증/RBAC/샌드박스/감사로그 포함 여부 확정) | `release_hold` | 1주 |
@@ -140,12 +140,12 @@
 ## 11. 완료 정의 (Definition of Done)
 
 - [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4, 총 37건 — Gate A–G 정식 배선 전까지는 pytest 골든셋 기준)
-- [ ] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주
-- [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동
-- [ ] RBAC·샌드박스·Audit Log 3중 기록 트랜잭션 원자성에 대한 보안/무결성 테스트 통과
+- [ ] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — **불가(의존성 갭)**: agent-evaluator SDK 미통합, `docs/LIMITS.md` §1 참고
+- [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동
+- [~] RBAC·샌드박스·Audit Log 3중 기록 트랜잭션 원자성에 대한 보안/무결성 테스트 통과 — 부분: 샌드박스 우회 방지·NF7 idempotency·append-only 트리거는 검증 완료, Docker 실제 격리 동작은 미검증(`docs/LIMITS.md` §2)
 - [ ] 2인 팀 + 진짜 GitHub 원격에서 클레임 충돌 최소 1회 실전 발생·해소
 - [ ] Skills 3개+ 신규 발굴 및 `skill_merge` 승인
-- [ ] 배정 공정성 지표(사람·Agent 성과 비교)를 최종 회고에서 정량 보고
+- [x] 배정 공정성 지표(사람·Agent 성과 비교) 구현 및 API 제공(`GET /api/fairness-report`) — 표본 부족으로 정량 해석은 보류(`docs/LIMITS.md` §4)
 
 ## 12. 오픈 이슈 (1차 출시 범위 밖, 추후 검토)
 
@@ -157,4 +157,7 @@
 - Audit Log의 SQLite 쓰기 부하 확장성(실사용 규모 부하테스트 필요)
 - 초기 타깃 업종/조직 규모, 배포 모델(온프레미스 vs SaaS) 확정
 - 팀원의 셀프서비스 요구(예: 본인이 직접 배정 요청)가 실사용에서 크면 RBAC 권한 매트릭스(ADR 결정 3) 완화 재검토
+- AgentForge `agent-evaluator` SDK vendor/import(Gate A–G 실측 배선의 전제조건, `docs/LIMITS.md` §1)
+- Docker 설치 환경에서 샌드박스 실제 격리(리소스 쿼터·네트워크 차단) 동작 검증(`docs/LIMITS.md` §2)
+- 멀티프로세스/멀티워커 배포 시 NF7 idempotency의 진짜 경쟁 상태(race condition) 방지 — 현재는 단일 커넥션·순차 요청 전제(`docs/LIMITS.md` §3)
 - Docker 런타임 설치를 배포 필수 요건으로 문서화(README·설치 가이드, ADR 결정 8)
