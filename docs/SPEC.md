@@ -148,6 +148,8 @@
 - [~] Skills 3개+ 신규 발굴 및 `skill_merge` 승인 — 부분: `rbac-permission-audit` 1건 완료(3회+ 기준 충족), 나머지 3건은 기준 미충족으로 보류
 - [x] 배정 공정성 지표(사람·Agent 성과 비교) 구현 및 API 제공(`GET /api/fairness-report`) — 표본 부족으로 정량 해석은 보류(`docs/LIMITS.md` §4)
 
+기획(이 문서·ADR.md·"HAIR 플랫폼 기획안" Claude 문서) 대비 실제 구현의 상세 비교는 `docs/RETROSPECTIVE.md` 참고 — git 커밋·`pytest` 실행 결과 기반 실측 대조다.
+
 ## 12. 오픈 이슈 (1차 출시 범위 밖, 추후 검토)
 
 - 알림/통지 체계(F7 승인 요청 시 이메일/Slack 연동)
