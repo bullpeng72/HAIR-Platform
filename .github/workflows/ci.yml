@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    name: Tests + lint (pytest, ruff, black)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v
+      - run: ruff check src tests
+      - run: black --check --target-version py311 src tests
+      # Gate A-G CI 잡은 아직 없다 — agent-evaluator SDK가 vendor/import되지 않아
+      # Gate 평가 자체가 불가능하다(docs/LIMITS.md §1). Harness Autopilot도 이
+      # 저장소에는 설치되지 않아(.aoo/ 없음) claims audit 잡도 해당 없다.

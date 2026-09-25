@@ -94,10 +94,10 @@
 | 3 v3 | Approval Workflow 다단계 결재라인 확장(F7) + Job Queue+샌드박스 실행환경 도입, F4 비동기 전환 + F13 감사로그 구축 | — | 3주 |
 | 3 v4 | Performance Review(F8)+Cost Tracker(F10)+F9 온보딩/오프보딩 버튼 | — | 2주 |
 | 4 검증 | 완료(부분) — Gate A–G는 의존성 갭으로 불가, 배정 공정성 지표(NF4) 구현, NF7 idempotency 갭 발견·수정, 샌드박스 우회 방지 회귀 검증. 상세: `docs/LIMITS.md` | `threshold_review`(계획적 발동, pytest 골든셋 42건 근거로 대체) | 2주 |
-| 5 팀·PR CI | 실제 협업 환경에서 클레임 충돌/리뷰 검증 | — | 1주 |
-| 6 Skills화 | §8 신규 발굴 스킬 후보 3회+ 반복 확인 시 스킬화 | `skill_merge` | 진행 중 수시 |
-| 7 릴리스 후보 | v3→v4 배포 전 검토(인증/RBAC/샌드박스/감사로그 포함 여부 확정) | `release_hold` | 1주 |
-| 8 운영 | 최종 릴리스 | `deploy` | — |
+| 5 팀·PR CI | 완료(부분) — `.github/workflows/ci.yml`(pytest+ruff+black) 구축. **2인 팀 실전 클레임 충돌은 불가**(단독 세션, `docs/LIMITS.md` §5) | — | 1주 |
+| 6 Skills화 | 완료(부분) — `rbac-permission-audit` 1건 발굴·`skill_merge`(아래 §8 참고), 나머지 3건은 3회+ 기준 미충족으로 보류 | `skill_merge` | 진행 중 수시 |
+| 7 릴리스 후보 | v3→v4 배포 전 검토(인증/RBAC/샌드박스/감사로그 포함 여부 확정) | `release_hold` | 1주 — **사람 승인 대기** |
+| 8 운영 | 최종 릴리스 | `deploy` | — — **사람 승인 대기** |
 
 총 예상 기간(Phase 0–7): 약 18–20주.
 
@@ -105,11 +105,12 @@
 
 **AgentForge에서 그대로 재사용**: `spec-driven-artifacts`(본 SPEC 작성) · `harness-gate-ci` · `gate-improvement-loop` · `recommend-fix-workflow` · `abtest-decision-workflow` · `tdd-ai-workflow-checklist` · `config-silent-noop-check` · `eval-run-directory-hygiene` · `claims-audit-ci` · `checklist-confidence-audit` · `threshold-realism-review` · `sync-drift-check` · `harness-autopilot` · `unattended-session-recovery`.
 
-**이 프로젝트에서 신규 발굴 예정**(3회+ 반복 확인 후 스킬화, 원칙4 — 억지로 미리 만들지 않는다):
-- `human-agent-assignment-check` — Assignment Engine 매칭 결과(완전일치/스코어링/null 예외)를 검증하는 절차
-- `org-chart-sync` — Org Chart(F5)와 `assignments` 공유 테이블의 정합성(이중쓰기 방지)을 점검하는 절차
-- `async-job-status-ui` — Job Queue+샌드박스 기반 비동기 작업의 상태머신·재시도 UI 패턴
-- `rbac-permission-audit` — RBAC 세부 권한 매트릭스(어느 role이 어느 F-item을 조작 가능한지)를 주기적으로 감사하는 절차
+**신규 발굴 완료**(`skill_merge`, Phase 6): `rbac-permission-audit`(`.claude/skills/rbac-permission-audit/SKILL.md`) — v0~v4 5개 버전 전부에서 "역할별 접근 경계"를 반복 검증한 패턴이 3회+ 기준을 채워 스킬화했다.
+
+**아직 스킬화하지 않음**(3회+ 기준 미충족, 원칙4 — 억지로 미리 만들지 않는다):
+- `human-agent-assignment-check` — Assignment Engine 매칭 로직은 v1에서 한 번 구축한 뒤 반복 재검증한 적이 없다.
+- `org-chart-sync` — F5/F6 assignments 공유 정합성도 v2 한 번뿐이다.
+- `async-job-status-ui` — Job Queue 상태머신 패턴도 v3 한 번이다.
 
 ## 9. 버전 궤적 / 골든셋
 
@@ -143,8 +144,8 @@
 - [ ] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — **불가(의존성 갭)**: agent-evaluator SDK 미통합, `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동
 - [~] RBAC·샌드박스·Audit Log 3중 기록 트랜잭션 원자성에 대한 보안/무결성 테스트 통과 — 부분: 샌드박스 우회 방지·NF7 idempotency·append-only 트리거는 검증 완료, Docker 실제 격리 동작은 미검증(`docs/LIMITS.md` §2)
-- [ ] 2인 팀 + 진짜 GitHub 원격에서 클레임 충돌 최소 1회 실전 발생·해소
-- [ ] Skills 3개+ 신규 발굴 및 `skill_merge` 승인
+- [ ] 2인 팀 + 진짜 GitHub 원격에서 클레임 충돌 최소 1회 실전 발생·해소 — **불가(단독 세션)**: CI 인프라(`.github/workflows/ci.yml`)는 구축했으나 실전 클레임 충돌은 실제 2인 이상 협업에서만 발생한다, `docs/LIMITS.md` §5 참고
+- [~] Skills 3개+ 신규 발굴 및 `skill_merge` 승인 — 부분: `rbac-permission-audit` 1건 완료(3회+ 기준 충족), 나머지 3건은 기준 미충족으로 보류
 - [x] 배정 공정성 지표(사람·Agent 성과 비교) 구현 및 API 제공(`GET /api/fairness-report`) — 표본 부족으로 정량 해석은 보류(`docs/LIMITS.md` §4)
 
 ## 12. 오픈 이슈 (1차 출시 범위 밖, 추후 검토)
