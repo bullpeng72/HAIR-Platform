@@ -101,8 +101,22 @@ def test_gc60_root_page_serves_html_shell(client_and_conn):
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     body = resp.text
-    for marker in ["login-form", "tabs", "F1·F2 브리프", "F7 결재", "관리자(사용자)"]:
+    # 코드 재점검 R5(2026-09-26)에서 F1/F5 같은 스펙 코드가 화면에 그대로 노출돼
+    # 일반 사용자가 이해하기 어렵다는 지적을 받아 평이한 한국어 레이블로 바꿨다.
+    for marker in ["login-form", "tabs", "업무 요청", "결재", "사용자 관리"]:
         assert marker in body
+    for leaked_code in [
+        "F1·",
+        "F5 ",
+        "F6·",
+        "F7 결재",
+        "F8 ",
+        "F9 ",
+        "F10 ",
+        "F12 ",
+        "F13 ",
+    ]:
+        assert leaked_code not in body
 
 
 def test_gc61_full_ui_flow_end_to_end(client_and_conn):

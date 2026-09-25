@@ -57,8 +57,8 @@ INDEX_HTML = """<!DOCTYPE html>
     <h2>HAIR-Platform 로그인</h2>
     <div id="login-msg"></div>
     <form id="login-form">
-      <input id="login-username" placeholder="username" autocomplete="username" required>
-      <input id="login-password" type="password" placeholder="password" autocomplete="current-password" required>
+      <input id="login-username" placeholder="아이디" autocomplete="username" required>
+      <input id="login-password" type="password" placeholder="비밀번호" autocomplete="current-password" required>
       <button class="primary" type="submit" style="width:100%">로그인</button>
     </form>
   </section>
@@ -118,6 +118,19 @@ function showMsg(elId, text, kind) {
   el.innerHTML = '<div class="msg ' + (kind || "ok") + '">' + esc(text) + "</div>";
 }
 
+const LABELS = {
+  human: "사람", agent: "AI 에이전트",
+  brief: "업무 요청", assignment: "배정", human_pool: "사람 인력", agent_pool: "AI 에이전트",
+  job: "생성 작업", job_item: "생성 항목", approval: "결재", user: "사용자",
+  pending: "대기중", waiting: "대기(이전 단계)", approved: "승인됨", rejected: "반려됨", skipped: "건너뜀",
+  requested: "요청됨", confirmed: "확정됨", superseded: "대체됨",
+  running: "진행중", succeeded: "성공", failed: "실패", partial: "일부 실패",
+  submitted: "제출됨", reviewed: "검토됨",
+  available: "가능", unavailable: "불가", offboarded: "오프보딩됨",
+  active: "활성", pending_onboarding: "온보딩 대기", deprecated: "비활성화됨",
+};
+function label(v) { return LABELS[v] || v; }
+
 function table(headers, rows) {
   let html = "<table><thead><tr>";
   for (const h of headers) html += "<th>" + esc(h) + "</th>";
@@ -137,19 +150,19 @@ function table(headers, rows) {
 let ME = null;
 
 const TABS = [
-  { id: "briefs", label: "F1·F2 브리프/Task", roles: ["admin", "manager", "member", "viewer"], render: renderBriefs },
-  { id: "match", label: "F6·F14 매칭/배분", roles: ["admin", "manager"], render: renderMatch },
-  { id: "approvals", label: "F7 결재", roles: ["admin", "manager", "member", "viewer"], render: renderApprovals },
-  { id: "jobs", label: "F4 Agent 생성", roles: ["admin", "manager"], render: renderJobs },
-  { id: "humanpool", label: "F12 Human Pool", roles: ["admin", "manager"], render: renderHumanPool },
-  { id: "agentpool", label: "F9 Agent Pool", roles: ["admin", "manager"], render: renderAgentPool },
-  { id: "search", label: "F3 Pool 검색", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
-  { id: "orgchart", label: "F5 조직도", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
-  { id: "performance", label: "F8 성과리뷰", roles: ["admin", "manager", "member"], render: renderPerformance },
-  { id: "cost", label: "F10 비용", roles: ["admin", "manager"], render: renderCost },
+  { id: "briefs", label: "업무 요청", roles: ["admin", "manager", "member", "viewer"], render: renderBriefs },
+  { id: "match", label: "인력 매칭/배정", roles: ["admin", "manager"], render: renderMatch },
+  { id: "approvals", label: "결재", roles: ["admin", "manager", "member", "viewer"], render: renderApprovals },
+  { id: "jobs", label: "AI 에이전트 생성", roles: ["admin", "manager"], render: renderJobs },
+  { id: "humanpool", label: "사람 인력", roles: ["admin", "manager"], render: renderHumanPool },
+  { id: "agentpool", label: "AI 에이전트", roles: ["admin", "manager"], render: renderAgentPool },
+  { id: "search", label: "인력 검색", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
+  { id: "orgchart", label: "조직도", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
+  { id: "performance", label: "성과 리뷰", roles: ["admin", "manager", "member"], render: renderPerformance },
+  { id: "cost", label: "비용", roles: ["admin", "manager"], render: renderCost },
   { id: "fairness", label: "공정성 지표", roles: ["admin", "manager"], render: renderFairness },
-  { id: "audit", label: "F13 감사로그", roles: ["admin", "manager"], render: renderAudit },
-  { id: "admin", label: "관리자(사용자)", roles: ["admin"], render: renderAdmin },
+  { id: "audit", label: "활동 기록", roles: ["admin", "manager"], render: renderAudit },
+  { id: "admin", label: "사용자 관리", roles: ["admin"], render: renderAdmin },
 ];
 
 async function boot() {
@@ -220,25 +233,25 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
   await boot();
 });
 
-/* ---------- F1/F2 브리프 ---------- */
+/* ---------- 업무 요청/할 일 ---------- */
 
 async function renderBriefs(content) {
   const canWrite = ["admin", "manager", "member"].includes(ME.role);
   const briefs = await api("GET", "/api/briefs");
-  let html = "<section class=\\"card\\"><h2>F1 — 브리프 제출</h2>";
+  let html = "<section class=\\"card\\"><h2>업무 요청 등록</h2>";
   if (canWrite) {
     html += '<form class="inline" id="brief-form">' +
       '<textarea id="brief-text" placeholder="예: 백엔드 개발자 1명" rows="2" style="flex:1;min-width:240px"></textarea>' +
       '<button class="primary" type="submit">제출</button></form>';
   }
-  html += "</section><section class=\\"card\\"><h2>브리프 목록 / F2 Task 분해</h2>";
+  html += "</section><section class=\\"card\\"><h2>업무 요청 목록</h2>";
   html += table(["ID", "내용", "상태", "제안된 역할", "동작"], briefs.map(b => [
     b.id,
     esc(b.raw_text),
-    esc(b.status),
+    esc(label(b.status)),
     esc(b.stub_roles.join(", ")),
-    canWrite ? '<button class="small" data-decompose="' + b.id + '">Task 분해</button> ' +
-      '<button class="small" data-viewtasks="' + b.id + '">Task 보기</button>' : "",
+    canWrite ? '<button class="small" data-decompose="' + b.id + '">할 일로 나누기</button> ' +
+      '<button class="small" data-viewtasks="' + b.id + '">할 일 보기</button>' : "",
   ]));
   html += '<div id="brief-detail"></div></section>';
   content.innerHTML = html;
@@ -249,7 +262,7 @@ async function renderBriefs(content) {
       ev.preventDefault();
       try {
         await api("POST", "/api/briefs", { raw_text: document.getElementById("brief-text").value });
-        showMsg("global-msg", "브리프를 제출했습니다.", "ok");
+        showMsg("global-msg", "업무 요청을 제출했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     });
@@ -265,12 +278,12 @@ async function renderBriefs(content) {
 function renderDecomposeForm(briefId) {
   const detail = document.getElementById("brief-detail");
   detail.innerHTML =
-    '<h3>브리프 #' + esc(briefId) + ' Task 분해</h3>' +
+    '<h3>업무 요청 #' + esc(briefId) + ' — 할 일 나누기</h3>' +
     '<form class="inline" id="decompose-form">' +
-    '<input id="d-role" placeholder="role_name" required>' +
-    '<input id="d-skills" placeholder="required_skills(콤마구분)">' +
-    '<input id="d-headcount" type="number" min="1" value="1" style="width:70px">' +
-    '<button class="primary" type="submit">Task 추가</button></form>';
+    '<input id="d-role" placeholder="필요한 역할(예: 백엔드 개발자)" required>' +
+    '<input id="d-skills" placeholder="필요 스킬(콤마로 구분)">' +
+    '<input id="d-headcount" type="number" min="1" value="1" style="width:70px" title="인원 수">' +
+    '<button class="primary" type="submit">할 일 추가</button></form>';
   document.getElementById("decompose-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const skills = document.getElementById("d-skills").value.split(",").map(s => s.trim()).filter(Boolean);
@@ -282,7 +295,7 @@ function renderDecomposeForm(briefId) {
           headcount: Number(document.getElementById("d-headcount").value) || 1,
         }],
       });
-      showMsg("global-msg", "Task를 추가했습니다.", "ok");
+      showMsg("global-msg", "할 일을 추가했습니다.", "ok");
       renderTaskList(briefId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
@@ -291,21 +304,21 @@ function renderDecomposeForm(briefId) {
 async function renderTaskList(briefId) {
   const detail = document.getElementById("brief-detail");
   const tasks = await api("GET", "/api/briefs/" + briefId + "/tasks");
-  detail.innerHTML = "<h3>브리프 #" + esc(briefId) + " Task 목록</h3>" +
-    table(["Task ID", "역할", "필요 스킬", "인원"], tasks.map(t => [
+  detail.innerHTML = "<h3>업무 요청 #" + esc(briefId) + " — 할 일 목록</h3>" +
+    table(["할 일 ID", "역할", "필요 스킬", "인원"], tasks.map(t => [
       t.id, esc(t.role_name), esc(t.required_skills.join(", ")), t.headcount,
     ])) +
-    '<p class="muted">Task ID는 "F6 매칭/배분", "F4 Agent 생성" 탭에서 사용합니다.</p>';
+    '<p class="muted">할 일 ID는 "인력 매칭/배정", "AI 에이전트 생성" 탭에서 사용합니다.</p>';
 }
 
-/* ---------- F6/F14 매칭·배분 ---------- */
+/* ---------- 인력 매칭·배정 ---------- */
 
 async function renderMatch(content) {
   content.innerHTML =
-    '<section class="card"><h2>F6/F14 — Task 매칭</h2>' +
+    '<section class="card"><h2>할 일에 맞는 인력 찾기</h2>' +
     '<form class="inline" id="match-form">' +
-    '<input id="match-task-id" type="number" placeholder="task_id" required style="width:100px">' +
-    '<button class="primary" type="submit">매칭 조회</button></form>' +
+    '<input id="match-task-id" type="number" placeholder="할 일 ID" required style="width:100px">' +
+    '<button class="primary" type="submit">찾기</button></form>' +
     '<div id="match-result"></div></section>';
   document.getElementById("match-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -320,13 +333,13 @@ async function renderMatch(content) {
 function renderMatchResult(taskId, result) {
   const box = document.getElementById("match-result");
   if (result.generate_new) {
-    box.innerHTML = '<p class="msg error">매칭되는 후보가 없습니다 — F4(Agent 생성)를 제안합니다.</p>';
+    box.innerHTML = '<p class="msg error">매칭되는 후보가 없습니다 — "AI 에이전트 생성" 탭에서 새로 만들어 보세요.</p>';
     return;
   }
   box.innerHTML = table(
-    ["순위", "타입", "ID", "역할", "가용", "비용", "점수", "breakdown", "동작"],
+    ["순위", "타입", "ID", "역할", "가용", "비용", "점수", "점수 상세", "동작"],
     result.top.map((sc, i) => [
-      i + 1, esc(sc.candidate.type), sc.candidate.id, esc(sc.candidate.role),
+      i + 1, esc(label(sc.candidate.type)), sc.candidate.id, esc(sc.candidate.role),
       sc.candidate.is_available ? "가능" : "불가",
       sc.candidate.cost,
       sc.score.toFixed(3) + (sc.exact_match ? " (완전일치)" : ""),
@@ -337,26 +350,26 @@ function renderMatchResult(taskId, result) {
   box.querySelectorAll("[data-assign-id]").forEach(btn => {
     btn.onclick = async () => {
       try {
-        const r = await api("POST", "/api/tasks/" + taskId + "/assignments", {
+        await api("POST", "/api/tasks/" + taskId + "/assignments", {
           resource_type: btn.dataset.assignType, resource_id: Number(btn.dataset.assignId),
         });
-        showMsg("global-msg", "배정 요청 완료 (approval_id=" + r.approval_id + ") — F7 결재 탭에서 처리하세요.", "ok");
+        showMsg("global-msg", "배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.", "ok");
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
 }
 
-/* ---------- F7 결재 ---------- */
+/* ---------- 결재 ---------- */
 
 async function renderApprovals(content) {
   const isDecider = ["admin", "manager"].includes(ME.role);
   let html = "";
   if (isDecider) {
     const inbox = await api("GET", qs("/api/approvals", { scope: "inbox" }));
-    html += '<section class="card"><h2>F7 — 내 승인 대기함</h2>' + approvalTable(inbox, true) + "</section>";
+    html += '<section class="card"><h2>내 승인 대기함</h2>' + approvalTable(inbox, true) + "</section>";
   }
   const mine = await api("GET", qs("/api/approvals", { scope: "mine" }));
-  html += '<section class="card"><h2>F7 — 내가 요청한 건</h2>' + approvalTable(mine, false) + "</section>";
+  html += '<section class="card"><h2>내가 요청한 건</h2>' + approvalTable(mine, false) + "</section>";
   content.innerHTML = html;
   content.querySelectorAll("[data-decide]").forEach(btn => {
     btn.onclick = async () => {
@@ -370,10 +383,10 @@ async function renderApprovals(content) {
 }
 
 function approvalTable(rows, withActions) {
-  const headers = ["ID", "대상", "subject_id", "step", "상태"];
+  const headers = ["ID", "대상 종류", "대상 ID", "단계", "상태"];
   if (withActions) headers.push("동작");
   return table(headers, rows.map(a => {
-    const row = [a.id, esc(a.subject_type), a.subject_id, a.step, esc(a.status)];
+    const row = [a.id, esc(label(a.subject_type)), a.subject_id, a.step, esc(label(a.status))];
     if (withActions) {
       row.push(a.status === "pending"
         ? '<button class="small" data-decide="' + a.id + '" data-approve="1">승인</button> ' +
@@ -384,14 +397,14 @@ function approvalTable(rows, withActions) {
   }));
 }
 
-/* ---------- F4 Agent 생성(Job Queue) ---------- */
+/* ---------- AI 에이전트 생성 ---------- */
 
 async function renderJobs(content) {
   content.innerHTML =
-    '<section class="card"><h2>F4 — Agent 생성(Job Queue)</h2>' +
+    '<section class="card"><h2>AI 에이전트 생성</h2>' +
     '<form class="inline" id="job-form">' +
-    '<input id="job-brief-id" type="number" placeholder="brief_id" required style="width:100px">' +
-    '<input id="job-task-ids" placeholder="task_id(콤마구분)" required style="width:180px">' +
+    '<input id="job-brief-id" type="number" placeholder="업무 요청 ID" required style="width:110px">' +
+    '<input id="job-task-ids" placeholder="할 일 ID(콤마로 구분)" required style="width:180px">' +
     '<button class="primary" type="submit">생성 실행</button></form>' +
     '<div id="job-result"></div></section>';
   document.getElementById("job-form").addEventListener("submit", async (ev) => {
@@ -407,9 +420,9 @@ async function renderJobs(content) {
 
 function renderJobResult(result) {
   const box = document.getElementById("job-result");
-  box.innerHTML = "<p>job_id=" + result.job_id + ", status=<b>" + esc(result.status) + "</b></p>" +
-    table(["item_id", "task_id", "상태", "에러", "재시도", "동작"], result.items.map(it => [
-      it.id, it.task_id, esc(it.status), esc(it.error || ""), it.retry_count,
+  box.innerHTML = "<p>생성 결과 상태: <b>" + esc(label(result.status)) + "</b></p>" +
+    table(["ID", "할 일 ID", "상태", "에러", "재시도", "동작"], result.items.map(it => [
+      it.id, it.task_id, esc(label(it.status)), esc(it.error || ""), it.retry_count,
       it.status === "failed" ? '<button class="small" data-retry-job="' + result.job_id + '" data-retry-item="' + it.id + '">재시도</button>' : "",
     ]));
   box.querySelectorAll("[data-retry-item]").forEach(btn => {
@@ -422,21 +435,21 @@ function renderJobResult(result) {
   });
 }
 
-/* ---------- F12 Human Pool ---------- */
+/* ---------- 사람 인력 ---------- */
 
 async function renderHumanPool(content) {
   const people = await api("GET", "/api/human-pool");
   content.innerHTML =
-    '<section class="card"><h2>F12 — Human Pool 온보딩</h2>' +
+    '<section class="card"><h2>사람 인력 등록</h2>' +
     '<form class="inline" id="hp-form">' +
     '<input id="hp-name" placeholder="이름" required>' +
     '<input id="hp-role" placeholder="역할" required>' +
-    '<input id="hp-skills" placeholder="스킬(콤마구분)">' +
+    '<input id="hp-skills" placeholder="스킬(콤마로 구분)">' +
     '<input id="hp-cost" type="number" step="0.01" placeholder="비용" value="0">' +
     '<button class="primary" type="submit">등록</button></form>' +
-    '</section><section class="card"><h2>Human Pool 목록</h2>' +
+    '</section><section class="card"><h2>사람 인력 목록</h2>' +
     table(["ID", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "동작"], people.map(p => [
-      p.id, esc(p.name), esc(p.role), esc(p.skill_tags.join(", ")), esc(p.availability), p.cost_estimate,
+      p.id, esc(p.name), esc(p.role), esc(p.skill_tags.join(", ")), esc(label(p.availability)), p.cost_estimate,
       p.performance_consent ? "동의함" : "미동의",
       p.performance_score === null ? "-" : p.performance_score,
       p.availability === "offboarded" ? "<span class=\\"muted\\">오프보딩됨</span>" :
@@ -489,12 +502,12 @@ async function renderHumanPool(content) {
   });
 }
 
-/* ---------- F9 Agent Pool ---------- */
+/* ---------- AI 에이전트 ---------- */
 
 async function renderAgentPool(content) {
   const agents = await api("GET", "/api/agent-pool");
   const isAdmin = ME.role === "admin";
-  content.innerHTML = '<section class="card"><h2>F9 — Agent Pool</h2>' +
+  content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
     table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "동작"], agents.map(a => {
       let actions = "";
       if (isAdmin) {
@@ -506,7 +519,7 @@ async function renderAgentPool(content) {
           '<button class="small" data-set-ascore="' + a.id + '">점수입력</button>';
       }
       return [a.id, esc(a.role_name), esc(a.skill_tags.join(", ")), a.cost_estimate,
-        a.performance_score === null ? "-" : a.performance_score, esc(a.status), actions];
+        a.performance_score === null ? "-" : a.performance_score, esc(label(a.status)), actions];
     })) + "</section>";
 
   content.querySelectorAll("[data-onboard]").forEach(btn => {
@@ -529,13 +542,13 @@ async function renderAgentPool(content) {
   });
 }
 
-/* ---------- F3 Pool 검색 ---------- */
+/* ---------- 인력 검색 ---------- */
 
 async function renderSearch(content) {
   content.innerHTML =
-    '<section class="card"><h2>F3 — Pool 통합 검색</h2>' +
+    '<section class="card"><h2>사람·AI 에이전트 통합 검색</h2>' +
     '<form class="inline" id="search-form">' +
-    '<input id="s-role" placeholder="role"><input id="s-skill" placeholder="skill">' +
+    '<input id="s-role" placeholder="역할"><input id="s-skill" placeholder="스킬">' +
     '<label><input id="s-avail" type="checkbox"> 가용만</label>' +
     '<button class="primary" type="submit">검색</button></form>' +
     '<div id="search-result"></div></section>';
@@ -549,21 +562,21 @@ async function renderSearch(content) {
       }));
       document.getElementById("search-result").innerHTML = table(
         ["타입", "ID", "이름", "역할", "가용", "비용", "스킬", "성과점수"],
-        results.map(c => [esc(c.type), c.id, esc(c.name || "-"), esc(c.role), c.is_available ? "가능" : "불가", c.cost, esc(c.skill_tags.join(", ")), c.performance_score === null ? "-" : c.performance_score])
+        results.map(c => [esc(label(c.type)), c.id, esc(c.name || "-"), esc(c.role), c.is_available ? "가능" : "불가", c.cost, esc(c.skill_tags.join(", ")), c.performance_score === null ? "-" : c.performance_score])
       );
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 }
 
-/* ---------- F5 조직도 ---------- */
+/* ---------- 조직도 ---------- */
 
 async function renderOrgChart(content) {
   const chart = await api("GET", "/api/org-chart");
-  let html = '<section class="card"><h2>F5 — 조직도(확정된 배정)</h2>';
+  let html = '<section class="card"><h2>조직도(확정된 배정)</h2>';
   for (const bucket of chart) {
     html += "<h3>" + (bucket.manager_username ? esc(bucket.manager_username) : "(지정된 관리자 없음)") + "</h3>";
-    html += table(["배정 ID", "Task ID", "역할", "타입", "리소스"], bucket.reports.map(r => [
-      r.assignment_id, r.task_id, esc(r.role_name), esc(r.resource_type), esc(r.resource_name || "-"),
+    html += table(["배정 ID", "할 일 ID", "역할", "타입", "리소스"], bucket.reports.map(r => [
+      r.assignment_id, r.task_id, esc(r.role_name), esc(label(r.resource_type)), esc(r.resource_name || "-"),
     ]));
   }
   if (!chart.length) html += '<p class="muted">확정된 배정이 없습니다.</p>';
@@ -571,26 +584,26 @@ async function renderOrgChart(content) {
   content.innerHTML = html;
 }
 
-/* ---------- F8 성과리뷰 ---------- */
+/* ---------- 성과 리뷰 ---------- */
 
 async function renderPerformance(content) {
   const rows = await api("GET", "/api/performance-review");
-  content.innerHTML = '<section class="card"><h2>F8 — 성과리뷰</h2>' +
+  content.innerHTML = '<section class="card"><h2>성과 리뷰</h2>' +
     table(["타입", "ID", "이름", "역할", "동의", "성과점수", "확정 배정 수"], rows.map(r => [
-      esc(r.type), r.id, esc(r.name || "-"), esc(r.role),
+      esc(label(r.type)), r.id, esc(r.name || "-"), esc(r.role),
       r.performance_consent === null ? "-" : (r.performance_consent ? "동의함" : "미동의"),
       r.performance_score === null ? "-" : r.performance_score,
       r.confirmed_assignments,
     ])) + "</section>";
 }
 
-/* ---------- F10 비용 ---------- */
+/* ---------- 비용 ---------- */
 
 async function renderCost(content) {
   const report = await api("GET", "/api/cost-report");
-  content.innerHTML = '<section class="card"><h2>F10 — 비용 리포트(총액: ' + report.total_cost + ')</h2>' +
+  content.innerHTML = '<section class="card"><h2>비용 리포트(총액: ' + report.total_cost + ')</h2>' +
     table(["타입", "ID", "이름", "역할", "단가", "확정 배정 수", "합계"], report.resources.map(r => [
-      esc(r.type), r.id, esc(r.name || "-"), esc(r.role), r.cost_estimate, r.confirmed_assignments, r.total_cost,
+      esc(label(r.type)), r.id, esc(r.name || "-"), esc(r.role), r.cost_estimate, r.confirmed_assignments, r.total_cost,
     ])) + "</section>";
 }
 
@@ -598,23 +611,23 @@ async function renderCost(content) {
 
 async function renderFairness(content) {
   const r = await api("GET", "/api/fairness-report");
-  content.innerHTML = '<section class="card"><h2>배정 공정성 지표(NF4)</h2>' +
+  content.innerHTML = '<section class="card"><h2>배정 공정성 지표</h2>' +
     (r.low_sample_warning ? '<p class="msg error">표본이 작아(각 10건 미만) 통계적 해석에 주의가 필요합니다.</p>' : "") +
     table(["구분", "확정", "반려", "결정됨", "반려율"], [
       ["사람", r.human.confirmed, r.human.rejected, r.human.decided, r.human.rejection_rate === null ? "-" : r.human.rejection_rate.toFixed(3)],
-      ["Agent", r.agent.confirmed, r.agent.rejected, r.agent.decided, r.agent.rejection_rate === null ? "-" : r.agent.rejection_rate.toFixed(3)],
+      ["AI 에이전트", r.agent.confirmed, r.agent.rejected, r.agent.decided, r.agent.rejection_rate === null ? "-" : r.agent.rejection_rate.toFixed(3)],
     ]) +
     "<p>반려율 격차: " + (r.rejection_rate_gap === null ? "-" : r.rejection_rate_gap.toFixed(3)) + "</p></section>";
 }
 
-/* ---------- F13 감사로그 ---------- */
+/* ---------- 활동 기록 ---------- */
 
 async function renderAudit(content) {
   content.innerHTML =
-    '<section class="card"><h2>F13 — 감사로그</h2>' +
+    '<section class="card"><h2>활동 기록</h2>' +
     '<form class="inline" id="audit-form">' +
-    '<input id="a-actor" type="number" placeholder="actor_id">' +
-    '<input id="a-subject" placeholder="subject_type">' +
+    '<input id="a-actor" type="number" placeholder="처리자 ID">' +
+    '<input id="a-subject" placeholder="대상 종류(예: brief, assignment)">' +
     '<button class="primary" type="submit">조회</button></form>' +
     '<div id="audit-result"></div></section>';
   const load = async () => {
@@ -625,8 +638,8 @@ async function renderAudit(content) {
     }));
     document.getElementById("audit-result").innerHTML =
       "<p class=\\"muted\\">전체 " + body.total + "건 중 " + body.items.length + "건 표시</p>" +
-      table(["시각", "actor", "action", "subject", "subject_id"], body.items.map(a => [
-        esc(a.created_at), a.actor_id, esc(a.action), esc(a.subject_type), a.subject_id === null ? "-" : a.subject_id,
+      table(["시각", "처리자 ID", "동작", "대상 종류", "대상 ID"], body.items.map(a => [
+        esc(a.created_at), a.actor_id, esc(a.action), esc(label(a.subject_type)), a.subject_id === null ? "-" : a.subject_id,
       ]));
   };
   document.getElementById("audit-form").addEventListener("submit", (ev) => { ev.preventDefault(); load(); });
@@ -638,16 +651,17 @@ async function renderAudit(content) {
 async function renderAdmin(content) {
   const users = await api("GET", "/api/users");
   content.innerHTML =
-    '<section class="card"><h2>관리자 — 사용자 생성</h2>' +
+    '<section class="card"><h2>사용자 생성</h2>' +
     '<form class="inline" id="user-form">' +
-    '<input id="u-username" placeholder="username" required>' +
-    '<input id="u-password" type="password" placeholder="password" required>' +
-    '<select id="u-role"><option value="admin">admin</option><option value="manager">manager</option>' +
-    '<option value="member" selected>member</option><option value="viewer">viewer</option></select>' +
+    '<input id="u-username" placeholder="아이디" required>' +
+    '<input id="u-password" type="password" placeholder="비밀번호" required>' +
+    '<select id="u-role"><option value="admin">관리자</option><option value="manager">매니저</option>' +
+    '<option value="member" selected>팀원</option><option value="viewer">뷰어</option></select>' +
     '<button class="primary" type="submit">생성</button></form>' +
     "</section>" +
-    '<section class="card"><h2>사용자 목록 / 상사(manager_id) 지정 — F7용</h2>' +
-    table(["ID", "username", "role", "상사", "동작"], users.map(u => [
+    '<section class="card"><h2>사용자 목록 / 상사 지정</h2>' +
+    '<p class="muted">상사를 지정하면 결재 요청이 자동으로 그 상사에게 라우팅됩니다.</p>' +
+    table(["ID", "아이디", "권한", "상사", "동작"], users.map(u => [
       u.id, esc(u.username), esc(u.role), u.manager_id === null ? "-" : u.manager_id,
       '<select id="mgr-' + u.id + '"><option value="">(없음)</option>' +
         users.filter(m => m.id !== u.id).map(m => '<option value="' + m.id + '"' + (m.id === u.manager_id ? " selected" : "") + ">" + esc(m.username) + "</option>").join("") +
