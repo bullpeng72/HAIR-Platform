@@ -14,6 +14,8 @@ dependencies = [
     "pydantic>=2.0,<3.0",
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
+    "bcrypt>=4.0.0",
+    "itsdangerous>=2.1.0",
 ]
 
 [project.optional-dependencies]
@@ -28,3 +30,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff.lint]
+# B008: FastAPI의 Depends()는 함수 기본값 호출이 의도된 패턴이다(FastAPI 공식 권장) — 오탐 무시.
+ignore = ["B008"]
