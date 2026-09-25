@@ -45,6 +45,17 @@ class HumanPoolCreate(BaseModel):
     manager_id: int | None = None
 
 
+class HumanPoolUpdate(BaseModel):
+    """코드 재점검(R3)에서 발견 — Agent Pool엔 onboard/deprecate 라이프사이클이
+    있는데 Human Pool엔 생성 후 수정할 방법이 전혀 없던 비대칭을 없앤다.
+    전부 optional — 보낸 필드만 갱신한다."""
+
+    role: str | None = None
+    skill_tags: list[str] | None = None
+    availability: str | None = None
+    cost_estimate: float | None = None
+
+
 class ApprovalDecision(BaseModel):
     approve: bool
 

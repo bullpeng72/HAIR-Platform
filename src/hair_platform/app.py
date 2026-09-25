@@ -57,6 +57,7 @@ from hair_platform.models import (
     CostUpdateRequest,
     GenerateRequest,
     HumanPoolCreate,
+    HumanPoolUpdate,
     LoginRequest,
     ManagerUpdate,
     PerformanceScoreRequest,
@@ -215,6 +216,77 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         )
         conn.commit()
         return {"id": cur.lastrowid, "name": payload.name}
+
+    @app.patch("/api/human-pool/{human_id}")
+    def update_human_pool_entry(
+        human_id: int,
+        payload: HumanPoolUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """코드 재점검(R3)에서 발견한 비대칭 보완 — Agent Pool엔 onboard/deprecate가
+        있는데 Human Pool은 생성 후 수정할 방법이 전혀 없었다."""
+        row = conn.execute(
+            "SELECT * FROM human_pool WHERE id = ?", (human_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="사람을 찾을 수 없습니다")
+
+        updates: dict[str, object] = {}
+        if payload.role is not None:
+            updates["role"] = payload.role
+        if payload.skill_tags is not None:
+            updates["skill_tags"] = json.dumps(payload.skill_tags, ensure_ascii=False)
+        if payload.availability is not None:
+            updates["availability"] = payload.availability
+        if payload.cost_estimate is not None:
+            updates["cost_estimate"] = payload.cost_estimate
+        if not updates:
+            raise HTTPException(status_code=400, detail="수정할 필드가 없습니다")
+
+        set_clause = ", ".join(f"{key} = ?" for key in updates)
+        conn.execute(
+            f"UPDATE human_pool SET {set_clause} WHERE id = ?",
+            (*updates.values(), human_id),
+        )
+        audit.record(
+            conn,
+            user["id"],
+            "human_pool_updated",
+            "human_pool",
+            human_id,
+            before={k: row[k] for k in updates},
+            after=updates,
+        )
+        conn.commit()
+        return {"id": human_id, **updates}
+
+    @app.post("/api/human-pool/{human_id}/offboard")
+    def offboard_human(
+        human_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """코드 재점검(R3)에서 발견한 누락 보완 — 퇴사한 사람을 검색/매칭에서
+        완전히 배제할 방법이 없었다(Agent의 `/deprecate`에 대응)."""
+        row = conn.execute(
+            "SELECT * FROM human_pool WHERE id = ?", (human_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="사람을 찾을 수 없습니다")
+        conn.execute(
+            "UPDATE human_pool SET availability = 'offboarded' WHERE id = ?",
+            (human_id,),
+        )
+        audit.record(
+            conn,
+            user["id"],
+            "human_offboarded",
+            "human_pool",
+            human_id,
+            before={"availability": row["availability"]},
+            after={"availability": "offboarded"},
+        )
+        conn.commit()
+        return {"id": human_id, "availability": "offboarded"}
 
     @app.post("/api/briefs/{brief_id}/tasks", status_code=201)
     def decompose_brief_into_tasks(

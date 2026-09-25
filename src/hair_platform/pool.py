@@ -24,7 +24,9 @@ def human_pool_candidates(
     skill: str | None = None,
     available_only: bool = False,
 ) -> list[ResourceCandidate]:
-    query = "SELECT * FROM human_pool WHERE 1=1"
+    # 코드 재점검(R3)에서 추가한 오프보딩 상태 — 퇴사한 사람은 검색/매칭에서
+    # 완전히 배제한다(단순 unavailable과 달리 아예 후보군에서 제외).
+    query = "SELECT * FROM human_pool WHERE availability != 'offboarded'"
     params: list[object] = []
     if role:
         query += " AND role LIKE ?"

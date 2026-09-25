@@ -63,10 +63,21 @@ def match_candidates(
         ]
         return MatchResult(top=scored[:3], generate_new=False)
 
+    # 코드 재점검(2026-09-26, R3)에서 발견한 버그 수정: 완전일치가 없으면 이전엔
+    # role이 완전히 다른 후보까지 전부 점수 매겨 "매칭 결과"로 추천했다(예: 백엔드
+    # 개발자를 찾는데 Pool에 디자이너만 있어도 top 3로 제시되고 generate_new=False가
+    # 나왔다) — 가중치 스코어링은 role이 일치하는 후보로만 좁힌다. role 일치 후보가
+    # 아예 없으면 완전히 없는 것과 동일하게 F4 생성을 제안한다.
+    role_relevant = [
+        c for c in candidates if c.role.strip().lower() == required_role.strip().lower()
+    ]
+    if not role_relevant:
+        return MatchResult(top=[], generate_new=True)
+
     scored: list[ScoredCandidate] = []
-    for c in candidates:
+    for c in role_relevant:
         availability = 1.0 if c.is_available else 0.0
-        cost_score = _cost_score(c.cost, candidates)
+        cost_score = _cost_score(c.cost, role_relevant)
         if c.performance_score is None:
             # null 예외(SPEC §10): 적합도 제외, 가용성60·비용40으로 재조정
             score = availability * 0.60 + cost_score * 0.40
