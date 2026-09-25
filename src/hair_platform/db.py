@@ -1,7 +1,7 @@
-"""SQLite 연결 및 스키마 — v0 범위(users·human_pool·briefs·approvals)만 다룬다.
+"""SQLite 연결 및 스키마 — v1 범위(users·human_pool·briefs·tasks·approvals)만 다룬다.
 
 ADR 결정 5: 실시간 쓰기가 빈번한 엔티티는 SQLite를 트랜잭션 RDB(WAL 모드)로 쓴다.
-assignments·assignment_history·audit_log·jobs 테이블은 v1 이후 버전에서 추가한다.
+assignments·assignment_history·audit_log·jobs 테이블은 v2 이후 버전에서 추가한다.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS human_pool (
     role TEXT NOT NULL,
     skill_tags TEXT NOT NULL DEFAULT '[]',
     availability TEXT NOT NULL DEFAULT 'available',
+    cost_estimate REAL NOT NULL DEFAULT 0.0,
     manager_id INTEGER REFERENCES users(id),
     user_id INTEGER REFERENCES users(id)
 );
@@ -44,6 +45,14 @@ CREATE TABLE IF NOT EXISTS briefs (
     raw_text TEXT NOT NULL,
     stub_roles TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'submitted'
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    brief_id INTEGER NOT NULL REFERENCES briefs(id),
+    role_name TEXT NOT NULL,
+    required_skills TEXT NOT NULL DEFAULT '[]',
+    headcount INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS approvals (

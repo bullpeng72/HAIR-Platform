@@ -1,11 +1,12 @@
-"""HAIR-Platform API — Phase 3 v0.
+"""HAIR-Platform API — Phase 3 v0–v1.
 
-범위(SPEC.md §9 v0, ADR.md): Auth 최소구현(세션 기반, 결정 6) + RBAC 4종 역할(결정 3)
+v0 범위(SPEC.md §9, ADR.md): Auth 최소구현(세션 기반, 결정 6) + RBAC 4종 역할(결정 3)
 + F1(브리프 제출, 규칙기반 스텁) + F12(Human Pool 온보딩) + 최소 승인 워크플로우
 (단일 승인자, self-approval 방지 — 결정 3-A).
 
-F1의 실제 Spec Interpreter(LLM) 연동, F2(Review UI)·F3(Pool 검색)·F4(Agent 생성)·
-F5/F6(조직도·배분)·F7(다단계 결재라인)·F13/F14(감사로그·매칭근거)는 v1 이후 버전 범위다.
+v1 범위 추가: F2(Review UI — Task 분해 결과 검토, 후보 매칭 미포함 — ADR 결정 1-A) +
+F3(Pool 통합 검색) + Assignment Engine 매칭(F14 점수 breakdown 포함, `assignment.py`).
+F4(Agent 생성)·F5/F6(조직도·배분 확정)·F7(다단계 결재라인)·F13(감사로그)는 v2 이후 범위다.
 """
 
 from __future__ import annotations
@@ -16,13 +17,15 @@ import sqlite3
 from fastapi import Depends, FastAPI, HTTPException, Request
 from starlette.middleware.sessions import SessionMiddleware
 
-from hair_platform import db
+from hair_platform import db, pool
+from hair_platform.assignment import match_candidates
 from hair_platform.auth import Role, authenticate, get_current_user, require_role
 from hair_platform.models import (
     ApprovalDecision,
     BriefSubmission,
     HumanPoolCreate,
     LoginRequest,
+    TaskDecomposition,
 )
 
 
@@ -76,18 +79,102 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         cur = conn.execute(
-            "INSERT INTO human_pool (name, role, skill_tags, availability, manager_id) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO human_pool "
+            "(name, role, skill_tags, availability, cost_estimate, manager_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 payload.name,
                 payload.role,
                 json.dumps(payload.skill_tags, ensure_ascii=False),
                 payload.availability,
+                payload.cost_estimate,
                 payload.manager_id,
             ),
         )
         conn.commit()
         return {"id": cur.lastrowid, "name": payload.name}
+
+    @app.post("/api/briefs/{brief_id}/tasks", status_code=201)
+    def decompose_brief_into_tasks(
+        brief_id: int,
+        payload: TaskDecomposition,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """F2 — Task 분해 결과 등록(후보 매칭은 포함하지 않는다, ADR 결정 1-A)."""
+        brief = conn.execute(
+            "SELECT * FROM briefs WHERE id = ?", (brief_id,)
+        ).fetchone()
+        if brief is None:
+            raise HTTPException(status_code=404, detail="브리프를 찾을 수 없습니다")
+
+        created = []
+        for item in payload.tasks:
+            cur = conn.execute(
+                "INSERT INTO tasks (brief_id, role_name, required_skills, headcount) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    brief_id,
+                    item.role_name,
+                    json.dumps(item.required_skills, ensure_ascii=False),
+                    item.headcount,
+                ),
+            )
+            created.append({"id": cur.lastrowid, "role_name": item.role_name})
+        conn.execute("UPDATE briefs SET status = 'reviewed' WHERE id = ?", (brief_id,))
+        conn.commit()
+        return {"brief_id": brief_id, "tasks": created}
+
+    @app.get("/api/pool/search")
+    def search_pool(
+        role: str | None = None,
+        skill: str | None = None,
+        available_only: bool = False,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """F3 — Human Pool + Agent Pool(스텁) 통합 검색. 전원 조회 가능(RBAC 매트릭스)."""
+        candidates = (
+            pool.human_pool_candidates(
+                conn, role=role, skill=skill, available_only=available_only
+            )
+            + pool.agent_pool_candidates()
+        )
+        rows = conn.execute("SELECT id, name FROM human_pool").fetchall()
+        name_by_id = {row["id"]: row["name"] for row in rows}
+        return [
+            {
+                **c.model_dump(),
+                "name": name_by_id.get(c.id) if c.type == "human" else None,
+            }
+            for c in candidates
+        ]
+
+    @app.post("/api/tasks/{task_id}/match")
+    def match_task(
+        task_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """F6 매칭 미리보기 + F14(점수 breakdown) — 배정 요청(assignments)은 v2 범위."""
+        task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task를 찾을 수 없습니다")
+
+        required_skills = json.loads(task["required_skills"])
+        candidates = pool.human_pool_candidates(conn) + pool.agent_pool_candidates()
+        result = match_candidates(task["role_name"], required_skills, candidates)
+
+        return {
+            "task_id": task_id,
+            "generate_new": result.generate_new,
+            "top": [
+                {
+                    "candidate": sc.candidate.model_dump(),
+                    "score": sc.score,
+                    "breakdown": sc.breakdown,
+                    "exact_match": sc.exact_match,
+                }
+                for sc in result.top
+            ],
+        }
 
     @app.post("/api/approvals", status_code=201)
     def create_approval(

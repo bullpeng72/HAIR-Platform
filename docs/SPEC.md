@@ -116,7 +116,7 @@
 | 버전 | 내용 | 골든셋 최소 사례 |
 |---|---|---|
 | v0 | Auth 최소구현+F1 브리프 제출+F12 온보딩 폼, 규칙기반 스텁 | 4건(파이프라인 형태 증명) |
-| v1 | Assignment Engine 매칭 알고리즘 LLM화(F2·F3·F14 포함) | 6건(완전일치/스코어링/null예외 케이스 포함) |
+| v1 | Assignment Engine 매칭 알고리즘 구현(결정론적, LLM 미사용 — ADR 결정 2)(F2·F3·F14 포함) | 6건(완전일치/스코어링/null예외 케이스 포함) |
 | v2 | Org Chart+배분 UI(F5·F6), `assignment_history` 도입 | 8건(재배치 시나리오 포함) |
 | v3 | Approval Workflow 다단계(F7), Job Queue+샌드박스(F4 비동기), Audit Log(F13) | 8건(승인 경로 3단계 이상 1건 포함) |
 | v4 | Performance Review(F8)+Cost Tracker(F10)+F9 | 10건(성과리뷰·비용 통합 검증) |
