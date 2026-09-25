@@ -4,21 +4,39 @@
 > 정직하게 남긴다. 이 문서는 SPEC.md §7 Phase 4(검증)에서 실제로 확인한 것과
 > 확인하지 못한 것을 구분한다.
 
-## 1. Gate A–G 실측 배선 — 검증 불가(의존성 갭)
+## 1. Gate A–G 실측 배선 — 배선 완료, 실행은 사용자 몫(업데이트: 2026-09-25)
 
-SPEC.md §7은 Phase 4에서 "Gate A–G 전부 fail→진단→해결"을 요구하지만, Gate A–G
-평가(`@agent_eval` 배선)는 AgentForge의 `agent-evaluator` SDK가 제공하는 기능이고
-이 저장소는 그 SDK를 아직 vendor/import하지 않았다(SPEC.md §12 오픈 이슈, ADR
-결정 2에서도 "신규 컴포넌트는 전부 LLM 미사용"이라고 명시한 대로 애초에 Gate가
-평가할 LLM 판단 자체가 이 저장소 코드에는 없다).
+SPEC.md §7은 Phase 4에서 "Gate A–G 전부 fail→진단→해결"을 요구한다. 처음
+확인했을 때는 `agent-evaluator` SDK가 vendor/import되지 않아 "검증 불가"로
+적었으나, 이후 확인해보니 **`agent-evaluator`는 PyPI에 실제로 배포된 설치형
+패키지**였다(vendor/import가 필요한 소스 복사가 아니었다) — 그래서 이번에
+실제로 설치하고 배선까지 마쳤다.
 
-**대신 실제로 한 것**: `pytest` 골든셋 42건(v0–v4 37건 + Phase 4 검증 5건)으로
-파이프라인 동작을 검증했다. `threshold_review` 승인 게이트는 이 골든셋 결과를
-근거로 사람이 검토하는 것으로 대체한다 — Gate 점수 기반 자동 판정이 아니다.
+**한 것**: `pyproject.toml`에 `agent-evaluator[sdk]` 의존성 추가, `pip install`
+완료(`pip show agent-evaluator` 확인). `eval_wiring.py`가 `jobs.
+create_and_run_job()`(F4 생성 파이프라인)을 `@agent_eval`로 감싸 Gate
+A/B/D/E/G를 측정하도록 배선했다(AgentForge의 `eval_wiring.py`와 같은 패턴).
+모듈 임포트만으로는 아무 것도 실행되지 않음을 확인했다(데코레이터는 등록만
+한다).
 
-**남은 일**: AgentForge의 `spec_interpreter`·`code_generator`·`verifier`를 실제로
-vendor/import하고 `agent_evaluator`를 의존성에 추가해야 Gate A–G가 의미를 가진다.
-이건 새 코드를 몇 줄 고치는 문제가 아니라 별도 통합 작업이다.
+**의도적으로 실행은 안 함**: 사용자가 "배선만, 실제 측정은 나중에 직접"을
+선택했다. 다만 이 배선이 감싸는 `default_stub_generator`는 LLM을 전혀
+호출하지 않고(ADR 결정 2), `llm_judge`·환각탐지도 켜지 않았으므로 **이
+특정 측정 실행 자체는 API 비용이 들지 않을 것으로 보인다** — 다만 이건
+이 세션의 판단이지 실측 확인은 아니므로, 실행 전 `agent-eval check`로 직접
+확인하기를 권한다. 실행 명령은 `eval_wiring.py` 상단 docstring에 있다.
+
+**측정하면 무엇이 나올지 미리 밝혀둠**: `default_stub_generator`는 역할명·
+스킬을 그대로 되돌려주는 규칙기반 스텁이라, Gate A(응답품질)·G(설명가능성)가
+요구하는 "실제 판단 근거"가 빈약하다 — 처음 실행하면 낮은 점수가 나올
+가능성이 높다. 이건 버그가 아니라 스텁의 정직한 한계를 드러내는 결과다.
+Gate C(재현성)는 스텁이 결정론적이라 항상 100%로 나와 정보가 없고, Gate
+F(멀티에이전트 조율)는 에이전트 간 위임이 없어 해당 사항이 없다 — 둘 다
+배선 대상에서 뺐다.
+
+**남은 일**: 실제 AgentForge `spec_interpreter`·`code_generator`·`verifier`
+연동은 여전히 별도 작업이다 — 그게 붙어야 Gate A/G 점수가 스텁의 한계가
+아니라 진짜 LLM 판단 품질을 재게 된다.
 
 ## 2. Docker 샌드박스 — 실제 격리 동작 미검증(환경 제약)
 
@@ -95,7 +113,7 @@ SKILL.md`). 나머지 3개(`human-agent-assignment-check`·`org-chart-sync`·
 
 | 항목 | 상태 |
 |---|---|
-| Gate A–G 실측 | 불가(의존성 미통합) — pytest 골든셋으로 대체 |
+| Gate A–G 실측 | 배선 완료(`eval_wiring.py`), 실행은 사용자 선택으로 보류 — 그때까지는 pytest 골든셋으로 대체 |
 | Docker 샌드박스 실제 격리 | 미검증(환경에 Docker 없음) — 명령 구성·우회 방지는 검증 완료 |
 | 2인 팀 실전 클레임 충돌 | 불가(단독 세션) — CI 인프라는 구축 완료 |
 | Skills 신규 발굴 | 1/4건 완료(`rbac-permission-audit`), 나머지는 3회+ 기준 미충족 |

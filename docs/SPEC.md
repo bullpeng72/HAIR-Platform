@@ -140,8 +140,8 @@
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4, 총 37건 — Gate A–G 정식 배선 전까지는 pytest 골든셋 기준)
-- [ ] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — **불가(의존성 갭)**: agent-evaluator SDK 미통합, `docs/LIMITS.md` §1 참고
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4, 총 37건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
+- [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 실제 실행은 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동
 - [~] RBAC·샌드박스·Audit Log 3중 기록 트랜잭션 원자성에 대한 보안/무결성 테스트 통과 — 부분: 샌드박스 우회 방지·NF7 idempotency·append-only 트리거는 검증 완료, Docker 실제 격리 동작은 미검증(`docs/LIMITS.md` §2)
 - [ ] 2인 팀 + 진짜 GitHub 원격에서 클레임 충돌 최소 1회 실전 발생·해소 — **불가(단독 세션)**: CI 인프라(`.github/workflows/ci.yml`)는 구축했으나 실전 클레임 충돌은 실제 2인 이상 협업에서만 발생한다, `docs/LIMITS.md` §5 참고
@@ -158,7 +158,7 @@
 - Audit Log의 SQLite 쓰기 부하 확장성(실사용 규모 부하테스트 필요)
 - 초기 타깃 업종/조직 규모, 배포 모델(온프레미스 vs SaaS) 확정
 - 팀원의 셀프서비스 요구(예: 본인이 직접 배정 요청)가 실사용에서 크면 RBAC 권한 매트릭스(ADR 결정 3) 완화 재검토
-- AgentForge `agent-evaluator` SDK vendor/import(Gate A–G 실측 배선의 전제조건, `docs/LIMITS.md` §1)
+- `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선은 완료 — 실제 Gate 측정 실행(사용자 직접) 및 AgentForge `spec_interpreter`·`code_generator`·`verifier` 실연동(의미 있는 점수의 전제조건)은 남음(`docs/LIMITS.md` §1)
 - Docker 설치 환경에서 샌드박스 실제 격리(리소스 쿼터·네트워크 차단) 동작 검증(`docs/LIMITS.md` §2)
 - 멀티프로세스/멀티워커 배포 시 NF7 idempotency의 진짜 경쟁 상태(race condition) 방지 — 현재는 단일 커넥션·순차 요청 전제(`docs/LIMITS.md` §3)
 - Docker 런타임 설치를 배포 필수 요건으로 문서화(README·설치 가이드, ADR 결정 8)
