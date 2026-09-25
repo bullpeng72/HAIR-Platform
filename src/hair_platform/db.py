@@ -1,7 +1,9 @@
-"""SQLite 연결 및 스키마 — v2 범위(audit_log·jobs 제외 전부)까지 다룬다.
+"""SQLite 연결 및 스키마 — v3 범위(전체)까지 다룬다.
 
 ADR 결정 5: 실시간 쓰기가 빈번한 엔티티는 SQLite를 트랜잭션 RDB(WAL 모드)로 쓴다.
-audit_log·jobs 테이블은 v3에서 추가한다(Job Queue+샌드박스, F13 감사로그).
+ADR 결정 3: `approvals.step`·`approver_id`로 F7 다단계 결재라인(조직도 매니저 관계
+기반 자동 라우팅)을 표현한다. NF10: `audit_log`는 트리거로 UPDATE/DELETE를 막아
+append-only를 DB 레벨에서 강제한다.
 """
 
 from __future__ import annotations
@@ -60,6 +62,8 @@ CREATE TABLE IF NOT EXISTS approvals (
     requested_by INTEGER NOT NULL REFERENCES users(id),
     subject_type TEXT NOT NULL,
     subject_id INTEGER NOT NULL,
+    step INTEGER NOT NULL DEFAULT 1,
+    approver_id INTEGER REFERENCES users(id),
     status TEXT NOT NULL DEFAULT 'pending',
     approved_by INTEGER REFERENCES users(id)
 );
@@ -83,6 +87,55 @@ CREATE TABLE IF NOT EXISTS assignment_history (
     reason TEXT,
     changed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    brief_id INTEGER NOT NULL REFERENCES briefs(id),
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_by INTEGER NOT NULL REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS job_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL REFERENCES jobs(id),
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    status TEXT NOT NULL DEFAULT 'pending',
+    result TEXT,
+    error TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS agent_pool (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role_name TEXT NOT NULL,
+    skill_tags TEXT NOT NULL DEFAULT '[]',
+    cost_estimate REAL NOT NULL DEFAULT 0.0,
+    status TEXT NOT NULL DEFAULT 'pending_onboarding',
+    source_job_item_id INTEGER REFERENCES job_items(id)
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id INTEGER NOT NULL REFERENCES users(id),
+    action TEXT NOT NULL,
+    subject_type TEXT NOT NULL,
+    subject_id INTEGER,
+    before_value TEXT,
+    after_value TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update
+BEFORE UPDATE ON audit_log
+BEGIN
+    SELECT RAISE(ABORT, 'audit_log is append-only (NF10)');
+END;
+
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete
+BEFORE DELETE ON audit_log
+BEGIN
+    SELECT RAISE(ABORT, 'audit_log is append-only (NF10)');
+END;
 """
 
 

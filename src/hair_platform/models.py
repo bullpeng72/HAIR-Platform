@@ -64,3 +64,9 @@ class AssignmentRequest(BaseModel):
 
     resource_type: Literal["human", "agent"]
     resource_id: int
+
+
+class GenerateRequest(BaseModel):
+    """F4 — 생성 버튼. 부족한 역할(Task)들을 지정해 배치로 Agent 생성을 트리거한다."""
+
+    task_ids: list[int]

@@ -1,9 +1,10 @@
-"""Resource Pool 조회 — Human Pool(F12에서 등록) + Agent Pool(스텁) → ResourceCandidate.
+"""Resource Pool 조회 — Human Pool(F12) + Agent Pool(F4/F9로 채워짐) → ResourceCandidate.
 
 ADR 결정 4: AgentContract·HumanProfile은 각자 `to_candidate()` 어댑터로 공통
-인터페이스에 맞춘다. Agent Pool은 AgentForge 컴포넌트 추출 전까지(v3 Job Queue 이후)
-빈 리스트를 반환하는 스텁이다 — v1 시점엔 실제로 생성된 Agent가 하나도 없으므로
-빈 리스트가 정확한 현재 상태다.
+인터페이스에 맞춘다. `agent_pool` 테이블은 v3(Job Queue+F9 온보딩)에서 실제로
+채워지기 시작한다 — `status='active'`(F9 온보딩 승인 완료)인 항목만 후보로 노출한다.
+실제 AgentForge Code Generator/Verifier 연동은 아직 vendor/import되지 않아
+`agent_pool.skill_tags` 등은 `jobs.py`의 스텁 제너레이터 결과다(SPEC.md §12 오픈 이슈).
 """
 
 from __future__ import annotations
@@ -48,6 +49,18 @@ def human_pool_candidates(
     return candidates
 
 
-def agent_pool_candidates() -> list[ResourceCandidate]:
-    """AgentForge Pool 추출 전 스텁 — v3(Job Queue) 이후 실제 Agent가 생기면 채워진다."""
-    return []
+def agent_pool_candidates(conn: sqlite3.Connection) -> list[ResourceCandidate]:
+    """F9에서 온보딩(`status='active'`)된 Agent만 후보로 노출한다."""
+    rows = conn.execute("SELECT * FROM agent_pool WHERE status = 'active'").fetchall()
+    return [
+        ResourceCandidate(
+            id=row["id"],
+            type="agent",
+            role=row["role_name"],
+            is_available=True,
+            cost=row["cost_estimate"],
+            skill_tags=json.loads(row["skill_tags"]),
+            performance_score=None,  # F8(Gate 평균) 전까지는 항상 null
+        )
+        for row in rows
+    ]

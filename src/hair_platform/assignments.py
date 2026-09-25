@@ -1,8 +1,8 @@
 """F5/F6 — 배정 요청·승인 확정 처리(ADR 결정 7: 3중 기록 트랜잭션 원자성).
 
-`assignments`·`assignment_history`는 이 모듈이 하나의 트랜잭션으로 묶는다(commit은
-호출자가 한다 — decide_approval에서 approvals 상태 변경까지 같은 트랜잭션으로 커밋).
-audit_log 합류는 v3(Job Queue+F13)에서 완성된다.
+`assignments`·`assignment_history`·`approvals`(F7 다단계 결재라인, `approvals.py`)는
+이 모듈이 하나의 트랜잭션으로 묶는다(commit은 호출자가 한다 — decide_approval에서
+audit_log 기록까지 같은 트랜잭션으로 커밋).
 
 F5(조직도)·F6(배분)은 이 모듈이 공유하는 `assignments` 테이블 하나를 통해서만
 데이터를 주고받는다(SPEC.md §10 — 이중 쓰기 방지).
@@ -11,6 +11,9 @@ F5(조직도)·F6(배분)은 이 모듈이 공유하는 `assignments` 테이블 
 from __future__ import annotations
 
 import sqlite3
+
+from hair_platform import approvals as approvals_mod
+from hair_platform import audit
 
 
 def _record_history(
@@ -35,7 +38,11 @@ def create_assignment_request(
     resource_id: int,
     requested_by: int,
 ) -> dict:
-    """배정 요청(assignments.status='requested') + 승인요청(approvals) + 이력을 커밋한다."""
+    """배정 요청(assignments.status='requested') + 결재라인(approvals) + 이력을 커밋한다.
+
+    결재라인은 요청자의 조직도 매니저 체인을 따라 다단계로 구성된다(F7, ADR 결정 3).
+    반환하는 `approval_id`는 체인의 1단계(즉시 결정 가능한 단계) id다 — 하위 호환용.
+    """
     try:
         cur = conn.execute(
             "INSERT INTO assignments "
@@ -46,27 +53,34 @@ def create_assignment_request(
         assignment_id = cur.lastrowid
         assert assignment_id is not None
 
-        approval_cur = conn.execute(
-            "INSERT INTO approvals (requested_by, subject_type, subject_id) "
-            "VALUES (?, 'assignment', ?)",
-            (requested_by, assignment_id),
+        approval_ids = approvals_mod.create_approval_chain(
+            conn, requested_by, "assignment", assignment_id
         )
-        approval_id = approval_cur.lastrowid
 
         conn.execute(
             "UPDATE assignments SET approval_id = ? WHERE id = ?",
-            (approval_id, assignment_id),
+            (approval_ids[0], assignment_id),
         )
         _record_history(conn, assignment_id, None, "requested", requested_by)
+        result = {
+            "assignment_id": assignment_id,
+            "approval_id": approval_ids[0],
+            "approval_ids": approval_ids,
+            "status": "requested",
+        }
+        audit.record(
+            conn,
+            requested_by,
+            "assignment_requested",
+            "assignment",
+            assignment_id,
+            after=result,
+        )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
-    return {
-        "assignment_id": assignment_id,
-        "approval_id": approval_id,
-        "status": "requested",
-    }
+    return result
 
 
 def resolve_assignment_decision(

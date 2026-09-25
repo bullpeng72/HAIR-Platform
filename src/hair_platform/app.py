@@ -1,4 +1,4 @@
-"""HAIR-Platform API — Phase 3 v0–v2.
+"""HAIR-Platform API — Phase 3 v0–v3.
 
 v0 범위(SPEC.md §9, ADR.md): Auth 최소구현(세션 기반, 결정 6) + RBAC 4종 역할(결정 3)
 + F1(브리프 제출, 규칙기반 스텁) + F12(Human Pool 온보딩) + 최소 승인 워크플로우
@@ -11,7 +11,10 @@ v2 범위 추가: F6(배분 요청 → 승인 후 확정, `assignments`+`assignm
 트랜잭션 원자성 — ADR 결정 7) + F5(조직도 조회, confirmed 배정만 노출) + 재배치
 (같은 task 재승인 시 이전 confirmed 배정을 superseded로 전환, `assignments.py`).
 
-F4(Agent 생성)·F7(다단계 결재라인)·F13(감사로그)는 v3 이후 범위다.
+v3 범위 추가: F7(다단계 결재라인, 조직도 매니저 체인 자동 라우팅 — `approvals.py`) +
+F4(Job Queue+Docker 샌드박스로 Agent 생성, 실패 역할만 재시도 — `jobs.py`·
+`sandbox.py`) + F9(Agent 온보딩/오프보딩 — 이때 `pool.agent_pool_candidates()`가
+처음으로 실제 데이터를 반환하게 된다) + F13(감사로그, append-only — `audit.py`).
 """
 
 from __future__ import annotations
@@ -22,13 +25,15 @@ import sqlite3
 from fastapi import Depends, FastAPI, HTTPException, Request
 from starlette.middleware.sessions import SessionMiddleware
 
-from hair_platform import assignments, db, pool
+from hair_platform import approvals as approvals_mod
+from hair_platform import assignments, audit, db, jobs, pool
 from hair_platform.assignment import match_candidates
 from hair_platform.auth import Role, authenticate, get_current_user, require_role
 from hair_platform.models import (
     ApprovalDecision,
     AssignmentRequest,
     BriefSubmission,
+    GenerateRequest,
     HumanPoolCreate,
     LoginRequest,
     TaskDecomposition,
@@ -138,12 +143,9 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         user: sqlite3.Row = Depends(get_current_user),
     ):
         """F3 — Human Pool + Agent Pool(스텁) 통합 검색. 전원 조회 가능(RBAC 매트릭스)."""
-        candidates = (
-            pool.human_pool_candidates(
-                conn, role=role, skill=skill, available_only=available_only
-            )
-            + pool.agent_pool_candidates()
-        )
+        candidates = pool.human_pool_candidates(
+            conn, role=role, skill=skill, available_only=available_only
+        ) + pool.agent_pool_candidates(conn)
         rows = conn.execute("SELECT id, name FROM human_pool").fetchall()
         name_by_id = {row["id"]: row["name"] for row in rows}
         return [
@@ -165,7 +167,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             raise HTTPException(status_code=404, detail="Task를 찾을 수 없습니다")
 
         required_skills = json.loads(task["required_skills"])
-        candidates = pool.human_pool_candidates(conn) + pool.agent_pool_candidates()
+        candidates = pool.human_pool_candidates(conn) + pool.agent_pool_candidates(conn)
         result = match_candidates(task["role_name"], required_skills, candidates)
 
         return {
@@ -195,6 +197,90 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         return assignments.create_assignment_request(
             conn, task_id, payload.resource_type, payload.resource_id, user["id"]
         )
+
+    @app.post("/api/briefs/{brief_id}/generate", status_code=201)
+    def generate_agents(
+        brief_id: int,
+        payload: GenerateRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """F4 — 생성 버튼. Job Queue+샌드박스(ADR 결정 8)로 부족한 역할을 배치 생성한다."""
+        brief = conn.execute(
+            "SELECT * FROM briefs WHERE id = ?", (brief_id,)
+        ).fetchone()
+        if brief is None:
+            raise HTTPException(status_code=404, detail="브리프를 찾을 수 없습니다")
+        return jobs.create_and_run_job(conn, brief_id, payload.task_ids, user["id"])
+
+    @app.post("/api/jobs/{job_id}/items/{item_id}/retry")
+    def retry_job_item(
+        job_id: int,
+        item_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """NF6 — 실패 역할만 재시도."""
+        try:
+            return jobs.retry_failed_item(conn, job_id, item_id, user["id"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/agent-pool/{agent_id}/onboard")
+    def onboard_agent(
+        agent_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        """F9 — Agent 온보딩 승인(Admin 전용). 승인 후 F3 검색에 노출된다."""
+        agent = conn.execute(
+            "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
+        ).fetchone()
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent를 찾을 수 없습니다")
+        conn.execute(
+            "UPDATE agent_pool SET status = 'active' WHERE id = ?", (agent_id,)
+        )
+        audit.record(
+            conn,
+            user["id"],
+            "agent_onboarded",
+            "agent_pool",
+            agent_id,
+            before={"status": agent["status"]},
+            after={"status": "active"},
+        )
+        conn.commit()
+        return {"id": agent_id, "status": "active"}
+
+    @app.post("/api/agent-pool/{agent_id}/deprecate")
+    def deprecate_agent(
+        agent_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        """F9 — Agent 오프보딩(Admin 전용). 이후 F3 검색에서 제외된다."""
+        agent = conn.execute(
+            "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
+        ).fetchone()
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent를 찾을 수 없습니다")
+        conn.execute(
+            "UPDATE agent_pool SET status = 'deprecated' WHERE id = ?", (agent_id,)
+        )
+        audit.record(
+            conn,
+            user["id"],
+            "agent_deprecated",
+            "agent_pool",
+            agent_id,
+            before={"status": agent["status"]},
+            after={"status": "deprecated"},
+        )
+        conn.commit()
+        return {"id": agent_id, "status": "deprecated"}
+
+    @app.get("/api/audit-log")
+    def get_audit_log(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """F13 — 감사로그 조회(Admin·매니저 전용, NF12). append-only는 DB 트리거가 강제."""
+        rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC").fetchall()
+        return [dict(row) for row in rows]
 
     @app.get("/api/org-chart")
     def get_org_chart(user: sqlite3.Row = Depends(get_current_user)):
@@ -257,6 +343,9 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         ).fetchone()
         if approval is None:
             raise HTTPException(status_code=404, detail="승인 요청을 찾을 수 없습니다")
+        if approval["status"] == "waiting":
+            # F7 다단계 결재라인: 이전 단계가 아직 안 끝났다(ADR 결정 3).
+            raise HTTPException(status_code=409, detail="이전 단계 승인이 필요합니다")
         if approval["status"] != "pending":
             # NF3: 이미 처리된 승인을 재처리해 결재라인을 우회하지 못하게 막는다.
             raise HTTPException(status_code=409, detail="이미 처리된 승인입니다")
@@ -266,18 +355,51 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 status_code=403,
                 detail="본인이 요청한 건은 승인할 수 없습니다(ADR 결정 3-A)",
             )
+        if (
+            approval["approver_id"] is not None
+            and approval["approver_id"] != user["id"]
+            and user["role"] != Role.ADMIN.value
+        ):
+            raise HTTPException(
+                status_code=403, detail="지정된 승인자만 이 단계를 승인할 수 있습니다"
+            )
+
         new_status = "approved" if payload.approve else "rejected"
+        subject_type = approval["subject_type"]
+        subject_id = approval["subject_id"]
         try:
             conn.execute(
                 "UPDATE approvals SET status = ?, approved_by = ? WHERE id = ?",
                 (new_status, user["id"], approval_id),
             )
             assignment_result = None
-            if approval["subject_type"] == "assignment":
-                # ADR 결정 7: approvals·assignments·assignment_history를 한 트랜잭션으로 커밋.
-                assignment_result = assignments.resolve_assignment_decision(
-                    conn, approval["subject_id"], payload.approve, user["id"]
+            next_step_pending = False
+            if payload.approve:
+                next_step_pending = approvals_mod.activate_next_step(
+                    conn, subject_type, subject_id, approval["step"]
                 )
+                if not next_step_pending and subject_type == "assignment":
+                    # ADR 결정 7: 체인의 마지막 단계 통과 시에만 최종 확정한다.
+                    assignment_result = assignments.resolve_assignment_decision(
+                        conn, subject_id, True, user["id"]
+                    )
+            else:
+                approvals_mod.skip_remaining_steps(
+                    conn, subject_type, subject_id, approval["step"]
+                )
+                if subject_type == "assignment":
+                    assignment_result = assignments.resolve_assignment_decision(
+                        conn, subject_id, False, user["id"]
+                    )
+            audit.record(
+                conn,
+                user["id"],
+                f"approval_{new_status}",
+                "approval",
+                approval_id,
+                before={"step": approval["step"], "subject_type": subject_type},
+                after={"next_step_pending": next_step_pending},
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -285,6 +407,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         return {
             "id": approval_id,
             "status": new_status,
+            "next_step_pending": next_step_pending,
             "assignment": assignment_result,
         }
 
