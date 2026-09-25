@@ -28,6 +28,7 @@ import os
 import sqlite3
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from hair_platform import approvals as approvals_mod
@@ -40,6 +41,7 @@ from hair_platform import (
     jobs,
     performance,
     pool,
+    webui,
 )
 from hair_platform.assignment import match_candidates
 from hair_platform.auth import (
@@ -99,6 +101,17 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             "username": user["username"],
             "role": user["role"],
         }
+        return {"id": user["id"], "username": user["username"], "role": user["role"]}
+
+    @app.post("/logout")
+    def logout(request: Request):
+        """Web UI 세션 종료 — 로그인은 있었는데 로그아웃이 없던 것을 보완."""
+        request.session.clear()
+        return {"status": "logged_out"}
+
+    @app.get("/api/me")
+    def get_me(user: sqlite3.Row = Depends(get_current_user)):
+        """Web UI 셸이 현재 로그인 사용자·role을 알아야 RBAC에 맞게 화면을 그린다."""
         return {"id": user["id"], "username": user["username"], "role": user["role"]}
 
     @app.post("/api/users", status_code=201)
@@ -196,6 +209,22 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         conn.commit()
         return {"id": cur.lastrowid, "stub_roles": stub_roles, "status": "submitted"}
 
+    @app.get("/api/briefs")
+    def list_briefs(user: sqlite3.Row = Depends(get_current_user)):
+        """Web UI가 브리프 목록을 브라우징할 수 있어야 F2(Task 분해) 화면으로
+        이어갈 수 있다 — 지금까지는 생성 응답의 id를 기억해야만 했다."""
+        rows = conn.execute("SELECT * FROM briefs ORDER BY id DESC").fetchall()
+        return [
+            {
+                "id": row["id"],
+                "raw_text": row["raw_text"],
+                "stub_roles": json.loads(row["stub_roles"]),
+                "status": row["status"],
+                "submitted_by": row["submitted_by"],
+            }
+            for row in rows
+        ]
+
     @app.post("/api/human-pool", status_code=201)
     def create_human_pool_entry(
         payload: HumanPoolCreate,
@@ -216,6 +245,29 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         )
         conn.commit()
         return {"id": cur.lastrowid, "name": payload.name}
+
+    @app.get("/api/human-pool")
+    def list_human_pool(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """Web UI가 Human Pool 관리 화면(수정/오프보딩/동의)에서 원본 레코드가
+        필요하다 — `/api/pool/search`는 공통 ResourceCandidate 어댑터라 availability
+        원문·manager_id·performance_consent가 빠져 있어 이 목적에 못 쓴다."""
+        rows = conn.execute("SELECT * FROM human_pool ORDER BY id DESC").fetchall()
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "role": row["role"],
+                "skill_tags": json.loads(row["skill_tags"]),
+                "availability": row["availability"],
+                "cost_estimate": row["cost_estimate"],
+                "manager_id": row["manager_id"],
+                "performance_consent": bool(row["performance_consent"]),
+                "performance_score": row["performance_score"],
+            }
+            for row in rows
+        ]
 
     @app.patch("/api/human-pool/{human_id}")
     def update_human_pool_entry(
@@ -318,6 +370,25 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         conn.commit()
         return {"brief_id": brief_id, "tasks": created}
 
+    @app.get("/api/briefs/{brief_id}/tasks")
+    def list_tasks_for_brief(
+        brief_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """Web UI가 F6(매칭/배분) 화면에서 브리프별 Task 목록을 골라야 한다 —
+        지금까지는 분해 응답의 id를 기억해야만 했다."""
+        rows = conn.execute(
+            "SELECT * FROM tasks WHERE brief_id = ? ORDER BY id", (brief_id,)
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "role_name": row["role_name"],
+                "required_skills": json.loads(row["required_skills"]),
+                "headcount": row["headcount"],
+            }
+            for row in rows
+        ]
+
     @app.get("/api/pool/search")
     def search_pool(
         role: str | None = None,
@@ -410,6 +481,26 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             return jobs.retry_failed_item(conn, job_id, item_id, user["id"])
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/agent-pool")
+    def list_agent_pool(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """Web UI가 F9(온보딩/오프보딩) 화면에서 status 무관 전체 목록을 봐야
+        한다 — F3 검색(`/api/pool/search`)은 `status='active'`만 노출해서
+        온보딩 대기(pending_onboarding) 항목을 찾을 방법이 없었다."""
+        rows = conn.execute("SELECT * FROM agent_pool ORDER BY id DESC").fetchall()
+        return [
+            {
+                "id": row["id"],
+                "role_name": row["role_name"],
+                "skill_tags": json.loads(row["skill_tags"]),
+                "cost_estimate": row["cost_estimate"],
+                "performance_score": row["performance_score"],
+                "status": row["status"],
+            }
+            for row in rows
+        ]
 
     @app.post("/api/agent-pool/{agent_id}/onboard")
     def onboard_agent(
@@ -832,5 +923,11 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             "next_step_pending": next_step_pending,
             "assignment": assignment_result,
         }
+
+    @app.get("/", response_class=HTMLResponse)
+    def index():
+        """F11 — Web UI 셸(코드 재점검 R4). 위 JSON API를 그대로 호출하는 단일
+        페이지 바닐라 JS 앱이다 — 새 비즈니스 로직은 없다(webui.py)."""
+        return webui.INDEX_HTML
 
     return app
