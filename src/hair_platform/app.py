@@ -1,4 +1,4 @@
-"""HAIR-Platform API — Phase 3 v0–v3.
+"""HAIR-Platform API — Phase 3 v0–v4 (전체 개발 버전 완료).
 
 v0 범위(SPEC.md §9, ADR.md): Auth 최소구현(세션 기반, 결정 6) + RBAC 4종 역할(결정 3)
 + F1(브리프 제출, 규칙기반 스텁) + F12(Human Pool 온보딩) + 최소 승인 워크플로우
@@ -15,6 +15,10 @@ v3 범위 추가: F7(다단계 결재라인, 조직도 매니저 체인 자동 �
 F4(Job Queue+Docker 샌드박스로 Agent 생성, 실패 역할만 재시도 — `jobs.py`·
 `sandbox.py`) + F9(Agent 온보딩/오프보딩 — 이때 `pool.agent_pool_candidates()`가
 처음으로 실제 데이터를 반환하게 된다) + F13(감사로그, append-only — `audit.py`).
+
+v4(마지막 개발 버전) 범위 추가: F8(성과리뷰 — 사람 데이터는 사전 동의(opt-in) 없이는
+절대 노출하지 않는다, NF9 — `performance.py`) + F10(비용 조회, 1차는 수동 입력만
+— `cost.py`). 이로써 SPEC.md의 F1–F14가 전부 구현됐다.
 """
 
 from __future__ import annotations
@@ -26,16 +30,19 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from starlette.middleware.sessions import SessionMiddleware
 
 from hair_platform import approvals as approvals_mod
-from hair_platform import assignments, audit, db, jobs, pool
+from hair_platform import assignments, audit, cost, db, jobs, performance, pool
 from hair_platform.assignment import match_candidates
 from hair_platform.auth import Role, authenticate, get_current_user, require_role
 from hair_platform.models import (
     ApprovalDecision,
     AssignmentRequest,
     BriefSubmission,
+    ConsentRequest,
+    CostUpdateRequest,
     GenerateRequest,
     HumanPoolCreate,
     LoginRequest,
+    PerformanceScoreRequest,
     TaskDecomposition,
 )
 
@@ -281,6 +288,122 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         """F13 — 감사로그 조회(Admin·매니저 전용, NF12). append-only는 DB 트리거가 강제."""
         rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC").fetchall()
         return [dict(row) for row in rows]
+
+    @app.post("/api/human-pool/{human_id}/consent")
+    def set_performance_consent(
+        human_id: int,
+        payload: ConsentRequest,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """F8 — 사전 동의(opt-in, NF9). 본인 또는 Admin만 설정할 수 있다."""
+        human = conn.execute(
+            "SELECT * FROM human_pool WHERE id = ?", (human_id,)
+        ).fetchone()
+        if human is None:
+            raise HTTPException(
+                status_code=404, detail="Human Pool 레코드를 찾을 수 없습니다"
+            )
+        if human["user_id"] != user["id"] and user["role"] != Role.ADMIN.value:
+            raise HTTPException(
+                status_code=403,
+                detail="본인 또는 Admin만 동의를 설정할 수 있습니다(NF9)",
+            )
+        performance.set_human_consent(conn, human_id, payload.consent)
+        audit.record(
+            conn,
+            user["id"],
+            "performance_consent_set",
+            "human_pool",
+            human_id,
+            after={"consent": payload.consent},
+        )
+        conn.commit()
+        return {"id": human_id, "performance_consent": payload.consent}
+
+    @app.post("/api/human-pool/{human_id}/performance")
+    def set_human_performance_score(
+        human_id: int,
+        payload: PerformanceScoreRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """F8 — 성과 점수 입력. 동의 없이는 거부된다(NF9)."""
+        try:
+            performance.set_human_performance(conn, human_id, payload.score)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="사람을 찾을 수 없습니다"
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=403,
+                detail="동의 없이는 성과데이터를 수집할 수 없습니다(NF9)",
+            ) from exc
+        audit.record(
+            conn,
+            user["id"],
+            "human_performance_recorded",
+            "human_pool",
+            human_id,
+            after={"score": payload.score},
+        )
+        conn.commit()
+        return {"id": human_id, "performance_score": payload.score}
+
+    @app.post("/api/agent-pool/{agent_id}/performance")
+    def set_agent_performance_score(
+        agent_id: int,
+        payload: PerformanceScoreRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """F8 — Agent 성과 점수(사람이 아니므로 동의 불필요)."""
+        performance.set_agent_performance(conn, agent_id, payload.score)
+        audit.record(
+            conn,
+            user["id"],
+            "agent_performance_recorded",
+            "agent_pool",
+            agent_id,
+            after={"score": payload.score},
+        )
+        conn.commit()
+        return {"id": agent_id, "performance_score": payload.score}
+
+    @app.get("/api/performance-review")
+    def get_performance_review(
+        user: sqlite3.Row = Depends(
+            require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
+        ),
+    ):
+        """F8 — 성과리뷰 조회. Admin·매니저는 전체, 팀원은 본인 관련만(RBAC 매트릭스)."""
+        if user["role"] == Role.MEMBER.value:
+            return performance.review_for_member(conn, user["id"])
+        return performance.full_review(conn)
+
+    @app.post("/api/agent-pool/{agent_id}/cost")
+    def set_agent_cost(
+        agent_id: int,
+        payload: CostUpdateRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """F10 — Agent 비용 수동 입력(1차 범위)."""
+        cost.set_agent_cost(conn, agent_id, payload.cost_estimate)
+        audit.record(
+            conn,
+            user["id"],
+            "agent_cost_updated",
+            "agent_pool",
+            agent_id,
+            after={"cost_estimate": payload.cost_estimate},
+        )
+        conn.commit()
+        return {"id": agent_id, "cost_estimate": payload.cost_estimate}
+
+    @app.get("/api/cost-report")
+    def get_cost_report(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """F10 — 비용 조회(Admin·매니저 전용, RBAC 매트릭스)."""
+        return cost.report(conn)
 
     @app.get("/api/org-chart")
     def get_org_chart(user: sqlite3.Row = Depends(get_current_user)):

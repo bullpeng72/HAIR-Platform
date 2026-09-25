@@ -139,7 +139,7 @@
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [ ] F1–F14 전부 골든셋 케이스로 검증됨
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4, 총 37건 — Gate A–G 정식 배선 전까지는 pytest 골든셋 기준)
 - [ ] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동
 - [ ] RBAC·샌드박스·Audit Log 3중 기록 트랜잭션 원자성에 대한 보안/무결성 테스트 통과

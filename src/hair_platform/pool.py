@@ -5,6 +5,9 @@ ADR 결정 4: AgentContract·HumanProfile은 각자 `to_candidate()` 어댑터�
 채워지기 시작한다 — `status='active'`(F9 온보딩 승인 완료)인 항목만 후보로 노출한다.
 실제 AgentForge Code Generator/Verifier 연동은 아직 vendor/import되지 않아
 `agent_pool.skill_tags` 등은 `jobs.py`의 스텁 제너레이터 결과다(SPEC.md §12 오픈 이슈).
+
+v4부터 `performance_score`가 실제 값을 반환한다 — 사람은 `performance_consent`가
+참일 때만(NF9, F8), Agent는 동의 개념이 없어 그대로 노출한다.
 """
 
 from __future__ import annotations
@@ -43,7 +46,10 @@ def human_pool_candidates(
                 is_available=row["availability"] == "available",
                 cost=row["cost_estimate"],
                 skill_tags=skill_tags,
-                performance_score=None,  # F8 성과리뷰(v4) 전까지는 항상 null(동의 기반 수집 전)
+                # NF9: 동의(performance_consent) 없이는 절대 노출하지 않는다.
+                performance_score=(
+                    row["performance_score"] if row["performance_consent"] else None
+                ),
             )
         )
     return candidates
@@ -60,7 +66,7 @@ def agent_pool_candidates(conn: sqlite3.Connection) -> list[ResourceCandidate]:
             is_available=True,
             cost=row["cost_estimate"],
             skill_tags=json.loads(row["skill_tags"]),
-            performance_score=None,  # F8(Gate 평균) 전까지는 항상 null
+            performance_score=row["performance_score"],
         )
         for row in rows
     ]

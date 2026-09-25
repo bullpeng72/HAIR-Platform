@@ -1,4 +1,4 @@
-"""Pydantic v2 요청 모델 — v2 범위(F1·F2·F3·F5·F6·F12·F14·승인 결정)까지 다룬다."""
+"""Pydantic v2 요청 모델 — v4(전체) 범위까지 다룬다."""
 
 from __future__ import annotations
 
@@ -70,3 +70,21 @@ class GenerateRequest(BaseModel):
     """F4 — 생성 버튼. 부족한 역할(Task)들을 지정해 배치로 Agent 생성을 트리거한다."""
 
     task_ids: list[int]
+
+
+class ConsentRequest(BaseModel):
+    """F8 — 사람 성과데이터 수집 사전 동의(opt-in, NF9)."""
+
+    consent: bool
+
+
+class PerformanceScoreRequest(BaseModel):
+    """F8 — 성과 점수 입력(0~1). Gate 실측 배선 전까지는 수동 입력이다."""
+
+    score: float
+
+
+class CostUpdateRequest(BaseModel):
+    """F10 — Agent 비용 수동 입력(1차 범위, HR/LLM 과금 연동은 오픈 이슈)."""
+
+    cost_estimate: float

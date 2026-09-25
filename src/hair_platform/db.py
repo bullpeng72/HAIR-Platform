@@ -1,9 +1,10 @@
-"""SQLite 연결 및 스키마 — v3 범위(전체)까지 다룬다.
+"""SQLite 연결 및 스키마 — v4(전체) 범위까지 다룬다.
 
 ADR 결정 5: 실시간 쓰기가 빈번한 엔티티는 SQLite를 트랜잭션 RDB(WAL 모드)로 쓴다.
 ADR 결정 3: `approvals.step`·`approver_id`로 F7 다단계 결재라인(조직도 매니저 관계
 기반 자동 라우팅)을 표현한다. NF10: `audit_log`는 트리거로 UPDATE/DELETE를 막아
-append-only를 DB 레벨에서 강제한다.
+append-only를 DB 레벨에서 강제한다. NF9: `human_pool.performance_consent`가
+False이면 `performance_score`를 절대 채우지 않는다(F8, 사전 동의 기반 최소수집).
 """
 
 from __future__ import annotations
@@ -38,7 +39,9 @@ CREATE TABLE IF NOT EXISTS human_pool (
     availability TEXT NOT NULL DEFAULT 'available',
     cost_estimate REAL NOT NULL DEFAULT 0.0,
     manager_id INTEGER REFERENCES users(id),
-    user_id INTEGER REFERENCES users(id)
+    user_id INTEGER REFERENCES users(id),
+    performance_consent INTEGER NOT NULL DEFAULT 0,
+    performance_score REAL
 );
 
 CREATE TABLE IF NOT EXISTS briefs (
@@ -110,6 +113,7 @@ CREATE TABLE IF NOT EXISTS agent_pool (
     role_name TEXT NOT NULL,
     skill_tags TEXT NOT NULL DEFAULT '[]',
     cost_estimate REAL NOT NULL DEFAULT 0.0,
+    performance_score REAL,
     status TEXT NOT NULL DEFAULT 'pending_onboarding',
     source_job_item_id INTEGER REFERENCES job_items(id)
 );
