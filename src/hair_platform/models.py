@@ -12,6 +12,22 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class UserCreate(BaseModel):
+    """조직도(F5/F7) 코드 재점검 후 신규 — `users.manager_id`를 Web UI로 채울 수 있는
+    유일한 경로였던 부트스트랩 스크립트 의존을 없앤다(ADMIN 전용)."""
+
+    username: str
+    password: str
+    role: Literal["admin", "manager", "member", "viewer"]
+    manager_id: int | None = None
+
+
+class ManagerUpdate(BaseModel):
+    """F7 결재라인 자동라우팅이 참조하는 `users.manager_id`를 갱신한다(ADMIN 전용)."""
+
+    manager_id: int | None = None
+
+
 class BriefSubmission(BaseModel):
     """F1 — 규칙기반 스텁. 실제 Spec Interpreter(LLM) 연동은 이후 버전에서 이뤄진다."""
 

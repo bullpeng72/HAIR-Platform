@@ -41,7 +41,13 @@ from hair_platform import (
     pool,
 )
 from hair_platform.assignment import match_candidates
-from hair_platform.auth import Role, authenticate, get_current_user, require_role
+from hair_platform.auth import (
+    Role,
+    authenticate,
+    create_user,
+    get_current_user,
+    require_role,
+)
 from hair_platform.models import (
     ApprovalDecision,
     AssignmentRequest,
@@ -51,8 +57,10 @@ from hair_platform.models import (
     GenerateRequest,
     HumanPoolCreate,
     LoginRequest,
+    ManagerUpdate,
     PerformanceScoreRequest,
     TaskDecomposition,
+    UserCreate,
 )
 
 
@@ -84,6 +92,77 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             "role": user["role"],
         }
         return {"id": user["id"], "username": user["username"], "role": user["role"]}
+
+    @app.post("/api/users", status_code=201)
+    def create_user_account(
+        payload: UserCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """코드 재점검(2026-09-26)에서 발견한 누락 보완 — `users`·`manager_id`를
+        Web UI/API로 설정할 방법이 전무해 F7 결재라인이 항상 flat(단일 단계)으로
+        축소되던 갭을 닫는다. ADMIN 전용(사용자 계정 생성은 조직 관리 권한)."""
+        try:
+            new_id = create_user(
+                conn,
+                payload.username,
+                payload.password,
+                Role(payload.role),
+                payload.manager_id,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409, detail="이미 존재하는 username입니다"
+            ) from exc
+        audit.record(
+            conn,
+            user["id"],
+            "user_created",
+            "user",
+            new_id,
+            after={
+                "username": payload.username,
+                "role": payload.role,
+                "manager_id": payload.manager_id,
+            },
+        )
+        conn.commit()
+        return {"id": new_id, "username": payload.username, "role": payload.role}
+
+    @app.patch("/api/users/{user_id}/manager")
+    def set_user_manager(
+        user_id: int,
+        payload: ManagerUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """F7이 라우팅에 쓰는 `users.manager_id`를 갱신한다(ADMIN 전용)."""
+        target = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+        if payload.manager_id is not None:
+            manager = conn.execute(
+                "SELECT id FROM users WHERE id = ?", (payload.manager_id,)
+            ).fetchone()
+            if manager is None:
+                raise HTTPException(status_code=404, detail="매니저를 찾을 수 없습니다")
+            if payload.manager_id == user_id:
+                raise HTTPException(
+                    status_code=400, detail="본인을 상사로 지정할 수 없습니다"
+                )
+        conn.execute(
+            "UPDATE users SET manager_id = ? WHERE id = ?",
+            (payload.manager_id, user_id),
+        )
+        audit.record(
+            conn,
+            user["id"],
+            "user_manager_updated",
+            "user",
+            user_id,
+            before={"manager_id": target["manager_id"]},
+            after={"manager_id": payload.manager_id},
+        )
+        conn.commit()
+        return {"id": user_id, "manager_id": payload.manager_id}
 
     @app.post("/api/briefs", status_code=201)
     def submit_brief(
@@ -158,10 +237,14 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         available_only: bool = False,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """F3 — Human Pool + Agent Pool(스텁) 통합 검색. 전원 조회 가능(RBAC 매트릭스)."""
+        """F3 — Human Pool + Agent Pool(스텁) 통합 검색. 전원 조회 가능(RBAC 매트릭스).
+
+        코드 재점검(2026-09-26)에서 발견: role/skill 필터가 human_pool에만 걸리고
+        Agent Pool은 무조건 전부 반환되던 버그를 수정 — 양쪽에 동일 필터를 적용한다.
+        """
         candidates = pool.human_pool_candidates(
             conn, role=role, skill=skill, available_only=available_only
-        ) + pool.agent_pool_candidates(conn)
+        ) + pool.agent_pool_candidates(conn, role=role, skill=skill)
         rows = conn.execute("SELECT id, name FROM human_pool").fetchall()
         name_by_id = {row["id"]: row["name"] for row in rows}
         return [
@@ -423,19 +506,35 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
 
     @app.get("/api/org-chart")
     def get_org_chart(user: sqlite3.Row = Depends(get_current_user)):
-        """F5 — 조직도 조회. `confirmed` 배정만 노출한다(F5·F6 공유 assignments 테이블)."""
+        """F5 — 조직도 조회. `confirmed` 배정만 노출한다(F5·F6 공유 assignments 테이블).
+
+        코드 재점검(2026-09-26)에서 발견: Agent 배정은 `human_pool` LEFT JOIN이
+        전부 NULL이라 `manager_id=None` 버킷에 뭉뚱그려져 "사람과 Agent를 하나의
+        조직도 위에"라는 핵심 가치와 어긋났다 — Agent는 고용관계상 상사가 없으므로
+        그 업무를 실제로 요청·소유한 사람(`assignments.requested_by`)을 관리자로
+        귀속시킨다.
+        """
         rows = conn.execute("""
-            SELECT a.id AS assignment_id, a.task_id, a.resource_type,
-                   t.role_name, hp.name AS resource_name, hp.manager_id
+            SELECT a.id AS assignment_id, a.task_id, a.resource_type, a.resource_id,
+                   a.requested_by, t.role_name,
+                   hp.name AS human_name, hp.manager_id AS human_manager_id,
+                   ap.role_name AS agent_role_name
             FROM assignments a
             JOIN tasks t ON t.id = a.task_id
             LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
+            LEFT JOIN agent_pool ap ON ap.id = a.resource_id AND a.resource_type = 'agent'
             WHERE a.status = 'confirmed'
             """).fetchall()
 
         chart: dict[int | None, dict] = {}
         for row in rows:
-            manager_id = row["manager_id"]
+            if row["resource_type"] == "human":
+                manager_id = row["human_manager_id"]
+                resource_name = row["human_name"]
+            else:
+                # Agent는 상사가 없으니 이 배정을 요청/소유한 사람을 관리자로 삼는다.
+                manager_id = row["requested_by"]
+                resource_name = f"Agent#{row['resource_id']} ({row['agent_role_name']})"
             if manager_id not in chart:
                 manager_row = conn.execute(
                     "SELECT username FROM users WHERE id = ?", (manager_id,)
@@ -453,7 +552,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                     "task_id": row["task_id"],
                     "role_name": row["role_name"],
                     "resource_type": row["resource_type"],
-                    "resource_name": row["resource_name"],
+                    "resource_name": resource_name,
                 }
             )
         return list(chart.values())
@@ -462,8 +561,35 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     def create_approval(
         subject_type: str,
         subject_id: int,
-        user: sqlite3.Row = Depends(get_current_user),
+        user: sqlite3.Row = Depends(
+            require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
+        ),
     ):
+        """F1(브리프) 최소 단일승인 워크플로우 전용(ADR.md v0 범위, ADR 결정 3-A).
+
+        코드 재점검(2026-09-26)에서 발견한 심각한 우회 경로 수정: 이전엔 role
+        제한이 전혀 없고(get_current_user만) `subject_type`도 검증하지 않아,
+        VIEWER를 포함한 아무 로그인 사용자가 `subject_type=assignment`로 진행 중인
+        F7 다단계 결재라인과 무관한 rogue 승인 레코드(step=1, approver_id=NULL)를
+        만들 수 있었다 — `decide_approval`의 "지정된 승인자만" 체크는
+        approver_id가 NULL일 때 통과되므로, 체인 밖의 아무 Admin/Manager가 이
+        rogue 레코드를 승인하면 `resolve_assignment_decision`이 subject_id만 보고
+        배정을 조기 확정/반려시킬 수 있었다. 이 엔드포인트는 설계상 F1(브리프)
+        단일승인 전용이었으므로 subject_type을 그 범위로 고정해 우회로를 닫는다.
+        `assignment` 승인은 `POST /api/tasks/{task_id}/assignments`(F6)가 만드는
+        정식 체인으로만 생성되게 한다.
+        """
+        if subject_type != "brief":
+            raise HTTPException(
+                status_code=400,
+                detail="이 엔드포인트는 brief 승인 전용입니다(assignment는 F6 배정 "
+                "요청을 통해서만 결재라인이 생성됩니다)",
+            )
+        brief = conn.execute(
+            "SELECT id FROM briefs WHERE id = ?", (subject_id,)
+        ).fetchone()
+        if brief is None:
+            raise HTTPException(status_code=404, detail="브리프를 찾을 수 없습니다")
         cur = conn.execute(
             "INSERT INTO approvals (requested_by, subject_type, subject_id) VALUES (?, ?, ?)",
             (user["id"], subject_type, subject_id),

@@ -109,6 +109,44 @@ SKILL.md`). 나머지 3개(`human-agent-assignment-check`·`org-chart-sync`·
 승인이 Autopilot 워크플로 상으로 공식 발동하지는 않는다 — 이 문서와 SPEC.md §8
 갱신이 그 승인 기록을 대체한다.
 
+## 7. 코드 레벨 재점검(2026-09-26) — 4건 발견·전부 수정 완료
+
+기획 문서가 아니라 **실제 구현 코드**를 대상으로 데이터 흐름·프로세스 오류/Gray
+영역/누락을 재점검했다(그 전까지 5회는 기획 문서 대상 리뷰였다). 42건이던
+골든셋 테스트가 커버하지 못하던 경로 위주로 확인했고, 발견한 4건 전부 즉시
+수정하고 회귀 테스트(GC42–46, `tests/unit/test_phase5_review_fixes.py`)로
+고정했다 — pytest 47건 전부 통과.
+
+**7-1. `POST /api/approvals`가 F7 결재라인을 우회하던 심각한 구멍(수정 완료)**:
+이 엔드포인트만 `require_role` 없이 `get_current_user`만 걸려 있어 VIEWER를
+포함한 아무 로그인 사용자가 `subject_type=assignment`로 정식 결재라인과 무관한
+rogue 승인(step=1, approver_id=NULL)을 만들 수 있었다. `decide_approval`은
+`approver_id IS NULL`이면 승인자 지정 체크를 건너뛰고 `subject_id`만으로 배정을
+확정하므로, 체인 밖의 임의 Admin/Manager가 이 rogue 레코드를 승인하면 진행 중인
+배정을 조기 확정/반려시킬 수 있었다. **수정**: 이 엔드포인트를 설계 원래 범위인
+F1(브리프) 단일승인 전용으로 고정(`subject_type != "brief"`면 400) + role을
+ADMIN/MANAGER/MEMBER로 제한 + brief 존재 검증 추가.
+
+**7-2. F3 검색의 role/skill 필터가 Agent Pool에는 적용 안 됨(수정 완료)**:
+`agent_pool_candidates()`에 필터 인자 자체가 없어 검색 결과에 역할 무관 Agent가
+항상 섞여 나왔다. `human_pool_candidates()`와 동일한 필터를 추가했다.
+
+**7-3. 조직도(F5)가 Agent 배정의 관리자 귀속을 못 보여줌(수정 완료)**: Agent는
+`human_pool` LEFT JOIN 대상이 아니라 전부 `manager_id=None` 버킷으로 뭉개졌다 —
+"사람과 Agent를 하나의 조직도 위에"라는 핵심 가치와 어긋났다. Agent는 고용관계상
+상사가 없으므로 배정을 요청·소유한 사람(`assignments.requested_by`)을 관리자로
+귀속시키도록 수정했다.
+
+**7-4. `users.manager_id`를 Web UI/API로 설정할 방법이 전무했던 누락(수정 완료)**:
+F7 전체가 이 컬럼에 의존하는데 이를 채울 엔드포인트가 없어(사용자 생성 자체도
+API로 노출 안 됨) 실사용 시 모든 사용자가 flat 상태로 남고, 그 결과 F7의
+"지정된 승인자만" 체크가 한 번도 실전에서 발동한 적이 없었다(모든 테스트
+픽스처도 `manager_id=None`이라 이 갭이 42건 골든셋을 다 통과하고도 드러나지
+않았다). `POST /api/users`(ADMIN 전용, 계정 생성) + `PATCH
+/api/users/{id}/manager`(ADMIN 전용, 상사 지정)를 추가해 F7을 실제로 다단계로
+쓸 수 있게 했다 — GC46이 매니저 지정 후 `approver_id`가 실제로 채워지고, 체인
+밖 매니저는 403으로 거부됨을 검증한다.
+
 ## 요약
 
 | 항목 | 상태 |
@@ -119,3 +157,4 @@ SKILL.md`). 나머지 3개(`human-agent-assignment-check`·`org-chart-sync`·
 | Skills 신규 발굴 | 1/4건 완료(`rbac-permission-audit`), 나머지는 3회+ 기준 미충족 |
 | NF7 idempotency | **구현 갭 발견 → 수정 완료** |
 | NF4 배정 공정성 지표 | 구현 완료, 표본 부족으로 해석 보류 |
+| 코드 레벨 재점검 4건(승인 우회·검색 필터·조직도 귀속·manager_id 누락) | **전부 발견 → 전부 수정 완료(GC42–46)** |

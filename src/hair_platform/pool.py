@@ -55,18 +55,39 @@ def human_pool_candidates(
     return candidates
 
 
-def agent_pool_candidates(conn: sqlite3.Connection) -> list[ResourceCandidate]:
-    """F9에서 온보딩(`status='active'`)된 Agent만 후보로 노출한다."""
-    rows = conn.execute("SELECT * FROM agent_pool WHERE status = 'active'").fetchall()
-    return [
-        ResourceCandidate(
-            id=row["id"],
-            type="agent",
-            role=row["role_name"],
-            is_available=True,
-            cost=row["cost_estimate"],
-            skill_tags=json.loads(row["skill_tags"]),
-            performance_score=row["performance_score"],
+def agent_pool_candidates(
+    conn: sqlite3.Connection,
+    role: str | None = None,
+    skill: str | None = None,
+) -> list[ResourceCandidate]:
+    """F9에서 온보딩(`status='active'`)된 Agent만 후보로 노출한다.
+
+    F3 검색 버그 수정(코드 재점검): `role`/`skill` 필터가 human_pool_candidates
+    에만 있고 여기엔 없어서 검색 결과에 무관한 Agent가 항상 섞여 나왔다 —
+    human_pool_candidates와 동일한 필터 규약을 맞춘다. `available_only`는
+    Agent에 해당 없다(온보딩된 Agent는 항상 available).
+    """
+    query = "SELECT * FROM agent_pool WHERE status = 'active'"
+    params: list[object] = []
+    if role:
+        query += " AND role_name LIKE ?"
+        params.append(f"%{role}%")
+
+    rows = conn.execute(query, params).fetchall()
+    candidates = []
+    for row in rows:
+        skill_tags = json.loads(row["skill_tags"])
+        if skill and skill not in skill_tags:
+            continue
+        candidates.append(
+            ResourceCandidate(
+                id=row["id"],
+                type="agent",
+                role=row["role_name"],
+                is_available=True,
+                cost=row["cost_estimate"],
+                skill_tags=skill_tags,
+                performance_score=row["performance_score"],
+            )
         )
-        for row in rows
-    ]
+    return candidates

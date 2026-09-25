@@ -121,6 +121,7 @@
 | v2 | Org Chart+배분 UI(F5·F6), `assignment_history` 도입 | 8건(재배치 시나리오 포함) |
 | v3 | Approval Workflow 다단계(F7), Job Queue+샌드박스(F4 비동기), Audit Log(F13) | 8건(승인 경로 3단계 이상 1건 포함) |
 | v4 | Performance Review(F8)+Cost Tracker(F10)+F9 | 10건(성과리뷰·비용 통합 검증) |
+| Phase 5(코드 재점검) | 승인 우회 차단·F3 Agent 필터·조직도 Agent 귀속·`users.manager_id` API 추가(`docs/LIMITS.md` §7) | 5건(GC42–46) |
 
 ## 10. 설계 결정
 
@@ -140,7 +141,7 @@
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4, 총 37건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+Phase 5, 총 47건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
 - [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 실제 실행은 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동
 - [~] RBAC·샌드박스·Audit Log 3중 기록 트랜잭션 원자성에 대한 보안/무결성 테스트 통과 — 부분: 샌드박스 우회 방지·NF7 idempotency·append-only 트리거는 검증 완료, Docker 실제 격리 동작은 미검증(`docs/LIMITS.md` §2)
