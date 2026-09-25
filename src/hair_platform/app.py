@@ -1,4 +1,4 @@
-"""HAIR-Platform API — Phase 3 v0–v1.
+"""HAIR-Platform API — Phase 3 v0–v2.
 
 v0 범위(SPEC.md §9, ADR.md): Auth 최소구현(세션 기반, 결정 6) + RBAC 4종 역할(결정 3)
 + F1(브리프 제출, 규칙기반 스텁) + F12(Human Pool 온보딩) + 최소 승인 워크플로우
@@ -6,7 +6,12 @@ v0 범위(SPEC.md §9, ADR.md): Auth 최소구현(세션 기반, 결정 6) + RBA
 
 v1 범위 추가: F2(Review UI — Task 분해 결과 검토, 후보 매칭 미포함 — ADR 결정 1-A) +
 F3(Pool 통합 검색) + Assignment Engine 매칭(F14 점수 breakdown 포함, `assignment.py`).
-F4(Agent 생성)·F5/F6(조직도·배분 확정)·F7(다단계 결재라인)·F13(감사로그)는 v2 이후 범위다.
+
+v2 범위 추가: F6(배분 요청 → 승인 후 확정, `assignments`+`assignment_history`
+트랜잭션 원자성 — ADR 결정 7) + F5(조직도 조회, confirmed 배정만 노출) + 재배치
+(같은 task 재승인 시 이전 confirmed 배정을 superseded로 전환, `assignments.py`).
+
+F4(Agent 생성)·F7(다단계 결재라인)·F13(감사로그)는 v3 이후 범위다.
 """
 
 from __future__ import annotations
@@ -17,11 +22,12 @@ import sqlite3
 from fastapi import Depends, FastAPI, HTTPException, Request
 from starlette.middleware.sessions import SessionMiddleware
 
-from hair_platform import db, pool
+from hair_platform import assignments, db, pool
 from hair_platform.assignment import match_candidates
 from hair_platform.auth import Role, authenticate, get_current_user, require_role
 from hair_platform.models import (
     ApprovalDecision,
+    AssignmentRequest,
     BriefSubmission,
     HumanPoolCreate,
     LoginRequest,
@@ -176,6 +182,57 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             ],
         }
 
+    @app.post("/api/tasks/{task_id}/assignments", status_code=201)
+    def request_assignment(
+        task_id: int,
+        payload: AssignmentRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """F6 — 배정 요청. 승인(F7) 전까지는 `requested` 상태로만 남는다(NF3)."""
+        task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task를 찾을 수 없습니다")
+        return assignments.create_assignment_request(
+            conn, task_id, payload.resource_type, payload.resource_id, user["id"]
+        )
+
+    @app.get("/api/org-chart")
+    def get_org_chart(user: sqlite3.Row = Depends(get_current_user)):
+        """F5 — 조직도 조회. `confirmed` 배정만 노출한다(F5·F6 공유 assignments 테이블)."""
+        rows = conn.execute("""
+            SELECT a.id AS assignment_id, a.task_id, a.resource_type,
+                   t.role_name, hp.name AS resource_name, hp.manager_id
+            FROM assignments a
+            JOIN tasks t ON t.id = a.task_id
+            LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
+            WHERE a.status = 'confirmed'
+            """).fetchall()
+
+        chart: dict[int | None, dict] = {}
+        for row in rows:
+            manager_id = row["manager_id"]
+            if manager_id not in chart:
+                manager_row = conn.execute(
+                    "SELECT username FROM users WHERE id = ?", (manager_id,)
+                ).fetchone()
+                chart[manager_id] = {
+                    "manager_id": manager_id,
+                    "manager_username": (
+                        manager_row["username"] if manager_row else None
+                    ),
+                    "reports": [],
+                }
+            chart[manager_id]["reports"].append(
+                {
+                    "assignment_id": row["assignment_id"],
+                    "task_id": row["task_id"],
+                    "role_name": row["role_name"],
+                    "resource_type": row["resource_type"],
+                    "resource_name": row["resource_name"],
+                }
+            )
+        return list(chart.values())
+
     @app.post("/api/approvals", status_code=201)
     def create_approval(
         subject_type: str,
@@ -200,6 +257,9 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         ).fetchone()
         if approval is None:
             raise HTTPException(status_code=404, detail="승인 요청을 찾을 수 없습니다")
+        if approval["status"] != "pending":
+            # NF3: 이미 처리된 승인을 재처리해 결재라인을 우회하지 못하게 막는다.
+            raise HTTPException(status_code=409, detail="이미 처리된 승인입니다")
         if approval["requested_by"] == user["id"]:
             # ADR 결정 3-A: self-approval 방지
             raise HTTPException(
@@ -207,11 +267,25 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 detail="본인이 요청한 건은 승인할 수 없습니다(ADR 결정 3-A)",
             )
         new_status = "approved" if payload.approve else "rejected"
-        conn.execute(
-            "UPDATE approvals SET status = ?, approved_by = ? WHERE id = ?",
-            (new_status, user["id"], approval_id),
-        )
-        conn.commit()
-        return {"id": approval_id, "status": new_status}
+        try:
+            conn.execute(
+                "UPDATE approvals SET status = ?, approved_by = ? WHERE id = ?",
+                (new_status, user["id"], approval_id),
+            )
+            assignment_result = None
+            if approval["subject_type"] == "assignment":
+                # ADR 결정 7: approvals·assignments·assignment_history를 한 트랜잭션으로 커밋.
+                assignment_result = assignments.resolve_assignment_decision(
+                    conn, approval["subject_id"], payload.approve, user["id"]
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return {
+            "id": approval_id,
+            "status": new_status,
+            "assignment": assignment_result,
+        }
 
     return app

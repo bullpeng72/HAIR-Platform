@@ -1,4 +1,4 @@
-"""Pydantic v2 요청 모델 — v1 범위(F1·F2·F3·F12·F14·승인 결정)까지 다룬다."""
+"""Pydantic v2 요청 모델 — v2 범위(F1·F2·F3·F5·F6·F12·F14·승인 결정)까지 다룬다."""
 
 from __future__ import annotations
 
@@ -57,3 +57,10 @@ class ResourceCandidate(BaseModel):
     cost: float
     skill_tags: list[str]
     performance_score: float | None = None
+
+
+class AssignmentRequest(BaseModel):
+    """F6 — 배분 화면에서 매니저가 후보를 배정 요청한다(상태는 항상 requested로 시작)."""
+
+    resource_type: Literal["human", "agent"]
+    resource_id: int
