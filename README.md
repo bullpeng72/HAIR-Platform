@@ -5,9 +5,10 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 47
-passed). 코드 레벨 재점검(2026-09-26)에서 발견한 4건(승인 우회·검색 필터·조직도
-귀속·`manager_id` 누락)도 전부 수정 완료(`docs/LIMITS.md` §7). `release_hold`
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 51
+passed). 코드 레벨 재점검을 2회 진행해 발견한 8건(R1: 승인 우회·검색 필터·조직도
+귀속·`manager_id` 누락, R2: 승인 inbox·사용자 목록·감사로그 페이지네이션·
+secret_key 하드코딩)도 전부 수정 완료(`docs/LIMITS.md` §7·§8). `release_hold`
 (Phase 7)는 사용자 선택으로 보류 — 알려진 갭은 `docs/LIMITS.md`, 기획 대비 실제
 구현 비교는 `docs/RETROSPECTIVE.md` 참고.
 
@@ -16,7 +17,7 @@ passed). 코드 레벨 재점검(2026-09-26)에서 발견한 4건(승인 우회�
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 47건(오프라인, LLM 호출 없음)
+pytest tests/ -q        # 골든셋 51건(오프라인, LLM 호출 없음)
 ```
 
 Gate A–G 실측(선택, 배선은 돼 있으나 실행은 보류돼 있음 — `docs/LIMITS.md` §1):
@@ -34,7 +35,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(24개 엔드포인트)
+  app.py             # FastAPI 라우트(26개 엔드포인트)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -53,7 +54,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 42건
+tests/unit/                            # 골든셋 51건
 ```
 
 ## 로드맵

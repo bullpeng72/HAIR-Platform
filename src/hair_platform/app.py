@@ -24,6 +24,7 @@ v4(마지막 개발 버전) 범위 추가: F8(성과리뷰 — 사람 데이터�
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -72,8 +73,14 @@ def parse_brief_stub(raw_text: str) -> list[str]:
 
 def create_app(db_path: str = ":memory:") -> FastAPI:
     app = FastAPI(title="HAIR-Platform")
-    # ADR 결정 6: 세션 기반 인증(SessionMiddleware). secret_key는 배포 시 환경변수로 교체한다.
-    app.add_middleware(SessionMiddleware, secret_key="dev-secret-change-in-production")
+    # ADR 결정 6: 세션 기반 인증(SessionMiddleware).
+    # 코드 재점검(2026-09-26)에서 발견: "배포 시 환경변수로 교체한다"는 주석만 있고
+    # 실제로 환경변수를 읽는 코드가 없어 항상 소스에 공개된 고정 키를 쓰던 오류를
+    # 수정 — HAIR_PLATFORM_SECRET_KEY가 없으면 개발용 기본값으로 폴백한다.
+    secret_key = os.environ.get(
+        "HAIR_PLATFORM_SECRET_KEY", "dev-secret-change-in-production"
+    )
+    app.add_middleware(SessionMiddleware, secret_key=secret_key)
 
     conn = db.get_connection(db_path)
     db.init_schema(conn)
@@ -163,6 +170,15 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         )
         conn.commit()
         return {"id": user_id, "manager_id": payload.manager_id}
+
+    @app.get("/api/users")
+    def list_users(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """코드 재점검(2026-09-26)에서 발견한 누락 보완 — PATCH .../manager를
+        쓰려면 상사로 지정할 user_id를 조회할 방법이 있어야 하는데 없었다."""
+        rows = conn.execute(
+            "SELECT id, username, role, manager_id FROM users ORDER BY id"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     @app.post("/api/briefs", status_code=201)
     def submit_brief(
@@ -375,11 +391,37 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
 
     @app.get("/api/audit-log")
     def get_audit_log(
+        limit: int = 50,
+        offset: int = 0,
+        actor_id: int | None = None,
+        subject_type: str | None = None,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """F13 — 감사로그 조회(Admin·매니저 전용, NF12). append-only는 DB 트리거가 강제."""
-        rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC").fetchall()
-        return [dict(row) for row in rows]
+        """F13 — 감사로그 조회(Admin·매니저 전용, NF12). append-only는 DB 트리거가 강제.
+
+        코드 재점검(2026-09-26)에서 발견: 페이지네이션/필터 없이 전체 테이블을
+        반환하던 것을 고쳤다 — append-only라 무한정 커지는 테이블을 무제한
+        반환하면 응답 크기·지연 문제로 이어진다.
+        """
+        limit = max(1, min(limit, 200))
+        query = "SELECT * FROM audit_log WHERE 1=1"
+        params: list[object] = []
+        if actor_id is not None:
+            query += " AND actor_id = ?"
+            params.append(actor_id)
+        if subject_type is not None:
+            query += " AND subject_type = ?"
+            params.append(subject_type)
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = conn.execute(query, params).fetchall()
+        total = conn.execute("SELECT COUNT(*) AS c FROM audit_log").fetchone()["c"]
+        return {
+            "items": [dict(row) for row in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     @app.post("/api/human-pool/{human_id}/consent")
     def set_performance_consent(
@@ -556,6 +598,49 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 }
             )
         return list(chart.values())
+
+    @app.get("/api/approvals")
+    def list_approvals(
+        scope: str = "inbox",
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """코드 재점검(2026-09-26)에서 발견한 누락 보완 — 승인권자가 자신에게 무엇이
+        결재 대기 중인지 조회할 API가 전무했다(F7이 이론상으로만 동작). `decide_approval`
+        의 권한 로직과 동일한 기준으로 "내가 지금 결정할 수 있는 건"만 보여준다.
+
+        - `scope=mine`(누구나): 내가 요청한 승인 전체(상태 무관).
+        - `scope=inbox`(Admin/매니저 전용, 기본값): 아직 `pending`이고, 내가
+          요청자가 아니며(self-approval 제외, ADR 결정 3-A), Admin이면 전부,
+          매니저면 승인자 미지정이거나 나로 지정된 건만.
+        """
+        if scope == "mine":
+            rows = conn.execute(
+                "SELECT * FROM approvals WHERE requested_by = ? ORDER BY id DESC",
+                (user["id"],),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        if scope != "inbox":
+            raise HTTPException(
+                status_code=400, detail="scope는 inbox 또는 mine이어야 합니다"
+            )
+        if user["role"] not in (Role.ADMIN.value, Role.MANAGER.value):
+            raise HTTPException(
+                status_code=403,
+                detail="승인 대기함은 Admin/매니저만 조회할 수 있습니다",
+            )
+        if user["role"] == Role.ADMIN.value:
+            rows = conn.execute(
+                "SELECT * FROM approvals WHERE status = 'pending' AND requested_by != ? "
+                "ORDER BY id ASC",
+                (user["id"],),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM approvals WHERE status = 'pending' AND requested_by != ? "
+                "AND (approver_id IS NULL OR approver_id = ?) ORDER BY id ASC",
+                (user["id"], user["id"]),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     @app.post("/api/approvals", status_code=201)
     def create_approval(

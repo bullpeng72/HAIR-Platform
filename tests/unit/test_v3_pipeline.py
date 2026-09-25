@@ -155,7 +155,7 @@ def test_gc23_audit_log_records_writes_and_is_role_restricted(client_and_conn):
 
     resp = client.get("/api/audit-log")
     assert resp.status_code == 200
-    actions = {row["action"] for row in resp.json()}
+    actions = {row["action"] for row in resp.json()["items"]}
     assert "agent_generation_succeeded" in actions
 
     _login(client, "viewer1", "viewerpass")
