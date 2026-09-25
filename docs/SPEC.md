@@ -37,7 +37,7 @@
 | ID | 요구사항 | 대응 컴포넌트 | AgentForge 재사용 |
 |---|---|---|---|
 | F1 | Web UI 브리프 입력 폼 제출 → GoldenData 파싱 결과 미리보기 | Spec Interpreter + 신규 POST API | 로직 재사용, API 신규 |
-| F2 | Review UI에서 Task 분해·후보 매칭 결과를 검토하고 필요시 수동 재선택 | Resource Designer + Review UI(신규) | 확장 필요 |
+| F2 | Review UI에서 Resource Designer가 산출한 Task 분해 결과(필요 역할·인원)를 검토·조정(후보 매칭은 포함하지 않음 — 매칭은 F6, ADR 결정 1-A) | Resource Designer + Review UI(신규) | 확장 필요 |
 | F3 | Pool(Agent+사람) 통합 검색·필터(Human Pool 포함) | Composer→Resource Pool 확장 | 확장 필요 |
 | F4 | 생성 버튼 → 신규 Agent 생성 트리거, Job 상태(pending/running/succeeded/failed/partial) 추적, 실패 역할만 재시도 | Code Generator+Verifier + Job Queue(샌드박스 실행) | 로직 재사용, 비동기+샌드박스 신규 |
 | F5 | 조직도 화면에서 배치 조회·드래그 재배치(F6과 동일 `assignments` 테이블 공유) | Org Chart(신규) | 신규 |
@@ -131,9 +131,11 @@
 - **`audit_log`는 append-only**이며 수정·삭제를 허용하지 않는다(LIMITS L7 교훈 반영 — 상태값만이 아니라 이전/이후 값을 함께 저장해야 실제 발동을 증명 가능). F13은 Admin·매니저 role만 접근 가능하다.
 - **`assignments`의 상태 변경은 `assignment_history`에 스냅샷으로 남긴다**(현재 상태 UPDATE만으로 이력을 대체하지 않는다) — F6 핵심 차별화(팀간 유동적 재배치)의 신뢰성 증거 데이터.
 - **F6/F7 배정 확정 처리 시 `assignments`·`assignment_history`·`audit_log` 3중 기록은 하나의 DB 트랜잭션으로 커밋**한다(부분 실패 시 전체 롤백).
-- **F2(Review UI)와 F6(배분 화면)의 역할 중복 여부**: 별개 화면으로 유지할지 통합할지는 미정 — Phase 2 ADR에서 확정한다(오픈 이슈).
+- **F2(Review UI)와 F6(배분 화면)의 역할 경계**: F2는 Task 분해 결과(필요 역할·인원)만 검토하고, 후보 매칭·배정은 F6이 전담한다 — 별개 화면 유지로 확정(ADR 결정 1-A).
+- **RBAC 권한 매트릭스**: F1–F14 × Admin/매니저/팀원/뷰어 접근권한 확정(ADR 결정 3), **F7 self-approval 방지**(배정 요청자 본인은 그 건을 승인 불가, ADR 결정 3-A) 포함.
+- **Job Queue 샌드박스**: Docker 컨테이너(`--cpus`·`--memory` 쿼터, `--network=none`, 타임아웃)로 확정(ADR 결정 8) — Docker 런타임이 배포 요건에 추가된다.
 
-이 결정들은 Part IV(설계 단계)의 ADR에서 공식적으로 재확인·기록된다 — 여기서의 확정은 저장소 부트스트랩을 진행하기 위한 실무적 가결정이며, `adr_review` 승인이 최종 확정이다.
+이 결정들은 `docs/ADR.md`(Phase 2, `adr_review` 대기)에서 공식적으로 재확인·기록된다 — 여기서의 확정은 저장소 부트스트랩을 진행하기 위한 실무적 가결정이며, `adr_review` 승인이 최종 확정이다.
 
 ## 11. 완료 정의 (Definition of Done)
 
@@ -154,3 +156,5 @@
 - `assignment_history`·`audit_log` 보관기간 정책(개인정보보호법 대응)
 - Audit Log의 SQLite 쓰기 부하 확장성(실사용 규모 부하테스트 필요)
 - 초기 타깃 업종/조직 규모, 배포 모델(온프레미스 vs SaaS) 확정
+- 팀원의 셀프서비스 요구(예: 본인이 직접 배정 요청)가 실사용에서 크면 RBAC 권한 매트릭스(ADR 결정 3) 완화 재검토
+- Docker 런타임 설치를 배포 필수 요건으로 문서화(README·설치 가이드, ADR 결정 8)

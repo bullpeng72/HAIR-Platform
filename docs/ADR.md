@@ -1,0 +1,150 @@
+# ADR — HAIR-Platform 아키텍처 결정
+
+> 《하네스 메서드》 §17 ADR 형식. `adr_review` 승인 대상. SPEC.md §10의 가결정을 여기서
+> 공식 재확인하고, 신규 컴포넌트 역할분리·Tier 배정·RBAC 권한 매트릭스·샌드박스 구현
+> 방식 등 SPEC.md에서 "오픈 이슈" 또는 "가결정"으로 남겨뒀던 항목을 확정한다.
+
+## 배경
+
+SPEC.md(DRAFT, `spec_review` 대기)가 F1–F14를 정의했다. "HAIR 플랫폼 기획안" 문서의
+1~5차 재검토에서 데이터 흐름의 논리적 모순은 해소했지만, 구조적 설계 결정(컴포넌트
+경계, Tier 배정, 권한 매트릭스, 샌드박스 구체 기술)은 "Phase 2 ADR에서 확정"으로
+미뤄둔 상태였다. 이 ADR이 그 결정들을 내린다.
+
+## 결정 1 — 7-컴포넌트 역할 분리 (신규 모듈)
+
+| 컴포넌트 | 담당 요구사항 | 입력 | 출력 |
+|---|---|---|---|
+| Resource Designer | F2 | GoldenData(Spec Interpreter 출력) | Task 분해 결과(필요 역할 목록·인원) |
+| Assignment Engine | F3, F6, F14 | Task 분해 결과 + Agent Pool + Human Pool | Top3 후보 + 점수 breakdown, 배정요청(`requested`) |
+| Human Pool | F12 | 온보딩 폼 입력 | ResourceCandidate(사람) |
+| Approval Workflow | F7 | 배정요청(`requested`) | 승인/반려, `confirmed` 상태 전환 |
+| Job Queue / Worker | F4 | 생성 트리거(부족 역할) | 신규 Agent(AgentForge 파이프라인 결과), Job 상태 |
+| Auth + RBAC | F11 전반 | 로그인 요청, API 호출 | 세션, 권한 허용/거부 |
+| Audit Log | F13 | 모든 쓰기 액션 이벤트(F4·F6·F7·F9) | 조회 가능한 append-only 이력 |
+
+**결정 1-A — F2/F6 경계 확정(3차 재검토 오픈 이슈 해소)**: F2(Review UI)는 **Task
+분해 결과만** 검토·조정한다(어떤 역할이 몇 명 필요한지) — 후보 매칭 결과는 포함하지
+않는다. 후보 매칭(누가 그 역할을 맡을지)은 F2 **이후** Assignment Engine이 수행하고,
+그 결과를 F6(배분 화면)에서 매니저가 확인·배정 요청한다. 즉 SI → Resource Designer(F2,
+역할분해) → Assignment Engine(F3/F6/F14, 후보매칭) 순서이며 두 화면은 서로 다른
+대상(역할구조 vs 후보인물)을 검토하므로 중복이 아니다.
+
+> SPEC.md F2 문구("Task 분해·후보 매칭 결과를 검토")가 이 경계와 어긋나 이 ADR과 함께
+> "Task 분해 결과를 검토"로 정정한다(§ SPEC.md 패치 참고).
+
+**대안 검토**: F2와 F6을 하나의 화면으로 통합하는 안을 검토했으나 기각 — 역할분해(구조
+결정, 매니저 판단 필요)와 후보선택(매칭 알고리즘 결과 확인, 다른 성격의 판단)을 한
+화면에 섞으면 "이 화면에서 뭘 확정하는 건지" 사용자가 혼동하기 쉽고, 3차 재검토에서
+지적된 "중복처럼 보이는" 문제를 UI 레벨에서 완전히 없애지 못한다. 두 화면을 유지하되
+책임을 위처럼 명확히 분리하는 쪽을 택한다.
+
+## 결정 2 — Tier 배정: 신규 컴포넌트 중 LLM 추론이 필요한 것은 없다
+
+AgentForge ADR(결정 1·2)은 Spec Interpreter·Team Designer를 Tier 1(AC), Code
+Generator·Verifier를 Tier 2(AOO)로 배정했다. 이 프로젝트는 이 배정을 **그대로
+재사용**한다(Resource Designer는 Team Designer를 확장한 것뿐, 별도 LLM 호출 추가 없음).
+
+**신규 컴포넌트(Assignment Engine·Human Pool·Approval Workflow·Job Queue·Auth·Audit
+Log)에는 원칙5의 Tier 1/2 프레임워크가 적용되지 않는다** — 전부 결정론적 로직(CRUD,
+가중치 스코어링, 상태머신, 권한 검사)이며 LLM 판단이 개입하지 않기 때문이다.
+
+**대안 검토**: Assignment Engine의 "적합도" 계산에 LLM을 사용해 스킬 매칭을 더 정교하게
+하는 안을 검토했으나 기각 — AgentForge의 Pool 매칭 자체가 이미 "역할명 겹침이라는 아주
+단순한 휴리스틱"(`docs/LIMITS_T-D8D8CE.md` 실측 기록)으로 충분히 작동한 선례가 있고
+(원칙4: 이미 있는 패턴 재사용), 결정론적 스코어링이라야 F14(점수 breakdown 표시)가
+사용자에게 "왜 이 점수인지" 재현 가능하게 설명할 수 있다. LLM 기반 스코어링은 설명
+가능성(explainability)을 해치므로 채택하지 않는다.
+
+## 결정 3 — RBAC 역할모델 + 권한 매트릭스 확정
+
+역할 4종(Admin/매니저/팀원/뷰어)과 F1–F14의 접근 권한을 다음과 같이 확정한다.
+
+| F-item | Admin | 매니저 | 팀원 | 뷰어 |
+|---|---|---|---|---|
+| F1 브리프 제출 | O | O | O | X |
+| F2 Review UI(역할분해 검토) | O | O | X | X |
+| F3 Pool 검색 | O | O | O | O |
+| F4 생성 트리거 | O | O | X | X |
+| F5 조직도 조회 / 배치 조작 | O(조회+조작) | O(조회+조작) | O(조회만) | O(조회만) |
+| F6 배정 요청 | O | O | X | X |
+| F7 승인/반려 | O | O(단, 본인이 요청한 건은 승인 불가 — 결정 3-A) | X | X |
+| F8 성과리뷰 | O(전체) | O(전체) | O(본인 관련만) | X |
+| F9 온보딩/오프보딩 | O | X | X | X |
+| F10 비용 조회 | O | O | X | X |
+| F12 Human Pool 온보딩 | O | O | X | X |
+| F13 감사로그 | O | O | X | X |
+| F14 점수 breakdown | O | O(요청자 본인) | X | X |
+
+**결정 3-A — Self-approval 방지**: F7에서 배정을 **요청한 사람 본인은 그 건을 승인할
+수 없다**(RBAC상 매니저 권한이 있어도). Approval Workflow는 `requested_by`와
+`approved_by`가 같으면 거부한다. 결재라인의 최소 신뢰 요건이며, NF3(결재라인 우회
+방지)의 연장선이다.
+
+**대안 검토**: F9(온보딩/오프보딩)를 매니저에게도 허용하는 안을 검토했으나 기각 —
+Agent 라이프사이클(특히 오프보딩)은 진행 중인 배정에 연쇄 영향을 주므로(§결정 8 참고)
+Admin으로 좁혀 오작동 범위를 줄인다. 실사용에서 매니저 요청이 많으면 Phase 4 이후
+재검토한다(오픈 이슈로 기록).
+
+## 결정 4 — ResourceCandidate 공통 인터페이스 (SPEC §10 재확인)
+
+`ResourceCandidate`(Pydantic v2): `id`·`type(human|agent)`·`role`·`availability`·
+`cost`·`skill_tags`·`performance_score(0–1, 사람은 1차 null 허용)`. `AgentContract`·
+`HumanProfile`은 각자 `to_candidate()` 어댑터로 이 인터페이스에 맞춘다. **변경 없이
+확정.**
+
+## 결정 5 — Pool 저장 정책 (SPEC §10 재확인)
+
+평가결과(`results/*.json` + SQLite 인덱스, 배치성)는 AgentForge 하이브리드 패턴 그대로
+유지한다. Human Pool·`assignments`·`approvals`·`jobs`·`audit_log`·
+`assignment_history`처럼 실시간 쓰기가 빈번한 신규 엔티티는 SQLite를 **트랜잭션 RDB
+(WAL 모드)**로 사용한다. **변경 없이 확정.**
+
+## 결정 6 — Web UI 인증 스택 = 세션 기반(서버 사이드) + RBAC 미들웨어
+
+FastAPI 내장 `SessionMiddleware`(서버 사이드 세션, httponly 쿠키) + 비밀번호 bcrypt
+해시를 채택한다. JWT(클라이언트 사이드 토큰) 대신 세션을 택한 이유: AgentForge Web UI가
+이미 순수 서버 렌더 HTML(f-string+`html.escape`, SPA 아님) 패턴이라(AgentForge ADR
+결정 5) 세션 기반이 이 패턴과 자연스럽게 맞물린다. RBAC 미들웨어는 **서버측에서** 모든
+쓰기 API 호출마다 역할을 검증한다(클라이언트 UI에서 버튼을 숨기는 것만으로는 불충분 —
+SPEC.md 실패모드 카탈로그 "RBAC 서버측 미검증" 참고).
+
+**대안 검토**: JWT 기반 무상태 인증을 검토했으나 기각 — 이 프로젝트는 SPA가 아니라
+서버가 매 요청마다 페이지를 새로 렌더링하므로 무상태성의 이점이 없고, 세션 무효화
+(로그아웃·강제 만료)가 JWT 블랙리스트 관리보다 단순하다.
+
+## 결정 7 — 3중 기록 트랜잭션 원자성 구현 (SPEC §10, NF13 재확인)
+
+F6/F7에서 배정 상태가 바뀔 때 `assignments`(UPDATE) · `assignment_history`(INSERT) ·
+`audit_log`(INSERT) 3개 쓰기를 **하나의 SQLite 커넥션 트랜잭션**(`BEGIN`…`COMMIT`,
+실패 시 `ROLLBACK`)으로 묶는다. 세 테이블이 물리적으로 같은 SQLite 파일(WAL 모드)에
+있으므로 별도의 분산 트랜잭션(2PC) 없이 로컬 트랜잭션만으로 원자성이 보장된다. **변경
+없이 확정**(로컬 재검토에서 이미 결정한 내용을 ADR에서 공식화).
+
+## 결정 8 — Job Queue 샌드박스 = Docker 컨테이너
+
+Verifier의 smoke-test(생성된 CrewAI 코드 실행)는 **Docker 컨테이너**에서 실행한다 —
+`--cpus`·`--memory`로 리소스 쿼터, `--network=none`으로 아웃바운드 네트워크 차단,
+프로세스 타임아웃(예: 60초)을 건다.
+
+**대안 검토**:
+- **컨테이너 없이 `subprocess`+`resource.setrlimit`만 사용**하는 안을 검토했으나 기각
+  — CPU/메모리 제한은 가능해도 네트워크 차단(아웃바운드 콜 완전 차단)이 OS 프로세스
+  격리만으로는 어렵고, 생성된 코드가 임의 코드라는 점(NF8, 실패모드 카탈로그 "샌드박스
+  탈출")을 고려하면 파일시스템·네트워크까지 격리하는 컨테이너가 더 안전하다.
+- **gVisor/Firecracker**(더 강한 VM급 격리)를 검토했으나 기각 — 설치·운영 복잡도가
+  "로컬/온프레미스 우선, 최소 인프라"(SPEC §3) 원칙과 충돌한다. 조직 규모가 커져
+  멀티테넌시로 확장할 때 재검토 대상으로 남긴다(오픈 이슈).
+
+AgentForge의 Verifier는 현재 샌드박싱을 전혀 하지 않는다(코드베이스 확인 완료) — 재사용할
+기존 패턴이 없으므로 이번에 신규로 결정한다(원칙4가 적용될 선례 부재).
+
+## 결과 / 트레이드오프
+
+- 결정 3(RBAC 매트릭스)에 따라 "팀원"은 F1(브리프 제출)과 F3(Pool 조회)·F5(조직도
+  조회)·F8(본인 성과)만 가능하다 — 실사용 중 팀원의 셀프서비스 요구(예: 본인이 직접
+  배정 요청)가 크면 Phase 4 이후 권한 매트릭스를 완화하는 재검토가 필요할 수 있다.
+- 결정 8(Docker 샌드박스)로 Job Queue/Worker 실행 환경에 Docker 런타임 의존성이
+  생긴다 — README·설치 가이드에 Docker 필수 요건으로 명시해야 한다(v3 작업 시 반영).
+- 결정 1-A(F2/F6 경계 확정)로 SPEC.md F2 문구를 정정했다 — 이미 배포된 문서가 있다면
+  동기화 필요(현재는 SPEC.md 자체가 아직 `spec_review` 전 DRAFT라 영향 없음).
