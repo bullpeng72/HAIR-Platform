@@ -169,7 +169,8 @@
 - Audit Log의 SQLite 쓰기 부하 확장성(실사용 규모 부하테스트 필요)
 - 초기 타깃 업종/조직 규모, 배포 모델(온프레미스 vs SaaS) 확정
 - 팀원의 셀프서비스 요구(예: 본인이 직접 배정 요청)가 실사용에서 크면 RBAC 권한 매트릭스(ADR 결정 3) 완화 재검토
-- `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선은 완료 — 실제 Gate 측정 실행(사용자 직접) 및 AgentForge `spec_interpreter`·`code_generator`·`verifier` 실연동(의미 있는 점수의 전제조건)은 남음(`docs/LIMITS.md` §1)
+- `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선은 완료 — 실제 Gate 측정 실행(사용자 직접)은 남음(`docs/LIMITS.md` §1)
 - Docker 설치 환경에서 샌드박스 실제 격리(리소스 쿼터·네트워크 차단) 동작 검증(`docs/LIMITS.md` §2)
 - 멀티프로세스/멀티워커 배포 시 NF7 idempotency의 진짜 경쟁 상태(race condition) 방지 — 현재는 단일 커넥션·순차 요청 전제(`docs/LIMITS.md` §3)
 - Docker 런타임 설치를 배포 필수 요건으로 문서화(README·설치 가이드, ADR 결정 8)
+- **AgentForge `spec_interpreter`·`code_generator`·`verifier` 실연동 — 계획 확정(ADR 결정 10, 2026-09-26), 구현은 아직 착수 안 함**: 사용자 요청으로 "① stub/단순 LLM/CrewAI 3단계 선택 ② CrewAI Agent/Task/Crew 핵심 기능 반영(Task 간 산출물 자동 전달, Process.sequential 협업) ③ MCP로 외부 검색 등 도구 연동" 구조를 설계했다. `GenerateRequest.framework`(신규, 기본값 `"stub"`로 여전히 무료) 파라미터로 게이팅하며, CrewAI는 별도 optional extra(`[crewai]`)로 지연 설치한다 — 자세한 매핑·대안 검토는 ADR.md 결정 10 참고.

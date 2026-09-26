@@ -174,6 +174,79 @@ VIEWER가 하나라도 포함되면 "내 업무"(담당자가 자기 업무를 �
 오히려 흐름을 끊는다. 같은 셸 안에서 시각적으로만 구역을 나누는 쪽을
 택했다.
 
+## 결정 10 — AI Agent 생성 방식을 3단계(stub·단순 LLM·CrewAI)로 계층화하고,
+CrewAI Agent에 MCP 도구를 연결한다(사용자 요청, 2026-09-26, 기획 단계 —
+아직 코드 미반영)
+
+**배경**: SPEC.md §3은 "출력 프레임워크: AgentForge와 동일하게 CrewAI
+하나만"이라고 이미 정해뒀고, AgentForge의 실제 `code_generator/generator.py`는
+LLM에게 `from crewai import Agent`로 시작하는 진짜 CrewAI 코드를 만들라고
+프롬프트한다(코드 확인 완료). 하지만 HAIR-Platform은 이 계획을 아직
+구현하지 않았다 — `jobs.default_stub_generator`는 CrewAI 흉내만 내는
+문자열(`agents_yaml_snippet`)을 만들 뿐이고, 이번 세션에서 추가한
+`jobs.llm_agent_generator`도 CrewAI 구조 없이 LLM에 자유형식 텍스트를
+한 번 요청할 뿐이다(SPEC.md §12 오픈 이슈로 이미 기록됨). 사용자가
+"① 단순 LLM 호출 / CrewAI 중 선택 ② CrewAI 핵심 기능 반영 ③ MCP로 외부
+검색 등 도구 연동"을 요청했다 — 이 결정은 그 세 가지를 하나의 일관된
+아키텍처로 계획한다.
+
+**결정 1 — 생성 전략 3단계, 항상 opt-in(비용 원칙 유지)**:
+`GenerateRequest`/`AgentExecuteRequest`에 `framework:
+"stub" | "simple_llm" | "crewai" = "stub"`을 추가한다(기본값은 여전히
+비용 없는 stub — Gate A-G·LLM 연동 때부터 지켜온 "명시적으로 요청했을
+때만 비용 발생" 원칙을 그대로 잇는다).
+- `stub`: 지금의 `default_stub_generator`(무료, 결정론적).
+- `simple_llm`: 지금의 `llm_agent_generator`(1회 LLM 호출, 자유형식
+  텍스트 산출물 — 빠르고 저렴하지만 다단계 추론·도구 사용·협업 불가).
+- `crewai`: 이 결정에서 새로 설계하는 경로(아래).
+
+**결정 2 — CrewAI 핵심 개념을 HAIR 도메인에 매핑**:
+| CrewAI 개념 | HAIR-Platform 매핑 |
+|---|---|
+| `Agent(role, goal, backstory, tools, llm)` | `role` = task의 `role_name`, `goal` = 브리프 맥락+역할 목표를 LLM에게 한 번 요약시켜 채움, `backstory` = `required_skills` 목록을 문장화, `llm` = `llm.py`가 이미 판별한 provider/model(`ChatAnthropic`/`ChatOpenAI`/`ChatOllama` 래퍼로 감싼다) |
+| `Task(description, expected_output, agent, context)` | `description` = `execute_agent()`에 넘기던 prompt, `expected_output` 신규 필드(사용자가 원하는 산출물 형식을 명시하게 함 — 지금까지 없던 것), `context`로 **앞 단계 Task의 출력**을 다음 Task 입력에 자동 연결(예: 기획자→분석가로 산출물이 실제로 전달됨 — 지금의 `execute_agent()`는 Agent를 독립적으로만 호출해 이게 불가능했다) |
+| `Crew(agents, tasks, process, memory)` | SDLC 8역할(기획→분석→설계→FE/BE/DB→검증→품질)을 **하나의 Crew**로 묶어 `Process.sequential`로 실행 — "따로따로 만든 8개 Agent"가 아니라 "서로 산출물을 주고받으며 실제 협업하는 팀"이 된다. `memory=True`로 Crew 전체가 이전 실행 맥락을 기억 |
+| Tools | 결정 3(MCP)에서 채운다 |
+
+이게 "CrewAI 핵심 기능 반영"의 실질적 의미다 — 단순히 라이브러리 이름만
+바꾸는 게 아니라, 지금은 없는 **Task 간 산출물 자동 전달**과 **여러
+Agent의 순차 협업**을 처음으로 가능하게 한다.
+
+**결정 3 — 외부 도구는 MCP로 연결한다(자체 도구 구현 대신)**:
+CrewAI Agent의 `tools`는 `crewai-tools`의 MCP 어댑터(`MCPServerAdapter`
+계열, stdio/SSE 방식 MCP 서버 접속 지원)로 채운다 — HAIR-Platform이
+직접 검색 API를 통합하지 않고, 이미 있는 MCP 서버 생태계(웹 검색, 사내
+문서 검색 등)를 그대로 재사용한다(원칙4: 이미 있는 것을 재사용, 새로
+안 만든다). Agent별로 연결할 MCP 서버 목록은 `AgentModelConfig`를 확장해
+`mcp_servers: list[str]`로 저장한다(결정 9와 같은 패턴 — Agent별 설정을
+`agent_pool`에 영속화).
+
+**대안 검토**:
+- **자체 웹 검색 도구를 직접 구현**하는 안을 검토했으나 기각 — MCP
+  서버 생태계가 이미 검색·파일시스템·DB 커넥터를 표준 프로토콜로
+  제공하므로, 직접 구현은 이미 해결된 문제를 다시 푸는 것이다(원칙4).
+- **LangChain 전체 스택으로 전환**하는 안도 검토했으나 기각 — SPEC.md
+  §3이 이미 "CrewAI 하나만"으로 스코프를 확정했고, AgentForge와의
+  프레임워크 일관성이 이 프로젝트의 존재 이유(§1: "AgentForge가 검증한
+  파이프라인 재사용")와 직결된다.
+
+**한계(정직하게 명시, 기획 단계 — 실측 없음)**:
+- CrewAI는 무거운 의존성(langchain 계열 하위 의존성 포함)이라 별도
+  optional extra(`pip install -e ".[crewai]"`)로 유지해야 한다 — 기존
+  `[llm]` extra와 분리(설치 안 하면 `stub`/`simple_llm` 경로는 그대로
+  동작해야 하므로, 지연 import 원칙을 CrewAI에도 동일하게 적용).
+- Crew가 8개 Agent를 순차 실행하면 LLM API 호출 횟수가 단순 LLM 호출
+  대비 수 배로 늘어난다(Agent당 최소 1콜 + MCP 도구 호출당 추가 콜) —
+  비용이 이번 세션에서 실측한 SDLC 8역할 생성(개당 1콜)보다 훨씬 커질
+  수 있다는 것을 사용자가 실행 전에 알아야 한다.
+- MCP를 통한 외부 검색 결과는 **데이터이지 지시가 아니다** — 검색
+  결과에 프롬프트 인젝션이 섞여 들어올 위험을 Task 설계 시 반영해야
+  한다(이 세션 자체의 원칙과 동일한 이유).
+- 이 결정은 아직 코드로 구현되지 않았다 — 사용자가 "기획해달라"고
+  명시적으로 요청했으므로, 방향에 동의하면 별도로 구현을 요청해야
+  한다(무거운 의존성 설치와 비용 구조가 걸린 결정이라 바로 코드부터
+  쓰지 않았다).
+
 ## 결과 / 트레이드오프
 
 - 결정 3(RBAC 매트릭스)에 따라 "팀원"은 F1(브리프 제출)과 F3(Pool 조회)·F5(조직도
@@ -187,3 +260,7 @@ VIEWER가 하나라도 포함되면 "내 업무"(담당자가 자기 업무를 �
   영향이 없다 — 다만 새 탭을 추가할 때마다 `group`을 명시해야 하는 규칙이
   하나 늘었다(안 하면 어느 그룹에도 안 뜬다는 것을 코드 리뷰 체크리스트에
   남긴다).
+- 결정 10(CrewAI+MCP)은 **기획만 완료, 구현은 미착수**다 — `framework`
+  파라미터·CrewAI 의존성·MCP 어댑터 어느 것도 아직 코드에 없다. 이 ADR이
+  구현 착수 시점의 설계 근거가 되도록 남겨두되, `docs/SPEC.md` §12
+  오픈이슈에도 "계획 확정, 구현 대기"로 동기화해야 한다.
