@@ -56,6 +56,7 @@ from hair_platform.auth import (
 )
 from hair_platform.models import (
     AgentExecuteRequest,
+    AgentModelConfig,
     ApprovalDecision,
     AssignmentRequest,
     BriefSubmission,
@@ -562,6 +563,30 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 status_code=409, detail="온보딩(active)된 Agent만 실행할 수 있습니다"
             ) from exc
         return {"id": agent_id, "output": output}
+
+    @app.patch("/api/agent-pool/{agent_id}/model")
+    def set_agent_model_config(
+        agent_id: int,
+        payload: AgentModelConfig,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """Agent별 기본 LLM provider/model을 저장한다(사용자 요청, 2026-09-26,
+        2차 — Anthropic/OpenAI/Ollama 중 선택). 비용이 발생하지 않는다 —
+        LLM을 호출하지 않고 설정만 저장한다. 이후 `/execute`가 provider/model을
+        안 받으면 여기서 저장한 값을 기본으로 쓴다."""
+        try:
+            resolved_provider, resolved_model = agent_runtime.set_model_config(
+                conn, agent_id, user["id"], payload.provider, payload.model
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="Agent를 찾을 수 없습니다"
+            ) from exc
+        return {
+            "id": agent_id,
+            "llm_provider": resolved_provider,
+            "llm_model": resolved_model,
+        }
 
     @app.post("/api/agent-pool/{agent_id}/onboard")
     def onboard_agent(

@@ -23,7 +23,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7.0.0", "black>=23.0.0", "ruff>=0.5.0", "httpx>=0.27.0"]
 # llm.py가 지연 import한다 — use_llm=True 경로를 실제로 쓸 때만 필요하다.
-llm = ["anthropic>=0.34.0", "openai>=1.40.0"]
+# Ollama는 로컬 서버(기본 http://localhost:11434)가 별도로 떠 있어야 한다.
+llm = ["anthropic>=0.34.0", "openai>=1.40.0", "httpx>=0.27.0"]
 
 [project.scripts]
 hair-platform-bootstrap-admin = "hair_platform.bootstrap:main"

@@ -49,7 +49,7 @@ INDEX_HTML = """<!DOCTYPE html>
   td.col-actions, th.col-actions { width: 160px; }
   td.col-output, th.col-output { width: 280px; }
   .actions { display: flex; flex-direction: column; align-items: stretch; gap: 0.3rem; }
-  .actions button { width: 100%; }
+  .actions > button, .actions > select { width: 100%; }
   .actions .pair { display: flex; gap: 0.2rem; }
   .actions .pair input, .actions .pair select { width: 0; min-width: 0; flex: 1; }
   .actions .pair button { width: auto; flex-shrink: 0; }
@@ -428,7 +428,8 @@ async function renderJobs(content) {
     '<input id="job-task-ids" placeholder="할 일 ID(콤마로 구분)" required style="width:180px">' +
     '<label><input id="job-use-llm" type="checkbox"> 실제 LLM으로 생성(비용 발생)</label>' +
     '<select id="job-provider"><option value="">provider 자동 판별</option>' +
-    '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option></select>' +
+    '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
+    '<option value="ollama">Ollama(로컬)</option></select>' +
     '<input id="job-model" placeholder="모델명(비우면 기본값)" style="width:200px">' +
     '<button class="primary" type="submit">생성 실행</button></form>' +
     '<p class="muted">LLM 체크박스를 켜지 않으면 비용 없는 규칙 기반 스텁으로 생성합니다.</p>' +
@@ -542,7 +543,7 @@ async function renderAgentPool(content) {
   const isAdmin = ME.role === "admin";
   const canExecute = ["admin", "manager"].includes(ME.role);
   content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
-    '<p class="muted">"실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 실제 LLM API를 호출하므로 비용이 발생합니다.</p>' +
+    '<p class="muted">"모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다.</p>' +
     table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "LLM", "최근 산출물", "동작"], agents.map(a => {
       let actions = "";
       if (isAdmin) {
@@ -553,6 +554,14 @@ async function renderAgentPool(content) {
           '<button class="small" data-set-cost="' + a.id + '">비용입력</button></span>' +
           '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="ascore-' + a.id + '">' +
           '<button class="small" data-set-ascore="' + a.id + '">점수입력</button></span>';
+      }
+      if (canExecute) {
+        const providers = ["anthropic", "openai", "ollama"];
+        actions += '<select id="provider-' + a.id + '">' +
+          providers.map(p => '<option value="' + p + '"' + (p === a.llm_provider ? " selected" : "") + ">" + p + "</option>").join("") +
+          "</select>" +
+          '<span class="pair"><input placeholder="모델명(비우면 기본값)" id="model-' + a.id + '" value="' + esc(a.llm_model || "") + '">' +
+          '<button class="small" data-set-model="' + a.id + '">모델 설정</button></span>';
       }
       if (canExecute && a.status === "active") {
         actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
@@ -580,6 +589,18 @@ async function renderAgentPool(content) {
     btn.onclick = async () => {
       const v = document.getElementById("ascore-" + btn.dataset.setAscore).value;
       try { await api("POST", "/api/agent-pool/" + btn.dataset.setAscore + "/performance", { score: Number(v) }); refresh(); } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-set-model]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.setModel;
+      const provider = document.getElementById("provider-" + id).value;
+      const model = document.getElementById("model-" + id).value || null;
+      try {
+        await api("PATCH", "/api/agent-pool/" + id + "/model", { provider, model });
+        showMsg("global-msg", "모델 설정을 저장했습니다 — 다음 실행부터 적용됩니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
   content.querySelectorAll("[data-execute]").forEach(btn => {

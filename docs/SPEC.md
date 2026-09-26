@@ -125,7 +125,8 @@
 | 코드 재점검 R2 | 승인 inbox 조회·`GET /api/users`·감사로그 페이지네이션·secret_key 환경변수화(`docs/LIMITS.md` §8) | 4건(GC47–50) |
 | 코드 재점검 R3 | 매칭 알고리즘 role 필터 버그·콜드스타트 부트스트랩 CLI·Human Pool 수정/오프보딩(`docs/LIMITS.md` §9) | 5건(GC51–55) |
 | 코드 재점검 R4 | **F11 Web UI 셸이 실제로는 전무했던 것을 발견·구현**(`webui.py`, `docs/LIMITS.md` §10) | 6건(GC56–61) |
-| LLM 연동(사용자 요청) | Anthropic/OpenAI 선택 가능한 실제 LLM 연동(`llm.py`·`agent_runtime.py`, `docs/LIMITS.md` §11) | 7건(GC62–68, mock 기반) |
+| LLM 연동(사용자 요청) | Anthropic/OpenAI 선택 가능한 실제 LLM 연동(`llm.py`·`agent_runtime.py`, `docs/LIMITS.md` §11) — 이후 실제 OpenAI API로 실측 검증 완료 | 7건(GC62–68, mock 기반) |
+| Ollama + Agent별 모델 설정(사용자 요청) | Ollama 추가 + `PATCH /api/agent-pool/{id}/model`(`docs/LIMITS.md` §11) | 4건(GC69–72, mock 기반) |
 
 ## 10. 설계 결정
 
@@ -145,7 +146,7 @@
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동, 총 70건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정, 총 75건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
 - [x] F11 — 인증된 Web UI 셸에서 F1–F14 전부 조작 가능(`webui.py`, 단일 페이지 바닐라 JS, R4에서 뒤늦게 구현 — `docs/LIMITS.md` §10 참고. 실제 브라우저 수동 조작은 미검증, TestClient 전체 플로우 통합 테스트로 대체)
 - [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 실제 실행은 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동

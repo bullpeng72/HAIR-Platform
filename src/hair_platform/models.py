@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+LlmProvider = Literal["anthropic", "openai", "ollama"]
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -96,22 +98,33 @@ class AssignmentRequest(BaseModel):
 class GenerateRequest(BaseModel):
     """F4 — 생성 버튼. 부족한 역할(Task)들을 지정해 배치로 Agent 생성을 트리거한다.
 
-    `use_llm=True`일 때만 실제 Anthropic/OpenAI API를 호출한다(사용자 요청,
+    `use_llm=True`일 때만 실제 Anthropic/OpenAI/Ollama를 호출한다(사용자 요청,
     2026-09-26) — 기본값은 여전히 무료 규칙기반 스텁이다(비용 발생을 암묵적으로
     유발하지 않기 위해 항상 opt-in)."""
 
     task_ids: list[int]
     use_llm: bool = False
-    provider: Literal["anthropic", "openai"] | None = None
+    provider: LlmProvider | None = None
     model: str | None = None
 
 
 class AgentExecuteRequest(BaseModel):
     """온보딩된 Agent에게 실제 업무를 맡긴다(사용자 요청, 2026-09-26) — 항상
-    실제 LLM API를 호출하므로 비용이 발생한다."""
+    실제 LLM API를 호출하므로 비용이 발생한다(Ollama는 로컬 실행). provider/
+    model을 안 넘기면 그 Agent에 저장된 모델 설정(`AgentModelConfig`로 지정한
+    값)을 우선 쓰고, 그것도 없으면 전역 기본값으로 판별한다."""
 
     prompt: str
-    provider: Literal["anthropic", "openai"] | None = None
+    provider: LlmProvider | None = None
+    model: str | None = None
+
+
+class AgentModelConfig(BaseModel):
+    """Agent별 기본 LLM provider/model을 저장한다(사용자 요청, 2026-09-26,
+    2차 — Ollama 추가와 함께 요청된 '모델 설정 기능'). 비용이 발생하지 않는
+    설정 전용 엔드포인트다 — 이걸로는 LLM을 호출하지 않는다."""
+
+    provider: LlmProvider
     model: str | None = None
 
 
