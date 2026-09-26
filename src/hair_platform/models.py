@@ -94,9 +94,25 @@ class AssignmentRequest(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    """F4 — 생성 버튼. 부족한 역할(Task)들을 지정해 배치로 Agent 생성을 트리거한다."""
+    """F4 — 생성 버튼. 부족한 역할(Task)들을 지정해 배치로 Agent 생성을 트리거한다.
+
+    `use_llm=True`일 때만 실제 Anthropic/OpenAI API를 호출한다(사용자 요청,
+    2026-09-26) — 기본값은 여전히 무료 규칙기반 스텁이다(비용 발생을 암묵적으로
+    유발하지 않기 위해 항상 opt-in)."""
 
     task_ids: list[int]
+    use_llm: bool = False
+    provider: Literal["anthropic", "openai"] | None = None
+    model: str | None = None
+
+
+class AgentExecuteRequest(BaseModel):
+    """온보딩된 Agent에게 실제 업무를 맡긴다(사용자 요청, 2026-09-26) — 항상
+    실제 LLM API를 호출하므로 비용이 발생한다."""
+
+    prompt: str
+    provider: Literal["anthropic", "openai"] | None = None
+    model: str | None = None
 
 
 class ConsentRequest(BaseModel):

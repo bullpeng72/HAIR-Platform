@@ -26,13 +26,14 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from functools import partial
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from starlette.middleware.sessions import SessionMiddleware
 
-from hair_platform import approvals as approvals_mod
 from hair_platform import (
+    agent_runtime,
     assignments,
     audit,
     cost,
@@ -43,6 +44,7 @@ from hair_platform import (
     pool,
     webui,
 )
+from hair_platform import approvals as approvals_mod
 from hair_platform.assignment import match_candidates
 from hair_platform.auth import (
     Role,
@@ -52,6 +54,7 @@ from hair_platform.auth import (
     require_role,
 )
 from hair_platform.models import (
+    AgentExecuteRequest,
     ApprovalDecision,
     AssignmentRequest,
     BriefSubmission,
@@ -462,23 +465,44 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         payload: GenerateRequest,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """F4 — 생성 버튼. Job Queue+샌드박스(ADR 결정 8)로 부족한 역할을 배치 생성한다."""
+        """F4 — 생성 버튼. Job Queue+샌드박스(ADR 결정 8)로 부족한 역할을 배치 생성한다.
+
+        `use_llm=True`일 때만 실제 Anthropic/OpenAI API를 호출한다(사용자 요청,
+        2026-09-26) — 명시적으로 요청하지 않으면 기본값인 무료 규칙기반 스텁을 쓴다.
+        """
         brief = conn.execute(
             "SELECT * FROM briefs WHERE id = ?", (brief_id,)
         ).fetchone()
         if brief is None:
             raise HTTPException(status_code=404, detail="브리프를 찾을 수 없습니다")
-        return jobs.create_and_run_job(conn, brief_id, payload.task_ids, user["id"])
+        generator = None
+        if payload.use_llm:
+            generator = partial(
+                jobs.llm_agent_generator, provider=payload.provider, model=payload.model
+            )
+        return jobs.create_and_run_job(
+            conn, brief_id, payload.task_ids, user["id"], generator=generator
+        )
 
     @app.post("/api/jobs/{job_id}/items/{item_id}/retry")
     def retry_job_item(
         job_id: int,
         item_id: int,
+        use_llm: bool = False,
+        provider: str | None = None,
+        model: str | None = None,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         """NF6 — 실패 역할만 재시도."""
+        generator = None
+        if use_llm:
+            generator = partial(
+                jobs.llm_agent_generator, provider=provider, model=model
+            )
         try:
-            return jobs.retry_failed_item(conn, job_id, item_id, user["id"])
+            return jobs.retry_failed_item(
+                conn, job_id, item_id, user["id"], generator=generator
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -498,9 +522,39 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "cost_estimate": row["cost_estimate"],
                 "performance_score": row["performance_score"],
                 "status": row["status"],
+                "llm_provider": row["llm_provider"],
+                "llm_model": row["llm_model"],
+                "last_output": row["last_output"],
             }
             for row in rows
         ]
+
+    @app.post("/api/agent-pool/{agent_id}/execute")
+    def execute_agent_endpoint(
+        agent_id: int,
+        payload: AgentExecuteRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """온보딩된 Agent에게 실제 업무를 맡긴다(사용자 요청, 2026-09-26) —
+        호출하면 실제 Anthropic/OpenAI API가 불려 비용이 발생한다."""
+        try:
+            output = agent_runtime.execute_agent(
+                conn,
+                agent_id,
+                user["id"],
+                payload.prompt,
+                payload.provider,
+                payload.model,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="Agent를 찾을 수 없습니다"
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=409, detail="온보딩(active)된 Agent만 실행할 수 있습니다"
+            ) from exc
+        return {"id": agent_id, "output": output}
 
     @app.post("/api/agent-pool/{agent_id}/onboard")
     def onboard_agent(

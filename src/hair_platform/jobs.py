@@ -20,7 +20,7 @@ import json
 import sqlite3
 from collections.abc import Callable
 
-from hair_platform import audit
+from hair_platform import audit, llm
 from hair_platform.sandbox import run_smoke_test_in_sandbox
 
 GeneratorFn = Callable[[str, list[str]], dict]
@@ -32,6 +32,34 @@ def default_stub_generator(role_name: str, required_skills: list[str]) -> dict:
         "role_name": role_name,
         "skill_tags": required_skills,
         "agents_yaml_snippet": f"role: {role_name}, skills: {required_skills}",
+    }
+
+
+def llm_agent_generator(
+    role_name: str,
+    required_skills: list[str],
+    provider: str | None = None,
+    model: str | None = None,
+) -> dict:
+    """실제 LLM을 호출해 이 역할의 첫 산출물을 생성한다(사용자 요청, 비용 발생).
+
+    `use_llm=True`를 명시적으로 요청했을 때만 이 함수가 쓰인다(app.py에서
+    게이팅) — 기본 생성 경로는 여전히 무료인 `default_stub_generator`다.
+    """
+    resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
+    system = llm.system_prompt_for_role(role_name, required_skills)
+    prompt = (
+        f"'{role_name}' 역할로서 지금 막 팀에 합류했습니다. "
+        "이 역할이 프로젝트에서 처음 맡을 만한 구체적인 산출물을 하나 작성하세요."
+    )
+    output = llm.call_llm(resolved_provider, resolved_model, system, prompt)
+    return {
+        "role_name": role_name,
+        "skill_tags": required_skills,
+        "agents_yaml_snippet": f"role: {role_name}, skills: {required_skills}",
+        "llm_provider": resolved_provider,
+        "llm_model": resolved_model,
+        "generated_output": output,
     }
 
 
@@ -88,12 +116,16 @@ def _run_item(
             (json.dumps(generated, ensure_ascii=False), item_id),
         )
         cur = conn.execute(
-            "INSERT INTO agent_pool (role_name, skill_tags, source_job_item_id) "
-            "VALUES (?, ?, ?)",
+            "INSERT INTO agent_pool "
+            "(role_name, skill_tags, source_job_item_id, llm_provider, llm_model, last_output) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 task_row["role_name"],
                 json.dumps(required_skills, ensure_ascii=False),
                 item_id,
+                generated.get("llm_provider"),
+                generated.get("llm_model"),
+                generated.get("generated_output"),
             ),
         )
         audit.record(

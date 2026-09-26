@@ -5,29 +5,42 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 63
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 70
 passed). **F11 Web UI 셸(`GET /`, 단일 페이지 바닐라 JS)을 실제로 구현** —
 v0–v4 개발 동안 JSON API만 있고 브라우저 화면이 전무했던 것을 코드 재점검
 4회차(R4)에서 발견해 채웠다(`docs/LIMITS.md` §10, 실제 브라우저 수동 조작은
-미검증). 그 전 3라운드에서 발견한 11건(R1: 승인 우회·검색 필터·조직도 귀속·
-`manager_id` 누락, R2: 승인 inbox·사용자 목록·감사로그 페이지네이션·secret_key
-하드코딩, R3: 매칭 알고리즘 role 필터 버그·콜드스타트 부트스트랩·Human Pool
-수정/오프보딩)도 전부 수정 완료(`docs/LIMITS.md` §7·§8·§9). `release_hold`
-(Phase 7)는 사용자 선택으로 보류 — 알려진 갭은 `docs/LIMITS.md`, 기획 대비 실제
-구현 비교는 `docs/RETROSPECTIVE.md` 참고.
+미검증). **실제 LLM(Anthropic/OpenAI) 연동도 추가**(`llm.py`·
+`agent_runtime.py`) — F4 Agent 생성 시 `use_llm=True`로 실제 API를 호출할 수
+있고, 온보딩된 Agent에게 `POST /api/agent-pool/{id}/execute`로 온디맨드 업무를
+맡길 수 있다(기본값은 여전히 비용 없는 스텁, `docs/LIMITS.md` §11 — 실제 API
+키로 실측은 미검증). 그 전 3라운드에서 발견한 11건(R1: 승인 우회·검색 필터·
+조직도 귀속·`manager_id` 누락, R2: 승인 inbox·사용자 목록·감사로그 페이지네이션·
+secret_key 하드코딩, R3: 매칭 알고리즘 role 필터 버그·콜드스타트 부트스트랩·
+Human Pool 수정/오프보딩)도 전부 수정 완료(`docs/LIMITS.md` §7·§8·§9).
+`release_hold`(Phase 7)는 사용자 선택으로 보류 — 알려진 갭은 `docs/LIMITS.md`,
+기획 대비 실제 구현 비교는 `docs/RETROSPECTIVE.md` 참고.
 
 ## 빠른 시작
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 63건(오프라인, LLM 호출 없음)
+pytest tests/ -q        # 골든셋 70건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
 
 ```bash
 hair-platform-bootstrap-admin --db-path hair.db --username admin --password '...'
+```
+
+실제 LLM 연동을 쓰려면(Anthropic 또는 OpenAI 중 하나, 둘 다 선택 사항):
+
+```bash
+pip install -e ".[llm]"                    # anthropic·openai SDK 설치
+export ANTHROPIC_API_KEY=...               # 또는 OPENAI_API_KEY
+# API 요청에 "use_llm": true 를 넣거나, Web UI "AI 에이전트 생성" 탭의
+# 체크박스를 켜면 실제 API가 호출된다(비용 발생) — 안 켜면 무료 스텁 그대로.
 ```
 
 Web UI 실행(부트스트랩으로 만든 ADMIN 계정으로 로그인):
@@ -52,7 +65,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(35개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(36개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -66,6 +79,8 @@ src/hair_platform/
   eval_wiring.py      # Gate A/B/D/E/G 평가 배선(agent-evaluator SDK)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성 CLI
   webui.py           # F11 Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙)
+  llm.py             # 실제 Anthropic/OpenAI 연동(provider/model 선택 가능)
+  agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
   ADR.md             # 설계 결정 8건
@@ -73,7 +88,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 63건
+tests/unit/                            # 골든셋 70건
 ```
 
 ## 로드맵

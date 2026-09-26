@@ -405,14 +405,24 @@ async function renderJobs(content) {
     '<form class="inline" id="job-form">' +
     '<input id="job-brief-id" type="number" placeholder="업무 요청 ID" required style="width:110px">' +
     '<input id="job-task-ids" placeholder="할 일 ID(콤마로 구분)" required style="width:180px">' +
+    '<label><input id="job-use-llm" type="checkbox"> 실제 LLM으로 생성(비용 발생)</label>' +
+    '<select id="job-provider"><option value="">provider 자동 판별</option>' +
+    '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option></select>' +
+    '<input id="job-model" placeholder="모델명(비우면 기본값)" style="width:200px">' +
     '<button class="primary" type="submit">생성 실행</button></form>' +
+    '<p class="muted">LLM 체크박스를 켜지 않으면 비용 없는 규칙 기반 스텁으로 생성합니다.</p>' +
     '<div id="job-result"></div></section>';
   document.getElementById("job-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const briefId = document.getElementById("job-brief-id").value;
     const taskIds = document.getElementById("job-task-ids").value.split(",").map(s => Number(s.trim())).filter(n => !isNaN(n));
+    const useLlm = document.getElementById("job-use-llm").checked;
+    const provider = document.getElementById("job-provider").value || null;
+    const model = document.getElementById("job-model").value || null;
     try {
-      const result = await api("POST", "/api/briefs/" + briefId + "/generate", { task_ids: taskIds });
+      const result = await api("POST", "/api/briefs/" + briefId + "/generate", {
+        task_ids: taskIds, use_llm: useLlm, provider, model,
+      });
       renderJobResult(result);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
@@ -507,8 +517,10 @@ async function renderHumanPool(content) {
 async function renderAgentPool(content) {
   const agents = await api("GET", "/api/agent-pool");
   const isAdmin = ME.role === "admin";
+  const canExecute = ["admin", "manager"].includes(ME.role);
   content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
-    table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "동작"], agents.map(a => {
+    '<p class="muted">"실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 실제 LLM API를 호출하므로 비용이 발생합니다.</p>' +
+    table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "LLM", "최근 산출물", "동작"], agents.map(a => {
       let actions = "";
       if (isAdmin) {
         if (a.status === "pending_onboarding") actions += '<button class="small" data-onboard="' + a.id + '">온보딩 승인</button> ';
@@ -516,11 +528,16 @@ async function renderAgentPool(content) {
         actions += '<input class="small" style="width:70px" type="number" step="0.01" id="cost-' + a.id + '"> ' +
           '<button class="small" data-set-cost="' + a.id + '">비용입력</button> ' +
           '<input class="small" style="width:60px" type="number" step="0.01" min="0" max="1" id="ascore-' + a.id + '"> ' +
-          '<button class="small" data-set-ascore="' + a.id + '">점수입력</button>';
+          '<button class="small" data-set-ascore="' + a.id + '">점수입력</button> ';
       }
+      if (canExecute && a.status === "active") {
+        actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
+      }
+      const output = a.last_output ? esc(a.last_output).slice(0, 80) + (a.last_output.length > 80 ? "…" : "") : "-";
+      const llmInfo = a.llm_provider ? esc(a.llm_provider) + "/" + esc(a.llm_model || "") : "-";
       return [a.id, esc(a.role_name), esc(a.skill_tags.join(", ")), a.cost_estimate,
-        a.performance_score === null ? "-" : a.performance_score, esc(label(a.status)), actions];
-    })) + "</section>";
+        a.performance_score === null ? "-" : a.performance_score, esc(label(a.status)), llmInfo, output, actions];
+    })) + '<div id="execute-result"></div></section>';
 
   content.querySelectorAll("[data-onboard]").forEach(btn => {
     btn.onclick = async () => { try { await api("POST", "/api/agent-pool/" + btn.dataset.onboard + "/onboard"); refresh(); } catch (e) { showMsg("global-msg", e.message, "error"); } };
@@ -538,6 +555,17 @@ async function renderAgentPool(content) {
     btn.onclick = async () => {
       const v = document.getElementById("ascore-" + btn.dataset.setAscore).value;
       try { await api("POST", "/api/agent-pool/" + btn.dataset.setAscore + "/performance", { score: Number(v) }); refresh(); } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-execute]").forEach(btn => {
+    btn.onclick = async () => {
+      const taskPrompt = window.prompt("이 에이전트에게 시킬 업무를 입력하세요(실제 LLM API 호출 — 비용 발생):");
+      if (!taskPrompt) return;
+      try {
+        const r = await api("POST", "/api/agent-pool/" + btn.dataset.execute + "/execute", { prompt: taskPrompt });
+        document.getElementById("execute-result").innerHTML =
+          '<div class="msg ok"><b>실행 결과</b><br>' + esc(r.output).replace(/\\n/g, "<br>") + "</div>";
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
 }

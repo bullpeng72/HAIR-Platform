@@ -115,7 +115,10 @@ CREATE TABLE IF NOT EXISTS agent_pool (
     cost_estimate REAL NOT NULL DEFAULT 0.0,
     performance_score REAL,
     status TEXT NOT NULL DEFAULT 'pending_onboarding',
-    source_job_item_id INTEGER REFERENCES job_items(id)
+    source_job_item_id INTEGER REFERENCES job_items(id),
+    llm_provider TEXT,
+    llm_model TEXT,
+    last_output TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
