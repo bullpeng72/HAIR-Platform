@@ -27,9 +27,17 @@ INDEX_HTML = """<!DOCTYPE html>
   header h1 { font-size: 1.1rem; margin: 0; }
   header .spacer { flex: 1; }
   header button { background: #fca311; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; }
-  nav { display: flex; flex-wrap: wrap; gap: 0.25rem; background: #fff; padding: 0.5rem; border-bottom: 1px solid #ddd; }
+  nav { background: #fff; border-bottom: 1px solid #ddd; }
+  .nav-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; padding: 0.4rem 0.5rem; }
+  .nav-group + .nav-group { border-top: 1px dashed #e2e4e8; }
+  .nav-group.admin-group { background: #fff7ec; }
+  .nav-label { font-size: 0.72rem; font-weight: 600; color: #888; margin-right: 0.4rem; min-width: 72px; }
+  .nav-group.admin-group .nav-label { color: #a15c00; }
   nav button { background: none; border: 1px solid #ccc; padding: 0.35rem 0.7rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
   nav button.active { background: #14213d; color: #fff; border-color: #14213d; }
+  .nav-group.admin-group button { border-color: #f0c98a; }
+  .nav-group.admin-group button.active { background: #a15c00; border-color: #a15c00; }
+  .badge-adminonly { font-size: 0.65rem; background: #a15c00; color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
   main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
   section.card { background: #fff; border: 1px solid #e2e4e8; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
@@ -170,20 +178,26 @@ function table(headers, rows) {
 
 let ME = null;
 
+/* 코드 재점검(2026-09-26) 사용자 요청 — 관리자 기능과 일반 업무 기능을
+   화면상에서도 명확히 구분한다(ADR.md 결정 9). group: "user"는 담당자가
+   자기 업무를 처리하는 화면, group: "admin"은 조직/리소스를 운영·관리하는
+   화면이다 — roles 배열(백엔드 RBAC과 동일)로 실제 접근 제어는 그대로 하되,
+   내비게이션을 둘로 나눠 보여준다. adminOnly: true는 그중에서도 ADMIN
+   role만 되는 항목(매니저도 접근 가능한 관리자 도구와 구분 표시). */
 const TABS = [
-  { id: "briefs", label: "업무 요청", roles: ["admin", "manager", "member", "viewer"], render: renderBriefs },
-  { id: "match", label: "인력 매칭/배정", roles: ["admin", "manager"], render: renderMatch },
-  { id: "approvals", label: "결재", roles: ["admin", "manager", "member", "viewer"], render: renderApprovals },
-  { id: "jobs", label: "AI 에이전트 생성", roles: ["admin", "manager"], render: renderJobs },
-  { id: "humanpool", label: "사람 인력", roles: ["admin", "manager"], render: renderHumanPool },
-  { id: "agentpool", label: "AI 에이전트", roles: ["admin", "manager"], render: renderAgentPool },
-  { id: "search", label: "인력 검색", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
-  { id: "orgchart", label: "조직도", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
-  { id: "performance", label: "성과 리뷰", roles: ["admin", "manager", "member"], render: renderPerformance },
-  { id: "cost", label: "비용", roles: ["admin", "manager"], render: renderCost },
-  { id: "fairness", label: "공정성 지표", roles: ["admin", "manager"], render: renderFairness },
-  { id: "audit", label: "활동 기록", roles: ["admin", "manager"], render: renderAudit },
-  { id: "admin", label: "사용자 관리", roles: ["admin"], render: renderAdmin },
+  { id: "briefs", label: "업무 요청", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBriefs },
+  { id: "approvals", label: "결재", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderApprovals },
+  { id: "search", label: "인력 검색", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
+  { id: "orgchart", label: "조직도", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
+  { id: "performance", label: "성과 리뷰", group: "user", roles: ["admin", "manager", "member"], render: renderPerformance },
+  { id: "match", label: "인력 매칭/배정", group: "admin", roles: ["admin", "manager"], render: renderMatch },
+  { id: "jobs", label: "AI 에이전트 생성", group: "admin", roles: ["admin", "manager"], render: renderJobs },
+  { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
+  { id: "agentpool", label: "AI 에이전트 관리", group: "admin", roles: ["admin", "manager"], render: renderAgentPool },
+  { id: "cost", label: "비용", group: "admin", roles: ["admin", "manager"], render: renderCost },
+  { id: "fairness", label: "공정성 지표", group: "admin", roles: ["admin", "manager"], render: renderFairness },
+  { id: "audit", label: "활동 기록", group: "admin", roles: ["admin", "manager"], render: renderAudit },
+  { id: "admin", label: "사용자 관리", group: "admin", roles: ["admin"], adminOnly: true, render: renderAdmin },
 ];
 
 async function boot() {
@@ -204,14 +218,36 @@ async function boot() {
 function buildNav() {
   const nav = document.getElementById("tabs");
   nav.innerHTML = "";
-  for (const t of TABS) {
-    if (!t.roles.includes(ME.role)) continue;
-    const btn = document.createElement("button");
-    btn.textContent = t.label;
-    btn.dataset.tab = t.id;
-    btn.onclick = () => selectTab(t.id);
-    nav.appendChild(btn);
-  }
+
+  const userTabs = TABS.filter(t => t.group === "user" && t.roles.includes(ME.role));
+  const adminTabs = TABS.filter(t => t.group === "admin" && t.roles.includes(ME.role));
+
+  const addGroup = (label, tabs, cls) => {
+    if (!tabs.length) return;
+    const row = document.createElement("div");
+    row.className = "nav-group" + (cls ? " " + cls : "");
+    const tag = document.createElement("span");
+    tag.className = "nav-label";
+    tag.textContent = label;
+    row.appendChild(tag);
+    for (const t of tabs) {
+      const btn = document.createElement("button");
+      btn.textContent = t.label;
+      if (t.adminOnly) {
+        const badge = document.createElement("span");
+        badge.className = "badge-adminonly";
+        badge.textContent = "관리자 전용";
+        btn.appendChild(badge);
+      }
+      btn.dataset.tab = t.id;
+      btn.onclick = () => selectTab(t.id);
+      row.appendChild(btn);
+    }
+    nav.appendChild(row);
+  };
+
+  addGroup("내 업무", userTabs, "");
+  addGroup("관리자 도구", adminTabs, "admin-group");
 }
 
 let currentTab = null;

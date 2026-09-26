@@ -5,8 +5,11 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 75
-passed). **F11 Web UI 셸(`GET /`, 단일 페이지 바닐라 JS)을 실제로 구현** —
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 79
+passed). **F11 Web UI 셸(`GET /`, 단일 페이지 바닐라 JS)을 실제로 구현**했고,
+내비게이션은 기존 RBAC 매트릭스를 그대로 근거로 "내 업무"/"관리자 도구"
+2구역으로 분리했다(ADR 결정 9 — 백엔드 권한 규칙 변경 없이 순수 UI 구조
+개선) —
 v0–v4 개발 동안 JSON API만 있고 브라우저 화면이 전무했던 것을 코드 재점검
 4회차(R4)에서 발견해 채웠다(`docs/LIMITS.md` §10, 실제 브라우저 수동 조작은
 미검증). **실제 LLM(Anthropic/OpenAI/Ollama) 연동도 추가**(`llm.py`·
@@ -29,7 +32,7 @@ v0–v4 개발 동안 JSON API만 있고 브라우저 화면이 전무했던 것
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 75건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 79건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -101,12 +104,12 @@ src/hair_platform/
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
-  ADR.md             # 설계 결정 8건
+  ADR.md             # 설계 결정 9건
   LIMITS.md          # 알려진 갭(정직하게 기록)
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 75건
+tests/unit/                            # 골든셋 79건
 ```
 
 ## 로드맵
