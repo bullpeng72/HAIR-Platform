@@ -46,12 +46,13 @@ INDEX_HTML = """<!DOCTYPE html>
   .muted { color: #777; font-size: 0.8rem; }
   table { table-layout: fixed; }
   td, th { overflow-wrap: break-word; }
-  td.col-actions, th.col-actions { width: 210px; }
-  td.col-output, th.col-output { width: 260px; }
-  .actions { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
-  .actions input[type="number"] { width: 55px; }
-  .actions .pair { display: inline-flex; gap: 0.2rem; }
-  .actions select { max-width: 100px; }
+  td.col-actions, th.col-actions { width: 160px; }
+  td.col-output, th.col-output { width: 280px; }
+  .actions { display: flex; flex-direction: column; align-items: stretch; gap: 0.3rem; }
+  .actions button { width: 100%; }
+  .actions .pair { display: flex; gap: 0.2rem; }
+  .actions .pair input, .actions .pair select { width: 0; min-width: 0; flex: 1; }
+  .actions .pair button { width: auto; flex-shrink: 0; }
   #login-view { display: flex; align-items: center; justify-content: center; height: 100vh; }
   #login-view .card { width: 320px; }
   #login-view input { width: 100%; margin-bottom: 0.5rem; box-sizing: border-box; }
@@ -715,9 +716,9 @@ async function renderAdmin(content) {
     '<p class="muted">상사를 지정하면 결재 요청이 자동으로 그 상사에게 라우팅됩니다.</p>' +
     table(["ID", "아이디", "권한", "상사", "동작"], users.map(u => [
       u.id, esc(u.username), esc(u.role), u.manager_id === null ? "-" : u.manager_id,
-      '<div class="actions"><select id="mgr-' + u.id + '"><option value="">(없음)</option>' +
+      '<div class="actions"><span class="pair"><select id="mgr-' + u.id + '"><option value="">(없음)</option>' +
         users.filter(m => m.id !== u.id).map(m => '<option value="' + m.id + '"' + (m.id === u.manager_id ? " selected" : "") + ">" + esc(m.username) + "</option>").join("") +
-      '</select><button class="small" data-set-manager="' + u.id + '">저장</button></div>',
+      '</select><button class="small" data-set-manager="' + u.id + '">저장</button></span></div>',
     ])) + "</section>";
 
   document.getElementById("user-form").addEventListener("submit", async (ev) => {
