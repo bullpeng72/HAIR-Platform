@@ -38,7 +38,16 @@ hair-platform-bootstrap-admin --db-path hair.db --username admin --password '...
 
 ```bash
 pip install -e ".[llm]"                    # anthropic·openai SDK 설치
+
+# 방법 A — 프로젝트 루트에 .env 파일(git에 커밋되지 않음, .gitignore 처리됨):
+#   ANTHROPIC_API_KEY=...
+#   OPENAI_API_KEY=...
+# create_app()이 기동 시 자동으로 읽는다(python-dotenv, 이미 설정된 환경변수는
+# 덮어쓰지 않음).
+
+# 방법 B — 환경변수로 직접:
 export ANTHROPIC_API_KEY=...               # 또는 OPENAI_API_KEY
+
 # API 요청에 "use_llm": true 를 넣거나, Web UI "AI 에이전트 생성" 탭의
 # 체크박스를 켜면 실제 API가 호출된다(비용 발생) — 안 켜면 무료 스텁 그대로.
 ```

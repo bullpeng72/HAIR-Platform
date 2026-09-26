@@ -28,6 +28,7 @@ import os
 import sqlite3
 from functools import partial
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from starlette.middleware.sessions import SessionMiddleware
@@ -78,6 +79,12 @@ def parse_brief_stub(raw_text: str) -> list[str]:
 
 
 def create_app(db_path: str = ":memory:") -> FastAPI:
+    # 사용자 요청(2026-09-26) — 프로젝트 루트 `.env`(gitignore됨)에서
+    # ANTHROPIC_API_KEY/OPENAI_API_KEY/HAIR_PLATFORM_SECRET_KEY 등을 읽는다.
+    # `.env`가 없으면 조용히 아무 일도 하지 않는다(기존 동작과 동일).
+    # 이미 설정된 실제 환경변수를 덮어쓰지 않는다(override=False, 기본값).
+    load_dotenv()
+
     app = FastAPI(title="HAIR-Platform")
     # ADR 결정 6: 세션 기반 인증(SessionMiddleware).
     # 코드 재점검(2026-09-26)에서 발견: "배포 시 환경변수로 교체한다"는 주석만 있고
