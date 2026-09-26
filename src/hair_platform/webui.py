@@ -44,6 +44,14 @@ INDEX_HTML = """<!DOCTYPE html>
   .msg.error { background: #fde2e2; color: #7a1212; }
   .msg.ok { background: #e3f6e5; color: #185c2c; }
   .muted { color: #777; font-size: 0.8rem; }
+  table { table-layout: fixed; }
+  td, th { overflow-wrap: break-word; }
+  td.col-actions, th.col-actions { width: 210px; }
+  td.col-output, th.col-output { width: 260px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+  .actions input[type="number"] { width: 55px; }
+  .actions .pair { display: inline-flex; gap: 0.2rem; }
+  .actions select { max-width: 100px; }
   #login-view { display: flex; align-items: center; justify-content: center; height: 100vh; }
   #login-view .card { width: 320px; }
   #login-view input { width: 100%; margin-bottom: 0.5rem; box-sizing: border-box; }
@@ -131,16 +139,28 @@ const LABELS = {
 };
 function label(v) { return LABELS[v] || v; }
 
+function headerColClass(h) {
+  if (h === "동작") return "col-actions";
+  if (h === "최근 산출물") return "col-output";
+  return "";
+}
+
 function table(headers, rows) {
   let html = "<table><thead><tr>";
-  for (const h of headers) html += "<th>" + esc(h) + "</th>";
+  for (const h of headers) {
+    const cls = headerColClass(h);
+    html += "<th" + (cls ? ' class="' + cls + '"' : "") + ">" + esc(h) + "</th>";
+  }
   html += "</tr></thead><tbody>";
   if (!rows.length) {
     html += '<tr><td colspan="' + headers.length + '" class="muted">데이터가 없습니다.</td></tr>';
   }
   for (const r of rows) {
     html += "<tr>";
-    for (const c of r) html += "<td>" + c + "</td>";
+    r.forEach((c, i) => {
+      const cls = headerColClass(headers[i]);
+      html += "<td" + (cls ? ' class="' + cls + '"' : "") + ">" + c + "</td>";
+    });
     html += "</tr>";
   }
   html += "</tbody></table>";
@@ -250,8 +270,8 @@ async function renderBriefs(content) {
     esc(b.raw_text),
     esc(label(b.status)),
     esc(b.stub_roles.join(", ")),
-    canWrite ? '<button class="small" data-decompose="' + b.id + '">할 일로 나누기</button> ' +
-      '<button class="small" data-viewtasks="' + b.id + '">할 일 보기</button>' : "",
+    canWrite ? '<div class="actions"><button class="small" data-decompose="' + b.id + '">할 일로 나누기</button>' +
+      '<button class="small" data-viewtasks="' + b.id + '">할 일 보기</button></div>' : "",
   ]));
   html += '<div id="brief-detail"></div></section>';
   content.innerHTML = html;
@@ -389,8 +409,8 @@ function approvalTable(rows, withActions) {
     const row = [a.id, esc(label(a.subject_type)), a.subject_id, a.step, esc(label(a.status))];
     if (withActions) {
       row.push(a.status === "pending"
-        ? '<button class="small" data-decide="' + a.id + '" data-approve="1">승인</button> ' +
-          '<button class="small danger" data-decide="' + a.id + '" data-approve="0">반려</button>'
+        ? '<div class="actions"><button class="small" data-decide="' + a.id + '" data-approve="1">승인</button>' +
+          '<button class="small danger" data-decide="' + a.id + '" data-approve="0">반려</button></div>'
         : "");
     }
     return row;
@@ -463,11 +483,13 @@ async function renderHumanPool(content) {
       p.performance_consent ? "동의함" : "미동의",
       p.performance_score === null ? "-" : p.performance_score,
       p.availability === "offboarded" ? "<span class=\\"muted\\">오프보딩됨</span>" :
+        '<div class="actions">' +
         '<button class="small" data-toggle-consent="' + p.id + '" data-consent="' + (p.performance_consent ? "0" : "1") + '">' +
-          (p.performance_consent ? "동의 철회" : "동의") + "</button> " +
-        '<input class="small" style="width:60px" type="number" step="0.01" min="0" max="1" id="score-' + p.id + '"> ' +
-        '<button class="small" data-set-score="' + p.id + '">점수입력</button> ' +
-        '<button class="small danger" data-offboard="' + p.id + '">오프보딩</button>',
+          (p.performance_consent ? "동의 철회" : "동의") + "</button>" +
+        '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="score-' + p.id + '">' +
+        '<button class="small" data-set-score="' + p.id + '">점수입력</button></span>' +
+        '<button class="small danger" data-offboard="' + p.id + '">오프보딩</button>' +
+        "</div>",
     ])) + "</section>";
 
   document.getElementById("hp-form").addEventListener("submit", async (ev) => {
@@ -523,12 +545,13 @@ async function renderAgentPool(content) {
     table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "LLM", "최근 산출물", "동작"], agents.map(a => {
       let actions = "";
       if (isAdmin) {
-        if (a.status === "pending_onboarding") actions += '<button class="small" data-onboard="' + a.id + '">온보딩 승인</button> ';
-        if (a.status === "active") actions += '<button class="small danger" data-deprecate="' + a.id + '">오프보딩</button> ';
-        actions += '<input class="small" style="width:70px" type="number" step="0.01" id="cost-' + a.id + '"> ' +
-          '<button class="small" data-set-cost="' + a.id + '">비용입력</button> ' +
-          '<input class="small" style="width:60px" type="number" step="0.01" min="0" max="1" id="ascore-' + a.id + '"> ' +
-          '<button class="small" data-set-ascore="' + a.id + '">점수입력</button> ';
+        if (a.status === "pending_onboarding") actions += '<button class="small" data-onboard="' + a.id + '">온보딩 승인</button>';
+        if (a.status === "active") actions += '<button class="small danger" data-deprecate="' + a.id + '">오프보딩</button>';
+        actions +=
+          '<span class="pair"><input type="number" step="0.01" placeholder="비용" id="cost-' + a.id + '">' +
+          '<button class="small" data-set-cost="' + a.id + '">비용입력</button></span>' +
+          '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="ascore-' + a.id + '">' +
+          '<button class="small" data-set-ascore="' + a.id + '">점수입력</button></span>';
       }
       if (canExecute && a.status === "active") {
         actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
@@ -536,7 +559,8 @@ async function renderAgentPool(content) {
       const output = a.last_output ? esc(a.last_output).slice(0, 80) + (a.last_output.length > 80 ? "…" : "") : "-";
       const llmInfo = a.llm_provider ? esc(a.llm_provider) + "/" + esc(a.llm_model || "") : "-";
       return [a.id, esc(a.role_name), esc(a.skill_tags.join(", ")), a.cost_estimate,
-        a.performance_score === null ? "-" : a.performance_score, esc(label(a.status)), llmInfo, output, actions];
+        a.performance_score === null ? "-" : a.performance_score, esc(label(a.status)), llmInfo, output,
+        '<div class="actions">' + actions + "</div>"];
     })) + '<div id="execute-result"></div></section>';
 
   content.querySelectorAll("[data-onboard]").forEach(btn => {
@@ -691,9 +715,9 @@ async function renderAdmin(content) {
     '<p class="muted">상사를 지정하면 결재 요청이 자동으로 그 상사에게 라우팅됩니다.</p>' +
     table(["ID", "아이디", "권한", "상사", "동작"], users.map(u => [
       u.id, esc(u.username), esc(u.role), u.manager_id === null ? "-" : u.manager_id,
-      '<select id="mgr-' + u.id + '"><option value="">(없음)</option>' +
+      '<div class="actions"><select id="mgr-' + u.id + '"><option value="">(없음)</option>' +
         users.filter(m => m.id !== u.id).map(m => '<option value="' + m.id + '"' + (m.id === u.manager_id ? " selected" : "") + ">" + esc(m.username) + "</option>").join("") +
-      '</select> <button class="small" data-set-manager="' + u.id + '">저장</button>',
+      '</select><button class="small" data-set-manager="' + u.id + '">저장</button></div>',
     ])) + "</section>";
 
   document.getElementById("user-form").addEventListener("submit", async (ev) => {
