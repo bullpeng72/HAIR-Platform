@@ -21,7 +21,13 @@ INDEX_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HAIR-Platform</title>
 <style>
-  :root { color-scheme: light dark; }
+  /* 페이지 전체가 라이트 팔레트로 하드코딩돼 있고 다크모드 대응 CSS가
+     따로 없다 — "light dark"를 두면 OS가 다크모드일 때 브라우저가 버튼
+     등 폼 컨트롤에 네이티브 다크 스타일(밝은 글자색)을 자동 적용하는데,
+     배경은 이 페이지의 라이트 CSS(흰색)가 그대로 남아 글자가 거의 안
+     보이는 상태가 된다(실사용 중 발견). 이 페이지는 라이트 전용임을
+     명시한다. */
+  :root { color-scheme: light; }
   body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f5f6f8; color: #1b1f24; }
   header { background: #14213d; color: #fff; padding: 0.75rem 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   header h1 { font-size: 1.1rem; margin: 0; }
