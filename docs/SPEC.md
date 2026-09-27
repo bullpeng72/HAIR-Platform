@@ -134,6 +134,7 @@
 | MCP(외부 도구) 연동(사용자 요청, "crewai-tools의 MCPServerAdapter... 참조해 mcp 기능을 구현해줘") | `run_crew()`에 `MCPServerAdapter` 실제 연결, `AgentModelConfig.mcp_servers` 추가(`docs/LIMITS.md` §15) | 3건(GC103–105) |
 | Agent-Evaluator 적용 분석(사용자 요청, "Agent-Evaluator 적용이 되어 있는지 분석해줘") | `eval_wiring.py`를 실제로 끝까지 실행해 `PerformanceMonitor` 저장 버그(`auto_save=False`) 발견·수정, `agent-eval gate` 채점까지 실제 성공 확인(`docs/LIMITS.md` §1) | 실측 검증(신규 golden case 없음, 기존 코드 버그 수정) |
 | E2E 시나리오 실행(사용자 요청, "개발업무 인간-AI Agent 협업 팀 구성... End-to-End로 진행하며 개선해줘") | 신규 SaaS 대시보드 프로젝트 팀 구성을 F1→F14까지 실제로 끝까지 진행, UX 문제 3건 발견·수정(`docs/LIMITS.md` §16) | 실측 검증(프런트엔드 텍스트 수정, golden case 대상 아님) |
+| CrewAI 개념 활용도 감사(사용자 요청, "전체적으로 CrewAI 기능/개념을 제대로 활용하도록 구현되어 있는지 확인해줘") | RAG 증강이 개별 실행에만 있고 Crew 협업에는 없던 실사용 갭 발견·수정, `human_input`/`token_usage`/`allow_delegation`/`planning` 4건 실측 판단(`docs/LIMITS.md` §17) | 1건(GC106) |
 
 ## 10. 설계 결정
 
@@ -155,7 +156,7 @@
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동, 총 108건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동+CrewAI 개념 활용도 감사, 총 109건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
 - [x] F11 — 인증된 Web UI 셸에서 F1–F14 전부 조작 가능(`webui.py`, 단일 페이지 바닐라 JS, R4에서 뒤늦게 구현 — `docs/LIMITS.md` §10 참고. 실제 브라우저 수동 조작은 미검증, TestClient 전체 플로우 통합 테스트로 대체)
 - [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 저장 버그 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공(TCR 100% PASS, Gate A/G 미달 확인) — `improve verify`로 confirmed까지 완주하는 반복은 여전히 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동

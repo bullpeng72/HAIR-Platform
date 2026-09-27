@@ -48,7 +48,7 @@ import os
 import sqlite3
 from contextlib import ExitStack
 
-from hair_platform import audit, llm
+from hair_platform import agent_runtime, audit, llm
 
 DELEGATION_TOOL_NAMES = {"Delegate work to coworker", "Ask question to coworker"}
 
@@ -253,9 +253,18 @@ def run_crew(
         tasks: list[Task] = []
         for i, description in enumerate(task_descriptions):
             context = [tasks[i - 1]] if i > 0 and process == "sequential" else None
+            # 2026-09-27, "CrewAI 기능/개념을 제대로 활용하도록 구현되어
+            # 있는지 확인해줘" 요청으로 발견한 갭 수정 — 지식검색(VectorDB)/
+            # 관계분석(GraphDB) skill_tags를 가진 Agent는 개별 실행
+            # (`execute_agent`)에서만 RAG 증강을 받고 있었다. Crew 협업에서도
+            # 똑같이 적용해야 ADR 결정 11이 약속한 대로 동작한다.
+            row_skills = json.loads(rows[i]["skill_tags"])
+            augmented_description = agent_runtime.augment_with_retrieval(
+                conn, row_skills, description
+            )
             tasks.append(
                 Task(
-                    description=description,
+                    description=augmented_description,
                     expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
                     agent=crewai_agents[i],
                     context=context,
@@ -371,6 +380,13 @@ def run_crew(
             "agent_ids": agent_ids,
             "process": process,
             "delegation_count": len(delegations),
+            # CrewAI가 실제로 집계해주는 토큰 사용량 — 참고용 기록일 뿐
+            # F10 비용 조회(cost.py)의 cost_estimate 계산에는 아직 연결
+            # 안 함(2026-09-27, "CrewAI 개념을 제대로 활용하는지 확인" 요청
+            # 으로 확인: cost.py는 수동입력만 쓰는 게 1차 범위로 이미
+            # 문서화돼 있다 — 자동 비용 갱신은 그 스코프를 벗어나는 더 큰
+            # 변경이라 감사로그에 참고 데이터만 남긴다).
+            "token_usage": result.token_usage.model_dump(),
         },
     )
     for delegation in delegations:

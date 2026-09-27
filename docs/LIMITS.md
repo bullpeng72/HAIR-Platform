@@ -650,6 +650,78 @@ Task를 등록하는 배치 UI로 재설계하는 것(API는 이미 지원)은 �
 "제안 클릭으로 채우기"보다 범위가 커서, 실사용 중 정말 불편하다는 신호가
 쌓이면 그때 다시 검토하는 게 맞다고 판단했다.
 
+## 17. "CrewAI 기능/개념을 제대로 활용하도록 구현되어 있는지" 감사 —
+실사용 갭 1건 발견·수정 + 후보 4건 실측 판단(사용자 요청, 2026-09-27)
+
+§14 리뷰가 `manager_agent`/`memory`/`max_iter`/`task_callback` 같은 API
+파라미터 수준을 다뤘다면, 이번엔 "CrewAI가 제공하는 개념을 이 도메인에
+제대로 매핑했는가"를 실제 소스 확인 기반으로 다시 봤다.
+
+**1) [실사용 갭, 수정 완료] RAG 증강이 개별 실행에만 붙고 Crew 협업에는
+없었다**: `agent_runtime._augment_with_retrieval()`(ADR 결정 11 — skill_tags에
+vectordb/rag·graphdb가 있으면 검색 결과를 프롬프트에 덧붙임)이
+`execute_agent()`(개별 실행)에서만 호출되고 `crew_runtime.run_crew()`
+(Crew 협업 — 이 프로젝트의 핵심 기능)에는 전혀 없었다(`grep`으로 확인).
+즉 "지식검색 Agent"/"관계분석 Agent"를 여러 Agent와 묶어 협업시키면
+RAG 증강 없이 원문 그대로 Task가 만들어져, ADR 결정 11이 약속한 기능이
+정작 CrewAI 협업 경로에서는 작동하지 않고 있었다. **수정**:
+`agent_runtime._augment_with_retrieval()`을 공개 함수
+`augment_with_retrieval()`로 바꾸고(밑줄 제거 — 두 모듈이 공유하는
+정당한 이유가 생겼다), `crew_runtime.run_crew()`의 Task 생성 루프에서
+각 Agent의 `skill_tags`를 보고 동일하게 적용하도록 고쳤다. 회귀 테스트
+GC106 — 실제 `Agent`/`Task`/`Crew` 객체를 구성해(`Crew.kickoff`만 mock)
+`crew.tasks[1].description`에 `graphquery.context_for_prompt()`의 증강
+흔적("확정된 배정")이 실제로 들어있는지, 그리고 일반 역할의 Task는
+증강 없이 원문 그대로인지 확인한다. 순환 import 우려(`crew_runtime`이
+`agent_runtime`을 import)는 실제로 `import hair_platform.crew_runtime`을
+돌려 문제없음을 확인했다(`agent_runtime`은 `crew_runtime`을 import하지
+않는다).
+
+**2) [실측 확인, 안 고침 — 기술적으로 부적합] `Task.human_input=True`**:
+CrewAI 소스(`crewai/core/providers/human_input.py`,
+`crew_agent_executor.py`)를 직접 읽어 확인한 결과, 이 기능은 실행 중
+**진짜 터미널 stdin에서 `input()`으로 블로킹 대기**한다(비동기 버전도
+OS stdin을 논블로킹으로 읽을 뿐, HTTP 요청으로 답을 주는 방식이 아니다).
+FastAPI 서버 프로세스 안에서 이걸 켜면 그 워커가 응답 없는 stdin을
+기다리며 사실상 멈춘다 — 이 플랫폼처럼 서버로 배포되는 웹 서비스에는
+쓸 수 없는 기능이다. `HumanInputProvider`가 교체 가능한 Protocol이라
+F7 결재 큐와 연동하는 커스텀 provider를 만드는 건 이론상 가능하지만,
+이는 "이미 있는 기능을 켠다" 수준이 아니라 새 통합 컴포넌트를 설계·
+구현하는 별도 작업이라 이번 범위에서는 안 하고 오픈 이슈로만 남긴다.
+F7 결재 워크플로가 이 도메인에 필요한 "사람의 승인/반려"를 이미 더
+정교하게(다단계 결재라인, RBAC, 감사로그) 제공하므로 당장 급하지도
+않다.
+
+**3) [실측 확인, 최소 반영] `CrewOutput.token_usage` vs F10 비용 조회**:
+`cost.py`는 문서에 이미 명시된 대로(`cost.py` 모듈 docstring, SPEC.md
+F10 행 "1차: 수동입력만") `cost_estimate` 수동 입력만 쓰고, CrewAI가
+실제로 계산해주는 `result.token_usage`(`UsageMetrics` — total/prompt/
+completion 토큰 수, 성공 요청 수)는 전혀 활용하지 않고 있었다. 이건
+이미 문서화된 의도적 스코프라 `cost.py` 자체를 바꾸진 않았지만,
+"CrewAI가 이미 계산해주는 데이터를 완전히 버리는 건 아깝다"고 판단해
+`run_crew()`의 `crew_run_completed` 감사로그에 `token_usage`를 참고용
+으로 함께 남기도록 최소 반영했다(F10 자동 갱신 같은 큰 변경은 안 함 —
+그건 여전히 오픈 이슈).
+
+**4) [실측 확인, 안 고침 — 근거 부족] 모든 Agent에 `allow_delegation=True`
+일괄 적용**: "품질 담당자"·"검증 엔지니어"처럼 위임보다 최종 검증을
+해야 할 것 같은 역할도 위임이 켜져 있는 게 맞는지 검토했다. CrewAI
+소스(`Agent.allow_delegation` 필드 설명)에는 특정 역할에 위임을
+제한해야 한다는 근거가 전혀 없다 — 순수히 이 도메인의 설계 판단
+영역이다. 확실한 기술적 근거 없이 임의로 역할별 차등을 두면 ADR 결정
+11이 의도적으로 선택한 "정적 릴레이가 아니라 실제 협업"이라는 취지를
+훼손할 위험이 더 크다고 판단해 그대로 뒀다.
+
+**5) [검토함, 보류] `Crew(planning=True)`**: CrewAI 소스(`crew.py`의
+`_handle_crew_planning`)를 확인하니 이 옵션은 실행 전 **별도의 LLM
+호출로 `AgentPlanner`를 돌려 계획을 세운 뒤 그 계획을 Task에 추가**하는
+구조다 — Crew 하나를 실행할 때마다 LLM 호출이 최소 1건 더 늘어난다.
+ADR 결정 11이 이미 "위임만으로도 호출 수 예측이 어려워진다"는 우려를
+문서화해뒀는데(§`docs/ADR.md` 결정 11 한계), 그 위에 계획 수립 호출까지
+얹을 명확한 이득(이 도메인의 Task description은 이미 사용자가 구체적
+으로 적어 넣는 편이라 "무엇을 할지 계획"이 크게 필요치 않아 보임)이
+확신되지 않아 켜지 않았다 — 검토했으나 보류.
+
 ## 요약
 
 | 항목 | 상태 |
@@ -676,3 +748,4 @@ Task를 등록하는 배치 UI로 재설계하는 것(API는 이미 지원)은 �
 | 실사용 발견: hierarchical에서 task_callback 매니저 오귀속 + Web UI null 출력 크래시 | **사용자 실제 테스트 중 발견 → 발견·수정 완료**(GC102) |
 | MCP(외부 도구) 연동 — `run_crew()`에 MCPServerAdapter 실제 연결 | **구현 완료**(GC103–105), 접속 가능한 실제 MCP 서버가 없어 종단간 검증은 미검증(mock 경계: `MCPServerAdapter`) |
 | E2E 시나리오(사람+AI 혼합 팀 구성) 전 과정 실행 | **F1–F14 핵심 흐름 실측 확인, UX 문제 3건 발견·수정**(브리프 placeholder, 제안 역할 클릭 채우기, 매칭 실패 안내 문구) |
+| CrewAI 개념 활용도 감사 — RAG 증강이 Crew 협업에서 누락됨 | **실사용 갭 발견 → 수정 완료**(GC106), human_input/token_usage/delegation/planning 4건 실측 판단(§17) |

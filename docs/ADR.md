@@ -413,3 +413,14 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
   `hierarchical`에서 Task.context 체이닝을 걸지 않는 것은 버그가 아니라
   의도된 설계임을 코드 주석으로 명시했다(매니저가 동적으로 조율하므로
   "바로 앞 Task"만 고정 전달하는 sequential 방식이 의미가 없다).
+  **정정(2026-09-27, "CrewAI 기능/개념을 제대로 활용하도록 구현되어
+  있는지 확인해줘" 요청) — RAG 증강이 Crew 협업에서 빠져 있던 실사용
+  갭 발견·수정**: 지식검색(VectorDB)·관계분석(GraphDB) Agent의 RAG
+  증강(`agent_runtime.augment_with_retrieval()`, 옛 이름
+  `_augment_with_retrieval`)이 개별 실행(`execute_agent`)에서만 호출되고
+  `run_crew()`(이 결정의 핵심인 Crew 협업)에는 전혀 연결돼 있지 않았다
+  — 이 Agent들을 Crew에 넣어 협업시켜도 RAG 증강 없이 원문 그대로
+  실행됐다. `run_crew()`의 Task 생성 루프에 동일하게 연결해 고쳤다
+  (GC106). 함께 검토한 CrewAI 개념 4건(`human_input`, `token_usage`,
+  `allow_delegation` 역할별 차등, `planning`)의 판단 근거는
+  `docs/LIMITS.md` §17 참고.

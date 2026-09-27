@@ -583,6 +583,54 @@ def test_gc105_agent_model_config_endpoint_persists_mcp_servers(client_and_conn)
     assert json.loads(row["mcp_servers"]) == saved
 
 
+# ---------- crew_runtime: CrewAI 개념 활용도 감사(사용자 요청, 2026-09-27,
+# "CrewAI 기능/개념을 제대로 활용하도록 구현되어 있는지 확인해줘") ----------
+
+
+def test_gc106_run_crew_augments_task_description_for_graphdb_agent(client_and_conn):
+    """실측으로 발견한 갭 회귀 테스트 — `agent_runtime.execute_agent()`(개별
+    실행)는 vectordb/graphdb skill_tags Agent에 RAG 증강을 붙이는데
+    `crew_runtime.run_crew()`(Crew 협업)에는 전혀 안 붙어 있었다. 같은
+    Agent가 Crew에 들어가도 동일하게 증강돼야 ADR 결정 11의 약속과
+    일치한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('기획자', '[\"요구사항정의\"]', 'active')"
+    )
+    normal_agent = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('관계분석 Agent', '[\"graphdb\"]', 'active')"
+    )
+    graphdb_agent = cur.lastrowid
+    conn.commit()
+
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["crew"] = self
+        return _crew_output("최종 산출물", ["기획서", "관계 기반 답변"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.run_crew(
+            conn,
+            [normal_agent, graphdb_agent],
+            ["기획서를 작성해줘", "누가 이 업무를 맡고 있어?"],
+            admin_id,
+            process="sequential",
+            provider="openai",
+        )
+
+    crew = captured["crew"]
+    assert crew.tasks[0].description == "기획서를 작성해줘"  # 일반 역할은 증강 없음
+    assert "확정된 배정" in crew.tasks[1].description  # graphquery 증강 흔적
+    assert "누가 이 업무를 맡고 있어?" in crew.tasks[1].description
+
+
 # ---------- vectorstore(VectorDB 지식검색 Agent) ----------
 
 

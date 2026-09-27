@@ -24,11 +24,16 @@ VECTORDB_SKILL_TAGS = {"vectordb", "rag"}
 GRAPHDB_SKILL_TAGS = {"graphdb", "관계질의"}
 
 
-def _augment_with_retrieval(
+def augment_with_retrieval(
     conn: sqlite3.Connection, skills: list[str], prompt: str
 ) -> str:
     """skill_tags로 지식검색(VectorDB)/관계분석(GraphDB) Agent를 판별해
-    검색 결과를 프롬프트에 덧붙인다(ADR 결정 11). 해당 없으면 원본 그대로."""
+    검색 결과를 프롬프트에 덧붙인다(ADR 결정 11). 해당 없으면 원본 그대로.
+
+    공개 함수다(밑줄 없음) — `crew_runtime.run_crew()`도 이 함수를 그대로
+    쓴다(2026-09-27, "CrewAI 기능/개념을 제대로 활용하도록 구현되어
+    있는지 확인해줘" 요청으로 발견: 개별 실행(`execute_agent`)에만 RAG
+    증강이 붙어 있고 Crew 협업에는 전혀 안 붙어 있던 갭을 여기서 메운다)."""
     skill_set = set(skills)
     if skill_set & VECTORDB_SKILL_TAGS:
         hits = vectorstore.search(conn, prompt, top_k=3)
@@ -108,7 +113,7 @@ def execute_agent(
         effective_provider, effective_model
     )
     system = llm.system_prompt_for_role(agent["role_name"], skills)
-    augmented_prompt = _augment_with_retrieval(conn, skills, prompt)
+    augmented_prompt = augment_with_retrieval(conn, skills, prompt)
     output = llm.call_llm(resolved_provider, resolved_model, system, augmented_prompt)
 
     conn.execute(

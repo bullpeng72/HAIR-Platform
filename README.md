@@ -5,7 +5,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 108
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 109
 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
@@ -34,7 +34,10 @@ Agent별 `mcp_servers` 설정에 실제로 접속해 도구를 붙인다 —
 실제 MCP 서버가 없어 종단간 검증은 미검증). "신규 SaaS 대시보드 프로젝트,
 사람+AI Agent 혼합 팀 구성" 시나리오를 F1부터 F14까지 실제로 끝까지
 진행해보며 브리프 입력·역할 제안·매칭 실패 안내 문구의 UX 문제 3건을
-발견해 수정했다(`docs/LIMITS.md` §16). **실제 OpenAI API로
+발견해 수정했다(`docs/LIMITS.md` §16). 이어서 "CrewAI 개념을 제대로
+활용하는지" 감사해 RAG 증강(VectorDB/GraphDB)이 개별 실행에만 붙어있고
+Crew 협업에는 빠져 있던 실사용 갭을 발견·수정했다(`docs/LIMITS.md`
+§17). **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
 우회·검색 필터·조직도 귀속·`manager_id` 누락, R2: 승인 inbox·사용자 목록·
@@ -49,7 +52,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 108건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 109건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -146,7 +149,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 108건
+tests/unit/                            # 골든셋 109건
 ```
 
 ## 로드맵
