@@ -151,6 +151,7 @@
 - **Job Queue 샌드박스**: Docker 컨테이너(`--cpus`·`--memory` 쿼터, `--network=none`, 타임아웃)로 확정(ADR 결정 8) — Docker 런타임이 배포 요건에 추가된다.
 - **Web UI 내비게이션 = "내 업무"/"관리자 도구" 2구역 분리**(사용자 요청, ADR 결정 9): 접근 제어 규칙은 새로 만들지 않고 기존 RBAC 매트릭스(결정 3)를 그대로 근거로 삼는다 — 탭의 `roles`에 팀원/뷰어가 하나라도 있으면 "내 업무", 없으면 "관리자 도구"로 분류한다. 사용자 관리(계정 생성·상사 지정)만 ADMIN 전용이라 "관리자 전용" 배지로 추가 표시한다.
 - **AI Agent 생성 3단계(stub/simple_llm/crewai) + 실제 CrewAI 협업 + VectorDB/GraphDB Agent — 구현 완료**(사용자 요청, ADR 결정 10·11, `crew_runtime.py`·`vectorstore.py`·`graphquery.py`): `GenerateRequest.framework`로 생성 방식을 고르고, `POST /api/crew/run`으로 여러 Agent를 실제 CrewAI Crew로 묶어 `allow_delegation`+`Task.context`로 협업시킨다. 표준 Agent 세트에 지식검색(VectorDB, OpenAI 임베딩+SQLite 코사인 유사도)·관계분석(GraphDB, 기존 관계형 데이터를 그래프로 취급) Agent를 추가했다 — 관계분석 Agent는 성과 데이터(NF9)를 소스 레벨에서 절대 조회하지 않는다. MCP 도구 연결은 `run_crew()`에 실제로 구현했다(`MCPServerAdapter`, `docs/LIMITS.md` §15) — 접속 가능한 실제 MCP 서버가 없어 종단간 검증만 오픈 이슈로 남는다.
+- **Skill Pool·Tool Pool + VectorDB/GraphDB의 CrewAI Tool화 — 기획 완료, 코드 미반영**(사용자 요청, ADR 결정 12): `skill_tags`의 "스킬→동작" 매핑이 코드 하드코딩이고 MCP 서버 설정이 Agent마다 개별 저장돼 재사용이 안 되는 구조적 갭을 분석해, `tool_pool`(도구 재사용 레지스트리)·`skill_pool`(스킬 정식 엔티티화)·`agent_tool_links`(N:M 연결) 3개 신규 테이블과, VectorDB/GraphDB를 지금의 정적 프롬프트 주입 대신 `crewai.tools.tool` 데코레이터로 감싸 Agent가 스스로 호출 여부를 판단하는 진짜 CrewAI Tool로 전환하는 안(스킬별 `augmentation_mode` 선택)까지 설계했다.
 
 이 결정들은 `docs/ADR.md`(Phase 2, `adr_review` 대기)에서 공식적으로 재확인·기록된다 — 여기서의 확정은 저장소 부트스트랩을 진행하기 위한 실무적 가결정이며, `adr_review` 승인이 최종 확정이다.
 
@@ -184,3 +185,4 @@
 - **CrewAI를 통한 MCP 도구 연결(외부 검색 등)** — `run_crew()`에는 실제로 연결 완료(ADR 결정 10, `docs/LIMITS.md` §15). 접속 가능한 실제 MCP 서버가 없어 종단간 검증은 못 했고, `crewai_agent_generator()`(F4 단일 생성)에는 아직 연결 안 함(그 시점엔 `agent_pool` row가 없어 MCP 설정을 읽을 곳이 없음)이 남은 오픈 이슈다.
 - **VectorDB 지식검색 Agent의 Ollama 로컬 임베딩 지원** — 현재는 OpenAI 임베딩만 지원한다(`vectorstore.py`). Anthropic은 공개 임베딩 API가 없다.
 - **CrewAI 위임(delegation) 도구 이름 하드코딩 위험** — `run_crew()`의 위임 캡처가 "Delegate work to coworker"/"Ask question to coworker"라는 CrewAI 내부 문자열에 의존한다 — CrewAI 버전업으로 이름이 바뀌면 조용히 캡처가 실패할 수 있다(`docs/LIMITS.md` §12).
+- **Skill Pool·Tool Pool(ADR 결정 12, 기획만 완료, 코드 미반영)** — 지금은 skill_tags가 자유문자열이고 "스킬→동작" 매핑이 `agent_runtime.py`에 하드코딩돼 있으며, MCP 서버 설정이 Agent마다 개별 저장돼 재사용이 안 된다. `tool_pool`·`skill_pool`·`agent_tool_links` 신규 테이블과, VectorDB/GraphDB를 정적 프롬프트 주입 대신 `crewai.tools.tool` 데코레이터로 감싼 진짜 CrewAI Tool로 전환하는 안(`augmentation_mode: "tool"|"always"|"none"`)까지 설계했다 — 구현·마이그레이션·Web UI는 다음 단계.

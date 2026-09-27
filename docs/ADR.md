@@ -371,6 +371,100 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
 - ~~이 결정도 결정 10과 마찬가지로 아직 코드로 구현되지 않았다.~~ —
   **정정**: 실제 구현 완료(`docs/LIMITS.md` §12).
 
+## 결정 12 — Skill Pool·Tool Pool로 Agent의 지식·도구 그라운딩을 데이터
+중심화하고, VectorDB/GraphDB를 CrewAI 네이티브 Tool로 전환한다(사용자 요청,
+2026-09-27 — "AI Agent에서 사용할 Skills, MCP Tool 등을 Pool로 구성하고
+지식 및 도구 그라운딩... CrewAI의 데코레이터 도구선언 기능과 비교해 개선점을
+찾아줘" — **기획 단계, 아직 코드 미반영**)
+
+**배경 — 실제 구현을 분석해 찾은 두 가지 구조적 갭**:
+
+1. **skill_tags가 자유 문자열이고, 특수 취급이 코드에 하드코딩돼 있다.**
+   `agent_runtime.py`의 `VECTORDB_SKILL_TAGS = {"vectordb", "rag"}`,
+   `GRAPHDB_SKILL_TAGS = {"graphdb", "관계질의"}`가 유일한 "스킬 → 동작"
+   매핑이다 — 새 스킬(예: "웹검색")을 추가하려면 코드를 고쳐야 하고, 이걸
+   가진 Agent가 몇 명이든 매핑은 전역으로 하나뿐이다.
+2. **MCP 서버 설정이 Agent마다 개별 저장이라 재사용이 안 된다.**
+   `AgentModelConfig.mcp_servers`는 Agent 레코드 하나하나에 JSON을 통째로
+   저장한다(`agent_pool.mcp_servers` 컬럼) — 같은 사내 검색 MCP 서버를
+   10개 Agent가 같이 쓰려면 JSON을 10번 붙여넣어야 하고, URL이 바뀌면 10곳을
+   다 고쳐야 한다. "이미 있는 걸 재사용"(원칙4)이 Agent 레벨에서는 되는데
+   Tool 레벨에서는 안 된다.
+3. **VectorDB/GraphDB가 CrewAI의 진짜 "Tool"이 아니라 정적 프롬프트
+   주입이다.** `crewai.tools.tool` 데코레이터(실제 설치된 패키지에서
+   `inspect`로 소스 확인함 — 함수+독스트링+타입힌트를 `Tool` 인스턴스로
+   변환해 `Agent(tools=[...])`에 넣으면, **LLM이 스스로 호출 여부·횟수·
+   질의어를 판단**하는 진짜 에이전틱 도구가 된다)와 달리, 지금
+   `agent_runtime.augment_with_retrieval()`/`crew_runtime.py`의 같은 함수
+   호출은 **Task를 만들기 전에 우리가 무조건 검색 결과를 프롬프트 앞에
+   붙인다** — Agent에게 선택권이 없고, 검색이 필요 없는 Task에도 항상
+   임베딩 API 비용이 발생한다. MCP 도구는 `MCPServerAdapter`로 이미 진짜
+   Tool이 돼 있으니 이 갭은 VectorDB/GraphDB 두 가지에만 해당한다.
+
+**결정 — 두 신규 Pool + Tool화 전환**:
+
+| 엔티티 | 목적 | 핵심 필드 |
+|---|---|---|
+| `tool_pool`(신규) | 실제 도구(MCP 서버 또는 native `@tool`) 하나를 이름으로 등록해 여러 Agent가 재사용 | `id, name(고유), description, kind(mcp_stdio\|mcp_remote\|native), config(JSON), tool_names(JSON, MCP 필터), is_active` |
+| `agent_tool_links`(신규, N:M) | 어떤 Agent가 어떤 Tool Pool 항목을 쓰는지 | `agent_id, tool_pool_id` |
+| `skill_pool`(신규) | 지금의 자유문자열 `skill_tags`를 정식 엔티티로 승격 | `id, name(고유, 기존 skill_tag와 매핑), description, default_tool_pool_ids(JSON), augmentation_mode("always"\|"tool"\|"none"), knowledge_collection(선택)` |
+
+- `tool_pool`은 MCP든 native(`vectorstore.search`/`graphquery.context_for_prompt`를
+  `@tool`로 감싼 것)든 한 표에 등록한다 — Agent 생성/실행 시점에
+  `agent_tool_links`를 조회해 실제 CrewAI `Tool` 목록으로 조립한다.
+- `skill_pool.augmentation_mode`로 두 방식을 스킬별로 선택 가능하게 한다:
+  - `"tool"`(신규 권장 기본값): `@tool`로 감싼 함수를 `tools=`에 등록 —
+    Agent가 필요할 때만 호출(진짜 에이전틱 사용, 비용 절감 가능성).
+  - `"always"`(지금 방식 유지): 지금처럼 Task 생성 전에 무조건 프롬프트에
+    주입 — "에이전트가 검색을 깜빡할 위험이 없어야 하는" 케이스(예: NF9
+    경계처럼 반드시 매번 적용돼야 하는 안전장치성 로직)에 남겨둔다.
+  - `"none"`: 아무 것도 안 함(순수 LLM 역할).
+- `skill_pool.knowledge_collection`으로 지식 그라운딩 범위를 명시한다 —
+  지금 `vectorstore.search()`는 `embedding_provider`/`model`로만 필터링하고
+  나머지는 **전역 공유 지식 풀**(누가 색인했든 다 검색 대상)이다. 이건
+  실측 확인한 현재 동작이지 버그가 아니다 — 다만 조직이 커지면 "이 스킬은
+  이 컬렉션의 지식만 봐야 한다"는 경계가 필요해질 수 있어, `knowledge_
+  chunks`에 `collection` 컬럼을 추가해 스킬 단위로 지식을 분리할 수 있게
+  설계 여지를 남긴다(당장 구현하지 않음 — 오픈 이슈로 명시).
+- Agent 생성(F4)/온보딩 시 `skill_tags`가 `skill_pool`의 이름과 일치하면
+  그 스킬의 `default_tool_pool_ids`를 자동으로 `agent_tool_links`에
+  연결한다(수동으로 Tool Pool을 매번 고르지 않아도 되도록) — 그래도 Web
+  UI에서 Agent별로 추가/제거는 가능해야 한다(자동 연결은 기본값이지 강제가
+  아니다).
+
+**대안 검토**:
+- **Skill Pool 없이 Tool Pool만 두고 Agent에 직접 연결**: 검토했으나 기각
+  — "이 역할군은 항상 이 도구 세트를 쓴다"는 재사용 패턴(모든 지식검색
+  역할이 vectorstore 도구를 쓰는 것)이 이미 존재하므로, Skill을 거치는
+  한 단계 간접화가 신규 Agent 생성 시 스킬 태그만으로 도구가 자동 연결되는
+  이점을 준다.
+- **기존 `skill_tags` 문자열 컬럼은 그대로 두고 Skill Pool을 "참고 문서"로만
+  둠(코드 매핑은 하드코딩 유지)**: 검토했으나 기각 — 그러면 지금 문제
+  (새 스킬 추가 시 코드 수정 필요)가 그대로 남아 "Pool로 구성"하라는 요청의
+  취지(데이터 중심화)를 충족하지 못한다.
+- **VectorDB/GraphDB를 전부 `"tool"` 모드로 강제 전환**: 검토했으나 기각 —
+  Agent가 검색을 안 부르면 `graphquery.py`의 NF9 안전장치(성과 데이터
+  절대 미노출)는 여전히 지켜지지만(그 로직은 SQL 자체에 있어 tool
+  호출 여부와 무관), "관계분석 Agent가 정말 필요할 때 관계 데이터를 참고
+  못 하는" 리스크가 생긴다 — 스킬별 선택(`augmentation_mode`)으로
+  두 방식을 다 지원하는 쪽이 안전하다.
+- **MCP `tool_pool`을 아예 안 만들고 지금처럼 Agent별 JSON 유지**: 검토했으나
+  기각 — 이번 요청이 명시적으로 "Pool로 구성"을 요구했고, 실측으로 확인한
+  "URL 하나 바뀌면 N군데 수정" 문제가 실사용에서 반복될 것으로 예상된다.
+
+**한계(정직하게 명시, 기획 단계 — 실측 없음)**:
+- `tool_pool`/`skill_pool`/`agent_tool_links` 테이블, 관리 API(CRUD), Web UI
+  화면은 전부 신규 설계일 뿐 구현되지 않았다.
+- `"tool"` 모드로 전환했을 때 Agent가 실제로 검색을 얼마나 자주/적절히
+  호출하는지(비용이 늘지 줄지)는 실측 전까지 예측할 수 없다 — "always"
+  대비 우월하다고 미리 단정하지 않는다.
+- 기존 8개 SDLC Agent·Human Pool의 `skill_tags` 문자열 데이터를 `skill_pool`
+  레코드로 마이그레이션하는 절차가 필요하다(1회성 스크립트 예상, 설계만
+  하고 작성 안 함).
+- `knowledge_chunks.collection` 컬럼 추가(지식 그라운딩 범위 분리)는 이
+  결정에서 여지만 남기고 실제 스키마 변경은 하지 않는다 — 실사용에서
+  전역 공유 지식 풀이 실제로 문제가 될 때 재검토한다.
+
 ## 결과 / 트레이드오프
 
 - 결정 3(RBAC 매트릭스)에 따라 "팀원"은 F1(브리프 제출)과 F3(Pool 조회)·F5(조직도
@@ -424,3 +518,9 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
   (GC106). 함께 검토한 CrewAI 개념 4건(`human_input`, `token_usage`,
   `allow_delegation` 역할별 차등, `planning`)의 판단 근거는
   `docs/LIMITS.md` §17 참고.
+- 결정 12(Skill Pool·Tool Pool + VectorDB/GraphDB Tool화)는 **기획
+  단계 — 아직 코드 미반영**(2026-09-27, "Skills, MCP Tool 등을 Pool로
+  구성하고 지식 및 도구 그라운딩... 개선점을 찾아줘" 요청). `tool_pool`·
+  `skill_pool`·`agent_tool_links` 신규 테이블, `crewai.tools.tool`
+  데코레이터로 VectorDB/GraphDB를 진짜 CrewAI Tool로 전환하는 안까지
+  설계했으나, 구현·마이그레이션·Web UI는 전부 다음 단계로 남겼다.
