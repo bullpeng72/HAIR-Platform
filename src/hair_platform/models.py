@@ -7,6 +7,8 @@ from typing import Literal
 from pydantic import BaseModel
 
 LlmProvider = Literal["anthropic", "openai", "ollama"]
+GeneratorFramework = Literal["stub", "simple_llm", "crewai"]
+CrewProcess = Literal["sequential", "hierarchical"]
 
 
 class LoginRequest(BaseModel):
@@ -100,10 +102,14 @@ class GenerateRequest(BaseModel):
 
     `use_llm=True`일 때만 실제 Anthropic/OpenAI/Ollama를 호출한다(사용자 요청,
     2026-09-26) — 기본값은 여전히 무료 규칙기반 스텁이다(비용 발생을 암묵적으로
-    유발하지 않기 위해 항상 opt-in)."""
+    유발하지 않기 위해 항상 opt-in). `framework="crewai"`(ADR 결정 10, 2차 요청)면
+    `use_llm`을 안 켜도 CrewAI 경로가 쓰이며(CrewAI 자체가 LLM을 호출하므로),
+    `use_llm=True`+`framework="simple_llm"`(또는 미지정)는 기존 1회성 LLM 호출과
+    동일하다."""
 
     task_ids: list[int]
     use_llm: bool = False
+    framework: GeneratorFramework = "stub"
     provider: LlmProvider | None = None
     model: str | None = None
 
@@ -125,6 +131,32 @@ class AgentModelConfig(BaseModel):
     설정 전용 엔드포인트다 — 이걸로는 LLM을 호출하지 않는다."""
 
     provider: LlmProvider
+    model: str | None = None
+
+
+class CrewRunRequest(BaseModel):
+    """ADR 결정 11 — 여러 Agent를 CrewAI Crew로 묶어 실제로 협업 실행한다
+    (사용자 요청, 2026-09-26, 3차). `agent_ids`와 `task_descriptions`는 순서가
+    같아야 한다(N번째 Agent가 N번째 Task를 맡는다). `process="sequential"`이면
+    Task.context로 앞 Agent의 산출물이 다음 Agent에게 자동 전달되고,
+    `"hierarchical"`이면 매니저가 동적으로 작업을 조율한다(비용 예측이
+    더 어려움 — ADR 결정 11 한계 참고). 항상 실제 LLM API를 호출한다(비용 발생)."""
+
+    agent_ids: list[int]
+    task_descriptions: list[str]
+    process: CrewProcess = "sequential"
+    provider: LlmProvider | None = None
+    model: str | None = None
+    manager_agent_id: int | None = None
+
+
+class KnowledgeIndexRequest(BaseModel):
+    """지식검색 Agent(VectorDB, ADR 결정 11)가 검색할 수 있도록 텍스트를
+    임베딩해 저장한다. `text`를 안 주면 그 Agent의 현재 `last_output`을
+    색인한다. 실제 임베딩 API를 호출하므로 비용이 발생한다(opt-in)."""
+
+    text: str | None = None
+    provider: LlmProvider | None = None
     model: str | None = None
 
 

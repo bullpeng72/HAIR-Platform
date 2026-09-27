@@ -5,6 +5,14 @@ ADR 결정 3: `approvals.step`·`approver_id`로 F7 다단계 결재라인(조�
 기반 자동 라우팅)을 표현한다. NF10: `audit_log`는 트리거로 UPDATE/DELETE를 막아
 append-only를 DB 레벨에서 강제한다. NF9: `human_pool.performance_consent`가
 False이면 `performance_score`를 절대 채우지 않는다(F8, 사전 동의 기반 최소수집).
+
+ADR 결정 10/11(2026-09-26): `agent_pool.framework`가 어떤 생성 경로(stub/
+simple_llm/crewai)로 만들어졌는지 기록한다. `knowledge_chunks`는 지식검색
+Agent(VectorDB)의 임베딩 저장소다 — 결정 11에서 정한 대로 별도 벡터DB
+서버 없이 SQLite에 임베딩을 JSON으로 저장하고, 검색은 애플리케이션에서
+코사인 유사도로 계산한다(로컬/온프레미스 우선 원칙). 관계분석 Agent
+(GraphDB)는 새 테이블이 필요 없다 — 이미 있는 `users.manager_id`·
+`assignments`·`human_pool`을 그래프로 취급해 조회한다(`graphquery.py`).
 """
 
 from __future__ import annotations
@@ -118,7 +126,18 @@ CREATE TABLE IF NOT EXISTS agent_pool (
     source_job_item_id INTEGER REFERENCES job_items(id),
     llm_provider TEXT,
     llm_model TEXT,
-    last_output TEXT
+    last_output TEXT,
+    framework TEXT NOT NULL DEFAULT 'stub'
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_agent_id INTEGER REFERENCES agent_pool(id),
+    text TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    embedding_provider TEXT NOT NULL,
+    embedding_model TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (

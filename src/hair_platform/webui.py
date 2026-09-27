@@ -194,6 +194,7 @@ const TABS = [
   { id: "jobs", label: "AI 에이전트 생성", group: "admin", roles: ["admin", "manager"], render: renderJobs },
   { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "agentpool", label: "AI 에이전트 관리", group: "admin", roles: ["admin", "manager"], render: renderAgentPool },
+  { id: "crew", label: "Crew 실행", group: "admin", roles: ["admin", "manager"], render: renderCrew },
   { id: "cost", label: "비용", group: "admin", roles: ["admin", "manager"], render: renderCost },
   { id: "fairness", label: "공정성 지표", group: "admin", roles: ["admin", "manager"], render: renderFairness },
   { id: "audit", label: "활동 기록", group: "admin", roles: ["admin", "manager"], render: renderAudit },
@@ -462,24 +463,26 @@ async function renderJobs(content) {
     '<form class="inline" id="job-form">' +
     '<input id="job-brief-id" type="number" placeholder="업무 요청 ID" required style="width:110px">' +
     '<input id="job-task-ids" placeholder="할 일 ID(콤마로 구분)" required style="width:180px">' +
-    '<label><input id="job-use-llm" type="checkbox"> 실제 LLM으로 생성(비용 발생)</label>' +
+    '<select id="job-framework"><option value="stub">stub(무료 스텁)</option>' +
+    '<option value="simple_llm">simple_llm(1회 LLM 호출)</option>' +
+    '<option value="crewai">crewai(실제 CrewAI Agent)</option></select>' +
     '<select id="job-provider"><option value="">provider 자동 판별</option>' +
     '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
     '<option value="ollama">Ollama(로컬)</option></select>' +
     '<input id="job-model" placeholder="모델명(비우면 기본값)" style="width:200px">' +
     '<button class="primary" type="submit">생성 실행</button></form>' +
-    '<p class="muted">LLM 체크박스를 켜지 않으면 비용 없는 규칙 기반 스텁으로 생성합니다.</p>' +
+    '<p class="muted">stub은 비용이 없습니다. simple_llm/crewai는 실제 API를 호출해 비용이 발생합니다.</p>' +
     '<div id="job-result"></div></section>';
   document.getElementById("job-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const briefId = document.getElementById("job-brief-id").value;
     const taskIds = document.getElementById("job-task-ids").value.split(",").map(s => Number(s.trim())).filter(n => !isNaN(n));
-    const useLlm = document.getElementById("job-use-llm").checked;
+    const framework = document.getElementById("job-framework").value;
     const provider = document.getElementById("job-provider").value || null;
     const model = document.getElementById("job-model").value || null;
     try {
       const result = await api("POST", "/api/briefs/" + briefId + "/generate", {
-        task_ids: taskIds, use_llm: useLlm, provider, model,
+        task_ids: taskIds, use_llm: framework !== "stub", framework, provider, model,
       });
       renderJobResult(result);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
@@ -579,8 +582,8 @@ async function renderAgentPool(content) {
   const isAdmin = ME.role === "admin";
   const canExecute = ["admin", "manager"].includes(ME.role);
   content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
-    '<p class="muted">"모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다.</p>' +
-    table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "LLM", "최근 산출물", "동작"], agents.map(a => {
+    '<p class="muted">"모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11). "지식 색인"은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생).</p>' +
+    table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "생성방식", "LLM", "최근 산출물", "동작"], agents.map(a => {
       let actions = "";
       if (isAdmin) {
         if (a.status === "pending_onboarding") actions += '<button class="small" data-onboard="' + a.id + '">온보딩 승인</button>';
@@ -601,11 +604,12 @@ async function renderAgentPool(content) {
       }
       if (canExecute && a.status === "active") {
         actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
+        actions += '<button class="small" data-index-knowledge="' + a.id + '">지식 색인</button>';
       }
       const output = a.last_output ? esc(a.last_output).slice(0, 80) + (a.last_output.length > 80 ? "…" : "") : "-";
       const llmInfo = a.llm_provider ? esc(a.llm_provider) + "/" + esc(a.llm_model || "") : "-";
       return [a.id, esc(a.role_name), esc(a.skill_tags.join(", ")), a.cost_estimate,
-        a.performance_score === null ? "-" : a.performance_score, esc(label(a.status)), llmInfo, output,
+        a.performance_score === null ? "-" : a.performance_score, esc(label(a.status)), esc(a.framework), llmInfo, output,
         '<div class="actions">' + actions + "</div>"];
     })) + '<div id="execute-result"></div></section>';
 
@@ -650,6 +654,84 @@ async function renderAgentPool(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  content.querySelectorAll("[data-index-knowledge]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 에이전트의 최근 산출물을 임베딩해 색인합니다(실제 임베딩 API 호출 — 비용 발생). 계속할까요?")) return;
+      try {
+        await api("POST", "/api/agent-pool/" + btn.dataset.indexKnowledge + "/index-knowledge", {});
+        showMsg("global-msg", "지식 색인을 완료했습니다.", "ok");
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+}
+
+/* ---------- Crew 실행(ADR 결정 11 — Agent 협업) ---------- */
+
+async function renderCrew(content) {
+  const agents = await api("GET", "/api/agent-pool");
+  const active = agents.filter(a => a.status === "active");
+  content.innerHTML =
+    '<section class="card"><h2>Crew 실행 — 여러 Agent를 묶어 실제로 협업시키기</h2>' +
+    '<p class="muted">한 줄에 "에이전트ID: 이 에이전트가 할 일"을 입력하세요. sequential이면 앞줄 에이전트의 산출물이 다음 에이전트에게 자동으로 전달됩니다(Task.context). 모든 에이전트는 allow_delegation이 켜져 있어 필요하면 서로에게 실제로 위임/질문할 수 있습니다. 실제 LLM API를 호출하므로 비용이 발생합니다.</p>' +
+    (active.length
+      ? table(["ID", "역할", "스킬"], active.map(a => [a.id, esc(a.role_name), esc(a.skill_tags.join(", "))]))
+      : '<p class="muted">온보딩된(활성) 에이전트가 없습니다 — 먼저 "AI 에이전트 생성"·"AI 에이전트 관리" 탭에서 준비하세요.</p>') +
+    '<form id="crew-form">' +
+    '<textarea id="crew-lines" rows="5" style="width:100%;box-sizing:border-box" placeholder="1: 요구사항 정의서 초안을 작성해줘&#10;2: 그 요구사항을 바탕으로 화면 설계를 해줘"></textarea>' +
+    '<div class="inline" style="margin-top:0.5rem">' +
+    '<select id="crew-process"><option value="sequential">sequential(순서대로 전달)</option>' +
+    '<option value="hierarchical">hierarchical(매니저가 조율)</option></select>' +
+    '<input id="crew-manager" type="number" placeholder="매니저 Agent ID(hierarchical 전용, 선택)">' +
+    '<select id="crew-provider"><option value="">provider 자동 판별</option>' +
+    '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
+    '<option value="ollama">Ollama(로컬)</option></select>' +
+    '<input id="crew-model" placeholder="모델명(비우면 기본값)">' +
+    '<button class="primary" type="submit">Crew 실행(비용 발생)</button>' +
+    "</div></form>" +
+    '<div id="crew-result"></div></section>';
+
+  document.getElementById("crew-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const lines = document.getElementById("crew-lines").value.split("\\n").map(l => l.trim()).filter(Boolean);
+    const agentIds = [];
+    const taskDescriptions = [];
+    for (const line of lines) {
+      const idx = line.indexOf(":");
+      if (idx < 0) { showMsg("global-msg", '형식이 잘못됐습니다: "' + line + '" (예: "1: 할 일")', "error"); return; }
+      const id = Number(line.slice(0, idx).trim());
+      if (isNaN(id)) { showMsg("global-msg", "에이전트 ID가 숫자가 아닙니다: " + line, "error"); return; }
+      agentIds.push(id);
+      taskDescriptions.push(line.slice(idx + 1).trim());
+    }
+    if (!agentIds.length) { showMsg("global-msg", "최소 한 줄은 입력해야 합니다.", "error"); return; }
+    if (!window.confirm(agentIds.length + "개 Agent로 Crew를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
+
+    const managerVal = document.getElementById("crew-manager").value;
+    try {
+      const result = await api("POST", "/api/crew/run", {
+        agent_ids: agentIds,
+        task_descriptions: taskDescriptions,
+        process: document.getElementById("crew-process").value,
+        manager_agent_id: managerVal ? Number(managerVal) : null,
+        provider: document.getElementById("crew-provider").value || null,
+        model: document.getElementById("crew-model").value || null,
+      });
+      renderCrewResult(result);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+}
+
+function renderCrewResult(result) {
+  const box = document.getElementById("crew-result");
+  let html = '<h3>최종 산출물</h3><div class="msg ok">' + esc(result.final_output).replace(/\\n/g, "<br>") + "</div>";
+  html += "<h3>Agent별 산출물</h3>" + table(["Agent ID", "역할", "산출물"], result.agents.map(a => [
+    a.agent_id, esc(a.role_name), esc(a.output).slice(0, 200) + (a.output.length > 200 ? "…" : ""),
+  ]));
+  html += "<h3>실제 위임/협업 발생 내역(" + result.delegations.length + "건)</h3>";
+  html += result.delegations.length
+    ? table(["위임한 Agent 역할", "사용한 도구"], result.delegations.map(d => [esc(d.from_agent_role || "-"), esc(d.tool)]))
+    : '<p class="muted">이번 실행에서는 Agent 간 실제 위임이 발생하지 않았습니다(각자 독립적으로 완수).</p>';
+  box.innerHTML = html;
 }
 
 /* ---------- 인력 검색 ---------- */

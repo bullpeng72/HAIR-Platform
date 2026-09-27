@@ -321,6 +321,60 @@ mock으로만 검증했다(GC69b). `llm.DEFAULT_MODELS["ollama"] = "llama3.1"`�
 흔히 쓰이는 이름을 기본값으로 잡은 것뿐이라, 실제 로컬에 받아둔 모델
 이름과 다르면 사용자가 직접 지정해야 한다.
 
+## 12. 실제 CrewAI 연동 + VectorDB/GraphDB Agent 구현 — 사용자 요청
+(2026-09-26, "실제 구현해줘" — ADR.md 결정 10·11의 실제 구현)
+
+**한 것**: `crew_runtime.py`(CrewAI Agent/Task/Crew 실제 구성 — 단일 생성용
+`crewai_agent_generator()` + 다중 Agent 협업용 `run_crew()`), `vectorstore.py`
+(OpenAI 임베딩+SQLite 코사인 유사도 검색), `graphquery.py`(기존 관계형
+데이터를 그래프로 취급하는 관계 질의, NF9 경계를 소스 레벨에서 강제).
+`GenerateRequest.framework`(stub/simple_llm/crewai), `POST /api/crew/run`,
+`PATCH /api/agent-pool/{id}/model`을 통한 모델 설정이 `agent_runtime.
+execute_agent()`의 provider/model 해석에 반영되고, `skill_tags`에 따라
+지식검색(VectorDB)·관계분석(GraphDB) Agent가 자동으로 RAG 증강되도록
+연결했다. Web UI에 "Crew 실행" 탭과 "지식 색인" 버튼을 추가했다.
+
+**실측 검증(중요)**: 이번엔 mock 검증에 그치지 않고 **실제로 crewai
+패키지를 설치해 실제 클래스(Agent/Task/Crew)로 통합 코드를 검증**했다 —
+LLM 호출 자체만 mock으로 대체했다(`crewai.Crew.kickoff` 경계). 이 과정에서
+**실제 사고가 있었다**: 처음에 `crewai.LLM.call`을 patch해서 검증하려
+했는데, CrewAI 내부 재시도 로직이 이를 우회해 **실제 OpenAI API를 호출해
+버렸다**(`.env`의 실제 키로, 비용 발생 — `mock.called=False`인데도 진짜
+응답이 돌아온 것을 보고 발견함). 원인은 두 가지였다: ① `crewai` 패키지는
+**import되는 순간 자체적으로 `.env`를 읽는다**(문서화되지 않은 부작용),
+② `LLM.call`은 CrewAI 내부 실행 경로의 유일한 진입점이 아니었다. 이후
+`crewai.Crew.kickoff`(내 코드가 실제로 호출하는 가장 바깥쪽 경계)를
+patch하는 방식으로 바꿔 안전하게 검증했다 — 이 파일(`test_phase12_*.py`)의
+모든 테스트가 이 방식만 쓴다. **위임(delegation) 캡처는 실제 CrewAI 이벤트
+클래스(`ToolUsageFinishedEvent`)를 만들어 실제 이벤트버스로 흘려보내
+검증했다** — 캡처 로직 자체가 가짜가 아니라 실제로 동작함을 확인했다.
+
+**부수적으로 발견한 환경 문제**: `crewai` 설치가 이 공유 개발 환경(conda
+`Evaluator` env)의 다른 패키지(`arize-phoenix`)와 의존성이 어긋나면서
+`pytest` 실행 자체가 전부 깨졌다(phoenix가 pytest 플러그인을 자동 등록하는데
+import가 실패). 이 프로젝트와 무관한 플러그인이라 `pyproject.toml`의
+`[tool.pytest.ini_options]`에 `addopts = "-p no:phoenix"`를 추가해 이
+프로젝트 범위에서만 비활성화했다(다른 프로젝트의 pytest 실행에는 영향 없음).
+
+**한계(정직하게 명시)**:
+- 실제 OpenAI API로 CrewAI 전체 플로우(Agent 생성)를 실측 검증하지는
+  않았다(자동화 테스트는 전부 `Crew.kickoff` mock) — 사용자가 지난
+  SDLC 8역할 생성 때 `simple_llm` 경로는 실측했지만 `crewai` 경로는
+  아직 실측 전이다.
+- `run_crew()`의 위임 캡처는 "Delegate work to coworker"/"Ask question to
+  coworker" 도구 이름으로 판별한다 — CrewAI 내부 구현이 이 이름을 바꾸면
+  캡처가 조용히 실패할 수 있다(버전 고정 필요, 오픈 이슈).
+- VectorDB는 OpenAI 임베딩만 지원한다(Anthropic 공개 임베딩 API 없음,
+  Ollama 로컬 임베딩은 오픈 이슈). 저장 규모가 커지면 SQLite 전수 스캔
+  코사인 유사도 계산은 느려진다 — `sqlite-vec` 등 전용 인덱스 재검토 필요.
+- GraphDB(관계분석 Agent)는 NF9 경계를 소스 검사 테스트로 강제했지만,
+  `execute_agent()`가 만드는 컨텍스트 텍스트 자체가 향후 다른 필드를
+  실수로 포함하게 되면 이 테스트로는 못 잡는다(SQL 쿼리 문자열만 검사) —
+  주기적 재검토 필요.
+- CrewAI는 무거운 의존성이다 — 이번에 실제 설치해 검증했지만, 배포
+  환경에는 `pip install -e ".[crewai]"`를 명시적으로 실행해야 한다
+  (기본 설치에는 포함되지 않음).
+
 ## 요약
 
 | 항목 | 상태 |
@@ -337,3 +391,6 @@ mock으로만 검증했다(GC69b). `llm.DEFAULT_MODELS["ollama"] = "llama3.1"`�
 | 코드 레벨 재점검 4회차(F11 Web UI 셸 전무 → 구현) | **발견 → 구현 완료(GC56–61), 단 실제 브라우저 수동 조작은 미검증** |
 | 실제 LLM(Anthropic/OpenAI) 연동 | 배선 완료(GC62–68, mock 검증) + **실제 OpenAI API로 실측 완료**(SDLC 8역할 에이전트 생성) |
 | Ollama 지원 + Agent별 모델 설정 | 배선 완료(GC69–72, mock 검증), 이 환경에 Ollama 로컬 서버가 없어 실측은 미검증 |
+| 실제 CrewAI 연동(단일 생성+다중 Agent 협업) | 구현 완료, 실제 crewai 패키지로 통합 검증(GC77–82, LLM 호출만 mock) — 검증 중 실제 API 호출 사고 발생 → `Crew.kickoff` 경계로 수정 |
+| VectorDB 지식검색 Agent + GraphDB 관계분석 Agent | 구현 완료(GC83–92), NF9 경계 소스 검사로 강제. 실제 임베딩 API 실측은 미검증(mock만) |
+| crewai 설치로 인한 pytest 전역 파손(arize-phoenix 충돌) | **발견 → 수정 완료**(`addopts = "-p no:phoenix"`) |

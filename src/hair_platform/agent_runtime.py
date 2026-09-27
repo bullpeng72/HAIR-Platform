@@ -4,6 +4,13 @@ F4(생성) 시점의 LLM 호출(`jobs.llm_agent_generator`)은 "처음 합류했
 산출물" 한 번만 만든다. 이 모듈은 그 이후 — 실제로 온보딩(F9)까지 끝나 조직에
 배치된 Agent에게 구체적인 업무를 맡기고 결과를 받는 경로다. 이게 있어야
 "생성만 되고 일은 안 하는 레코드"가 아니라 실제로 호출해 쓸 수 있는 Agent가 된다.
+
+ADR 결정 11(사용자 요청, 2026-09-26, 3차) — `skill_tags`에 "vectordb"/"rag"
+또는 "graphdb"가 있으면 LLM을 부르기 전에 각각 `vectorstore.search()`(임베딩
+검색, 추가 비용 발생)·`graphquery.context_for_prompt()`(SQL 조회, 비용 없음)로
+검색 결과를 프롬프트에 덧붙인다(RAG) — 이게 "지식검색 Agent"·"관계분석
+Agent"의 실제 동작이다. 관계분석 쪽은 NF9 경계를 지키기 위해 `graphquery.py`
+자체가 성과 데이터를 절대 SELECT하지 않는다.
 """
 
 from __future__ import annotations
@@ -11,7 +18,60 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from hair_platform import audit, llm
+from hair_platform import audit, graphquery, llm, vectorstore
+
+VECTORDB_SKILL_TAGS = {"vectordb", "rag"}
+GRAPHDB_SKILL_TAGS = {"graphdb", "관계질의"}
+
+
+def _augment_with_retrieval(
+    conn: sqlite3.Connection, skills: list[str], prompt: str
+) -> str:
+    """skill_tags로 지식검색(VectorDB)/관계분석(GraphDB) Agent를 판별해
+    검색 결과를 프롬프트에 덧붙인다(ADR 결정 11). 해당 없으면 원본 그대로."""
+    skill_set = set(skills)
+    if skill_set & VECTORDB_SKILL_TAGS:
+        hits = vectorstore.search(conn, prompt, top_k=3)
+        if hits:
+            context = "\n".join(f"- {h['text']}" for h in hits)
+            return f"참고할 과거 산출물:\n{context}\n\n요청: {prompt}"
+        return prompt
+    if skill_set & GRAPHDB_SKILL_TAGS:
+        context = graphquery.context_for_prompt(conn)
+        return f"{context}\n\n요청: {prompt}"
+    return prompt
+
+
+def index_knowledge(
+    conn: sqlite3.Connection,
+    agent_id: int,
+    actor_id: int,
+    text: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> int:
+    """이 Agent의 산출물(또는 지정한 text)을 임베딩해 지식검색 Agent가 찾을
+    수 있게 색인한다(ADR 결정 11, 비용 발생 — 항상 명시적 호출로만 일어난다)."""
+    agent = conn.execute(
+        "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
+    ).fetchone()
+    if agent is None:
+        raise ValueError("agent_not_found")
+    text_to_index = text or agent["last_output"]
+    if not text_to_index:
+        raise ValueError("no_text_to_index")
+
+    chunk_id = vectorstore.index_text(conn, agent_id, text_to_index, provider, model)
+    audit.record(
+        conn,
+        actor_id,
+        "agent_knowledge_indexed",
+        "knowledge_chunks",
+        chunk_id,
+        after={"source_agent_id": agent_id},
+    )
+    conn.commit()
+    return chunk_id
 
 
 def execute_agent(
@@ -48,7 +108,8 @@ def execute_agent(
         effective_provider, effective_model
     )
     system = llm.system_prompt_for_role(agent["role_name"], skills)
-    output = llm.call_llm(resolved_provider, resolved_model, system, prompt)
+    augmented_prompt = _augment_with_retrieval(conn, skills, prompt)
+    output = llm.call_llm(resolved_provider, resolved_model, system, augmented_prompt)
 
     conn.execute(
         "UPDATE agent_pool SET last_output = ?, llm_provider = ?, llm_model = ? WHERE id = ?",

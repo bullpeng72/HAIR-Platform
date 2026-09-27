@@ -60,6 +60,7 @@ def llm_agent_generator(
         "llm_provider": resolved_provider,
         "llm_model": resolved_model,
         "generated_output": output,
+        "framework": "simple_llm",
     }
 
 
@@ -117,8 +118,8 @@ def _run_item(
         )
         cur = conn.execute(
             "INSERT INTO agent_pool "
-            "(role_name, skill_tags, source_job_item_id, llm_provider, llm_model, last_output) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(role_name, skill_tags, source_job_item_id, llm_provider, llm_model, "
+            "last_output, framework) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 task_row["role_name"],
                 json.dumps(required_skills, ensure_ascii=False),
@@ -126,6 +127,7 @@ def _run_item(
                 generated.get("llm_provider"),
                 generated.get("llm_model"),
                 generated.get("generated_output"),
+                generated.get("framework", "stub"),
             ),
         )
         audit.record(

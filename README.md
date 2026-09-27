@@ -5,24 +5,26 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 79
-passed). **F11 Web UI 셸(`GET /`, 단일 페이지 바닐라 JS)을 실제로 구현**했고,
-내비게이션은 기존 RBAC 매트릭스를 그대로 근거로 "내 업무"/"관리자 도구"
-2구역으로 분리했다(ADR 결정 9 — 백엔드 권한 규칙 변경 없이 순수 UI 구조
-개선) —
-v0–v4 개발 동안 JSON API만 있고 브라우저 화면이 전무했던 것을 코드 재점검
-4회차(R4)에서 발견해 채웠다(`docs/LIMITS.md` §10, 실제 브라우저 수동 조작은
-미검증). **실제 LLM(Anthropic/OpenAI/Ollama) 연동도 추가**(`llm.py`·
-`agent_runtime.py`) — F4 Agent 생성 시 `use_llm=True`로 실제 API를 호출할 수
-있고, 온보딩된 Agent에게 `POST /api/agent-pool/{id}/execute`로 온디맨드 업무를
-맡길 수 있다(기본값은 여전히 비용 없는 스텁). `PATCH
-/api/agent-pool/{id}/model`로 Agent별 기본 provider/model을 저장해둘 수도
-있다(비용 없음 — 다음 실행부터 적용). **실제 OpenAI API로 SDLC 8역할
-에이전트 생성까지 실측 검증 완료**(Anthropic·Ollama 경로는 mock 검증만,
-`docs/LIMITS.md` §11). 그 전 3라운드에서 발견한 11건(R1: 승인 우회·검색
-필터·조직도 귀속·`manager_id` 누락, R2: 승인 inbox·사용자 목록·감사로그
-페이지네이션·secret_key 하드코딩, R3: 매칭 알고리즘 role 필터 버그·
-콜드스타트 부트스트랩·Human Pool 수정/오프보딩)도 전부 수정 완료
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 97
+passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
+**실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
+F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
+API를 호출할 수 있고(기본값은 여전히 무료 스텁), `PATCH
+/api/agent-pool/{id}/model`로 Agent별 기본 provider/model을 저장해둘 수
+있다. **실제 CrewAI 연동 + VectorDB/GraphDB Agent도 구현 완료**(ADR 결정
+10·11, `crew_runtime.py`·`vectorstore.py`·`graphquery.py`) —
+`GenerateRequest.framework="crewai"`로 실제 CrewAI Agent를 생성하고,
+`POST /api/crew/run`으로 여러 Agent를 실제 Crew로 묶어 `allow_delegation`+
+`Task.context`로 협업시킬 수 있다. 표준 Agent 세트에 지식검색(VectorDB)·
+관계분석(GraphDB, F8 성과 데이터는 소스 레벨에서 절대 조회 안 함) Agent를
+추가했다. 실제 `crewai` 패키지를 설치해 통합 검증했다(`docs/LIMITS.md`
+§12 — 검증 중 실제 API 호출 사고가 한 번 있었고, 원인·수정 내역을 정직하게
+기록해뒀다). **실제 OpenAI API로 SDLC 8역할 에이전트 생성까지 실측
+검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
+우회·검색 필터·조직도 귀속·`manager_id` 누락, R2: 승인 inbox·사용자 목록·
+감사로그 페이지네이션·secret_key 하드코딩, R3: 매칭 알고리즘 role 필터
+버그·콜드스타트 부트스트랩·Human Pool 수정/오프보딩)도 전부 수정 완료
 (`docs/LIMITS.md` §7·§8·§9). `release_hold`(Phase 7)는 사용자 선택으로
 보류 — 알려진 갭은 `docs/LIMITS.md`, 기획 대비 실제 구현 비교는
 `docs/RETROSPECTIVE.md` 참고.
@@ -32,13 +34,22 @@ v0–v4 개발 동안 JSON API만 있고 브라우저 화면이 전무했던 것
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 79건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 97건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
 
 ```bash
 hair-platform-bootstrap-admin --db-path hair.db --username admin --password '...'
+```
+
+실제 CrewAI 연동을 쓰려면(무거운 의존성 — opt-in):
+
+```bash
+pip install -e ".[crewai]"
+# GenerateRequest.framework="crewai" 또는 Web UI "AI 에이전트 생성" 탭에서
+# framework를 crewai로 선택 — 실제 LLM API를 호출하므로 비용이 발생한다.
+# "Crew 실행" 탭에서 여러 Agent를 실제 CrewAI Crew로 묶어 협업시킬 수 있다.
 ```
 
 실제 LLM 연동을 쓰려면(Anthropic·OpenAI·Ollama 중 선택):
@@ -86,7 +97,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(37개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(39개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -101,15 +112,18 @@ src/hair_platform/
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성 CLI
   webui.py           # F11 Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
-  agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로
+  agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
+  crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임)
+  vectorstore.py     # 지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
+  graphquery.py      # 관계분석 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의, NF9 경계
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
-  ADR.md             # 설계 결정 9건
+  ADR.md             # 설계 결정 11건
   LIMITS.md          # 알려진 갭(정직하게 기록)
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 79건
+tests/unit/                            # 골든셋 97건
 ```
 
 ## 로드맵

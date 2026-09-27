@@ -38,6 +38,7 @@ from hair_platform import (
     assignments,
     audit,
     cost,
+    crew_runtime,
     db,
     fairness,
     jobs,
@@ -62,9 +63,11 @@ from hair_platform.models import (
     BriefSubmission,
     ConsentRequest,
     CostUpdateRequest,
+    CrewRunRequest,
     GenerateRequest,
     HumanPoolCreate,
     HumanPoolUpdate,
+    KnowledgeIndexRequest,
     LoginRequest,
     ManagerUpdate,
     PerformanceScoreRequest,
@@ -475,8 +478,11 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     ):
         """F4 — 생성 버튼. Job Queue+샌드박스(ADR 결정 8)로 부족한 역할을 배치 생성한다.
 
-        `use_llm=True`일 때만 실제 Anthropic/OpenAI API를 호출한다(사용자 요청,
-        2026-09-26) — 명시적으로 요청하지 않으면 기본값인 무료 규칙기반 스텁을 쓴다.
+        `framework="crewai"`(ADR 결정 10)면 실제 CrewAI Agent+Task+Crew를
+        구성해 kickoff한다. `use_llm=True`+`framework` 미지정(또는
+        `"simple_llm"`)이면 기존 1회성 LLM 호출이다. 둘 다 명시적으로
+        요청했을 때만 실제 API를 호출한다(사용자 요청, 2026-09-26) —
+        기본값은 여전히 무료 규칙기반 스텁이다.
         """
         brief = conn.execute(
             "SELECT * FROM briefs WHERE id = ?", (brief_id,)
@@ -484,7 +490,13 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         if brief is None:
             raise HTTPException(status_code=404, detail="브리프를 찾을 수 없습니다")
         generator = None
-        if payload.use_llm:
+        if payload.framework == "crewai":
+            generator = partial(
+                crew_runtime.crewai_agent_generator,
+                provider=payload.provider,
+                model=payload.model,
+            )
+        elif payload.use_llm:
             generator = partial(
                 jobs.llm_agent_generator, provider=payload.provider, model=payload.model
             )
@@ -533,6 +545,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "llm_provider": row["llm_provider"],
                 "llm_model": row["llm_model"],
                 "last_output": row["last_output"],
+                "framework": row["framework"],
             }
             for row in rows
         ]
@@ -587,6 +600,62 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             "llm_provider": resolved_provider,
             "llm_model": resolved_model,
         }
+
+    @app.post("/api/agent-pool/{agent_id}/index-knowledge")
+    def index_agent_knowledge(
+        agent_id: int,
+        payload: KnowledgeIndexRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """ADR 결정 11 — 이 Agent의 산출물(또는 지정 텍스트)을 임베딩해
+        지식검색 Agent(VectorDB)가 찾을 수 있게 색인한다. 실제 임베딩 API를
+        호출하므로 비용이 발생한다(opt-in — 명시적으로 호출했을 때만)."""
+        try:
+            chunk_id = agent_runtime.index_knowledge(
+                conn,
+                agent_id,
+                user["id"],
+                payload.text,
+                payload.provider,
+                payload.model,
+            )
+        except ValueError as exc:
+            detail = (
+                "Agent를 찾을 수 없습니다"
+                if str(exc) == "agent_not_found"
+                else "색인할 텍스트가 없습니다(text를 지정하거나 먼저 실행/생성하세요)"
+            )
+            status_code = 404 if str(exc) == "agent_not_found" else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        return {"id": agent_id, "chunk_id": chunk_id}
+
+    @app.post("/api/crew/run", status_code=201)
+    def run_crew_endpoint(
+        payload: CrewRunRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """ADR 결정 11 — 여러 온보딩된 Agent를 CrewAI Crew로 묶어 실제 협업
+        실행한다(Task.context로 산출물 전달 + allow_delegation으로 실제 동료
+        위임/질의). 항상 실제 LLM API를 호출하므로 비용이 발생한다."""
+        try:
+            result = crew_runtime.run_crew(
+                conn,
+                payload.agent_ids,
+                payload.task_descriptions,
+                user["id"],
+                process=payload.process,
+                provider=payload.provider,
+                model=payload.model,
+                manager_agent_id=payload.manager_agent_id,
+            )
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"온보딩(active)된 Agent만 참여할 수 있습니다: {exc}",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return result
 
     @app.post("/api/agent-pool/{agent_id}/onboard")
     def onboard_agent(

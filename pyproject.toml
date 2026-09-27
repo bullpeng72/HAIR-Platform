@@ -25,6 +25,9 @@ dev = ["pytest>=7.0.0", "black>=23.0.0", "ruff>=0.5.0", "httpx>=0.27.0"]
 # llm.py가 지연 import한다 — use_llm=True 경로를 실제로 쓸 때만 필요하다.
 # Ollama는 로컬 서버(기본 http://localhost:11434)가 별도로 떠 있어야 한다.
 llm = ["anthropic>=0.34.0", "openai>=1.40.0", "httpx>=0.27.0"]
+# crew_runtime.py가 지연 import한다 — framework="crewai" 경로를 쓸 때만 필요하다.
+# 주의: crewai/litellm은 import 시점에 자체적으로 .env를 읽는다(수입 부작용).
+crewai = ["crewai>=1.0.0"]
 
 [project.scripts]
 hair-platform-bootstrap-admin = "hair_platform.bootstrap:main"
@@ -38,6 +41,11 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# crewai 설치 후 발견: 이 개발 환경(공유 conda env)에 이미 있는 arize-phoenix가
+# pytest 플러그인을 자동 등록하는데, crewai의 의존성(pydantic-ai 등)과 버전이
+# 어긋나면서 phoenix의 import 자체가 깨져 pytest 실행 전체가 막힌다(이 프로젝트와
+# 무관한 플러그인) — 이 프로젝트 범위에서만 명시적으로 비활성화한다.
+addopts = "-p no:phoenix"
 
 [tool.ruff.lint]
 # B008: FastAPI의 Depends()는 함수 기본값 호출이 의도된 패턴이다(FastAPI 공식 권장) — 오탐 무시.

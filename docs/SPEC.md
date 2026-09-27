@@ -128,6 +128,7 @@
 | LLM 연동(사용자 요청) | Anthropic/OpenAI 선택 가능한 실제 LLM 연동(`llm.py`·`agent_runtime.py`, `docs/LIMITS.md` §11) — 이후 실제 OpenAI API로 실측 검증 완료 | 7건(GC62–68, mock 기반) |
 | Ollama + Agent별 모델 설정(사용자 요청) | Ollama 추가 + `PATCH /api/agent-pool/{id}/model`(`docs/LIMITS.md` §11) | 4건(GC69–72, mock 기반) |
 | 관리자/일반 사용자 UI 분리(사용자 요청) | Web UI 내비게이션 "내 업무"/"관리자 도구" 2구역화(ADR 결정 9) | 4건(GC73–76, 소스 검사 기반) |
+| 실제 CrewAI 연동 + VectorDB/GraphDB Agent(사용자 요청, "실제 구현해줘") | `crew_runtime.py`(단일 생성+다중 협업)·`vectorstore.py`·`graphquery.py` 구현(ADR 결정 10·11, `docs/LIMITS.md` §12) | 18건(GC77–94, 실제 crewai 패키지로 통합 검증) |
 
 ## 10. 설계 결정
 
@@ -143,12 +144,13 @@
 - **RBAC 권한 매트릭스**: F1–F14 × Admin/매니저/팀원/뷰어 접근권한 확정(ADR 결정 3), **F7 self-approval 방지**(배정 요청자 본인은 그 건을 승인 불가, ADR 결정 3-A) 포함.
 - **Job Queue 샌드박스**: Docker 컨테이너(`--cpus`·`--memory` 쿼터, `--network=none`, 타임아웃)로 확정(ADR 결정 8) — Docker 런타임이 배포 요건에 추가된다.
 - **Web UI 내비게이션 = "내 업무"/"관리자 도구" 2구역 분리**(사용자 요청, ADR 결정 9): 접근 제어 규칙은 새로 만들지 않고 기존 RBAC 매트릭스(결정 3)를 그대로 근거로 삼는다 — 탭의 `roles`에 팀원/뷰어가 하나라도 있으면 "내 업무", 없으면 "관리자 도구"로 분류한다. 사용자 관리(계정 생성·상사 지정)만 ADMIN 전용이라 "관리자 전용" 배지로 추가 표시한다.
+- **AI Agent 생성 3단계(stub/simple_llm/crewai) + 실제 CrewAI 협업 + VectorDB/GraphDB Agent — 구현 완료**(사용자 요청, ADR 결정 10·11, `crew_runtime.py`·`vectorstore.py`·`graphquery.py`): `GenerateRequest.framework`로 생성 방식을 고르고, `POST /api/crew/run`으로 여러 Agent를 실제 CrewAI Crew로 묶어 `allow_delegation`+`Task.context`로 협업시킨다. 표준 Agent 세트에 지식검색(VectorDB, OpenAI 임베딩+SQLite 코사인 유사도)·관계분석(GraphDB, 기존 관계형 데이터를 그래프로 취급) Agent를 추가했다 — 관계분석 Agent는 성과 데이터(NF9)를 소스 레벨에서 절대 조회하지 않는다. MCP 도구 연결은 접속 가능한 서버가 없어 오픈 이슈로 남는다.
 
 이 결정들은 `docs/ADR.md`(Phase 2, `adr_review` 대기)에서 공식적으로 재확인·기록된다 — 여기서의 확정은 저장소 부트스트랩을 진행하기 위한 실무적 가결정이며, `adr_review` 승인이 최종 확정이다.
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리, 총 79건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB, 총 97건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
 - [x] F11 — 인증된 Web UI 셸에서 F1–F14 전부 조작 가능(`webui.py`, 단일 페이지 바닐라 JS, R4에서 뒤늦게 구현 — `docs/LIMITS.md` §10 참고. 실제 브라우저 수동 조작은 미검증, TestClient 전체 플로우 통합 테스트로 대체)
 - [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 실제 실행은 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동
@@ -173,5 +175,6 @@
 - Docker 설치 환경에서 샌드박스 실제 격리(리소스 쿼터·네트워크 차단) 동작 검증(`docs/LIMITS.md` §2)
 - 멀티프로세스/멀티워커 배포 시 NF7 idempotency의 진짜 경쟁 상태(race condition) 방지 — 현재는 단일 커넥션·순차 요청 전제(`docs/LIMITS.md` §3)
 - Docker 런타임 설치를 배포 필수 요건으로 문서화(README·설치 가이드, ADR 결정 8)
-- **AgentForge `spec_interpreter`·`code_generator`·`verifier` 실연동 — 계획 확정(ADR 결정 10, 2026-09-26), 구현은 아직 착수 안 함**: 사용자 요청으로 "① stub/단순 LLM/CrewAI 3단계 선택 ② CrewAI Agent/Task/Crew 핵심 기능 반영(Task 간 산출물 자동 전달, Process.sequential 협업) ③ MCP로 외부 검색 등 도구 연동" 구조를 설계했다. `GenerateRequest.framework`(신규, 기본값 `"stub"`로 여전히 무료) 파라미터로 게이팅하며, CrewAI는 별도 optional extra(`[crewai]`)로 지연 설치한다 — 자세한 매핑·대안 검토는 ADR.md 결정 10 참고.
-- **CrewAI Agent 협업 심화 + VectorDB/GraphDB 기반 표준 Agent 추가 — 계획 확정(ADR 결정 11, 2026-09-26), 구현은 아직 착수 안 함**: `allow_delegation`(Agent 간 동적 위임·co-worker 질의)과 `Process.hierarchical`(매니저 조율) 옵션을 결정 10의 `sequential` 기본값 위에 추가하고, 기본 8역할 Agent 세트에 "지식검색 Agent(VectorDB, 과거 산출물 RAG 검색)"와 "관계분석 Agent(GraphDB, 조직도·배정 관계 질의)"를 새 표준 Agent로 포함한다. 둘 다 로컬/온프레미스 우선 원칙(§3)에 따라 임베디드 저장소(SQLite 확장 등)를 1순위로 검토한다 — 자세한 내용·F8(NF9) 충돌 위험은 ADR.md 결정 11 참고.
+- **CrewAI를 통한 MCP 도구 연결(외부 검색 등)** — ADR 결정 10에서 계획했으나 이 환경에 접속 가능한 MCP 서버가 없어 미착수. `crew_runtime.py`가 CrewAI Agent에 `tools`를 연결할 수 있는 구조는 이미 있으므로, 실제 MCP 서버가 확보되면 `crewai-tools`의 MCP 어댑터만 추가 연결하면 된다.
+- **VectorDB 지식검색 Agent의 Ollama 로컬 임베딩 지원** — 현재는 OpenAI 임베딩만 지원한다(`vectorstore.py`). Anthropic은 공개 임베딩 API가 없다.
+- **CrewAI 위임(delegation) 도구 이름 하드코딩 위험** — `run_crew()`의 위임 캡처가 "Delegate work to coworker"/"Ask question to coworker"라는 CrewAI 내부 문자열에 의존한다 — CrewAI 버전업으로 이름이 바뀌면 조용히 캡처가 실패할 수 있다(`docs/LIMITS.md` §12).
