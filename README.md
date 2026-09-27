@@ -5,7 +5,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 104
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 105
 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
@@ -23,8 +23,12 @@ API를 호출할 수 있고(기본값은 여전히 무료 스텁), `PATCH
 기록해뒀다). 이후 "crewai 기능 적절히 적용됐는지" 재검토에서
 `manager_agent_id`+`hierarchical` 조합이 항상 크래시하던 실사용 버그와
 `memory=True`/`max_iter` 문서-코드 불일치를 발견해 전부 수정하고,
-`task_callback`으로 Task 완료마다 감사로그를 남기도록 세분화했다
-(`docs/LIMITS.md` §14). **실제 OpenAI API로 SDLC 8역할 에이전트 생성까지 실측
+`task_callback`으로 Task 완료마다 감사로그를 남기도록 세분화했다. 이후
+사용자가 실제로 Web UI에서 hierarchical+매니저 지정 조합을 테스트하다가
+`task_callback`이 hierarchical에서는 항상 매니저에게 잘못 귀속되는
+버그와, 매니저의 `output: null`을 Web UI가 렌더링하다 크래시하는 버그를
+추가로 발견해 둘 다 수정했다(`docs/LIMITS.md` §14). **실제 OpenAI API로
+SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
 우회·검색 필터·조직도 귀속·`manager_id` 누락, R2: 승인 inbox·사용자 목록·
 감사로그 페이지네이션·secret_key 하드코딩, R3: 매칭 알고리즘 role 필터
@@ -38,7 +42,7 @@ API를 호출할 수 있고(기본값은 여전히 무료 스텁), `PATCH
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 104건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 105건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -127,7 +131,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 104건
+tests/unit/                            # 골든셋 105건
 ```
 
 ## 로드맵

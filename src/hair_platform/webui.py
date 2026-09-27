@@ -725,7 +725,9 @@ function renderCrewResult(result) {
   const box = document.getElementById("crew-result");
   let html = '<h3>최종 산출물</h3><div class="msg ok">' + esc(result.final_output).replace(/\\n/g, "<br>") + "</div>";
   html += "<h3>Agent별 산출물</h3>" + table(["Agent ID", "역할", "산출물"], result.agents.map(a => [
-    a.agent_id, esc(a.role_name), esc(a.output).slice(0, 200) + (a.output.length > 200 ? "…" : ""),
+    a.agent_id, esc(a.role_name),
+    a.output === null ? "(없음 — 매니저는 조율만 하고 직접 산출물을 내지 않습니다)"
+      : esc(a.output).slice(0, 200) + (a.output.length > 200 ? "…" : ""),
   ]));
   html += "<h3>실제 위임/협업 발생 내역(" + result.delegations.length + "건)</h3>";
   html += result.delegations.length

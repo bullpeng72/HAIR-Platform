@@ -484,6 +484,35 @@ and will prevent checkpointing`을 낸다 — CrewAI의 체크포인트/재개 �
 쓰지 않는 한 무해하지만, 나중에 그 기능을 쓰게 되면 모듈 최상위 함수로
 바꿔야 한다(오픈 이슈로 기록만 해둔다).
 
+**6) [실사용 중 발견한 버그, 2026-09-27] `task_callback`이 hierarchical에서
+매니저에게 잘못 귀속**: 사용자가 Web UI "Crew 실행" 탭에서
+`manager_agent_id=1`(기획자)로 hierarchical을 실제로 실행해봤더니,
+분석가(agent 2)가 만든 "데이터 정의서"가 감사로그(`crew_task_completed`)에는
+"기획자가 했다"고 찍혔다. CrewAI 소스(`crew.py`의 `_get_agent_to_use`)를
+확인하니 hierarchical 프로세스에서는 `TaskOutput.agent`가 **항상
+manager_agent의 role**로 채워진다(매니저가 내부적으로 위임하더라도, Crew
+실행 루프 관점에서는 매니저 자신이 "이 Task를 실행한 Agent"이기 때문) —
+5)에서 `task_output.agent`를 그대로 믿고 쓴 게 잘못이었다. **수정**:
+`task_output.agent` 대신, 콜백이 몇 번째 호출됐는지(`len(task_completions)`)로
+`worker_rows`를 인덱싱해 실제 담당 Agent를 알아내도록 고쳤다 — CrewAI가
+`self.tasks`(=`worker_tasks`)를 그 순서 그대로 순차 실행하므로
+(`_execute_tasks`) 안전하다. `agent_pool.last_output` 갱신 로직은 원래도
+이 방식(위치 기반 zip)을 썼기 때문에 이 버그의 영향을 받지 않았다 —
+감사로그만 잘못됐었다. 회귀 테스트 GC102 추가.
+
+같은 재현 과정에서 **Web UI 프런트엔드 크래시**도 함께 발견했다:
+`webui.py`의 `renderCrewResult()`가 `a.output.length`를 무조건 읽는데,
+매니저 Agent의 `output`은 의도적으로 `null`이라(1번 항목 수정 내용)
+"Cannot read properties of null (reading 'length')"로 렌더링 자체가
+깨졌다. `a.output === null`일 때 "매니저는 조율만 하고 직접 산출물을 내지
+않습니다"라는 안내 문구를 대신 보여주도록 고쳤다. **교훈**: 백엔드
+API 계약을 바꿀 때(이번엔 `output: None`이 정상적으로 나올 수 있게 됨)
+그 값을 소비하는 프런트엔드 코드도 같이 점검해야 한다는 걸 실사용
+크래시로 다시 확인했다 — pytest 골든셋은 백엔드 JSON 응답만 검증하고
+`webui.py`의 JS 렌더링 로직 자체는 브라우저에서 실행해보기 전까지
+검증되지 않는다는 한계(§10 DoD에도 이미 기록된 한계)가 실제로 발현된
+사례다.
+
 ## 요약
 
 | 항목 | 상태 |
@@ -507,3 +536,4 @@ and will prevent checkpointing`을 낸다 — CrewAI의 체크포인트/재개 �
 | CrewAI 기능 적용 리뷰: manager_agent_id+hierarchical 크래시 | **발견 → 수정 완료**(GC98–99) |
 | CrewAI 기능 적용 리뷰: memory=True·max_iter 문서-코드 불일치 | **발견 → 수정 완료**(GC100) |
 | CrewAI 기능 적용 리뷰: task_callback 감사로그 세분화 | **구현 완료**(GC101), step_callback은 Agent 식별 불가로 의도적 보류 |
+| 실사용 발견: hierarchical에서 task_callback 매니저 오귀속 + Web UI null 출력 크래시 | **사용자 실제 테스트 중 발견 → 발견·수정 완료**(GC102) |

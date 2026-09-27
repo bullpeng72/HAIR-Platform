@@ -377,6 +377,57 @@ def test_gc101_run_crew_records_audit_log_per_task_via_task_callback(client_and_
     assert json.loads(rows[0]["after_value"])["output_preview"] == "기획서"
 
 
+def test_gc102_task_callback_attributes_hierarchical_output_to_real_worker(
+    client_and_conn,
+):
+    """실사용 중 발견한 버그 회귀 테스트(2026-09-27, 사용자가 Web UI에서
+    manager_agent_id=1(기획자)로 hierarchical 실행 후 재현). CrewAI 소스
+    확인 결과 hierarchical에서는 `TaskOutput.agent`가 **항상 매니저의
+    role**로 채워진다(`crew.py`의 `_get_agent_to_use`) — 매니저가 실제로는
+    분석가 몫의 작업을 만들어냈어도 `task_output.agent == "기획자"`로
+    온다. 이 테스트는 그 왜곡된 값을 그대로 감사로그에 쓰지 않고,
+    `worker_rows` 순서로 실제 담당 Agent(분석가)를 정확히 귀속시키는지
+    확인한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(
+        conn
+    )  # agent1=기획자(매니저), agent2=분석가
+
+    def _kickoff_with_misattributed_task_callback(self, *args, **kwargs):
+        from crewai.tasks.task_output import TaskOutput
+
+        # CrewAI 실측 동작 재현: hierarchical에서는 실제 워커(분석가)가 한
+        # 일인데도 TaskOutput.agent가 매니저(기획자)로 온다.
+        output = TaskOutput(description="task-0", agent="기획자", raw="데이터 정의서")
+        self.task_callback(output)
+        return _crew_output("데이터 정의서", ["데이터 정의서"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_with_misattributed_task_callback):
+        result = crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["기획서를 작성해줘", "그 기획서를 분석해줘"],
+            admin_id,
+            process="hierarchical",
+            manager_agent_id=agent1,
+            provider="openai",
+        )
+
+    row = conn.execute(
+        "SELECT after_value FROM audit_log WHERE action = 'crew_task_completed'"
+    ).fetchone()
+    logged = json.loads(row["after_value"])
+    assert logged["agent_role"] == "분석가"  # "기획자"(왜곡값)가 아니라 실제 담당자
+    assert logged["output_preview"] == "데이터 정의서"
+
+    outputs = {a["agent_id"]: a["output"] for a in result["agents"]}
+    assert outputs[agent2] == "데이터 정의서"
+    assert outputs[agent1] is None
+
+
 # ---------- vectorstore(VectorDB 지식검색 Agent) ----------
 
 

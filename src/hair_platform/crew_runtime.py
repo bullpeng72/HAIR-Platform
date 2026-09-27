@@ -214,9 +214,26 @@ def run_crew(
     task_completions: list[dict] = []
 
     def _capture_task_completion(task_output) -> None:
+        # 주의(실사용 중 발견, 2026-09-27): `task_output.agent`를 그대로
+        # 믿으면 안 된다 — CrewAI 소스(`crew.py`의 `_get_agent_to_use`)를
+        # 확인해보니 hierarchical 프로세스에서는 이 필드가 **항상
+        # manager_agent의 role**로 채워진다(매니저가 내부적으로 위임하더라도
+        # Crew 실행 루프 관점에서는 매니저 자신이 "이 Task를 실행한 Agent"이기
+        # 때문). 실제로 매니저=기획자, 워커=분석가로 hierarchical 실행했더니
+        # 분석가가 만든 산출물인데도 `task_output.agent == "기획자"`로 찍히는
+        # 걸 실측으로 확인했다. 대신 `worker_tasks`/`worker_rows`는 우리가
+        # 구성한 순서이고 CrewAI는 `self.tasks`를 그 순서 그대로 순차
+        # 실행하므로(`_execute_tasks`), 콜백이 몇 번째 호출됐는지로
+        # `worker_rows`를 인덱싱하면 실제 담당 Agent를 정확히 알 수 있다.
+        idx = len(task_completions)
+        agent_role = (
+            worker_rows[idx]["role_name"]
+            if idx < len(worker_rows)
+            else task_output.agent
+        )
         task_completions.append(
             {
-                "agent_role": task_output.agent,
+                "agent_role": agent_role,
                 "output_preview": (task_output.raw or "")[:200],
             }
         )
@@ -230,9 +247,7 @@ def run_crew(
         # 완료마다 감사로그를 남긴다. `step_callback`은 일부러 안 쓴다 —
         # CrewAI가 콜백에 넘기는 AgentAction/AgentFinish에는 어느 Agent가
         # 낸 스텝인지 식별할 필드가 없어(실측 확인: thought/tool/tool_input/
-        # text/result 뿐) 감사로그에 "누가"를 못 남긴다. 반면 task_callback이
-        # 받는 TaskOutput.agent는 role 이름을 갖고 있어 정확히 귀속시킬 수
-        # 있다.
+        # text/result 뿐) 감사로그에 "누가"를 못 남긴다.
         "task_callback": _capture_task_completion,
     }
     if process == "hierarchical":
