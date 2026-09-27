@@ -48,7 +48,7 @@ import os
 import sqlite3
 from contextlib import ExitStack
 
-from hair_platform import agent_runtime, audit, llm
+from hair_platform import agent_runtime, audit, graphquery, llm, vectorstore
 
 DELEGATION_TOOL_NAMES = {"Delegate work to coworker", "Ask question to coworker"}
 
@@ -103,6 +103,28 @@ def _mcp_tools(stack: ExitStack, mcp_servers: list[dict]) -> list:
     return tools
 
 
+def _skill_based_tools(conn: sqlite3.Connection, skills: list[str]) -> list:
+    """VectorDB/GraphDB skill_tags를 가진 Agent에게 실제 CrewAI Tool을
+    붙인다(ADR 결정 12, 사용자 요청 2026-09-27 — "MCP Tool처럼, CrewAI
+    Tool처럼 동작하도록 개선해줘").
+
+    **정정**: 이전까지는 `agent_runtime.augment_with_retrieval()`이 Task를
+    만들기 전에 검색 결과를 무조건 프롬프트에 끼워 넣었다(정적 주입) —
+    `run_crew()`에도 그렇게 연결돼 있었다(2026-09-27, "CrewAI 개념을 제대로
+    활용하는지 확인해줘" 리뷰에서 반영). 이번 요청으로 그 방식을 여기서는
+    대체한다 — 실제 CrewAI Tool을 붙여 **Agent가 검색 필요 여부를 스스로
+    판단**하게 한다(정적 주입 방식은 `execute_agent()`처럼 도구 호출
+    루프가 없는 단순 LLM 호출 경로에만 남긴다 — 그 경로는 Tool을 호출할
+    agent loop 자체가 없어 이 방식이 유일한 선택지다)."""
+    skill_set = set(skills)
+    tools: list = []
+    if skill_set & agent_runtime.VECTORDB_SKILL_TAGS:
+        tools.append(vectorstore.as_crewai_tool(conn))
+    if skill_set & agent_runtime.GRAPHDB_SKILL_TAGS:
+        tools.append(graphquery.as_crewai_tool(conn))
+    return tools
+
+
 def _crewai_llm(provider: str, model: str):
     from crewai import LLM  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
 
@@ -122,6 +144,7 @@ def _agent_backstory(role_name: str, skills: list[str]) -> str:
 
 
 def crewai_agent_generator(
+    conn: sqlite3.Connection,
     role_name: str,
     required_skills: list[str],
     provider: str | None = None,
@@ -129,7 +152,12 @@ def crewai_agent_generator(
 ) -> dict:
     """F4 생성 시점에 실제 CrewAI Agent+Task+Crew(단일, sequential)를 구성해
     kickoff한다. `jobs.GeneratorFn`과 같은 시그니처라 그대로 갈아끼울 수 있다.
-    """
+
+    `conn`은 이 Agent가 vectordb/graphdb 스킬을 가졌을 때 실제 CrewAI
+    Tool(`_skill_based_tools()`)을 붙이기 위해 필요하다(사용자 요청,
+    2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘" —
+    `GeneratorFn` 계약 자체에 conn을 추가해 F4 생성 시점부터 이 Agent가
+    쓸 도구를 가지고 태어나게 했다)."""
     from crewai import Agent, Crew, Process, Task
 
     resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
@@ -141,6 +169,7 @@ def crewai_agent_generator(
         backstory=_agent_backstory(role_name, required_skills),
         llm=crew_llm,
         allow_delegation=False,  # 단일 Agent Crew라 위임할 동료가 없다.
+        tools=_skill_based_tools(conn, required_skills),
         verbose=False,
     )
     task = Task(
@@ -244,27 +273,31 @@ def run_crew(
                 llm=crew_llm,
                 allow_delegation=True,  # ADR 결정 11 — 정적 릴레이가 아니라 실제 협업
                 max_iter=DELEGATION_MAX_ITER,
-                tools=_mcp_tools(mcp_stack, json.loads(row["mcp_servers"])),
+                # MCP 도구(ADR 결정 10) + VectorDB/GraphDB 스킬 기반 도구(ADR
+                # 결정 12, 2026-09-27 "MCP Tool처럼, CrewAI Tool처럼 동작하도록
+                # 개선해줘") — 둘 다 실제 CrewAI Tool이라 같은 리스트에 합친다.
+                tools=(
+                    _mcp_tools(mcp_stack, json.loads(row["mcp_servers"]))
+                    + _skill_based_tools(conn, json.loads(row["skill_tags"]))
+                ),
                 verbose=False,
             )
             for row in rows
         ]
 
+        # 정정(2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘"):
+        # 예전에는 여기서 `agent_runtime.augment_with_retrieval()`로 검색
+        # 결과를 Task description에 무조건 끼워 넣었다(정적 주입). 이제는
+        # 위에서 vectordb/graphdb 스킬을 가진 Agent에게 진짜 CrewAI Tool을
+        # 붙였으므로, description은 원문 그대로 두고 **Agent가 스스로 도구
+        # 호출 여부를 판단**하게 한다 — 정적 주입과 Tool 호출을 동시에 하면
+        # 검색 결과가 중복으로 들어가거나 Agent 판단이 무의미해진다.
         tasks: list[Task] = []
         for i, description in enumerate(task_descriptions):
             context = [tasks[i - 1]] if i > 0 and process == "sequential" else None
-            # 2026-09-27, "CrewAI 기능/개념을 제대로 활용하도록 구현되어
-            # 있는지 확인해줘" 요청으로 발견한 갭 수정 — 지식검색(VectorDB)/
-            # 관계분석(GraphDB) skill_tags를 가진 Agent는 개별 실행
-            # (`execute_agent`)에서만 RAG 증강을 받고 있었다. Crew 협업에서도
-            # 똑같이 적용해야 ADR 결정 11이 약속한 대로 동작한다.
-            row_skills = json.loads(rows[i]["skill_tags"])
-            augmented_description = agent_runtime.augment_with_retrieval(
-                conn, row_skills, description
-            )
             tasks.append(
                 Task(
-                    description=augmented_description,
+                    description=description,
                     expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
                     agent=crewai_agents[i],
                     context=context,

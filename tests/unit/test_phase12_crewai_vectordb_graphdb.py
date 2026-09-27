@@ -47,7 +47,7 @@ def test_gc77_crewai_agent_generator_shapes_result_like_other_generators():
         "crewai.Crew.kickoff", return_value=_crew_output("기획서 초안", ["기획서 초안"])
     ) as m:
         result = crew_runtime.crewai_agent_generator(
-            "기획자", ["요구사항정의"], provider="openai", model="gpt-4o-mini"
+            None, "기획자", ["요구사항정의"], provider="openai", model="gpt-4o-mini"
         )
     m.assert_called_once()
     assert result["role_name"] == "기획자"
@@ -587,12 +587,17 @@ def test_gc105_agent_model_config_endpoint_persists_mcp_servers(client_and_conn)
 # "CrewAI 기능/개념을 제대로 활용하도록 구현되어 있는지 확인해줘") ----------
 
 
-def test_gc106_run_crew_augments_task_description_for_graphdb_agent(client_and_conn):
+def test_gc106_run_crew_attaches_real_crewai_tool_for_graphdb_agent(client_and_conn):
     """실측으로 발견한 갭 회귀 테스트 — `agent_runtime.execute_agent()`(개별
     실행)는 vectordb/graphdb skill_tags Agent에 RAG 증강을 붙이는데
-    `crew_runtime.run_crew()`(Crew 협업)에는 전혀 안 붙어 있었다. 같은
-    Agent가 Crew에 들어가도 동일하게 증강돼야 ADR 결정 11의 약속과
-    일치한다."""
+    `crew_runtime.run_crew()`(Crew 협업)에는 전혀 안 붙어 있었다.
+
+    **정정(2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록
+    개선해줘")**: 처음엔 execute_agent()와 똑같이 Task description에
+    정적으로 끼워 넣는 방식으로 고쳤었지만, 이번 요청으로 진짜 CrewAI
+    Tool을 붙이는 방식으로 바꿨다 — description은 원문 그대로 두고,
+    Agent의 `tools`에 실제 "조직도 관계 조회" Tool이 붙어서 Agent가
+    스스로 호출 여부를 판단하게 한다."""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
@@ -626,9 +631,34 @@ def test_gc106_run_crew_augments_task_description_for_graphdb_agent(client_and_c
         )
 
     crew = captured["crew"]
-    assert crew.tasks[0].description == "기획서를 작성해줘"  # 일반 역할은 증강 없음
-    assert "확정된 배정" in crew.tasks[1].description  # graphquery 증강 흔적
-    assert "누가 이 업무를 맡고 있어?" in crew.tasks[1].description
+    # description은 정적 주입 없이 원문 그대로다.
+    assert crew.tasks[0].description == "기획서를 작성해줘"
+    assert crew.tasks[1].description == "누가 이 업무를 맡고 있어?"
+    # 대신 실제 CrewAI Tool이 해당 Agent에만 붙는다.
+    assert crew.agents[0].tools == []
+    tool_names = [t.name for t in crew.agents[1].tools]
+    assert "조직도 관계 조회" in tool_names
+
+
+def test_gc107_crewai_agent_generator_attaches_vectordb_tool(client_and_conn):
+    """F4 생성 시점(`crewai_agent_generator`)에도 vectordb 스킬을 요청하면
+    실제 CrewAI Tool이 붙는지 확인한다(사용자 요청, 2026-09-27 — "이미
+    생성된 또는 생성하는 AI Agent"에서 둘 다 동작해야 한다는 요구)."""
+    _client, conn = client_and_conn
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["crew"] = self
+        return _crew_output("검색 결과 요약", ["검색 결과 요약"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.crewai_agent_generator(
+            conn, "지식검색 Agent", ["vectordb"], provider="openai"
+        )
+
+    crew = captured["crew"]
+    tool_names = [t.name for t in crew.agents[0].tools]
+    assert "지식 베이스 검색" in tool_names
 
 
 # ---------- vectorstore(VectorDB 지식검색 Agent) ----------

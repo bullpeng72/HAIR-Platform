@@ -37,7 +37,15 @@ Agent별 `mcp_servers` 설정에 실제로 접속해 도구를 붙인다 —
 발견해 수정했다(`docs/LIMITS.md` §16). 이어서 "CrewAI 개념을 제대로
 활용하는지" 감사해 RAG 증강(VectorDB/GraphDB)이 개별 실행에만 붙어있고
 Crew 협업에는 빠져 있던 실사용 갭을 발견·수정했다(`docs/LIMITS.md`
-§17). **실제 OpenAI API로
+§17). **VectorDB/GraphDB를 정적 프롬프트 주입 대신 진짜 CrewAI Tool로
+전환**했다 — 실제 데모 DB를 확인해보니 VectorDB/GraphDB Agent가 실사용
+중엔 하나도 없었다는 것부터 확인한 뒤, `vectorstore.as_crewai_tool()`/
+`graphquery.as_crewai_tool()`(`crewai.tools.tool` 데코레이터 기반)을
+`run_crew()`(이미 온보딩된 Agent)와 `crewai_agent_generator()`(F4로 새로
+생성되는 Agent) 양쪽에 연결해, Agent가 검색 필요 여부를 스스로 판단해
+호출하게 했다(`AgentModelConfig`와 같은 재사용 레지스트리인 `tool_pool`·
+`skill_pool`은 여전히 기획만 — `docs/LIMITS.md` §18, ADR 결정 12).
+**실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
 우회·검색 필터·조직도 귀속·`manager_id` 누락, R2: 승인 inbox·사용자 목록·
@@ -52,7 +60,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 109건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 110건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -149,7 +157,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 109건
+tests/unit/                            # 골든셋 110건
 ```
 
 ## 로드맵

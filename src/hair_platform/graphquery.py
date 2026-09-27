@@ -105,3 +105,21 @@ def context_for_prompt(conn: sqlite3.Connection) -> str:
         for r in rows
     ]
     return "현재 조직의 확정된 배정 관계:\n" + "\n".join(lines)
+
+
+def as_crewai_tool(conn: sqlite3.Connection):
+    """GraphDB 관계조회를 실제 CrewAI Tool로 감싼다(ADR 결정 12, 사용자 요청
+    2026-09-27 — "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘"). NF9
+    경계는 `context_for_prompt()` 자체가 성과 컬럼을 절대 SELECT하지 않는
+    것으로 이미 보장된다 — Tool로 감싸도 호출하는 함수가 그대로이므로 이
+    보장은 변하지 않는다(회귀 테스트 `test_gc86`이 계속 이 파일의 소스
+    자체를 검사한다). `crewai`는 지연 import한다."""
+    from crewai.tools import tool  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
+
+    @tool("조직도 관계 조회")
+    def query_org_relationships() -> str:
+        """조직도·직속상사·배정 현황 등 관계형 데이터를 조회한다(성과
+        데이터는 포함하지 않는다). 관계 정보가 실제로 필요할 때만 호출하라."""
+        return context_for_prompt(conn)
+
+    return query_org_relationships

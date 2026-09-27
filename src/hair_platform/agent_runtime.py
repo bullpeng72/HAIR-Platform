@@ -30,10 +30,17 @@ def augment_with_retrieval(
     """skill_tags로 지식검색(VectorDB)/관계분석(GraphDB) Agent를 판별해
     검색 결과를 프롬프트에 덧붙인다(ADR 결정 11). 해당 없으면 원본 그대로.
 
-    공개 함수다(밑줄 없음) — `crew_runtime.run_crew()`도 이 함수를 그대로
-    쓴다(2026-09-27, "CrewAI 기능/개념을 제대로 활용하도록 구현되어
-    있는지 확인해줘" 요청으로 발견: 개별 실행(`execute_agent`)에만 RAG
-    증강이 붙어 있고 Crew 협업에는 전혀 안 붙어 있던 갭을 여기서 메운다)."""
+    **정정(2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록
+    개선해줘")**: 이 정적 주입 방식은 이제 `execute_agent()`(도구 호출
+    루프가 없는 단순 1회 LLM 호출)에만 남아 있다 — 그 경로는 Agent가 스스로
+    도구를 호출할 수 없어(agent loop 자체가 없음) 이 방식이 유일한
+    선택지다. `crew_runtime.run_crew()`/`crewai_agent_generator()`(실제
+    CrewAI Agent loop가 있는 경로)는 대신 `vectorstore.as_crewai_tool()`/
+    `graphquery.as_crewai_tool()`로 만든 진짜 CrewAI Tool을 Agent에 붙여서
+    Agent가 호출 여부를 스스로 판단하게 한다(`crew_runtime._skill_based_
+    tools()`) — 한때 이 함수를 `run_crew()`에도 그대로 연결했었지만
+    (2026-09-27, "CrewAI 개념을 제대로 활용하는지 확인해줘"), 이번 요청으로
+    Tool 방식으로 대체했다."""
     skill_set = set(skills)
     if skill_set & VECTORDB_SKILL_TAGS:
         hits = vectorstore.search(conn, prompt, top_k=3)

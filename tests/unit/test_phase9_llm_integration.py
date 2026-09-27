@@ -72,6 +72,7 @@ def test_gc62_resolve_provider_and_model(monkeypatch):
 def test_gc63_llm_agent_generator_calls_call_llm_and_shapes_result():
     with patch("hair_platform.llm.call_llm", return_value="생성된 산출물 텍스트") as m:
         result = llm_agent_generator(
+            None,
             "백엔드 개발자",
             ["python", "fastapi"],
             provider="anthropic",

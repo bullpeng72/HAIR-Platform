@@ -23,11 +23,18 @@ from collections.abc import Callable
 from hair_platform import audit, llm
 from hair_platform.sandbox import run_smoke_test_in_sandbox
 
-GeneratorFn = Callable[[str, list[str]], dict]
+GeneratorFn = Callable[[sqlite3.Connection, str, list[str]], dict]
 
 
-def default_stub_generator(role_name: str, required_skills: list[str]) -> dict:
-    """AgentForge 실제 파이프라인 연동 전까지의 규칙기반 스텁."""
+def default_stub_generator(
+    conn: sqlite3.Connection, role_name: str, required_skills: list[str]
+) -> dict:
+    """AgentForge 실제 파이프라인 연동 전까지의 규칙기반 스텁.
+
+    `conn`은 이 함수 자체는 쓰지 않는다 — `GeneratorFn` 계약이 모든 생성기에
+    DB 커넥션을 균일하게 넘기도록 통일했다(사용자 요청, 2026-09-27, "MCP
+    Tool처럼 동작하도록 개선해줘" — `crewai_agent_generator()`가 VectorDB/
+    GraphDB Tool을 붙이려면 conn이 필요해서 계약 자체를 바꿨다)."""
     return {
         "role_name": role_name,
         "skill_tags": required_skills,
@@ -36,6 +43,7 @@ def default_stub_generator(role_name: str, required_skills: list[str]) -> dict:
 
 
 def llm_agent_generator(
+    conn: sqlite3.Connection,
     role_name: str,
     required_skills: list[str],
     provider: str | None = None,
@@ -107,7 +115,7 @@ def _run_item(
     conn.execute("UPDATE job_items SET status = 'running' WHERE id = ?", (item_id,))
     required_skills = json.loads(task_row["required_skills"])
     try:
-        generated = generator(task_row["role_name"], required_skills)
+        generated = generator(conn, task_row["role_name"], required_skills)
         sandbox_result = run_smoke_test_in_sandbox(generated)
         if not sandbox_result.ok:
             raise RuntimeError(sandbox_result.stderr or "smoke test failed")

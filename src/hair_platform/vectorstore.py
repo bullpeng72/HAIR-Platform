@@ -113,3 +113,29 @@ def search(
         )
     scored.sort(key=lambda s: s["score"], reverse=True)
     return scored[:top_k]
+
+
+def as_crewai_tool(conn: sqlite3.Connection, top_k: int = 3):
+    """VectorDB 검색을 실제 CrewAI Tool로 감싼다(ADR 결정 12, 사용자 요청
+    2026-09-27 — "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘").
+
+    이전에는 `agent_runtime.augment_with_retrieval()`가 Task를 만들기 전에
+    무조건 검색 결과를 프롬프트에 끼워 넣었다(정적 주입) — Agent에게 호출
+    여부를 판단할 권한이 없었다. 이 함수로 만든 Tool을 `Agent(tools=[...])`
+    에 등록하면 **Agent가 실제로 검색이 필요한지 스스로 판단해서 호출**한다
+    (`crewai.tools.tool` 데코레이터를 실제 설치된 패키지 소스로 확인해
+    반영함 — `inspect`로 시그니처 확인). `crewai`는 지연 import한다 — 이
+    함수를 안 쓰면 `vectorstore.py` 자체는 crewai 설치 없이도 그대로
+    동작한다(기존 `execute_agent()` 경로가 이 모듈을 그렇게 쓰고 있다)."""
+    from crewai.tools import tool  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
+
+    @tool("지식 베이스 검색")
+    def search_knowledge_base(query: str) -> str:
+        """과거에 저장된 산출물 중 이 질의와 관련된 내용을 검색한다.
+        검색이 실제로 필요할 때만 호출하라 — 불필요하게 반복 호출하지 마라."""
+        hits = search(conn, query, top_k=top_k)
+        if not hits:
+            return "관련된 과거 산출물을 찾지 못했습니다."
+        return "\n".join(f"- {h['text']}" for h in hits)
+
+    return search_knowledge_base

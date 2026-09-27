@@ -722,6 +722,74 @@ ADR 결정 11이 이미 "위임만으로도 호출 수 예측이 어려워진다
 으로 적어 넣는 편이라 "무엇을 할지 계획"이 크게 필요치 않아 보임)이
 확신되지 않아 켜지 않았다 — 검토했으나 보류.
 
+## 18. Skill Pool·Tool Pool 기획 + VectorDB/GraphDB의 CrewAI Tool 전환 —
+부분 구현 완료(사용자 요청, 2026-09-27, "AI Agent에서 사용할 Skills, MCP
+Tool 등을 Pool로 구성하고 지식 및 도구 그라운딩... 개선점을 찾아줘" +
+"이미 생성된 또는 생성하는 AI Agent에서 MCP Tool처럼, 또는 CrewAI
+Tool처럼 동작하도록 개선해줘")
+
+**먼저 확인한 사실**: "VectorDB/GraphDB가 현재 AI Agent인지" 물었을 때
+실제 데모 DB(`hair.db`)를 직접 조회해 확인한 결과, 실사용 중인 8개
+SDLC Agent 중 vectordb/graphdb `skill_tags`를 가진 Agent는 **단 하나도
+없었다** — 이 개념은 `tests/unit/test_phase12_*.py`가 수동으로 INSERT하는
+테스트 픽스처(`'지식검색 Agent'`, `'관계분석 Agent'`)로만 존재했고, Web
+UI에도 이런 Agent를 만들도록 안내하는 흐름이 전혀 없다. 즉 "VectorDB/
+GraphDB Agent"는 지금 코드가 지원하는 **역량**(어떤 Agent든 skill_tags에
+그 문자열을 넣으면 동작)이지, 실제로 존재하는 전용 Agent 타입이 아니다
+— 정직하게 이 사실을 먼저 확인하고 넘어간다.
+
+**1) ADR 결정 12 기획(§ADR.md 결정 12)**: `tool_pool`(도구 재사용
+레지스트리)·`skill_pool`(스킬 정식 엔티티화)·`agent_tool_links`(N:M)
+3개 신규 테이블을 설계했다 — MCP 서버 설정을 Agent마다 개별 저장하는
+지금 방식의 중복 문제를 풀기 위한 것이다. **이 3개 테이블 자체는 이번에도
+구현하지 않았다** — 순수 기획으로 남아 있다.
+
+**2) VectorDB/GraphDB를 진짜 CrewAI Tool로 전환 — 실제 구현 완료**:
+`crewai.tools.tool` 데코레이터(실제 설치된 패키지 소스를 `inspect`로
+확인)를 이용해 `vectorstore.as_crewai_tool(conn)`/`graphquery.
+as_crewai_tool(conn)`을 새로 만들었다 — 각각 "지식 베이스 검색"/"조직도
+관계 조회"라는 이름의 실제 `Tool` 인스턴스를 반환한다. `crew_runtime.
+_skill_based_tools(conn, skills)`가 Agent의 skill_tags를 보고 이 Tool을
+골라 `Agent(tools=[...])`에 붙인다.
+
+- **`run_crew()`(이미 생성된/온보딩된 Agent)**: Agent별로 MCP 도구
+  (`_mcp_tools()`)와 스킬 기반 Tool(`_skill_based_tools()`)을 합쳐서
+  붙인다. 이전에는(2026-09-27 초반 리뷰에서) `agent_runtime.
+  augment_with_retrieval()`로 Task description에 검색 결과를 무조건
+  주입했었는데, 이번 요청으로 **정적 주입을 완전히 대체**했다 — Task
+  description은 이제 사용자가 입력한 원문 그대로이고, Agent가 Tool
+  호출 여부를 스스로 판단한다(GC106).
+- **`crewai_agent_generator()`(F4로 새로 생성되는 Agent)**: `GeneratorFn`
+  계약(`jobs.py`) 자체에 `conn: sqlite3.Connection`을 첫 인자로 추가해
+  — `default_stub_generator`·`llm_agent_generator`·`crewai_agent_
+  generator` 전부 시그니처를 맞췄다 — F4 생성 시점부터 `required_skills`
+  에 따라 Tool이 붙은 Agent가 태어난다(GC107). 이전까지는 conn 자체가
+  이 함수에 전달되지 않아 애초에 불가능했다.
+- **정적 주입은 `execute_agent()`에만 남았다**: 도구 호출 루프가 없는
+  단순 1회 LLM 호출 경로라 Agent가 Tool을 스스로 호출할 방법이 구조적으로
+  없다 — 이 경로에서는 정적 주입이 유일한 선택지이므로 의도적으로
+  유지했다.
+
+**한계(정직하게 명시)**:
+- `tool_pool`/`skill_pool`/`agent_tool_links` — MCP 서버를 여러 Agent가
+  이름으로 공유하는 재사용 레지스트리는 여전히 미구현이다. 지금도 MCP
+  서버 설정은 `AgentModelConfig.mcp_servers`로 Agent마다 개별 저장한다.
+- `skill_pool.augmentation_mode`(스킬별로 "tool"/"always"/"none" 선택)도
+  데이터로 존재하지 않는다 — 지금은 코드에 "VectorDB/GraphDB는 항상
+  tool 모드"로 고정돼 있다. 만약 나중에 "이 스킬은 반드시 매번 강제
+  적용돼야 한다"는 안전장치성 요구가 생기면(예: NF9와 비슷한 성격의
+  요구) 이 스킬만 정적 주입으로 되돌리는 것도 코드 변경이 필요하다.
+- Tool 방식으로 전환한 뒤 Agent가 실제로 검색을 얼마나 자주/적절히
+  호출하는지, 이게 정적 주입 대비 비용을 늘리는지 줄이는지는 실측
+  전까지 알 수 없다 — 접속 가능한 실제 사용 데이터가 쌓이기 전까지는
+  가정으로 남는다.
+- `GeneratorFn` 계약 변경(`conn` 추가)으로 `jobs.default_stub_generator`·
+  `jobs.llm_agent_generator`·`crew_runtime.crewai_agent_generator`와
+  이들을 직접 호출하는 기존 테스트 4건의 시그니처를 전부 맞춰야 했다 —
+  하위호환 shim 없이 계약 자체를 바꿨다(이 프로젝트가 지금까지 지켜온
+  "필요하면 계약을 정직하게 바꾼다" 원칙과 일치, 사용하지 않는 `conn`은
+  `default_stub_generator`/`llm_agent_generator`에서 그냥 무시한다).
+
 ## 요약
 
 | 항목 | 상태 |
@@ -748,4 +816,5 @@ ADR 결정 11이 이미 "위임만으로도 호출 수 예측이 어려워진다
 | 실사용 발견: hierarchical에서 task_callback 매니저 오귀속 + Web UI null 출력 크래시 | **사용자 실제 테스트 중 발견 → 발견·수정 완료**(GC102) |
 | MCP(외부 도구) 연동 — `run_crew()`에 MCPServerAdapter 실제 연결 | **구현 완료**(GC103–105), 접속 가능한 실제 MCP 서버가 없어 종단간 검증은 미검증(mock 경계: `MCPServerAdapter`) |
 | E2E 시나리오(사람+AI 혼합 팀 구성) 전 과정 실행 | **F1–F14 핵심 흐름 실측 확인, UX 문제 3건 발견·수정**(브리프 placeholder, 제안 역할 클릭 채우기, 매칭 실패 안내 문구) |
-| CrewAI 개념 활용도 감사 — RAG 증강이 Crew 협업에서 누락됨 | **실사용 갭 발견 → 수정 완료**(GC106), human_input/token_usage/delegation/planning 4건 실측 판단(§17) |
+| CrewAI 개념 활용도 감사 — RAG 증강이 Crew 협업에서 누락됨 | **실사용 갭 발견 → 수정 완료**(당시 GC106), human_input/token_usage/delegation/planning 4건 실측 판단(§17) — 이후 §18에서 정적 주입 자체를 Tool 방식으로 대체하며 GC106 내용도 갱신됨 |
+| Skill Pool·Tool Pool 기획 + VectorDB/GraphDB의 CrewAI Tool 전환 | **부분 구현 완료**(GC106-107 갱신) — Pool 테이블 자체는 기획만, Tool 전환은 실제 구현(§18) |

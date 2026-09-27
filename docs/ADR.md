@@ -375,7 +375,11 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
 중심화하고, VectorDB/GraphDB를 CrewAI 네이티브 Tool로 전환한다(사용자 요청,
 2026-09-27 — "AI Agent에서 사용할 Skills, MCP Tool 등을 Pool로 구성하고
 지식 및 도구 그라운딩... CrewAI의 데코레이터 도구선언 기능과 비교해 개선점을
-찾아줘" — **기획 단계, 아직 코드 미반영**)
+찾아줘" — **부분 구현 완료**: VectorDB/GraphDB의 CrewAI Tool화는
+2026-09-27, "이미 생성된 또는 생성하는 AI Agent에서 MCP Tool처럼, 또는
+CrewAI Tool처럼 동작하도록 개선해줘" 요청으로 실제 구현했다. `skill_pool`·
+`tool_pool`·`agent_tool_links` 신규 테이블(Pool 자체의 데이터 중심화)은
+여전히 기획 단계다 — `docs/LIMITS.md` §18 참고)
 
 **배경 — 실제 구현을 분석해 찾은 두 가지 구조적 갭**:
 
@@ -452,9 +456,29 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
   기각 — 이번 요청이 명시적으로 "Pool로 구성"을 요구했고, 실측으로 확인한
   "URL 하나 바뀌면 N군데 수정" 문제가 실사용에서 반복될 것으로 예상된다.
 
-**한계(정직하게 명시, 기획 단계 — 실측 없음)**:
-- `tool_pool`/`skill_pool`/`agent_tool_links` 테이블, 관리 API(CRUD), Web UI
-  화면은 전부 신규 설계일 뿐 구현되지 않았다.
+**한계(정직하게 명시)**:
+- ~~`tool_pool`/`skill_pool`/`agent_tool_links` 테이블, 관리 API(CRUD),
+  Web UI 화면은 전부 신규 설계일 뿐 구현되지 않았다.~~ — **정정
+  (2026-09-27, "이미 생성된 또는 생성하는 AI Agent에서... 개선해줘"
+  요청)**: 3개 신규 테이블 자체는 여전히 미구현이다(그대로 오픈 이슈).
+  다만 이 결정의 핵심 아이디어인 **VectorDB/GraphDB를 정적 프롬프트
+  주입 대신 진짜 CrewAI Tool로 전환**하는 부분은 Pool 테이블 없이도
+  구현했다 — `vectorstore.as_crewai_tool(conn)`/`graphquery.
+  as_crewai_tool(conn)`이 `crewai.tools.tool` 데코레이터로 실제 Tool을
+  만들고, `crew_runtime._skill_based_tools()`가 skill_tags를 보고 그
+  Tool을 `run_crew()`와 `crewai_agent_generator()` 양쪽(**이미 생성된
+  Agent** + **생성되는 Agent** 둘 다) Agent에 붙인다(GC106-107). 정적
+  주입(`agent_runtime.augment_with_retrieval()`)은 도구 호출 루프가 없는
+  `execute_agent()`(단순 1회 LLM 호출) 경로에만 남겼다 — 그 경로는
+  Agent가 스스로 도구를 호출할 방법이 구조적으로 없다. `GeneratorFn`
+  계약(`jobs.py`)에 `conn`을 추가해 F4 생성 시점부터 Tool을 붙일 수 있게
+  계약 자체를 바꿨다.
+- `tool_pool`/`skill_pool`/`agent_tool_links`(도구 재사용 레지스트리,
+  MCP 서버를 여러 Agent가 이름으로 공유하는 것) 자체는 여전히 미구현
+  — 지금은 MCP 서버 설정을 Agent마다 개별 저장하는 기존 방식
+  (`AgentModelConfig.mcp_servers`) 그대로다. `skill_pool.augmentation_mode`
+  같은 스킬별 선택 옵션도 아직 데이터로 존재하지 않고, 지금은 VectorDB/
+  GraphDB는 항상 "tool" 모드, 나머지는 해당 없음으로 코드에 고정돼 있다.
 - `"tool"` 모드로 전환했을 때 Agent가 실제로 검색을 얼마나 자주/적절히
   호출하는지(비용이 늘지 줄지)는 실측 전까지 예측할 수 없다 — "always"
   대비 우월하다고 미리 단정하지 않는다.
@@ -518,9 +542,12 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
   (GC106). 함께 검토한 CrewAI 개념 4건(`human_input`, `token_usage`,
   `allow_delegation` 역할별 차등, `planning`)의 판단 근거는
   `docs/LIMITS.md` §17 참고.
-- 결정 12(Skill Pool·Tool Pool + VectorDB/GraphDB Tool화)는 **기획
-  단계 — 아직 코드 미반영**(2026-09-27, "Skills, MCP Tool 등을 Pool로
-  구성하고 지식 및 도구 그라운딩... 개선점을 찾아줘" 요청). `tool_pool`·
-  `skill_pool`·`agent_tool_links` 신규 테이블, `crewai.tools.tool`
-  데코레이터로 VectorDB/GraphDB를 진짜 CrewAI Tool로 전환하는 안까지
-  설계했으나, 구현·마이그레이션·Web UI는 전부 다음 단계로 남겼다.
+- 결정 12(Skill Pool·Tool Pool + VectorDB/GraphDB Tool화)는 **부분 구현
+  완료**(2026-09-27). 계획 시점엔 "기획 단계 — 아직 코드 미반영"이었으나,
+  같은 날 "이미 생성된 또는 생성하는 AI Agent에서 MCP Tool처럼, 또는
+  CrewAI Tool처럼 동작하도록 개선해줘" 요청으로 핵심 전환(VectorDB/
+  GraphDB를 `crewai.tools.tool` 데코레이터 기반 진짜 CrewAI Tool로 전환,
+  `run_crew()`+`crewai_agent_generator()` 양쪽에 연결, `GeneratorFn`
+  계약에 `conn` 추가)을 실제로 구현했다(GC106-107). `tool_pool`·
+  `skill_pool`·`agent_tool_links` 신규 테이블(도구 재사용 레지스트리
+  자체)은 여전히 미구현으로 남는다 — 상세는 `docs/LIMITS.md` §18.

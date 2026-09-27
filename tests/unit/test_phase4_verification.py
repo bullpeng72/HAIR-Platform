@@ -135,5 +135,5 @@ def test_gc40_fairness_report_rbac_admin_manager_only(client_and_conn):
 def test_gc41_stub_generator_still_used_as_module_level_default():
     # 회귀 방지: default_stub_generator 참조가 여전히 모듈에서 임포트 가능해야 한다
     # (jobs.py 리팩터링 중 실수로 이름이 바뀌면 이 테스트가 즉시 잡는다).
-    result = default_stub_generator("백엔드 개발자", ["python"])
+    result = default_stub_generator(None, "백엔드 개발자", ["python"])
     assert result["role_name"] == "백엔드 개발자"

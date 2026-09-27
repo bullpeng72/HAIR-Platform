@@ -62,10 +62,10 @@ def test_gc20_partial_failure_and_retry_of_failed_items_only(client_and_conn):
     )
     task_fail = resp.json()["tasks"][0]["id"]
 
-    def flaky_generator(role_name, required_skills):
+    def flaky_generator(conn, role_name, required_skills):
         if role_name == "디자이너":
             raise RuntimeError("simulated LLM output escaping error")
-        return default_stub_generator(role_name, required_skills)
+        return default_stub_generator(conn, role_name, required_skills)
 
     with patch(
         "hair_platform.jobs.default_stub_generator", side_effect=flaky_generator
