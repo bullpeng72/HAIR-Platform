@@ -321,7 +321,7 @@ async function renderBriefs(content) {
   let html = "<section class=\\"card\\"><h2>업무 요청 등록</h2>";
   if (canWrite) {
     html += '<form class="inline" id="brief-form">' +
-      '<textarea id="brief-text" placeholder="예: 백엔드 개발자 1명" rows="2" style="flex:1;min-width:240px"></textarea>' +
+      '<textarea id="brief-text" placeholder="한 줄에 역할 하나씩 입력하세요(줄바꿈 단위로 나뉩니다). 예:&#10;백엔드 개발자 1명&#10;UI/UX 디자이너 1명" rows="3" style="flex:1;min-width:240px"></textarea>' +
       '<button class="primary" type="submit">제출</button></form>';
   }
   html += "</section><section class=\\"card\\"><h2>업무 요청 목록</h2>";
@@ -348,22 +348,34 @@ async function renderBriefs(content) {
     });
   }
   content.querySelectorAll("[data-decompose]").forEach(btn => {
-    btn.onclick = () => renderDecomposeForm(btn.dataset.decompose);
+    btn.onclick = () => {
+      const brief = briefs.find(b => b.id === Number(btn.dataset.decompose));
+      renderDecomposeForm(btn.dataset.decompose, brief ? brief.stub_roles : []);
+    };
   });
   content.querySelectorAll("[data-viewtasks]").forEach(btn => {
     btn.onclick = () => renderTaskList(btn.dataset.viewtasks);
   });
 }
 
-function renderDecomposeForm(briefId) {
+function renderDecomposeForm(briefId, stubRoles) {
   const detail = document.getElementById("brief-detail");
+  const suggestions = (stubRoles || []).length
+    ? '<p class="muted">제안된 역할(클릭하면 아래 입력창에 채워집니다 — 브리프를 줄바꿈으로 나눈 것뿐이라 다듬어서 쓰세요): ' +
+      stubRoles.map(r => '<button type="button" class="small" data-fill-role="' + esc(r) + '">' + esc(r) + '</button>').join(" ") +
+      "</p>"
+    : "";
   detail.innerHTML =
     '<h3>업무 요청 #' + esc(briefId) + ' — 할 일 나누기</h3>' +
+    suggestions +
     '<form class="inline" id="decompose-form">' +
     '<input id="d-role" placeholder="필요한 역할(예: 백엔드 개발자)" required>' +
     '<input id="d-skills" placeholder="필요 스킬(콤마로 구분)">' +
     '<input id="d-headcount" type="number" min="1" value="1" style="width:70px" title="인원 수">' +
     '<button class="primary" type="submit">할 일 추가</button></form>';
+  detail.querySelectorAll("[data-fill-role]").forEach(btn => {
+    btn.onclick = () => { document.getElementById("d-role").value = btn.dataset.fillRole; };
+  });
   document.getElementById("decompose-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const skills = document.getElementById("d-skills").value.split(",").map(s => s.trim()).filter(Boolean);
@@ -416,7 +428,7 @@ async function renderMatch(content) {
 function renderMatchResult(taskId, result) {
   const box = document.getElementById("match-result");
   if (result.generate_new) {
-    box.innerHTML = '<p class="msg error">매칭되는 후보가 없습니다 — "AI 에이전트 생성" 탭에서 새로 만들어 보세요.</p>';
+    box.innerHTML = '<p class="msg error">매칭되는 후보가 없습니다 — "AI 에이전트 생성" 탭에서 새 Agent를 만들거나, "사람 인력 관리" 탭에서 이 역할의 사람을 등록해보세요.</p>';
     return;
   }
   box.innerHTML = table(

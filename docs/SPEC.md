@@ -133,6 +133,7 @@
 | CrewAI 기능 적용 리뷰(사용자 요청, "crewai 기능을 적절히 적용되었는지 분석해줘" + "다른 리뷰 항목 마저 진행해줘") | `manager_agent_id`+`hierarchical` 실사용 크래시 버그, `memory=True`/`max_iter` 문서-코드 불일치 발견·수정 + `task_callback` 기반 감사로그 세분화 + 사용자 실사용 중 발견한 hierarchical 오귀속·Web UI null 크래시 수정(`docs/LIMITS.md` §14) | 5건(GC98–102) |
 | MCP(외부 도구) 연동(사용자 요청, "crewai-tools의 MCPServerAdapter... 참조해 mcp 기능을 구현해줘") | `run_crew()`에 `MCPServerAdapter` 실제 연결, `AgentModelConfig.mcp_servers` 추가(`docs/LIMITS.md` §15) | 3건(GC103–105) |
 | Agent-Evaluator 적용 분석(사용자 요청, "Agent-Evaluator 적용이 되어 있는지 분석해줘") | `eval_wiring.py`를 실제로 끝까지 실행해 `PerformanceMonitor` 저장 버그(`auto_save=False`) 발견·수정, `agent-eval gate` 채점까지 실제 성공 확인(`docs/LIMITS.md` §1) | 실측 검증(신규 golden case 없음, 기존 코드 버그 수정) |
+| E2E 시나리오 실행(사용자 요청, "개발업무 인간-AI Agent 협업 팀 구성... End-to-End로 진행하며 개선해줘") | 신규 SaaS 대시보드 프로젝트 팀 구성을 F1→F14까지 실제로 끝까지 진행, UX 문제 3건 발견·수정(`docs/LIMITS.md` §16) | 실측 검증(프런트엔드 텍스트 수정, golden case 대상 아님) |
 
 ## 10. 설계 결정
 

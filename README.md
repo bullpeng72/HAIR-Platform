@@ -31,7 +31,10 @@ API를 호출할 수 있고(기본값은 여전히 무료 스텁), `PATCH
 연동도 구현 완료**(`run_crew()`가 `crewai-tools`의 `MCPServerAdapter`로
 Agent별 `mcp_servers` 설정에 실제로 접속해 도구를 붙인다 —
 `AgentModelConfig.mcp_servers`로 설정, `docs/LIMITS.md` §15. 접속 가능한
-실제 MCP 서버가 없어 종단간 검증은 미검증). **실제 OpenAI API로
+실제 MCP 서버가 없어 종단간 검증은 미검증). "신규 SaaS 대시보드 프로젝트,
+사람+AI Agent 혼합 팀 구성" 시나리오를 F1부터 F14까지 실제로 끝까지
+진행해보며 브리프 입력·역할 제안·매칭 실패 안내 문구의 UX 문제 3건을
+발견해 수정했다(`docs/LIMITS.md` §16). **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
 우회·검색 필터·조직도 귀속·`manager_id` 누락, R2: 승인 inbox·사용자 목록·
