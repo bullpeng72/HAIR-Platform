@@ -127,7 +127,8 @@ CREATE TABLE IF NOT EXISTS agent_pool (
     llm_provider TEXT,
     llm_model TEXT,
     last_output TEXT,
-    framework TEXT NOT NULL DEFAULT 'stub'
+    framework TEXT NOT NULL DEFAULT 'stub',
+    mcp_servers TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
@@ -187,6 +188,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "agent_pool", "llm_model", "TEXT")
     _ensure_column(conn, "agent_pool", "last_output", "TEXT")
     _ensure_column(conn, "agent_pool", "framework", "TEXT NOT NULL DEFAULT 'stub'")
+    _ensure_column(conn, "agent_pool", "mcp_servers", "TEXT NOT NULL DEFAULT '[]'")
 
 
 def init_schema(conn: sqlite3.Connection) -> None:

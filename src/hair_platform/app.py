@@ -546,6 +546,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "llm_model": row["llm_model"],
                 "last_output": row["last_output"],
                 "framework": row["framework"],
+                "mcp_servers": json.loads(row["mcp_servers"]),
             }
             for row in rows
         ]
@@ -583,13 +584,24 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         payload: AgentModelConfig,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """Agent별 기본 LLM provider/model을 저장한다(사용자 요청, 2026-09-26,
-        2차 — Anthropic/OpenAI/Ollama 중 선택). 비용이 발생하지 않는다 —
-        LLM을 호출하지 않고 설정만 저장한다. 이후 `/execute`가 provider/model을
-        안 받으면 여기서 저장한 값을 기본으로 쓴다."""
+        """Agent별 기본 LLM provider/model(+ MCP 서버 설정)을 저장한다(사용자
+        요청, 2026-09-26, 2차 — Anthropic/OpenAI/Ollama 중 선택; MCP는
+        2026-09-27 추가). 비용이 발생하지 않는다 — LLM/MCP를 호출하지 않고
+        설정만 저장한다. 이후 `/execute`가 provider/model을 안 받으면 여기서
+        저장한 값을 기본으로 쓰고, `POST /api/crew/run`이 여기서 저장한
+        `mcp_servers`로 그 Agent에 실제 MCP 도구를 붙인다."""
         try:
             resolved_provider, resolved_model = agent_runtime.set_model_config(
-                conn, agent_id, user["id"], payload.provider, payload.model
+                conn,
+                agent_id,
+                user["id"],
+                payload.provider,
+                payload.model,
+                mcp_servers=(
+                    [s.model_dump() for s in payload.mcp_servers]
+                    if payload.mcp_servers is not None
+                    else None
+                ),
             )
         except ValueError as exc:
             raise HTTPException(

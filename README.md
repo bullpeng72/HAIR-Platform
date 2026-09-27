@@ -5,7 +5,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 105
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 108
 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
@@ -27,7 +27,11 @@ API를 호출할 수 있고(기본값은 여전히 무료 스텁), `PATCH
 사용자가 실제로 Web UI에서 hierarchical+매니저 지정 조합을 테스트하다가
 `task_callback`이 hierarchical에서는 항상 매니저에게 잘못 귀속되는
 버그와, 매니저의 `output: null`을 Web UI가 렌더링하다 크래시하는 버그를
-추가로 발견해 둘 다 수정했다(`docs/LIMITS.md` §14). **실제 OpenAI API로
+추가로 발견해 둘 다 수정했다(`docs/LIMITS.md` §14). **MCP(외부 도구)
+연동도 구현 완료**(`run_crew()`가 `crewai-tools`의 `MCPServerAdapter`로
+Agent별 `mcp_servers` 설정에 실제로 접속해 도구를 붙인다 —
+`AgentModelConfig.mcp_servers`로 설정, `docs/LIMITS.md` §15. 접속 가능한
+실제 MCP 서버가 없어 종단간 검증은 미검증). **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
 우회·검색 필터·조직도 귀속·`manager_id` 누락, R2: 승인 inbox·사용자 목록·
@@ -42,7 +46,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 105건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 108건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -58,6 +62,14 @@ pip install -e ".[crewai]"
 # GenerateRequest.framework="crewai" 또는 Web UI "AI 에이전트 생성" 탭에서
 # framework를 crewai로 선택 — 실제 LLM API를 호출하므로 비용이 발생한다.
 # "Crew 실행" 탭에서 여러 Agent를 실제 CrewAI Crew로 묶어 협업시킬 수 있다.
+
+# MCP(외부 검색 등 도구) 연동을 쓰려면 추가로:
+pip install -e ".[mcp]"
+# Web UI "AI 에이전트" 탭의 "MCP 서버(JSON)" 칸에
+# [{"url": "http://localhost:8000/mcp", "transport": "streamable-http"}]
+# 형태로 넣고 "모델 설정" 저장 — 이후 "Crew 실행"에서 그 Agent에 실제
+# MCP 도구가 붙는다. MCPServerAdapter는 생성 시점에 실제로 접속을
+# 시도한다(접속 가능한 MCP 서버가 준비돼 있어야 한다).
 ```
 
 실제 LLM 연동을 쓰려면(Anthropic·OpenAI·Ollama 중 선택):
@@ -131,7 +143,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 105건
+tests/unit/                            # 골든셋 108건
 ```
 
 ## 로드맵

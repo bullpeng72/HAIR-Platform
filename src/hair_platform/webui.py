@@ -615,7 +615,7 @@ async function renderAgentPool(content) {
   const isAdmin = ME.role === "admin";
   const canExecute = ["admin", "manager"].includes(ME.role);
   content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
-    '<p class="muted">"모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11). "지식 색인"은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생).</p>' +
+    '<p class="muted">"모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11). "지식 색인"은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생). "MCP 서버(JSON)"에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다(ADR 결정 10) — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다.</p>' +
     table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "생성방식", "LLM", "최근 산출물", "동작"], agents.map(a => {
       let actions = "";
       if (isAdmin) {
@@ -633,6 +633,7 @@ async function renderAgentPool(content) {
           providers.map(p => '<option value="' + p + '"' + (p === a.llm_provider ? " selected" : "") + ">" + p + "</option>").join("") +
           "</select>" +
           '<span class="pair"><input placeholder="모델명(비우면 기본값)" id="model-' + a.id + '" value="' + esc(a.llm_model || "") + '">' +
+          '<input placeholder="MCP 서버(JSON, 비우면 유지)" id="mcp-' + a.id + '" style="width:220px" value="' + esc(a.mcp_servers && a.mcp_servers.length ? JSON.stringify(a.mcp_servers) : "").replace(/"/g, "&quot;") + '">' +
           '<button class="small" data-set-model="' + a.id + '">모델 설정</button></span>';
       }
       if (canExecute && a.status === "active") {
@@ -669,8 +670,18 @@ async function renderAgentPool(content) {
       const id = btn.dataset.setModel;
       const provider = document.getElementById("provider-" + id).value;
       const model = document.getElementById("model-" + id).value || null;
+      const mcpRaw = document.getElementById("mcp-" + id).value.trim();
+      const payload = { provider, model };
+      if (mcpRaw) {
+        try {
+          payload.mcp_servers = JSON.parse(mcpRaw);
+        } catch (e) {
+          showMsg("global-msg", "MCP 서버 설정이 올바른 JSON이 아닙니다: " + e.message, "error");
+          return;
+        }
+      }
       try {
-        await api("PATCH", "/api/agent-pool/" + id + "/model", { provider, model });
+        await api("PATCH", "/api/agent-pool/" + id + "/model", payload);
         showMsg("global-msg", "모델 설정을 저장했습니다 — 다음 실행부터 적용됩니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }

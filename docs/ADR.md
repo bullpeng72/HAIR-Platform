@@ -176,7 +176,9 @@ VIEWER가 하나라도 포함되면 "내 업무"(담당자가 자기 업무를 �
 
 ## 결정 10 — AI Agent 생성 방식을 3단계(stub·단순 LLM·CrewAI)로 계층화하고,
 CrewAI Agent에 MCP 도구를 연결한다(사용자 요청, 2026-09-26 — 3단계 프레임워크
-구현 완료, MCP 도구 연결은 접속 가능한 서버가 없어 미착수)
+구현 완료; MCP는 2026-09-27, "crewai-tools의 MCPServerAdapter... 참조해
+mcp 기능을 구현해줘" 요청으로 `run_crew()`에 실제 연결 완료 — `docs/LIMITS.md`
+§15)
 
 **배경**: SPEC.md §3은 "출력 프레임워크: AgentForge와 동일하게 CrewAI
 하나만"이라고 이미 정해뒀고, AgentForge의 실제 `code_generator/generator.py`는
@@ -220,6 +222,13 @@ CrewAI Agent의 `tools`는 `crewai-tools`의 MCP 어댑터(`MCPServerAdapter`
 안 만든다). Agent별로 연결할 MCP 서버 목록은 `AgentModelConfig`를 확장해
 `mcp_servers: list[str]`로 저장한다(결정 9와 같은 패턴 — Agent별 설정을
 `agent_pool`에 영속화).
+**정정(2026-09-27, "crewai-tools의 MCPServerAdapter... 참조해 mcp 기능을
+구현해줘" 요청) — 실제로 구현하며 타입을 바꿈**: `crewai-tools`를 실제
+설치해 `MCPServerAdapter`/`mcpadapt.core.MCPAdapt` 소스를 읽어보니 서버
+식별자 문자열만으로는 접속이 안 되고 접속 정보(command/url 등) 자체가
+필요했다 — `mcp_servers: list[str]`을 `list[MCPServerConfig]`(command·
+args·env 또는 url·transport·tool_names)로 바꿨다. 상세는
+`docs/LIMITS.md` §15 참고.
 
 **대안 검토**:
 - **자체 웹 검색 도구를 직접 구현**하는 안을 검토했으나 기각 — MCP
@@ -245,8 +254,14 @@ CrewAI Agent의 `tools`는 `crewai-tools`의 MCP 어댑터(`MCPServerAdapter`
 - ~~이 결정은 아직 코드로 구현되지 않았다~~ — **정정(2026-09-26, 같은 날
   4차 요청)**: 사용자가 "실제 구현해줘"라고 명시적으로 요청해 `framework`
   파라미터·`crew_runtime.crewai_agent_generator()`까지 실제로 구현·검증
-  했다(`docs/LIMITS.md` §12). MCP 도구 연결만 접속 가능한 서버가 없어
-  여전히 미착수다.
+  했다(`docs/LIMITS.md` §12).
+  ~~MCP 도구 연결만 접속 가능한 서버가 없어 여전히 미착수다.~~ —
+  **정정(2026-09-27)**: `run_crew()`에 실제로 연결했다(`_mcp_tools()`,
+  `crewai_tools.MCPServerAdapter`) — 단, 접속 가능한 실제 MCP 서버가
+  이 환경에 없어 종단간 검증은 못 했고(mock 경계: `MCPServerAdapter`
+  클래스 자체), `crewai_agent_generator()`(F4 단일 생성)에는 아직 연결
+  안 했다(그 시점엔 `agent_pool` row가 없어 MCP 설정을 읽을 곳이 없음 —
+  오픈 이슈). `docs/LIMITS.md` §15 참고.
 
 ## 결정 11 — CrewAI Agent 협업(위임·계층 조율)을 심화하고, 기본 Agent
 세트에 VectorDB·GraphDB 기반 Agent를 추가한다(사용자 요청, 2026-09-26 —
@@ -369,11 +384,14 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
   영향이 없다 — 다만 새 탭을 추가할 때마다 `group`을 명시해야 하는 규칙이
   하나 늘었다(안 하면 어느 그룹에도 안 뜬다는 것을 코드 리뷰 체크리스트에
   남긴다).
-- 결정 10(CrewAI+MCP)은 **구현 완료(2026-09-26, "실제 구현해줘" 요청)** —
-  `framework` 파라미터·`crew_runtime.crewai_agent_generator()`·실제 crewai
-  패키지 설치·통합 검증(GC77-78)까지 마쳤다. MCP 어댑터 연결은 여전히
-  미착수다(이 환경에 접속 가능한 MCP 서버가 없어 실측 불가 — 오픈 이슈로
-  유지, `docs/LIMITS.md` §12).
+- 결정 10(CrewAI+MCP)은 **구현 완료(2026-09-26, "실제 구현해줘" 요청 +
+  2026-09-27, "crewai-tools의 MCPServerAdapter... 참조해 mcp 기능을
+  구현해줘" 요청)** — `framework` 파라미터·`crew_runtime.
+  crewai_agent_generator()`·실제 crewai 패키지 설치·통합 검증(GC77-78)에
+  이어, `run_crew()`에 `_mcp_tools()`(`crewai_tools.MCPServerAdapter`
+  실제 연결, GC103-105)까지 마쳤다. `crewai_agent_generator()`(F4 단일
+  생성)와 접속 가능한 실제 MCP 서버로의 종단간 검증은 오픈 이슈로 남는다
+  (`docs/LIMITS.md` §15).
 - 결정 11(Agent 협업 심화 + VectorDB/GraphDB Agent)도 **구현 완료
   (2026-09-26)** — `allow_delegation=True`+`Process.hierarchical` 옵션,
   `run_crew()`의 Task.context 체이닝, 실제 CrewAI 이벤트버스 기반 위임

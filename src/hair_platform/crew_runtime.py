@@ -29,6 +29,16 @@ litellm)는 **import되는 순간 자체 dotenv.load_dotenv()를 실행한다** 
 mock해야 한다 — 그보다 안쪽(`LLM.call` 등)을 mock하면 CrewAI 내부 재시도
 로직이 그걸 우회해 실제 네트워크 호출로 새어나갈 수 있다(이 세션에서 실제로
 한 번 발생시켜 확인함).
+
+**MCP(외부 도구) 연동(ADR 결정 10, 사용자 요청 2026-09-27)**: `run_crew()`에서
+각 Agent의 `agent_pool.mcp_servers`(`AgentModelConfig.mcp_servers`로 설정)에
+따라 `crewai-tools`의 `MCPServerAdapter`로 실제 MCP 서버에 접속해 도구를
+붙인다(`_mcp_tools()`). `crewai_agent_generator()`(F4 단일 생성)에는 아직
+연결하지 않았다 — 그 시점엔 아직 `agent_pool` row가 없어 MCP 설정을 읽어올
+곳이 없기 때문이다(온보딩 이후 `run_crew()`에서만 유효, 오픈 이슈로 명시).
+`MCPServerAdapter`는 생성 시점에 실제로 네트워크/프로세스 접속을 시도하므로,
+이 환경처럼 접속 가능한 MCP 서버가 없으면 mock 경계(`crewai_tools.
+MCPServerAdapter` 클래스 자체)로만 검증할 수 있다 — `docs/LIMITS.md` 참고.
 """
 
 from __future__ import annotations
@@ -36,6 +46,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import ExitStack
 
 from hair_platform import audit, llm
 
@@ -46,6 +57,50 @@ DELEGATION_TOOL_NAMES = {"Delegate work to coworker", "Ask question to coworker"
 # 발견해 반영함). CrewAI Agent 기본값(25)보다 보수적으로 잡는다 — 우리는 Crew
 # 전체 Agent에 allow_delegation=True를 켜서 위임 왕복이 겹칠 수 있기 때문이다.
 DELEGATION_MAX_ITER = 10
+
+
+def _mcp_serverparams(cfg: dict):
+    """MCP 서버 접속 파라미터를 만든다 — ADR 결정 10(사용자 요청, 2026-09-27,
+    "crewai-tools의 MCPServerAdapter... 참조해 mcp 기능을 구현해줘"). `command`가
+    있으면 stdio(로컬 프로세스), 없으면 `url` 기반 SSE/streamable-http로
+    판별한다 — `crewai-tools`를 실제 설치해 `MCPServerAdapter`/
+    `mcpadapt.core.MCPAdapt` 소스를 직접 읽고 확인한 형태다(문서 URL만 보고
+    추측하지 않았다)."""
+    if cfg.get("command"):
+        from mcp import StdioServerParameters  # 지연 import — crewai-tools[mcp] 필요
+
+        return StdioServerParameters(
+            command=cfg["command"], args=cfg.get("args") or [], env=cfg.get("env")
+        )
+    return {"url": cfg["url"], "transport": cfg.get("transport", "sse")}
+
+
+def _mcp_tools(stack: ExitStack, mcp_servers: list[dict]) -> list:
+    """설정된 MCP 서버들에 실제로 접속해 CrewAI 도구 목록을 모은다.
+
+    **주의(중요, 실측으로 확인)**: `MCPServerAdapter(...)`는 생성되는
+    시점에 실제로 접속을 시도한다(기본 `connect_timeout=30초`) — 지연
+    실행이 아니다. `mcp_servers`가 비어 있으면 `crewai_tools`/`mcp`를 아예
+    import하지 않는다(설치 안 해도 CrewAI의 다른 경로는 그대로 동작해야
+    하므로 — 지금까지의 지연 import 원칙과 동일). 서버별로 별도
+    `MCPServerAdapter`를 여는 이유는 `tool_names` 필터가 서버 단위이기
+    때문이다(`mcpadapt`는 여러 서버를 리스트 하나로 묶어 한 어댑터에 넣을
+    수도 있지만, 그러면 필터가 전체에 공통 적용돼 서버별 세분화가 안 된다).
+    이 프로젝트가 개발된 환경에는 접속 가능한 실제 MCP 서버가 없어
+    종단간(실제 서버 응답 수신까지) 검증은 못 했다 — 안전한 mock 경계는
+    `crewai_tools.MCPServerAdapter` 클래스 자체다(`docs/LIMITS.md` 참고).
+    """
+    if not mcp_servers:
+        return []
+    from crewai_tools import MCPServerAdapter  # 지연 import — 안 쓰면 설치 불필요
+
+    tools: list = []
+    for cfg in mcp_servers:
+        serverparams = _mcp_serverparams(cfg)
+        tool_names = cfg.get("tool_names") or []
+        adapter = stack.enter_context(MCPServerAdapter(serverparams, *tool_names))
+        tools.extend(adapter)
+    return tools
 
 
 def _crewai_llm(provider: str, model: str):
@@ -175,105 +230,112 @@ def run_crew(
     resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
     crew_llm = _crewai_llm(resolved_provider, resolved_model)
 
-    crewai_agents = [
-        Agent(
-            role=row["role_name"],
-            goal=_agent_goal(row["role_name"]),
-            backstory=_agent_backstory(row["role_name"], json.loads(row["skill_tags"])),
-            llm=crew_llm,
-            allow_delegation=True,  # ADR 결정 11 — 정적 릴레이가 아니라 실제 협업
-            max_iter=DELEGATION_MAX_ITER,
-            verbose=False,
-        )
-        for row in rows
-    ]
-
-    tasks: list[Task] = []
-    for i, description in enumerate(task_descriptions):
-        context = [tasks[i - 1]] if i > 0 and process == "sequential" else None
-        tasks.append(
-            Task(
-                description=description,
-                expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
-                agent=crewai_agents[i],
-                context=context,
+    # ADR 결정 10(MCP, 2026-09-27) — MCPServerAdapter는 생성 시점에 실제로
+    # 접속을 시도하므로, Crew 실행이 끝날 때까지 연결을 유지했다가 정리하기
+    # 위해 ExitStack으로 감싼다.
+    with ExitStack() as mcp_stack:
+        crewai_agents = [
+            Agent(
+                role=row["role_name"],
+                goal=_agent_goal(row["role_name"]),
+                backstory=_agent_backstory(
+                    row["role_name"], json.loads(row["skill_tags"])
+                ),
+                llm=crew_llm,
+                allow_delegation=True,  # ADR 결정 11 — 정적 릴레이가 아니라 실제 협업
+                max_iter=DELEGATION_MAX_ITER,
+                tools=_mcp_tools(mcp_stack, json.loads(row["mcp_servers"])),
+                verbose=False,
             )
+            for row in rows
+        ]
+
+        tasks: list[Task] = []
+        for i, description in enumerate(task_descriptions):
+            context = [tasks[i - 1]] if i > 0 and process == "sequential" else None
+            tasks.append(
+                Task(
+                    description=description,
+                    expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
+                    agent=crewai_agents[i],
+                    context=context,
+                )
+            )
+
+        # CrewAI는 manager_agent가 agents 목록에 함께 있으면
+        # ValidationError(manager_agent_in_agents)를 던진다 — 매니저는 작업을
+        # 직접 수행하지 않는다는 hierarchical 모델과 일치한다(2026-09-27 리뷰에서
+        # 실측으로 확인한 실사용 크래시 버그를 여기서 고친다).
+        manager_index = (
+            agent_ids.index(manager_agent_id) if manager_agent_id is not None else None
         )
+        worker_agents = [a for i, a in enumerate(crewai_agents) if i != manager_index]
+        worker_tasks = [t for i, t in enumerate(tasks) if i != manager_index]
+        worker_rows = [r for i, r in enumerate(rows) if i != manager_index]
 
-    # CrewAI는 manager_agent가 agents 목록에 함께 있으면
-    # ValidationError(manager_agent_in_agents)를 던진다 — 매니저는 작업을
-    # 직접 수행하지 않는다는 hierarchical 모델과 일치한다(2026-09-27 리뷰에서
-    # 실측으로 확인한 실사용 크래시 버그를 여기서 고친다).
-    manager_index = (
-        agent_ids.index(manager_agent_id) if manager_agent_id is not None else None
-    )
-    worker_agents = [a for i, a in enumerate(crewai_agents) if i != manager_index]
-    worker_tasks = [t for i, t in enumerate(tasks) if i != manager_index]
-    worker_rows = [r for i, r in enumerate(rows) if i != manager_index]
+        task_completions: list[dict] = []
 
-    task_completions: list[dict] = []
+        def _capture_task_completion(task_output) -> None:
+            # 주의(실사용 중 발견, 2026-09-27): `task_output.agent`를 그대로
+            # 믿으면 안 된다 — CrewAI 소스(`crew.py`의 `_get_agent_to_use`)를
+            # 확인해보니 hierarchical 프로세스에서는 이 필드가 **항상
+            # manager_agent의 role**로 채워진다(매니저가 내부적으로 위임하더라도
+            # Crew 실행 루프 관점에서는 매니저 자신이 "이 Task를 실행한 Agent"이기
+            # 때문). 실제로 매니저=기획자, 워커=분석가로 hierarchical 실행했더니
+            # 분석가가 만든 산출물인데도 `task_output.agent == "기획자"`로 찍히는
+            # 걸 실측으로 확인했다. 대신 `worker_tasks`/`worker_rows`는 우리가
+            # 구성한 순서이고 CrewAI는 `self.tasks`를 그 순서 그대로 순차
+            # 실행하므로(`_execute_tasks`), 콜백이 몇 번째 호출됐는지로
+            # `worker_rows`를 인덱싱하면 실제 담당 Agent를 정확히 알 수 있다.
+            idx = len(task_completions)
+            agent_role = (
+                worker_rows[idx]["role_name"]
+                if idx < len(worker_rows)
+                else task_output.agent
+            )
+            task_completions.append(
+                {
+                    "agent_role": agent_role,
+                    "output_preview": (task_output.raw or "")[:200],
+                }
+            )
 
-    def _capture_task_completion(task_output) -> None:
-        # 주의(실사용 중 발견, 2026-09-27): `task_output.agent`를 그대로
-        # 믿으면 안 된다 — CrewAI 소스(`crew.py`의 `_get_agent_to_use`)를
-        # 확인해보니 hierarchical 프로세스에서는 이 필드가 **항상
-        # manager_agent의 role**로 채워진다(매니저가 내부적으로 위임하더라도
-        # Crew 실행 루프 관점에서는 매니저 자신이 "이 Task를 실행한 Agent"이기
-        # 때문). 실제로 매니저=기획자, 워커=분석가로 hierarchical 실행했더니
-        # 분석가가 만든 산출물인데도 `task_output.agent == "기획자"`로 찍히는
-        # 걸 실측으로 확인했다. 대신 `worker_tasks`/`worker_rows`는 우리가
-        # 구성한 순서이고 CrewAI는 `self.tasks`를 그 순서 그대로 순차
-        # 실행하므로(`_execute_tasks`), 콜백이 몇 번째 호출됐는지로
-        # `worker_rows`를 인덱싱하면 실제 담당 Agent를 정확히 알 수 있다.
-        idx = len(task_completions)
-        agent_role = (
-            worker_rows[idx]["role_name"]
-            if idx < len(worker_rows)
-            else task_output.agent
-        )
-        task_completions.append(
-            {
-                "agent_role": agent_role,
-                "output_preview": (task_output.raw or "")[:200],
-            }
-        )
-
-    crew_kwargs: dict[str, object] = {
-        "agents": worker_agents,
-        "tasks": worker_tasks,
-        "verbose": False,
-        "memory": True,
-        # 사용자 요청(2026-09-27, "다른 리뷰 항목 마저 진행해줘")으로 Task
-        # 완료마다 감사로그를 남긴다. `step_callback`은 일부러 안 쓴다 —
-        # CrewAI가 콜백에 넘기는 AgentAction/AgentFinish에는 어느 Agent가
-        # 낸 스텝인지 식별할 필드가 없어(실측 확인: thought/tool/tool_input/
-        # text/result 뿐) 감사로그에 "누가"를 못 남긴다.
-        "task_callback": _capture_task_completion,
-    }
-    if process == "hierarchical":
-        crew_kwargs["process"] = Process.hierarchical
-        if manager_agent_id is not None:
-            crew_kwargs["manager_agent"] = crewai_agents[manager_index]
+        crew_kwargs: dict[str, object] = {
+            "agents": worker_agents,
+            "tasks": worker_tasks,
+            "verbose": False,
+            "memory": True,
+            # 사용자 요청(2026-09-27, "다른 리뷰 항목 마저 진행해줘")으로 Task
+            # 완료마다 감사로그를 남긴다. `step_callback`은 일부러 안 쓴다 —
+            # CrewAI가 콜백에 넘기는 AgentAction/AgentFinish에는 어느 Agent가
+            # 낸 스텝인지 식별할 필드가 없어(실측 확인: thought/tool/tool_input/
+            # text/result 뿐) 감사로그에 "누가"를 못 남긴다.
+            "task_callback": _capture_task_completion,
+        }
+        if process == "hierarchical":
+            crew_kwargs["process"] = Process.hierarchical
+            if manager_agent_id is not None:
+                crew_kwargs["manager_agent"] = crewai_agents[manager_index]
+            else:
+                crew_kwargs["manager_llm"] = crew_llm
+        elif process == "sequential":
+            crew_kwargs["process"] = Process.sequential
         else:
-            crew_kwargs["manager_llm"] = crew_llm
-    elif process == "sequential":
-        crew_kwargs["process"] = Process.sequential
-    else:
-        raise ValueError(f"지원하지 않는 process입니다: {process!r}")
+            raise ValueError(f"지원하지 않는 process입니다: {process!r}")
 
-    crew = Crew(**crew_kwargs)
+        crew = Crew(**crew_kwargs)
 
-    delegations: list[dict] = []
+        delegations: list[dict] = []
 
-    def _capture_delegation(source, event) -> None:
-        if event.tool_name in DELEGATION_TOOL_NAMES:
-            delegations.append(
-                {"from_agent_role": event.agent_role, "tool": event.tool_name}
-            )
+        def _capture_delegation(source, event) -> None:
+            if event.tool_name in DELEGATION_TOOL_NAMES:
+                delegations.append(
+                    {"from_agent_role": event.agent_role, "tool": event.tool_name}
+                )
 
-    with crewai_event_bus.scoped_handlers():
-        crewai_event_bus.on(ToolUsageFinishedEvent)(_capture_delegation)
-        result = crew.kickoff()
+        with crewai_event_bus.scoped_handlers():
+            crewai_event_bus.on(ToolUsageFinishedEvent)(_capture_delegation)
+            result = crew.kickoff()
 
     per_agent = []
     for row, task_output in zip(worker_rows, result.tasks_output, strict=False):

@@ -513,6 +513,72 @@ API 계약을 바꿀 때(이번엔 `output: None`이 정상적으로 나올 수 
 검증되지 않는다는 한계(§10 DoD에도 이미 기록된 한계)가 실제로 발현된
 사례다.
 
+## 15. MCP(외부 도구) 연동 — 사용자 요청(2026-09-27, "crewai-tools의
+MCPServerAdapter 또는 MCPServer 도구... 등을 참조해 mcp 기능을 구현해줘")
+
+ADR 결정 10·SPEC.md §12가 "접속 가능한 MCP 서버가 없어 미착수"로 남겨뒀던
+마지막 조각이다. **문서 URL만 보고 구현하지 않았다** — `WebFetch`가 이
+환경에서 scope violation으로 막혀 있어, 대신 `pip install crewai-tools`·
+`pip install "crewai-tools[mcp]"`로 실제 패키지를 설치하고
+`MCPServerAdapter`(`crewai_tools/adapters/mcp_adapter.py`)와 그 내부
+엔진 `MCPAdapt`(`mcpadapt/core.py`)의 소스를 직접 읽어 실제 시그니처를
+확인한 뒤 구현했다.
+
+**한 것**:
+- `models.py`에 `MCPServerConfig`(command/args/env 또는 url/transport,
+  tool_names) 추가, `AgentModelConfig.mcp_servers: list[MCPServerConfig]
+  | None`(부분 갱신 — `None`이면 기존 설정 유지, 빈 리스트면 실제로 비움)
+- `db.py`에 `agent_pool.mcp_servers TEXT NOT NULL DEFAULT '[]'` 컬럼 +
+  마이그레이션(§13과 같은 패턴)
+- `PATCH /api/agent-pool/{id}/model`이 `mcp_servers`도 함께 저장
+  (`agent_runtime.set_model_config()`)
+- `crew_runtime.py`의 `run_crew()`가 Agent별 `mcp_servers` 설정으로
+  `crewai_tools.MCPServerAdapter`에 실제로 접속해 도구를 붙인다
+  (`_mcp_tools()`) — `ExitStack`으로 Crew 실행이 끝날 때까지 연결을
+  유지했다가 정리
+- Web UI "AI 에이전트" 탭에 "MCP 서버(JSON)" 입력 추가(PATCH 재사용)
+
+**실측으로 확인한 사실(문서만 봤으면 몰랐을 것)**:
+- `MCPServerAdapter(serverparams, *tool_names, connect_timeout=30)` —
+  `serverparams`는 `StdioServerParameters`(stdio) 또는 `dict`(SSE·
+  streamable-http, 예: `{"url": ..., "transport": "sse"}`) 하나만
+  받는다(단수). "여러 서버"는 내부 `MCPAdapt`가 `list[...]`를 받아주는
+  것으로 지원되는데, `MCPServerAdapter`의 타입 힌트에는 이게 드러나지
+  않는다(런타임에는 동작함) — 우리는 서버별 `tool_names` 필터를 살리려고
+  서버 하나당 어댑터 하나를 여는 방식을 택했다(멀티서버 리스트는 필터가
+  전체 공통 적용이라 서버별 세분화가 안 됨).
+- **`MCPServerAdapter(...)`는 생성 시점에 실제로 접속한다**(지연 실행이
+  아니다) — `__init__` 안에서 바로 `self.start()`를 호출한다. 즉
+  `mcp_servers`가 설정된 Agent를 만드는 순간 네트워크/프로세스 I/O가
+  발생한다. 접속 가능한 서버가 없으면 최대 `connect_timeout`(기본
+  30초)만큼 블로킹되거나 `RuntimeError`가 난다.
+- `Agent.tools: list[BaseTool] | None`은 pydantic이 타입을 검증한다 —
+  테스트에서 아무 객체나 가짜 도구로 못 넣고, 실제 `crewai.tools.
+  BaseTool`을 상속해야 한다(GC104에서 실측 확인 후 반영).
+
+**안전한 mock 경계**: `crewai_tools.MCPServerAdapter` 클래스 자체(GC104,
+`docs/LIMITS.md` §12의 `Crew.kickoff` mock과 같은 정신) — 이 아래(mcp
+패키지의 실제 stdio/SSE 클라이언트)는 절대 patch 대상으로 삼지 않는다.
+
+**한계(정직하게 명시)**:
+- **접속 가능한 실제 MCP 서버가 없어 종단간(실제 서버가 응답하는 것까지)
+  검증은 못 했다** — mock 경계 안쪽(연결·핸드셰이크·도구 호출 자체)은
+  crewai-tools/mcpadapt 자체의 책임 범위이지 이 프로젝트가 검증한 부분이
+  아니다.
+- `crewai_agent_generator()`(F4 단일 Agent 생성)에는 MCP를 연결하지
+  않았다 — 그 시점엔 아직 `agent_pool` row가 없어 `mcp_servers` 설정을
+  읽어올 곳이 없다(신규 생성 요청 자체에 MCP 설정을 실어 보내는 방식은
+  검토했으나, 온보딩 이후 반복 실행되는 `run_crew()` 쪽이 우선순위가
+  높다고 판단해 이번 범위에서는 보류).
+- stdio(로컬 프로세스로 접속하는 MCP 서버) 경로는 `StdioServerParameters`
+  객체 생성까지만 코드로 확인했고, 실제 서브프로세스 기동은 당연히
+  이 환경에서 검증 불가.
+- `crewai-tools[mcp]`는 무거운 추가 의존성이다(`mcp`, `mcpadapt` 등) —
+  `pip install -e ".[mcp]"`로 별도 opt-in(설치 안 해도 `mcp_servers`를
+  안 쓰는 기존 crewai 경로는 그대로 동작 — `_mcp_tools()`가 빈 리스트일
+  때 import 자체를 안 하는 것으로 지연 import 원칙을 지킴, GC103으로
+  검증).
+
 ## 요약
 
 | 항목 | 상태 |
@@ -537,3 +603,4 @@ API 계약을 바꿀 때(이번엔 `output: None`이 정상적으로 나올 수 
 | CrewAI 기능 적용 리뷰: memory=True·max_iter 문서-코드 불일치 | **발견 → 수정 완료**(GC100) |
 | CrewAI 기능 적용 리뷰: task_callback 감사로그 세분화 | **구현 완료**(GC101), step_callback은 Agent 식별 불가로 의도적 보류 |
 | 실사용 발견: hierarchical에서 task_callback 매니저 오귀속 + Web UI null 출력 크래시 | **사용자 실제 테스트 중 발견 → 발견·수정 완료**(GC102) |
+| MCP(외부 도구) 연동 — `run_crew()`에 MCPServerAdapter 실제 연결 | **구현 완료**(GC103–105), 접속 가능한 실제 MCP 서버가 없어 종단간 검증은 미검증(mock 경계: `MCPServerAdapter`) |

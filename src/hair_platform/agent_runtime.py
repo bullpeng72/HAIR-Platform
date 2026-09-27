@@ -134,10 +134,14 @@ def set_model_config(
     actor_id: int,
     provider: str,
     model: str | None,
+    mcp_servers: list[dict] | None = None,
 ) -> tuple[str, str]:
-    """Agent별 기본 LLM provider/model을 저장한다(비용 없음 — 설정만 한다).
+    """Agent별 기본 LLM provider/model(+ MCP 서버 설정)을 저장한다(비용
+    없음 — 설정만 한다).
 
     `model`을 안 주면 해당 provider의 기본 모델로 채운다(`llm.DEFAULT_MODELS`).
+    `mcp_servers`는 `None`이면 기존 설정을 그대로 두고(부분 갱신), 리스트를
+    주면(빈 리스트 포함) 그 값으로 덮어쓴다(ADR 결정 10, 2026-09-27).
     """
     agent = conn.execute(
         "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
@@ -146,10 +150,25 @@ def set_model_config(
         raise ValueError("agent_not_found")
 
     resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
-    conn.execute(
-        "UPDATE agent_pool SET llm_provider = ?, llm_model = ? WHERE id = ?",
-        (resolved_provider, resolved_model, agent_id),
-    )
+    if mcp_servers is not None:
+        conn.execute(
+            "UPDATE agent_pool SET llm_provider = ?, llm_model = ?, mcp_servers = ? "
+            "WHERE id = ?",
+            (
+                resolved_provider,
+                resolved_model,
+                json.dumps(mcp_servers, ensure_ascii=False),
+                agent_id,
+            ),
+        )
+    else:
+        conn.execute(
+            "UPDATE agent_pool SET llm_provider = ?, llm_model = ? WHERE id = ?",
+            (resolved_provider, resolved_model, agent_id),
+        )
+    after = {"llm_provider": resolved_provider, "llm_model": resolved_model}
+    if mcp_servers is not None:
+        after["mcp_servers"] = mcp_servers
     audit.record(
         conn,
         actor_id,
@@ -157,7 +176,7 @@ def set_model_config(
         "agent_pool",
         agent_id,
         before={"llm_provider": agent["llm_provider"], "llm_model": agent["llm_model"]},
-        after={"llm_provider": resolved_provider, "llm_model": resolved_model},
+        after=after,
     )
     conn.commit()
     return resolved_provider, resolved_model

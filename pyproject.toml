@@ -28,6 +28,11 @@ llm = ["anthropic>=0.34.0", "openai>=1.40.0", "httpx>=0.27.0"]
 # crew_runtime.py가 지연 import한다 — framework="crewai" 경로를 쓸 때만 필요하다.
 # 주의: crewai/litellm은 import 시점에 자체적으로 .env를 읽는다(수입 부작용).
 crewai = ["crewai>=1.0.0"]
+# crew_runtime.py의 _mcp_tools()가 지연 import한다 — Agent에 mcp_servers를
+# 실제로 설정했을 때만 필요하다(ADR 결정 10, 2026-09-27). MCPServerAdapter는
+# 생성 시점에 실제로 MCP 서버에 접속을 시도한다 — 접속 가능한 서버가 없으면
+# 이 extra를 설치해도 mcp_servers를 빈 배열로 둔 채면 아무 영향이 없다.
+mcp = ["crewai-tools[mcp]>=1.0.0"]
 
 [project.scripts]
 hair-platform-bootstrap-admin = "hair_platform.bootstrap:main"

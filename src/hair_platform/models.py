@@ -9,6 +9,7 @@ from pydantic import BaseModel
 LlmProvider = Literal["anthropic", "openai", "ollama"]
 GeneratorFramework = Literal["stub", "simple_llm", "crewai"]
 CrewProcess = Literal["sequential", "hierarchical"]
+McpTransport = Literal["sse", "streamable-http"]
 
 
 class LoginRequest(BaseModel):
@@ -125,13 +126,37 @@ class AgentExecuteRequest(BaseModel):
     model: str | None = None
 
 
+class MCPServerConfig(BaseModel):
+    """단일 MCP 서버 접속 설정(ADR 결정 10, 사용자 요청 2026-09-27 — "crewai-tools의
+    MCPServerAdapter... 참조해 mcp 기능을 구현해줘"). `crewai-tools`를 실제
+    설치해 `MCPServerAdapter`/`mcpadapt.core.MCPAdapt` 소스를 확인해 결정한
+    형태다 — stdio(로컬 프로세스로 접속)면 `command`/`args`/`env`를, SSE·
+    streamable-http(원격 URL로 접속)면 `url`/`transport`를 채운다(서버
+    하나당 둘 중 하나만 유효). `tool_names`를 비워두면 그 서버의 모든
+    도구를 허용하고, 채우면 그 이름들만 필터링한다.
+
+    **정정**: ADR 결정 3 계획 당시엔 `mcp_servers: list[str]`(서버 식별자
+    문자열 목록)로 적어뒀으나, 실제로 `MCPServerAdapter`를 붙여보니 접속
+    정보(command/url 등) 자체가 필요해 구조화된 설정으로 바꿨다."""
+
+    command: str | None = None
+    args: list[str] = []
+    env: dict[str, str] | None = None
+    url: str | None = None
+    transport: McpTransport = "sse"
+    tool_names: list[str] = []
+
+
 class AgentModelConfig(BaseModel):
-    """Agent별 기본 LLM provider/model을 저장한다(사용자 요청, 2026-09-26,
-    2차 — Ollama 추가와 함께 요청된 '모델 설정 기능'). 비용이 발생하지 않는
-    설정 전용 엔드포인트다 — 이걸로는 LLM을 호출하지 않는다."""
+    """Agent별 기본 LLM provider/model(+ MCP 서버 설정)을 저장한다(사용자 요청,
+    2026-09-26, 2차 — Ollama 추가와 함께 요청된 '모델 설정 기능'; MCP는
+    2026-09-27 추가). 비용이 발생하지 않는 설정 전용 엔드포인트다 — 이걸로는
+    LLM/MCP를 호출하지 않는다. `mcp_servers`를 아예 안 보내면(None) 기존
+    설정을 그대로 둔다 — 빈 배열 `[]`을 보내야 실제로 전부 지운다."""
 
     provider: LlmProvider
     model: str | None = None
+    mcp_servers: list[MCPServerConfig] | None = None
 
 
 class CrewRunRequest(BaseModel):

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -426,6 +427,160 @@ def test_gc102_task_callback_attributes_hierarchical_output_to_real_worker(
     outputs = {a["agent_id"]: a["output"] for a in result["agents"]}
     assert outputs[agent2] == "데이터 정의서"
     assert outputs[agent1] is None
+
+
+# ---------- crew_runtime: MCP 연동(ADR 결정 10, 사용자 요청 2026-09-27,
+# "crewai-tools의 MCPServerAdapter... 참조해 mcp 기능을 구현해줘") ----------
+
+
+def _fake_tool(name="웹검색"):
+    """`crewai.tools.BaseTool`을 실제로 상속한 가짜 MCP 도구 — CrewAI의
+    `Agent.tools: list[BaseTool]`는 pydantic이 타입을 검증하므로 아무
+    객체나 넣으면 Agent 생성 자체가 실패한다(실측 확인)."""
+    from crewai.tools import BaseTool
+
+    class _Tool(BaseTool):
+        def _run(self, **kwargs):
+            return "ok"
+
+    return _Tool(name=name, description="테스트용 가짜 MCP 도구")
+
+
+class _FakeMCPServerAdapter:
+    """`crewai_tools.MCPServerAdapter`의 안전한 mock 경계 — 실제 클래스는
+    생성 시점에 진짜 네트워크/프로세스 접속을 시도하므로(`connect_timeout`
+    기본 30초), 접속 가능한 MCP 서버가 없는 이 환경에서는 이 클래스 자체를
+    patch하는 것이 유일하게 안전한 방법이다(`crewai.Crew.kickoff`를 patch
+    하는 것과 같은 정신)."""
+
+    calls: ClassVar[list[dict]] = []
+
+    def __init__(self, serverparams, *tool_names, connect_timeout=30):
+        self.serverparams = serverparams
+        self.tool_names = tool_names
+        self.stopped = False
+        _FakeMCPServerAdapter.calls.append(
+            {"serverparams": serverparams, "tool_names": tool_names}
+        )
+
+    def __enter__(self):
+        return [_fake_tool()]
+
+    def __exit__(self, *exc):
+        self.stopped = True
+        return False
+
+
+def test_gc103_mcp_tools_helper_short_circuits_when_no_servers_configured():
+    """mcp_servers가 비어 있으면 crewai_tools/mcp를 아예 import하지 않는다
+    (지연 import 원칙 — 설치 안 해도 기존 crewai 경로는 그대로 동작해야
+    한다). import 자체를 안 하는지는 `sys.modules`에서 지워도 에러가 안
+    나는 것으로 간접 확인한다."""
+    import sys
+    from contextlib import ExitStack
+
+    had_crewai_tools = sys.modules.pop("crewai_tools", None)
+    try:
+        with ExitStack() as stack:
+            result = crew_runtime._mcp_tools(stack, [])
+        assert result == []
+        assert "crewai_tools" not in sys.modules  # import를 안 했다
+    finally:
+        if had_crewai_tools is not None:
+            sys.modules["crewai_tools"] = had_crewai_tools
+
+
+def test_gc104_run_crew_attaches_real_mcp_tools_from_configured_agent_servers(
+    client_and_conn,
+):
+    """Agent별 `mcp_servers` 설정(`PATCH /api/agent-pool/{id}/model`로 저장)이
+    실제로 `MCPServerAdapter`를 통해 그 Agent의 `tools`에 붙는지 확인한다.
+    `crewai_tools.MCPServerAdapter` 자체를 mock해 안전하게 검증한다(실제
+    접속 가능한 MCP 서버가 없으므로)."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)
+
+    mcp_config = {
+        "url": "http://localhost:9999/mcp",
+        "transport": "streamable-http",
+        "tool_names": [],
+    }
+    conn.execute(
+        "UPDATE agent_pool SET mcp_servers = ? WHERE id = ?",
+        (json.dumps([mcp_config]), agent1),
+    )
+    conn.commit()
+
+    _FakeMCPServerAdapter.calls = []
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["crew"] = self
+        return _crew_output("최종 산출물", ["기획서", "분석서"])
+
+    with (
+        patch("crewai_tools.MCPServerAdapter", _FakeMCPServerAdapter),
+        patch("crewai.Crew.kickoff", new=_kickoff_capture),
+    ):
+        crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["기획서를 작성해줘", "그 기획서를 분석해줘"],
+            admin_id,
+            process="sequential",
+            provider="openai",
+        )
+
+    assert len(_FakeMCPServerAdapter.calls) == 1
+    assert _FakeMCPServerAdapter.calls[0]["serverparams"] == {
+        "url": "http://localhost:9999/mcp",
+        "transport": "streamable-http",
+    }
+
+    crew = captured["crew"]
+    agent1_tools = crew.agents[0].tools
+    agent2_tools = crew.agents[1].tools
+    assert len(agent1_tools) == 1
+    assert agent1_tools[0].name == "웹검색"
+    assert agent2_tools == []  # agent2는 mcp_servers를 설정하지 않았다
+
+
+def test_gc105_agent_model_config_endpoint_persists_mcp_servers(client_and_conn):
+    """`PATCH /api/agent-pool/{id}/model`로 저장한 mcp_servers가 실제로
+    DB에 남고, mcp_servers를 아예 안 보내면(None) 기존 설정을 보존하는지
+    확인한다(부분 갱신 계약)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    (agent1,) = _make_two_active_agents(conn)[:1]
+
+    resp = client.patch(
+        f"/api/agent-pool/{agent1}/model",
+        json={
+            "provider": "openai",
+            "mcp_servers": [{"url": "http://localhost:9999/mcp", "transport": "sse"}],
+        },
+    )
+    assert resp.status_code == 200
+
+    row = conn.execute(
+        "SELECT mcp_servers FROM agent_pool WHERE id = ?", (agent1,)
+    ).fetchone()
+    saved = json.loads(row["mcp_servers"])
+    assert len(saved) == 1
+    assert saved[0]["url"] == "http://localhost:9999/mcp"
+
+    # mcp_servers를 안 보내면 기존 설정이 그대로 보존돼야 한다(부분 갱신).
+    resp = client.patch(
+        f"/api/agent-pool/{agent1}/model", json={"provider": "anthropic"}
+    )
+    assert resp.status_code == 200
+    row = conn.execute(
+        "SELECT mcp_servers FROM agent_pool WHERE id = ?", (agent1,)
+    ).fetchone()
+    assert json.loads(row["mcp_servers"]) == saved
 
 
 # ---------- vectorstore(VectorDB 지식검색 Agent) ----------
