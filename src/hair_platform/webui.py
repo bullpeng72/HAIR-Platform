@@ -397,12 +397,15 @@ async function renderMatch(content) {
   content.innerHTML =
     '<section class="card"><h2>할 일에 맞는 인력 찾기</h2>' +
     '<form class="inline" id="match-form">' +
-    '<input id="match-task-id" type="number" placeholder="할 일 ID" required style="width:100px">' +
+    '<input id="match-task-id" type="number" min="1" step="1" placeholder="할 일 ID" required style="width:100px">' +
     '<button class="primary" type="submit">찾기</button></form>' +
     '<div id="match-result"></div></section>';
   document.getElementById("match-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const taskId = document.getElementById("match-task-id").value;
+    const taskId = Number(document.getElementById("match-task-id").value);
+    if (!Number.isInteger(taskId) || taskId < 1) {
+      showMsg("global-msg", "할 일 ID는 1 이상의 정수여야 합니다.", "error"); return;
+    }
     try {
       const result = await api("POST", "/api/tasks/" + taskId + "/match");
       renderMatchResult(taskId, result);
@@ -483,7 +486,7 @@ async function renderJobs(content) {
   content.innerHTML =
     '<section class="card"><h2>AI 에이전트 생성</h2>' +
     '<form class="inline" id="job-form">' +
-    '<input id="job-brief-id" type="number" placeholder="업무 요청 ID" required style="width:110px">' +
+    '<input id="job-brief-id" type="number" min="1" step="1" placeholder="업무 요청 ID" required style="width:110px">' +
     '<input id="job-task-ids" placeholder="할 일 ID(콤마로 구분)" required style="width:180px">' +
     '<select id="job-framework"><option value="stub">stub(무료 스텁)</option>' +
     '<option value="simple_llm">simple_llm(1회 LLM 호출)</option>' +
@@ -497,8 +500,14 @@ async function renderJobs(content) {
     '<div id="job-result"></div></section>';
   document.getElementById("job-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const briefId = document.getElementById("job-brief-id").value;
-    const taskIds = document.getElementById("job-task-ids").value.split(",").map(s => Number(s.trim())).filter(n => !isNaN(n));
+    const briefId = Number(document.getElementById("job-brief-id").value);
+    if (!Number.isInteger(briefId) || briefId < 1) {
+      showMsg("global-msg", "업무 요청 ID는 1 이상의 정수여야 합니다.", "error"); return;
+    }
+    const taskIds = document.getElementById("job-task-ids").value.split(",").map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0);
+    if (!taskIds.length) {
+      showMsg("global-msg", "할 일 ID는 1 이상의 정수로 최소 하나 입력해야 합니다.", "error"); return;
+    }
     const framework = document.getElementById("job-framework").value;
     const provider = document.getElementById("job-provider").value || null;
     const model = document.getElementById("job-model").value || null;
@@ -705,7 +714,7 @@ async function renderCrew(content) {
     '<div class="inline" style="margin-top:0.5rem">' +
     '<select id="crew-process"><option value="sequential">sequential(순서대로 전달)</option>' +
     '<option value="hierarchical">hierarchical(매니저가 조율)</option></select>' +
-    '<input id="crew-manager" type="number" placeholder="매니저 Agent ID(hierarchical 전용, 선택)">' +
+    '<input id="crew-manager" type="number" min="1" step="1" placeholder="매니저 Agent ID(hierarchical 전용, 선택)">' +
     '<select id="crew-provider"><option value="">provider 자동 판별</option>' +
     '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
     '<option value="ollama">Ollama(로컬)</option></select>' +
@@ -724,14 +733,17 @@ async function renderCrew(content) {
       const idx = line.indexOf(":");
       if (idx < 0) { showMsg("global-msg", '형식이 잘못됐습니다: "' + line + '" (예: "1: 할 일")', "error"); return; }
       const id = Number(line.slice(0, idx).trim());
-      if (isNaN(id)) { showMsg("global-msg", "에이전트 ID가 숫자가 아닙니다: " + line, "error"); return; }
+      if (!Number.isInteger(id) || id < 1) { showMsg("global-msg", "에이전트 ID는 1 이상의 정수여야 합니다: " + line, "error"); return; }
       agentIds.push(id);
       taskDescriptions.push(line.slice(idx + 1).trim());
     }
     if (!agentIds.length) { showMsg("global-msg", "최소 한 줄은 입력해야 합니다.", "error"); return; }
+    const managerVal = document.getElementById("crew-manager").value;
+    if (managerVal && (!Number.isInteger(Number(managerVal)) || Number(managerVal) < 1)) {
+      showMsg("global-msg", "매니저 Agent ID는 1 이상의 정수여야 합니다.", "error"); return;
+    }
     if (!window.confirm(agentIds.length + "개 Agent로 Crew를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
 
-    const managerVal = document.getElementById("crew-manager").value;
     const submitBtn = ev.submitter || document.querySelector("#crew-form button[type=submit]");
     try {
       const result = await withBusy(submitBtn, "실행 중…(시간이 걸릴 수 있습니다)", () => api("POST", "/api/crew/run", {
@@ -846,7 +858,7 @@ async function renderAudit(content) {
   content.innerHTML =
     '<section class="card"><h2>활동 기록</h2>' +
     '<form class="inline" id="audit-form">' +
-    '<input id="a-actor" type="number" placeholder="처리자 ID">' +
+    '<input id="a-actor" type="number" min="1" step="1" placeholder="처리자 ID">' +
     '<input id="a-subject" placeholder="대상 종류(예: brief, assignment)">' +
     '<button class="primary" type="submit">조회</button></form>' +
     '<div id="audit-result"></div></section>';
