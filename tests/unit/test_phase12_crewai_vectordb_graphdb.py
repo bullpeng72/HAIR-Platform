@@ -229,6 +229,114 @@ def test_gc82_crew_run_endpoint_rbac_and_errors(client_and_conn):
     assert resp.json()["final_output"] == "완료"
 
 
+# ---------- crew_runtime: CrewAI 기능 적용 리뷰에서 발견한 버그 수정
+# (사용자 요청, 2026-09-27, "crewai 기능을 적절히 적용되었는지 분석해줘") ----------
+
+
+def test_gc98_run_crew_hierarchical_with_manager_agent_id_does_not_crash(
+    client_and_conn,
+):
+    """실측으로 확인한 실사용 크래시 버그 회귀 테스트 — manager_agent_id가
+    가리키는 Agent가 Crew(agents=...)에도 같이 들어가면 CrewAI 자체
+    validator(check_manager_llm)가 ValidationError(manager_agent_in_agents)를
+    던졌다. 매니저는 agents/tasks 목록에서 빠지고 manager_agent로만
+    지정돼야 한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(
+        conn
+    )  # agent1=기획자(매니저), agent2=분석가
+
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["crew"] = self
+        return _crew_output("최종 산출물", ["분석서"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        result = crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["기획서를 작성해줘", "그 기획서를 분석해줘"],
+            admin_id,
+            process="hierarchical",
+            manager_agent_id=agent1,
+            provider="openai",
+        )
+
+    crew = captured["crew"]
+    assert len(crew.agents) == 1  # 매니저(agent1)는 agents 목록에서 빠졌다
+    assert crew.manager_agent is not None
+    assert crew.memory is True  # ADR 결정 10 약속(memory=True) 반영 확인
+
+    outputs = {a["agent_id"]: a["output"] for a in result["agents"]}
+    assert outputs[agent2] == "분석서"
+    assert outputs[agent1] is None  # 매니저는 자기 몫의 산출물이 없다
+
+    row1 = conn.execute("SELECT * FROM agent_pool WHERE id = ?", (agent1,)).fetchone()
+    row2 = conn.execute("SELECT * FROM agent_pool WHERE id = ?", (agent2,)).fetchone()
+    assert row2["last_output"] == "분석서"
+    assert row1["last_output"] is None  # 매니저 행은 실행되지 않았으니 갱신 안 됨
+
+
+def test_gc99_run_crew_validates_manager_agent_id_usage(client_and_conn):
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)
+
+    with pytest.raises(ValueError):
+        # sequential에서는 manager_agent_id를 쓸 수 없다
+        crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["a", "b"],
+            admin_id,
+            process="sequential",
+            manager_agent_id=agent1,
+        )
+
+    with pytest.raises(ValueError):
+        # agent_ids에 없는 manager_agent_id
+        crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["a", "b"],
+            admin_id,
+            process="hierarchical",
+            manager_agent_id=999999,
+        )
+
+
+def test_gc100_run_crew_sets_max_iter_and_memory_by_default(client_and_conn):
+    """ADR 결정 11이 스스로 "반드시 걸어야 한다"고 적어뒀던 max_iter 상한과,
+    결정 10이 약속한 memory=True가 실제로 세팅되는지 확인한다(둘 다 이전에는
+    코드에 반영되지 않았던 문서-코드 불일치였다)."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)
+
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["crew"] = self
+        return _crew_output("최종 산출물", ["기획서", "분석서"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.run_crew(
+            conn, [agent1, agent2], ["a", "b"], admin_id, provider="openai"
+        )
+
+    crew = captured["crew"]
+    assert crew.memory is True
+    assert all(a.max_iter == crew_runtime.DELEGATION_MAX_ITER for a in crew.agents)
+
+
 # ---------- vectorstore(VectorDB 지식검색 Agent) ----------
 
 

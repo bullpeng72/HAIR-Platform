@@ -41,6 +41,12 @@ from hair_platform import audit, llm
 
 DELEGATION_TOOL_NAMES = {"Delegate work to coworker", "Ask question to coworker"}
 
+# ADR 결정 11 한계 섹션이 "반드시 걸어야 한다"고 명시했던 상한(사용자 요청,
+# 2026-09-27, "crewai 기능 적절히 적용됐는지 분석" 리뷰에서 실제로 미반영 상태를
+# 발견해 반영함). CrewAI Agent 기본값(25)보다 보수적으로 잡는다 — 우리는 Crew
+# 전체 Agent에 allow_delegation=True를 켜서 위임 왕복이 겹칠 수 있기 때문이다.
+DELEGATION_MAX_ITER = 10
+
 
 def _crewai_llm(provider: str, model: str):
     from crewai import LLM  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
@@ -119,15 +125,37 @@ def run_crew(
 
     `process="sequential"`이면 Task.context로 앞 Agent의 산출물이 다음
     Agent에게 자동 전달된다. `"hierarchical"`이면 매니저(지정한
-    `manager_agent_id` 또는 매니저 LLM)가 작업을 조율한다. 모든 Agent에
-    `allow_delegation=True`를 켜서 실제 동료 위임/질의가 가능하게 한다 —
-    실제로 위임이 발동했는지는 CrewAI 이벤트버스에서 캡처해 정직하게
-    기록한다(추측 아님).
+    `manager_agent_id` 또는 매니저 LLM)가 작업을 조율한다 — CrewAI의
+    hierarchical 모델은 매니저가 작업을 직접 수행하지 않고 조율·위임만
+    하므로, `manager_agent_id`로 지정된 Agent에 대응하는
+    `task_descriptions` 항목은 실행되지 않는다(그 Agent는 매니저 역할만
+    맡는다). 이 때문에 Task.context 체이닝도 hierarchical에서는 걸지
+    않는다 — 매니저가 매 순간 누구에게 무엇을 넘길지 동적으로 결정하므로
+    sequential처럼 "바로 앞 Task"만 미리 고정해 넘기는 게 의미가 없다.
+    모든 Agent에 `allow_delegation=True`를 켜서 실제 동료 위임/질의가
+    가능하게 한다 — 실제로 위임이 발동했는지는 CrewAI 이벤트버스에서
+    캡처해 정직하게 기록한다(추측 아님).
+
+    `memory=True`(ADR 결정 10에서 약속했으나 누락됐던 부분, 2026-09-27
+    리뷰에서 발견해 반영함)로 Crew 전체가 이전 실행 맥락을 기억한다 —
+    **주의**: CrewAI의 기본 메모리 임베더는 provider와 무관하게 OpenAI
+    임베딩 API를 쓴다(Anthropic은 임베딩 API 자체가 없다). 즉
+    provider="anthropic"/"ollama"로 이 함수를 호출해도 `OPENAI_API_KEY`가
+    별도로 필요하다 — 없으면 메모리 저장 시점에 CrewAI가 에러를 낸다.
     """
     if len(agent_ids) != len(task_descriptions):
         raise ValueError("agent_ids와 task_descriptions의 개수가 같아야 합니다")
     if not agent_ids:
         raise ValueError("agent_ids가 비어 있습니다")
+    if manager_agent_id is not None:
+        if process != "hierarchical":
+            raise ValueError(
+                "manager_agent_id는 process='hierarchical'에서만 사용합니다"
+            )
+        if manager_agent_id not in agent_ids:
+            raise ValueError(
+                f"manager_agent_id가 agent_ids에 없습니다: {manager_agent_id}"
+            )
 
     from crewai import Agent, Crew, Process, Task
     from crewai.events.event_bus import crewai_event_bus
@@ -154,6 +182,7 @@ def run_crew(
             backstory=_agent_backstory(row["role_name"], json.loads(row["skill_tags"])),
             llm=crew_llm,
             allow_delegation=True,  # ADR 결정 11 — 정적 릴레이가 아니라 실제 협업
+            max_iter=DELEGATION_MAX_ITER,
             verbose=False,
         )
         for row in rows
@@ -171,17 +200,27 @@ def run_crew(
             )
         )
 
+    # CrewAI는 manager_agent가 agents 목록에 함께 있으면
+    # ValidationError(manager_agent_in_agents)를 던진다 — 매니저는 작업을
+    # 직접 수행하지 않는다는 hierarchical 모델과 일치한다(2026-09-27 리뷰에서
+    # 실측으로 확인한 실사용 크래시 버그를 여기서 고친다).
+    manager_index = (
+        agent_ids.index(manager_agent_id) if manager_agent_id is not None else None
+    )
+    worker_agents = [a for i, a in enumerate(crewai_agents) if i != manager_index]
+    worker_tasks = [t for i, t in enumerate(tasks) if i != manager_index]
+    worker_rows = [r for i, r in enumerate(rows) if i != manager_index]
+
     crew_kwargs: dict[str, object] = {
-        "agents": crewai_agents,
-        "tasks": tasks,
+        "agents": worker_agents,
+        "tasks": worker_tasks,
         "verbose": False,
+        "memory": True,
     }
     if process == "hierarchical":
         crew_kwargs["process"] = Process.hierarchical
         if manager_agent_id is not None:
-            crew_kwargs["manager_agent"] = crewai_agents[
-                agent_ids.index(manager_agent_id)
-            ]
+            crew_kwargs["manager_agent"] = crewai_agents[manager_index]
         else:
             crew_kwargs["manager_llm"] = crew_llm
     elif process == "sequential":
@@ -204,7 +243,7 @@ def run_crew(
         result = crew.kickoff()
 
     per_agent = []
-    for row, task_output in zip(rows, result.tasks_output, strict=False):
+    for row, task_output in zip(worker_rows, result.tasks_output, strict=False):
         conn.execute(
             "UPDATE agent_pool SET last_output = ?, llm_provider = ?, llm_model = ?, "
             "framework = 'crewai' WHERE id = ?",
@@ -215,6 +254,15 @@ def run_crew(
                 "agent_id": row["id"],
                 "role_name": row["role_name"],
                 "output": task_output.raw,
+            }
+        )
+    if manager_index is not None:
+        manager_row = rows[manager_index]
+        per_agent.append(
+            {
+                "agent_id": manager_row["id"],
+                "role_name": manager_row["role_name"],
+                "output": None,  # 매니저는 조율·위임만 하고 자기 몫의 산출물은 없다
             }
         )
 

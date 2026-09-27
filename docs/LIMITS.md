@@ -402,6 +402,66 @@ Row에 없는 키라 예외가 나 500으로 이어졌다.
 마이그레이션 도구(Alembic 등) 도입은 오픈 이슈로 남긴다 — 지금 규모에는
 과할 수 있다.
 
+## 14. "CrewAI 기능 적절히 적용됐는지 분석" 리뷰 — 실사용 크래시 버그
+1건 + 문서-코드 불일치 2건 발견·전부 수정 완료(사용자 요청, 2026-09-27)
+
+§12에서 "구현 완료"로 표시했던 CrewAI 연동을 CrewAI의 `Crew.model_fields`
+전체와 실제 검증 로직(validator 소스)을 기준으로 재검토했다. 코드를
+읽는 것에 그치지 않고, 가짜 API 키(`sk-fake`)로 실제 `Crew(...)`를
+생성해봐서(네트워크 호출 없이 Pydantic validation만 도는 안전한 방법)
+문제를 실측으로 재현했다.
+
+**1) [실사용 크래시 버그] `manager_agent_id` + `hierarchical`이 항상 실패**:
+`run_crew()`가 매니저를 `Crew(agents=...)`에도 들어가는 바로 그
+`crewai_agents` 리스트에서 골라 `manager_agent`로 지정했다. CrewAI의
+`check_manager_llm` validator는 "매니저는 agents 목록에 있으면 안 된다"를
+강제하는데, 가짜 키로 재현하니 예상대로
+`ValidationError(manager_agent_in_agents)`가 즉시 발생했다 — Web UI
+"Crew 실행" 탭의 "매니저 Agent ID" 입력란을 실제로 채우면 **항상
+실패하는 상태**였다. `test_phase12_*.py`에 이 조합(`hierarchical` +
+`manager_agent_id`)을 실행하는 테스트가 단 하나도 없어서(grep 결과 0건)
+GC77-97 100건이 전부 통과해도 잡히지 않았다. **수정**: 매니저를
+`agents`/`tasks` 목록에서 제외하고 `manager_agent`로만 전달하도록 고쳤다
+— CrewAI의 hierarchical 모델 자체가 "매니저는 조율·위임만 하고 작업을
+직접 수행하지 않는다"는 전제이므로, 매니저로 지정된 `agent_id`에 대응하는
+`task_descriptions` 항목은 실행되지 않는다(API 계약은 그대로 두고, 그
+task만 조용히 스킵됨). 회귀 테스트 GC98(정상 동작)·GC99(잘못된
+`manager_agent_id` 사용 시 명확한 `ValueError`) 추가.
+
+**2) [문서-코드 불일치] `memory=True` 약속이 코드에 없었음**: ADR 결정 10
+매핑 표가 "`memory=True`로 Crew 전체가 이전 실행 맥락을 기억"이라고
+명시했지만 `crew_kwargs`에 `memory` 키가 아예 없어 CrewAI 기본값
+(`False`)으로 동작하고 있었다. `crew_kwargs["memory"] = True`로
+반영했다 — **새로 발견한 트레이드오프**: CrewAI의 기본 메모리 임베더는
+provider 선택과 무관하게 OpenAI 임베딩 API를 쓴다(Anthropic은 임베딩
+API 자체가 없다). 즉 `provider="anthropic"`/`"ollama"`로 `run_crew()`를
+호출해도 `OPENAI_API_KEY`가 별도로 필요해지며, 없으면 CrewAI가 메모리
+저장 시점에 에러를 낸다 — 정직하게 이 문서에 남긴다(회귀 테스트 GC100이
+`crew.memory is True`를 확인, 실제 임베딩 호출 자체는 mock 경계 밖이라
+미실측).
+
+**3) [알려졌으나 방치된 한계] `max_iter` 상한 미설정**: ADR 결정 11이
+스스로 "반드시 걸어야 한다"고 적어뒀던 `max_iter` 상한을 `Agent(...)`
+생성 시 전혀 넘기지 않아 CrewAI 기본값(25)에 암묵적으로 의존하고
+있었다. `DELEGATION_MAX_ITER = 10`을 명시적으로 설정했다(회귀 테스트
+GC100). CrewAI 기본값이 이미 25로 완전 무제한은 아니었지만, 우리는 Crew
+전체 Agent에 위임을 동시에 켜므로 더 보수적인 상한이 맞다고 판단했다.
+
+**4) [Gray영역, 버그 아님] `hierarchical`에서 Task.context 미체이닝**:
+`sequential`과 달리 `hierarchical`에서는 앞 Task의 출력을 다음 Task에
+자동 연결하지 않는다(`context=None` 고정). 매니저가 매 순간 누구에게
+무엇을 넘길지 동적으로 결정하는 hierarchical 모델 특성상 의도된 설계로
+판단했다 — 코드에 없던 근거 주석을 추가해 향후 "버그 아니냐"는 재질문을
+막았다.
+
+**확인만 하고 변경하지 않은 것**: CrewAI 네이티브 `Knowledge`/
+`knowledge_sources`는 저장소로 ChromaDB류 별도 벡터스토어를 요구해
+SQLite 중심 저장 정책(결정 5)과 상충한다 — `vectorstore.py`를 직접 만든
+선택은 "원칙4: 이미 있는 것을 재사용" 위반이 아니라 오히려 일관됨을
+재확인했다. `max_rpm`/`step_callback`/`task_callback` 미사용은 기능
+공백이지 버그는 아니며(감사 로깅은 이벤트버스로 이미 처리 중), 이번
+리뷰에서는 손대지 않았다(오픈 이슈로만 남김).
+
 ## 요약
 
 | 항목 | 상태 |
@@ -422,3 +482,5 @@ Row에 없는 키라 예외가 나 500으로 이어졌다.
 | VectorDB 지식검색 Agent + GraphDB 관계분석 Agent | 구현 완료(GC83–92), NF9 경계 소스 검사로 강제. 실제 임베딩 API 실측은 미검증(mock만) |
 | crewai 설치로 인한 pytest 전역 파손(arize-phoenix 충돌) | **발견 → 수정 완료**(`addopts = "-p no:phoenix"`) |
 | 실사용 중 발견된 500 에러(agent_pool 스키마 마이그레이션 누락) | **사용자 보고 → 발견·수정 완료**(`db._migrate_schema()`, GC95–97) |
+| CrewAI 기능 적용 리뷰: manager_agent_id+hierarchical 크래시 | **발견 → 수정 완료**(GC98–99) |
+| CrewAI 기능 적용 리뷰: memory=True·max_iter 문서-코드 불일치 | **발견 → 수정 완료**(GC100) |

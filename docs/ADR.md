@@ -205,7 +205,7 @@ LLM에게 `from crewai import Agent`로 시작하는 진짜 CrewAI 코드를 만
 |---|---|
 | `Agent(role, goal, backstory, tools, llm)` | `role` = task의 `role_name`, `goal` = 브리프 맥락+역할 목표를 LLM에게 한 번 요약시켜 채움, `backstory` = `required_skills` 목록을 문장화, `llm` = `llm.py`가 이미 판별한 provider/model(`ChatAnthropic`/`ChatOpenAI`/`ChatOllama` 래퍼로 감싼다) |
 | `Task(description, expected_output, agent, context)` | `description` = `execute_agent()`에 넘기던 prompt, `expected_output` 신규 필드(사용자가 원하는 산출물 형식을 명시하게 함 — 지금까지 없던 것), `context`로 **앞 단계 Task의 출력**을 다음 Task 입력에 자동 연결(예: 기획자→분석가로 산출물이 실제로 전달됨 — 지금의 `execute_agent()`는 Agent를 독립적으로만 호출해 이게 불가능했다) |
-| `Crew(agents, tasks, process, memory)` | SDLC 8역할(기획→분석→설계→FE/BE/DB→검증→품질)을 **하나의 Crew**로 묶어 `Process.sequential`로 실행 — "따로따로 만든 8개 Agent"가 아니라 "서로 산출물을 주고받으며 실제 협업하는 팀"이 된다. `memory=True`로 Crew 전체가 이전 실행 맥락을 기억 |
+| `Crew(agents, tasks, process, memory)` | SDLC 8역할(기획→분석→설계→FE/BE/DB→검증→품질)을 **하나의 Crew**로 묶어 `Process.sequential`로 실행 — "따로따로 만든 8개 Agent"가 아니라 "서로 산출물을 주고받으며 실제 협업하는 팀"이 된다. `memory=True`로 Crew 전체가 이전 실행 맥락을 기억(**정정, 2026-09-27 리뷰 — 실제로 반영함**: 이 표만 있고 `crew_runtime.py`에는 `memory` 키 자체가 누락돼 CrewAI 기본값 `False`로 동작하던 문서-코드 불일치를 발견해 `crew_kwargs["memory"] = True`로 고쳤다. **주의**: CrewAI 기본 메모리 임베더는 provider와 무관하게 OpenAI 임베딩 API를 쓴다 — Anthropic/Ollama로 이 경로를 써도 `OPENAI_API_KEY`가 별도로 필요하다. LIMITS.md §12 참고) |
 | Tools | 결정 3(MCP)에서 채운다 |
 
 이게 "CrewAI 핵심 기능 반영"의 실질적 의미다 — 단순히 라이브러리 이름만
@@ -335,6 +335,12 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
   일어날지 예측이 어려워 **LLM API 호출 횟수(=비용)가 결정 10보다도
   더 불확실**해진다 — 실행 전 예상 호출 수 상한(`max_iter`, CrewAI
   지원)을 반드시 걸어야 한다.
+  **정정(2026-09-27, "crewai 기능 적절히 적용됐는지 분석해줘" 리뷰) —
+  실제로 반영함**: 리뷰 전까지는 이 문장만 있고 코드에는 `max_iter`가
+  전혀 전달되지 않아 CrewAI 기본값(25)에 그대로 의존하고 있었다(즉 "반드시
+  걸어야 한다"고 스스로 적어두고 안 지킨 상태). `crew_runtime.py`의
+  `DELEGATION_MAX_ITER = 10`을 모든 협업 Agent에 명시적으로 설정해 해소함
+  — LIMITS.md §12 참고.
 - 임베딩 생성(VectorDB 색인)도 별도 API 호출이다(Anthropic/OpenAI
   임베딩 엔드포인트, 또는 로컬 임베딩 모델) — `llm.py`의 "비용 발생은
   항상 opt-in" 원칙을 임베딩 호출에도 그대로 적용해야 한다.
@@ -376,3 +382,16 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
   `graphquery.py`가 성과 컬럼을 아예 SELECT하지 않는 것으로 해소했다 —
   회귀 테스트(`test_gc86`)가 실제 SQL 쿼리 문자열을 검사해 이를 강제한다.
   상세 실측 범위·한계는 `docs/LIMITS.md` §12 참고.
+  **정정(2026-09-27, "crewai 기능 적절히 적용됐는지 분석해줘" 리뷰) —
+  실사용 크래시 버그 발견·수정**: `manager_agent_id`를 지정한 채
+  `hierarchical`을 쓰면 그 Agent가 `Crew(agents=...)`와 `manager_agent=`
+  양쪽에 동시에 들어가 CrewAI 자체 validator가
+  `ValidationError(manager_agent_in_agents)`를 던지는 100% 재현 버그가
+  있었다 — Web UI "Crew 실행" 탭의 매니저 지정 입력을 실제로 쓰면 항상
+  실패했다(회귀 테스트가 없어 GC77-97 100건 통과에도 안 잡혔다). 매니저를
+  `agents`/`tasks` 목록에서 제외하고 `manager_agent`로만 넘기도록 고쳤다
+  (CrewAI의 hierarchical 모델 자체가 "매니저는 조율만, 작업은 직접
+  수행하지 않는다"는 전제와 일치) — 회귀 테스트 GC98-99 추가.
+  `hierarchical`에서 Task.context 체이닝을 걸지 않는 것은 버그가 아니라
+  의도된 설계임을 코드 주석으로 명시했다(매니저가 동적으로 조율하므로
+  "바로 앞 Task"만 고정 전달하는 sequential 방식이 의미가 없다).
