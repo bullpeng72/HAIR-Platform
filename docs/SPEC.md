@@ -132,6 +132,7 @@
 | 실사용 500 에러 수정(사용자 보고) | `agent_pool` 스키마 마이그레이션 누락 발견·수정(`db._migrate_schema()`, `docs/LIMITS.md` §13) | 3건(GC95–97) |
 | CrewAI 기능 적용 리뷰(사용자 요청, "crewai 기능을 적절히 적용되었는지 분석해줘" + "다른 리뷰 항목 마저 진행해줘") | `manager_agent_id`+`hierarchical` 실사용 크래시 버그, `memory=True`/`max_iter` 문서-코드 불일치 발견·수정 + `task_callback` 기반 감사로그 세분화 + 사용자 실사용 중 발견한 hierarchical 오귀속·Web UI null 크래시 수정(`docs/LIMITS.md` §14) | 5건(GC98–102) |
 | MCP(외부 도구) 연동(사용자 요청, "crewai-tools의 MCPServerAdapter... 참조해 mcp 기능을 구현해줘") | `run_crew()`에 `MCPServerAdapter` 실제 연결, `AgentModelConfig.mcp_servers` 추가(`docs/LIMITS.md` §15) | 3건(GC103–105) |
+| Agent-Evaluator 적용 분석(사용자 요청, "Agent-Evaluator 적용이 되어 있는지 분석해줘") | `eval_wiring.py`를 실제로 끝까지 실행해 `PerformanceMonitor` 저장 버그(`auto_save=False`) 발견·수정, `agent-eval gate` 채점까지 실제 성공 확인(`docs/LIMITS.md` §1) | 실측 검증(신규 golden case 없음, 기존 코드 버그 수정) |
 
 ## 10. 설계 결정
 
@@ -155,7 +156,7 @@
 
 - [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동, 총 108건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
 - [x] F11 — 인증된 Web UI 셸에서 F1–F14 전부 조작 가능(`webui.py`, 단일 페이지 바닐라 JS, R4에서 뒤늦게 구현 — `docs/LIMITS.md` §10 참고. 실제 브라우저 수동 조작은 미검증, TestClient 전체 플로우 통합 테스트로 대체)
-- [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 실제 실행은 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
+- [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 저장 버그 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공(TCR 100% PASS, Gate A/G 미달 확인) — `improve verify`로 confirmed까지 완주하는 반복은 여전히 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동
 - [~] RBAC·샌드박스·Audit Log 3중 기록 트랜잭션 원자성에 대한 보안/무결성 테스트 통과 — 부분: 샌드박스 우회 방지·NF7 idempotency·append-only 트리거는 검증 완료, Docker 실제 격리 동작은 미검증(`docs/LIMITS.md` §2)
 - [ ] 2인 팀 + 진짜 GitHub 원격에서 클레임 충돌 최소 1회 실전 발생·해소 — **불가(단독 세션)**: CI 인프라(`.github/workflows/ci.yml`)는 구축했으나 실전 클레임 충돌은 실제 2인 이상 협업에서만 발생한다, `docs/LIMITS.md` §5 참고

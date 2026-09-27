@@ -11,6 +11,16 @@ API를 부르지 않는다 — 이 배선 자체는 비용이 들지 않을 것�
     python -m hair_platform.eval_wiring
     agent-eval gate results/*.json --tcr 85   # 이후 Gate 채점
 
+**정정(사용자 요청, 2026-09-27, "Agent-Evaluator 적용이 되어 있는지
+분석해줘" — 실제로 실행해보고 발견)**: 위 실행 방법을 그대로 따라 해도
+`results/`에 파일이 하나도 안 생겼었다 — `PerformanceMonitor`는
+`auto_save=False`가 기본값이라 `output_dir`를 넘겨도 자동으로 저장하지
+않는다(SDK 소스로 확인). `monitor.task_count`로는 평가 자체가 메모리에
+정확히 기록됨을 확인했지만, 파일로 남기려면 `monitor.save_to_file(...)`을
+명시적으로 호출해야 한다는 걸 실측으로 확인해 아래 `__main__` 블록에
+추가했다 — 이전까지는 "배선 완료"라고 해놓고 실제로 끝까지 실행해본
+적이 없어서 이 갭이 발견되지 않았었다.
+
 한계(정직하게 명시, docs/LIMITS.md §1 참고): `default_stub_generator`는
 "역할명·스킬을 그대로 되돌려주는" 규칙기반 스텁이라 Gate A(응답품질)·G(설명가능성)
 가 요구하는 "실제 판단 근거"가 없다. 이 배선으로 처음 측정하면 낮은 점수가 나올
@@ -120,4 +130,7 @@ if __name__ == "__main__":
     # 직접 실행 예시 — 실행 전 `agent-eval check`로 설정을 먼저 확인하는 걸 권장한다.
     evaluate_generation("백엔드 개발자", ["python", "fastapi"])
     evaluate_generation("디자이너", ["figma"])
-    print("완료 — results/ 아래 저장된 결과에 `agent-eval gate`를 실행해 채점하세요.")
+    # PerformanceMonitor는 auto_save=False가 기본값이라 이 호출 없이는
+    # results/에 아무 파일도 안 생긴다(실측으로 발견, 위 모듈 docstring 정정 참고).
+    saved_path = monitor.save_to_file("agent_generation_eval.json")
+    print(f"완료 — {saved_path}에 저장됨. `agent-eval gate {saved_path}`로 채점하세요.")

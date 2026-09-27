@@ -4,7 +4,7 @@
 > 정직하게 남긴다. 이 문서는 SPEC.md §7 Phase 4(검증)에서 실제로 확인한 것과
 > 확인하지 못한 것을 구분한다.
 
-## 1. Gate A–G 실측 배선 — 배선 완료, 실행은 사용자 몫(업데이트: 2026-09-25)
+## 1. Gate A–G 실측 배선 — 배선 완료, 저장 버그 발견·수정 후 실제 gate 채점까지 성공(업데이트: 2026-09-27)
 
 SPEC.md §7은 Phase 4에서 "Gate A–G 전부 fail→진단→해결"을 요구한다. 처음
 확인했을 때는 `agent-evaluator` SDK가 vendor/import되지 않아 "검증 불가"로
@@ -37,6 +37,25 @@ F(멀티에이전트 조율)는 에이전트 간 위임이 없어 해당 사항�
 **남은 일**: 실제 AgentForge `spec_interpreter`·`code_generator`·`verifier`
 연동은 여전히 별도 작업이다 — 그게 붙어야 Gate A/G 점수가 스텁의 한계가
 아니라 진짜 LLM 판단 품질을 재게 된다.
+
+**정정(사용자 요청, 2026-09-27, "Agent-Evaluator 적용이 되어 있는지
+분석해줘" — 실제로 실행해보고 발견·수정)**: "배선 완료"라고 적어뒀지만
+실제로 `python -m hair_platform.eval_wiring`을 끝까지 실행해본 적은
+이번이 처음이었다. 돌려보니 **`results/`에 파일이 하나도 안 생기는
+버그**가 있었다 — `PerformanceMonitor(output_dir=...)`는 `auto_save=False`
+가 기본값이라 `output_dir`를 넘겨도 자동 저장이 안 된다(SDK 소스로 확인).
+`monitor.task_count`로 평가 자체는 메모리에 정확히 기록됨을 확인했지만,
+파일로 남기려면 `monitor.save_to_file(...)`을 명시적으로 호출해야 했다 —
+`eval_wiring.py`의 `__main__` 블록에 이 호출을 추가해 고쳤다.
+
+**고친 뒤 실제로 전체 파이프라인을 처음부터 끝까지 돌려 확인함**:
+`python -m hair_platform.eval_wiring` → `results/agent_generation_eval.json`
+생성 확인 → `agent-eval gate results/agent_generation_eval.json --tcr 85`
+실행 → **TCR 100%로 PASS**, 요약에 "Gate A(Goal Achievement)·G
+(Observability) 미달, 표본 2건이라 신뢰도 낮음"이 정확히 찍혔다 — 이
+모듈이 스스로 예고했던 대로("Gate A·G가 요구하는 실제 판단 근거가
+빈약해 낮은 점수가 나올 가능성이 높다") 나온 것을 실측으로 확인했다.
+`agent-eval gate`까지 실제로 성공한 건 이 프로젝트에서 이번이 처음이다.
 
 ## 2. Docker 샌드박스 — 실제 격리 동작 미검증(환경 제약)
 
@@ -583,7 +602,7 @@ ADR 결정 10·SPEC.md §12가 "접속 가능한 MCP 서버가 없어 미착수"
 
 | 항목 | 상태 |
 |---|---|
-| Gate A–G 실측 | 배선 완료(`eval_wiring.py`), 실행은 사용자 선택으로 보류 — 그때까지는 pytest 골든셋으로 대체 |
+| Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |
 | Docker 샌드박스 실제 격리 | 미검증(환경에 Docker 없음) — 명령 구성·우회 방지는 검증 완료 |
 | 2인 팀 실전 클레임 충돌 | 불가(단독 세션) — CI 인프라는 구축 완료 |
 | Skills 신규 발굴 | 1/4건 완료(`rbac-permission-audit`), 나머지는 3회+ 기준 미충족 |

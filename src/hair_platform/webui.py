@@ -60,10 +60,10 @@ INDEX_HTML = """<!DOCTYPE html>
   .muted { color: #777; font-size: 0.8rem; }
   table { table-layout: fixed; }
   td, th { overflow-wrap: break-word; }
-  td.col-actions, th.col-actions { width: 160px; }
+  td.col-actions, th.col-actions { width: 220px; }
   td.col-output, th.col-output { width: 280px; }
   .actions { display: flex; flex-direction: column; align-items: stretch; gap: 0.3rem; }
-  .actions > button, .actions > select { width: 100%; }
+  .actions > button, .actions > select, .actions > input { width: 100%; box-sizing: border-box; }
   .actions .pair { display: flex; gap: 0.2rem; }
   .actions .pair input, .actions .pair select { width: 0; min-width: 0; flex: 1; }
   .actions .pair button { width: auto; flex-shrink: 0; }
@@ -632,9 +632,9 @@ async function renderAgentPool(content) {
         actions += '<select id="provider-' + a.id + '">' +
           providers.map(p => '<option value="' + p + '"' + (p === a.llm_provider ? " selected" : "") + ">" + p + "</option>").join("") +
           "</select>" +
-          '<span class="pair"><input placeholder="모델명(비우면 기본값)" id="model-' + a.id + '" value="' + esc(a.llm_model || "") + '">' +
-          '<input placeholder="MCP 서버(JSON, 비우면 유지)" id="mcp-' + a.id + '" style="width:220px" value="' + esc(a.mcp_servers && a.mcp_servers.length ? JSON.stringify(a.mcp_servers) : "").replace(/"/g, "&quot;") + '">' +
-          '<button class="small" data-set-model="' + a.id + '">모델 설정</button></span>';
+          '<input placeholder="모델명(비우면 기본값)" id="model-' + a.id + '" value="' + esc(a.llm_model || "") + '">' +
+          '<input placeholder="MCP 서버(JSON, 비우면 유지)" id="mcp-' + a.id + '" value="' + esc(a.mcp_servers && a.mcp_servers.length ? JSON.stringify(a.mcp_servers) : "").replace(/"/g, "&quot;") + '">' +
+          '<button class="small" data-set-model="' + a.id + '">모델 설정</button>';
       }
       if (canExecute && a.status === "active") {
         actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
