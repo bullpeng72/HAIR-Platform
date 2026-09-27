@@ -141,6 +141,22 @@ function showMsg(elId, text, kind) {
   el.innerHTML = '<div class="msg ' + (kind || "ok") + '">' + esc(text) + "</div>";
 }
 
+/* 실제 LLM API를 호출해 오래 걸릴 수 있는 버튼(Crew 실행, AI 에이전트
+   생성, 개별 실행, 지식 색인)에 "처리 중" 표시를 준다 — 요청 중 버튼을
+   비활성화해 중복 클릭도 막는다(사용자 요청, 2026-09-27, "실행 중임을
+   알려주는 UI를 추가해줘"). */
+async function withBusy(btn, busyLabel, fn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = busyLabel;
+  try {
+    return await fn();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
 const LABELS = {
   human: "사람", agent: "AI 에이전트",
   brief: "업무 요청", assignment: "배정", human_pool: "사람 인력", agent_pool: "AI 에이전트",
@@ -486,10 +502,12 @@ async function renderJobs(content) {
     const framework = document.getElementById("job-framework").value;
     const provider = document.getElementById("job-provider").value || null;
     const model = document.getElementById("job-model").value || null;
+    const submitBtn = ev.submitter || document.querySelector("#job-form button[type=submit]");
+    const busyLabel = framework === "stub" ? "생성 중…" : "생성 중…(실제 API 호출, 시간이 걸릴 수 있습니다)";
     try {
-      const result = await api("POST", "/api/briefs/" + briefId + "/generate", {
+      const result = await withBusy(submitBtn, busyLabel, () => api("POST", "/api/briefs/" + briefId + "/generate", {
         task_ids: taskIds, use_llm: framework !== "stub", framework, provider, model,
-      });
+      }));
       renderJobResult(result);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
@@ -654,7 +672,7 @@ async function renderAgentPool(content) {
       const taskPrompt = window.prompt("이 에이전트에게 시킬 업무를 입력하세요(실제 LLM API 호출 — 비용 발생):");
       if (!taskPrompt) return;
       try {
-        const r = await api("POST", "/api/agent-pool/" + btn.dataset.execute + "/execute", { prompt: taskPrompt });
+        const r = await withBusy(btn, "실행 중…", () => api("POST", "/api/agent-pool/" + btn.dataset.execute + "/execute", { prompt: taskPrompt }));
         document.getElementById("execute-result").innerHTML =
           '<div class="msg ok"><b>실행 결과</b><br>' + esc(r.output).replace(/\\n/g, "<br>") + "</div>";
       } catch (e) { showMsg("global-msg", e.message, "error"); }
@@ -664,7 +682,7 @@ async function renderAgentPool(content) {
     btn.onclick = async () => {
       if (!window.confirm("이 에이전트의 최근 산출물을 임베딩해 색인합니다(실제 임베딩 API 호출 — 비용 발생). 계속할까요?")) return;
       try {
-        await api("POST", "/api/agent-pool/" + btn.dataset.indexKnowledge + "/index-knowledge", {});
+        await withBusy(btn, "색인 중…", () => api("POST", "/api/agent-pool/" + btn.dataset.indexKnowledge + "/index-knowledge", {}));
         showMsg("global-msg", "지식 색인을 완료했습니다.", "ok");
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
@@ -714,15 +732,16 @@ async function renderCrew(content) {
     if (!window.confirm(agentIds.length + "개 Agent로 Crew를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
 
     const managerVal = document.getElementById("crew-manager").value;
+    const submitBtn = ev.submitter || document.querySelector("#crew-form button[type=submit]");
     try {
-      const result = await api("POST", "/api/crew/run", {
+      const result = await withBusy(submitBtn, "실행 중…(시간이 걸릴 수 있습니다)", () => api("POST", "/api/crew/run", {
         agent_ids: agentIds,
         task_descriptions: taskDescriptions,
         process: document.getElementById("crew-process").value,
         manager_agent_id: managerVal ? Number(managerVal) : null,
         provider: document.getElementById("crew-provider").value || null,
         model: document.getElementById("crew-model").value || null,
-      });
+      }));
       renderCrewResult(result);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
