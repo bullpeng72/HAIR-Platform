@@ -17,6 +17,7 @@ Agent(VectorDB)의 임베딩 저장소다 — 결정 11에서 정한 대로 별�
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -141,6 +142,31 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS tool_pool (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK (kind IN ('mcp_stdio', 'mcp_remote', 'native')),
+    config TEXT NOT NULL DEFAULT '{}',
+    tool_names TEXT NOT NULL DEFAULT '[]',
+    is_active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS skill_pool (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    default_tool_pool_ids TEXT NOT NULL DEFAULT '[]',
+    augmentation_mode TEXT NOT NULL DEFAULT 'tool'
+        CHECK (augmentation_mode IN ('tool', 'always', 'none'))
+);
+
+CREATE TABLE IF NOT EXISTS agent_tool_links (
+    agent_id INTEGER NOT NULL REFERENCES agent_pool(id),
+    tool_pool_id INTEGER NOT NULL REFERENCES tool_pool(id),
+    PRIMARY KEY (agent_id, tool_pool_id)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id INTEGER NOT NULL REFERENCES users(id),
@@ -191,7 +217,57 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "agent_pool", "mcp_servers", "TEXT NOT NULL DEFAULT '[]'")
 
 
+def _seed_default_pools(conn: sqlite3.Connection) -> None:
+    """ADR 결정 12(사용자 요청, 2026-09-27, "tool_pool·skill_pool 테이블도
+    실제로 구현해줘") — VectorDB/GraphDB를 감싼 native Tool과, 이걸 쓰는
+    skill_pool 항목을 기본 제공한다. 이전까지 `agent_runtime.py`의
+    `VECTORDB_SKILL_TAGS`/`GRAPHDB_SKILL_TAGS` 하드코딩이 하던 "스킬→도구"
+    매핑을 데이터로 옮긴 것 — 이 시드가 없으면 기존 vectordb/graphdb
+    skill_tags를 가진 Agent가 갑자기 도구를 못 받게 되므로 반드시 필요하다.
+    `name` UNIQUE 제약으로 `INSERT OR IGNORE`가 매 기동마다 안전하게
+    멱등이다(이미 있으면 아무 것도 안 함 — 관리자가 이후 수정해도 안
+    덮어씀)."""
+    native_tools = [
+        (
+            "VectorDB 지식검색",
+            "vectorstore.search()를 감싼 네이티브 CrewAI Tool",
+            "vectordb_search",
+        ),
+        (
+            "GraphDB 관계조회",
+            "graphquery.context_for_prompt()를 감싼 네이티브 CrewAI Tool",
+            "graphdb_query",
+        ),
+    ]
+    tool_ids: dict[str, int] = {}
+    for name, description, native_id in native_tools:
+        conn.execute(
+            "INSERT OR IGNORE INTO tool_pool (name, description, kind, config) "
+            "VALUES (?, ?, 'native', ?)",
+            (name, description, json.dumps({"native_id": native_id})),
+        )
+        row = conn.execute(
+            "SELECT id FROM tool_pool WHERE name = ?", (name,)
+        ).fetchone()
+        tool_ids[native_id] = row["id"]
+
+    skills = [
+        ("vectordb", "VectorDB 기반 지식검색 역량", "vectordb_search"),
+        ("rag", "VectorDB 기반 지식검색 역량(별칭)", "vectordb_search"),
+        ("graphdb", "GraphDB 기반 관계분석 역량", "graphdb_query"),
+        ("관계질의", "GraphDB 기반 관계분석 역량(별칭)", "graphdb_query"),
+    ]
+    for name, description, native_id in skills:
+        conn.execute(
+            "INSERT OR IGNORE INTO skill_pool "
+            "(name, description, default_tool_pool_ids, augmentation_mode) "
+            "VALUES (?, ?, ?, 'tool')",
+            (name, description, json.dumps([tool_ids[native_id]])),
+        )
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _migrate_schema(conn)
+    _seed_default_pools(conn)
     conn.commit()

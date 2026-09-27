@@ -10,6 +10,8 @@ LlmProvider = Literal["anthropic", "openai", "ollama"]
 GeneratorFramework = Literal["stub", "simple_llm", "crewai"]
 CrewProcess = Literal["sequential", "hierarchical"]
 McpTransport = Literal["sse", "streamable-http"]
+ToolPoolKind = Literal["mcp_stdio", "mcp_remote", "native"]
+AugmentationMode = Literal["tool", "always", "none"]
 
 
 class LoginRequest(BaseModel):
@@ -201,3 +203,42 @@ class CostUpdateRequest(BaseModel):
     """F10 — Agent 비용 수동 입력(1차 범위, HR/LLM 과금 연동은 오픈 이슈)."""
 
     cost_estimate: float
+
+
+class ToolPoolCreate(BaseModel):
+    """ADR 결정 12(사용자 요청, 2026-09-27, "tool_pool·skill_pool 테이블도
+    실제로 구현해줘") — 실제 도구(MCP 서버 또는 native `@tool`) 하나를
+    이름으로 등록해 여러 Agent가 재사용한다. `kind="native"`면 `config`에
+    `{"native_id": "vectordb_search"|"graphdb_query"}`를 넣는다(현재
+    지원하는 native 도구는 이 둘뿐 — `pool_registry.NATIVE_TOOL_FACTORIES`
+    참고). `kind="mcp_stdio"|"mcp_remote"`면 `config`에 `AgentModelConfig.
+    mcp_servers`와 같은 형태(command/args/env 또는 url/transport)를
+    넣는다."""
+
+    name: str
+    description: str = ""
+    kind: ToolPoolKind
+    config: dict = {}
+    tool_names: list[str] = []
+
+
+class ToolActiveUpdate(BaseModel):
+    """Tool Pool 항목을 비활성화하면(`is_active=False`) 그 도구를 참조하는
+    모든 Agent에서 즉시 빠진다 — 삭제 대신 비활성화만 지원한다(참조
+    무결성 보존, `agent_tool_links`는 그대로 둔다)."""
+
+    is_active: bool
+
+
+class SkillPoolCreate(BaseModel):
+    """ADR 결정 12 — 자유 문자열이던 `skill_tags`를 정식 엔티티로 승격한다.
+    `augmentation_mode="tool"`이면 `default_tool_pool_ids`가 가리키는
+    도구가 이 스킬을 가진 모든 Agent에 자동으로 붙는다(`run_crew()`/
+    `crewai_agent_generator()`에서 매번 다시 계산 — 연결을 미리 저장해두지
+    않는다). `"always"`/`"none"`은 현재 코드에서 참조하지 않는 예약값이다
+    (오픈 이슈, `docs/LIMITS.md` §18)."""
+
+    name: str
+    description: str = ""
+    default_tool_pool_ids: list[int] = []
+    augmentation_mode: AugmentationMode = "tool"

@@ -42,12 +42,15 @@ def _crew_output(raw: str, task_raws: list[str]):
 # ---------- crew_runtime: 단일 Agent 생성(ADR 결정 10) ----------
 
 
-def test_gc77_crewai_agent_generator_shapes_result_like_other_generators():
+def test_gc77_crewai_agent_generator_shapes_result_like_other_generators(
+    client_and_conn,
+):
+    _client, conn = client_and_conn
     with patch(
         "crewai.Crew.kickoff", return_value=_crew_output("기획서 초안", ["기획서 초안"])
     ) as m:
         result = crew_runtime.crewai_agent_generator(
-            None, "기획자", ["요구사항정의"], provider="openai", model="gpt-4o-mini"
+            conn, "기획자", ["요구사항정의"], provider="openai", model="gpt-4o-mini"
         )
     m.assert_called_once()
     assert result["role_name"] == "기획자"

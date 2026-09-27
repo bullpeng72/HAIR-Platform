@@ -375,11 +375,12 @@ Task를 직접 수행하는 Agent였다. 여기에 다른 Agent들이 **위임�
 중심화하고, VectorDB/GraphDB를 CrewAI 네이티브 Tool로 전환한다(사용자 요청,
 2026-09-27 — "AI Agent에서 사용할 Skills, MCP Tool 등을 Pool로 구성하고
 지식 및 도구 그라운딩... CrewAI의 데코레이터 도구선언 기능과 비교해 개선점을
-찾아줘" — **부분 구현 완료**: VectorDB/GraphDB의 CrewAI Tool화는
-2026-09-27, "이미 생성된 또는 생성하는 AI Agent에서 MCP Tool처럼, 또는
-CrewAI Tool처럼 동작하도록 개선해줘" 요청으로 실제 구현했다. `skill_pool`·
-`tool_pool`·`agent_tool_links` 신규 테이블(Pool 자체의 데이터 중심화)은
-여전히 기획 단계다 — `docs/LIMITS.md` §18 참고)
+찾아줘" — **구현 완료**. 단계별로: VectorDB/GraphDB의 CrewAI Tool화는
+"이미 생성된 또는 생성하는 AI Agent에서 MCP Tool처럼, 또는 CrewAI
+Tool처럼 동작하도록 개선해줘" 요청으로, `skill_pool`·`tool_pool`·
+`agent_tool_links` 3개 신규 테이블과 그 CRUD API·Web UI는 이어진
+"tool_pool·skill_pool 테이블도 실제로 구현해줘" 요청으로 각각 실제
+구현했다 — `docs/LIMITS.md` §18 참고)
 
 **배경 — 실제 구현을 분석해 찾은 두 가지 구조적 갭**:
 
@@ -473,18 +474,32 @@ CrewAI Tool처럼 동작하도록 개선해줘" 요청으로 실제 구현했다
   Agent가 스스로 도구를 호출할 방법이 구조적으로 없다. `GeneratorFn`
   계약(`jobs.py`)에 `conn`을 추가해 F4 생성 시점부터 Tool을 붙일 수 있게
   계약 자체를 바꿨다.
-- `tool_pool`/`skill_pool`/`agent_tool_links`(도구 재사용 레지스트리,
-  MCP 서버를 여러 Agent가 이름으로 공유하는 것) 자체는 여전히 미구현
-  — 지금은 MCP 서버 설정을 Agent마다 개별 저장하는 기존 방식
-  (`AgentModelConfig.mcp_servers`) 그대로다. `skill_pool.augmentation_mode`
-  같은 스킬별 선택 옵션도 아직 데이터로 존재하지 않고, 지금은 VectorDB/
-  GraphDB는 항상 "tool" 모드, 나머지는 해당 없음으로 코드에 고정돼 있다.
+- ~~`tool_pool`/`skill_pool`/`agent_tool_links`(도구 재사용 레지스트리,
+  MCP 서버를 여러 Agent가 이름으로 공유하는 것) 자체는 여전히 미구현~~
+  — **정정(2026-09-27, "tool_pool·skill_pool 테이블도 실제로 구현해줘"
+  요청)**: 3개 테이블·`pool_registry.py`(CRUD+`resolve_pool_tools()`)·
+  CRUD API(`/api/tool-pool`, `/api/skill-pool`, `/api/agent-pool/{id}/
+  tools/{tool_pool_id}`)·Web UI("도구/스킬 Pool" 탭 + "AI 에이전트" 탭의
+  도구 연결/해제)까지 실제 구현했다(GC108-115). `crew_runtime.py`의
+  `_skill_based_tools()`가 이제 `agent_runtime.VECTORDB_SKILL_TAGS`/
+  `GRAPHDB_SKILL_TAGS` 하드코딩 대신 `skill_pool` 데이터를 조회한다 —
+  GC115가 그 두 상수를 빈 집합으로 patch해도 `run_crew()`가 여전히
+  도구를 붙이는 것으로 하드코딩 의존이 실제로 끊겼음을 확인했다.
+  `db.init_schema()`가 매 기동마다 VectorDB/GraphDB native Tool과
+  vectordb/rag/graphdb/관계질의 스킬을 멱등하게 시드해 기존 동작과의
+  호환을 보장한다.
+- `skill_pool.augmentation_mode`는 API/스키마 레벨로는 `"tool"`/
+  `"always"`/`"none"` 셋 다 저장 가능하지만, `resolve_pool_tools()`는
+  `"tool"`만 실제로 읽는다 — `"always"`(정적 주입) 모드를 skill_pool에서
+  선택했을 때 실제로 정적 주입을 트리거하는 로직은 아직 없다(오픈 이슈).
 - `"tool"` 모드로 전환했을 때 Agent가 실제로 검색을 얼마나 자주/적절히
   호출하는지(비용이 늘지 줄지)는 실측 전까지 예측할 수 없다 — "always"
   대비 우월하다고 미리 단정하지 않는다.
-- 기존 8개 SDLC Agent·Human Pool의 `skill_tags` 문자열 데이터를 `skill_pool`
-  레코드로 마이그레이션하는 절차가 필요하다(1회성 스크립트 예상, 설계만
-  하고 작성 안 함).
+- 기존 8개 SDLC Agent·Human Pool의 `skill_tags` 문자열 데이터는 이미
+  `skill_pool`에 등록된 이름(vectordb/rag/graphdb/관계질의)과 겹치면
+  자동으로 매칭된다(마이그레이션 스크립트 불필요 — `resolve_pool_tools()`
+  가 매번 다시 계산하기 때문). 다만 이 4개 외의 새 스킬(예: "웹검색")을
+  쓰려면 관리자가 Web UI에서 Tool Pool·Skill Pool을 직접 등록해야 한다.
 - `knowledge_chunks.collection` 컬럼 추가(지식 그라운딩 범위 분리)는 이
   결정에서 여지만 남기고 실제 스키마 변경은 하지 않는다 — 실사용에서
   전역 공유 지식 풀이 실제로 문제가 될 때 재검토한다.
@@ -542,12 +557,13 @@ CrewAI Tool처럼 동작하도록 개선해줘" 요청으로 실제 구현했다
   (GC106). 함께 검토한 CrewAI 개념 4건(`human_input`, `token_usage`,
   `allow_delegation` 역할별 차등, `planning`)의 판단 근거는
   `docs/LIMITS.md` §17 참고.
-- 결정 12(Skill Pool·Tool Pool + VectorDB/GraphDB Tool화)는 **부분 구현
-  완료**(2026-09-27). 계획 시점엔 "기획 단계 — 아직 코드 미반영"이었으나,
-  같은 날 "이미 생성된 또는 생성하는 AI Agent에서 MCP Tool처럼, 또는
-  CrewAI Tool처럼 동작하도록 개선해줘" 요청으로 핵심 전환(VectorDB/
-  GraphDB를 `crewai.tools.tool` 데코레이터 기반 진짜 CrewAI Tool로 전환,
-  `run_crew()`+`crewai_agent_generator()` 양쪽에 연결, `GeneratorFn`
-  계약에 `conn` 추가)을 실제로 구현했다(GC106-107). `tool_pool`·
-  `skill_pool`·`agent_tool_links` 신규 테이블(도구 재사용 레지스트리
-  자체)은 여전히 미구현으로 남는다 — 상세는 `docs/LIMITS.md` §18.
+- 결정 12(Skill Pool·Tool Pool + VectorDB/GraphDB Tool화)는 **구현
+  완료**(2026-09-27, 같은 날 세 단계로 진행). 계획 시점엔 "기획 단계 —
+  아직 코드 미반영"이었으나, "이미 생성된 또는 생성하는 AI Agent에서
+  MCP Tool처럼, 또는 CrewAI Tool처럼 동작하도록 개선해줘" 요청으로 핵심
+  전환(VectorDB/GraphDB를 `crewai.tools.tool` 데코레이터 기반 진짜
+  CrewAI Tool로 전환, `run_crew()`+`crewai_agent_generator()` 양쪽에
+  연결, `GeneratorFn` 계약에 `conn` 추가, GC106-107)을, 이어서
+  "tool_pool·skill_pool 테이블도 실제로 구현해줘" 요청으로 `tool_pool`·
+  `skill_pool`·`agent_tool_links` 3개 신규 테이블과 CRUD API·Web UI까지
+  실제로 구현했다(GC108-115) — 상세는 `docs/LIMITS.md` §18.

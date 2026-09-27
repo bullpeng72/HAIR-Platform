@@ -48,7 +48,7 @@ import os
 import sqlite3
 from contextlib import ExitStack
 
-from hair_platform import agent_runtime, audit, graphquery, llm, vectorstore
+from hair_platform import audit, llm, pool_registry
 
 DELEGATION_TOOL_NAMES = {"Delegate work to coworker", "Ask question to coworker"}
 
@@ -59,70 +59,38 @@ DELEGATION_TOOL_NAMES = {"Delegate work to coworker", "Ask question to coworker"
 DELEGATION_MAX_ITER = 10
 
 
-def _mcp_serverparams(cfg: dict):
-    """MCP 서버 접속 파라미터를 만든다 — ADR 결정 10(사용자 요청, 2026-09-27,
-    "crewai-tools의 MCPServerAdapter... 참조해 mcp 기능을 구현해줘"). `command`가
-    있으면 stdio(로컬 프로세스), 없으면 `url` 기반 SSE/streamable-http로
-    판별한다 — `crewai-tools`를 실제 설치해 `MCPServerAdapter`/
-    `mcpadapt.core.MCPAdapt` 소스를 직접 읽고 확인한 형태다(문서 URL만 보고
-    추측하지 않았다)."""
-    if cfg.get("command"):
-        from mcp import StdioServerParameters  # 지연 import — crewai-tools[mcp] 필요
-
-        return StdioServerParameters(
-            command=cfg["command"], args=cfg.get("args") or [], env=cfg.get("env")
-        )
-    return {"url": cfg["url"], "transport": cfg.get("transport", "sse")}
-
-
 def _mcp_tools(stack: ExitStack, mcp_servers: list[dict]) -> list:
-    """설정된 MCP 서버들에 실제로 접속해 CrewAI 도구 목록을 모은다.
-
-    **주의(중요, 실측으로 확인)**: `MCPServerAdapter(...)`는 생성되는
-    시점에 실제로 접속을 시도한다(기본 `connect_timeout=30초`) — 지연
-    실행이 아니다. `mcp_servers`가 비어 있으면 `crewai_tools`/`mcp`를 아예
+    """`AgentModelConfig.mcp_servers`(Agent별 개별 MCP 설정)에 실제로
+    접속해 CrewAI 도구 목록을 모은다 — 접속 로직 자체는
+    `pool_registry.connect_mcp_tools()`에 있다(ADR 결정 12 이후 Tool Pool
+    경로와 공유). `mcp_servers`가 비어 있으면 `crewai_tools`/`mcp`를 아예
     import하지 않는다(설치 안 해도 CrewAI의 다른 경로는 그대로 동작해야
-    하므로 — 지금까지의 지연 import 원칙과 동일). 서버별로 별도
-    `MCPServerAdapter`를 여는 이유는 `tool_names` 필터가 서버 단위이기
-    때문이다(`mcpadapt`는 여러 서버를 리스트 하나로 묶어 한 어댑터에 넣을
-    수도 있지만, 그러면 필터가 전체에 공통 적용돼 서버별 세분화가 안 된다).
-    이 프로젝트가 개발된 환경에는 접속 가능한 실제 MCP 서버가 없어
-    종단간(실제 서버 응답 수신까지) 검증은 못 했다 — 안전한 mock 경계는
-    `crewai_tools.MCPServerAdapter` 클래스 자체다(`docs/LIMITS.md` 참고).
-    """
+    하므로 — 지연 import 원칙)."""
     if not mcp_servers:
         return []
-    from crewai_tools import MCPServerAdapter  # 지연 import — 안 쓰면 설치 불필요
-
-    tools: list = []
-    for cfg in mcp_servers:
-        serverparams = _mcp_serverparams(cfg)
-        tool_names = cfg.get("tool_names") or []
-        adapter = stack.enter_context(MCPServerAdapter(serverparams, *tool_names))
-        tools.extend(adapter)
-    return tools
+    return [
+        tool
+        for cfg in mcp_servers
+        for tool in pool_registry.connect_mcp_tools(stack, cfg)
+    ]
 
 
-def _skill_based_tools(conn: sqlite3.Connection, skills: list[str]) -> list:
-    """VectorDB/GraphDB skill_tags를 가진 Agent에게 실제 CrewAI Tool을
-    붙인다(ADR 결정 12, 사용자 요청 2026-09-27 — "MCP Tool처럼, CrewAI
-    Tool처럼 동작하도록 개선해줘").
+def _skill_based_tools(
+    conn: sqlite3.Connection,
+    stack: ExitStack,
+    skills: list[str],
+    agent_id: int | None = None,
+) -> list:
+    """`skill_pool`/`agent_tool_links`(ADR 결정 12, 사용자 요청 2026-09-27
+    — "tool_pool·skill_pool 테이블도 실제로 구현해줘")를 조회해 실제
+    CrewAI Tool을 붙인다 — `pool_registry.resolve_pool_tools()`에 위임한다.
 
-    **정정**: 이전까지는 `agent_runtime.augment_with_retrieval()`이 Task를
-    만들기 전에 검색 결과를 무조건 프롬프트에 끼워 넣었다(정적 주입) —
-    `run_crew()`에도 그렇게 연결돼 있었다(2026-09-27, "CrewAI 개념을 제대로
-    활용하는지 확인해줘" 리뷰에서 반영). 이번 요청으로 그 방식을 여기서는
-    대체한다 — 실제 CrewAI Tool을 붙여 **Agent가 검색 필요 여부를 스스로
-    판단**하게 한다(정적 주입 방식은 `execute_agent()`처럼 도구 호출
-    루프가 없는 단순 LLM 호출 경로에만 남긴다 — 그 경로는 Tool을 호출할
-    agent loop 자체가 없어 이 방식이 유일한 선택지다)."""
-    skill_set = set(skills)
-    tools: list = []
-    if skill_set & agent_runtime.VECTORDB_SKILL_TAGS:
-        tools.append(vectorstore.as_crewai_tool(conn))
-    if skill_set & agent_runtime.GRAPHDB_SKILL_TAGS:
-        tools.append(graphquery.as_crewai_tool(conn))
-    return tools
+    **정정 이력**: 처음엔 `VECTORDB_SKILL_TAGS`/`GRAPHDB_SKILL_TAGS`를
+    직접 하드코딩해서 판별했었는데(2026-09-27, "MCP Tool처럼... 동작하도록
+    개선해줘"), 이번 요청으로 그 매핑 자체를 `skill_pool` 데이터로
+    옮겼다 — 새 스킬을 추가할 때 코드를 안 고치고 `skill_pool`에 레코드만
+    추가하면 된다."""
+    return pool_registry.resolve_pool_tools(conn, stack, skills, agent_id=agent_id)
 
 
 def _crewai_llm(provider: str, model: str):
@@ -163,25 +131,31 @@ def crewai_agent_generator(
     resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
     crew_llm = _crewai_llm(resolved_provider, resolved_model)
 
-    agent = Agent(
-        role=role_name,
-        goal=_agent_goal(role_name),
-        backstory=_agent_backstory(role_name, required_skills),
-        llm=crew_llm,
-        allow_delegation=False,  # 단일 Agent Crew라 위임할 동료가 없다.
-        tools=_skill_based_tools(conn, required_skills),
-        verbose=False,
-    )
-    task = Task(
-        description=(
-            f"'{role_name}' 역할로서 지금 막 팀에 합류했습니다. 이 역할이 "
-            "프로젝트에서 처음 맡을 만한 구체적인 산출물을 하나 작성하세요."
-        ),
-        expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
-        agent=agent,
-    )
-    crew = Crew(agents=[agent], tasks=[task], process=Process.sequential, verbose=False)
-    result = crew.kickoff()
+    # Tool Pool 항목 중 mcp_stdio/mcp_remote 종류는 접속을 유지했다가 정리해야
+    # 해서 ExitStack이 필요하다(ADR 결정 12) — native(VectorDB/GraphDB)는
+    # 필요 없지만 같은 해석 경로(_skill_based_tools)를 쓰므로 통일한다.
+    with ExitStack() as pool_stack:
+        agent = Agent(
+            role=role_name,
+            goal=_agent_goal(role_name),
+            backstory=_agent_backstory(role_name, required_skills),
+            llm=crew_llm,
+            allow_delegation=False,  # 단일 Agent Crew라 위임할 동료가 없다.
+            tools=_skill_based_tools(conn, pool_stack, required_skills),
+            verbose=False,
+        )
+        task = Task(
+            description=(
+                f"'{role_name}' 역할로서 지금 막 팀에 합류했습니다. 이 역할이 "
+                "프로젝트에서 처음 맡을 만한 구체적인 산출물을 하나 작성하세요."
+            ),
+            expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
+            agent=agent,
+        )
+        crew = Crew(
+            agents=[agent], tasks=[task], process=Process.sequential, verbose=False
+        )
+        result = crew.kickoff()
 
     return {
         "role_name": role_name,
@@ -273,12 +247,17 @@ def run_crew(
                 llm=crew_llm,
                 allow_delegation=True,  # ADR 결정 11 — 정적 릴레이가 아니라 실제 협업
                 max_iter=DELEGATION_MAX_ITER,
-                # MCP 도구(ADR 결정 10) + VectorDB/GraphDB 스킬 기반 도구(ADR
-                # 결정 12, 2026-09-27 "MCP Tool처럼, CrewAI Tool처럼 동작하도록
-                # 개선해줘") — 둘 다 실제 CrewAI Tool이라 같은 리스트에 합친다.
+                # AgentModelConfig.mcp_servers(Agent별 개별 MCP 설정, ADR
+                # 결정 10) + skill_pool/agent_tool_links(Tool Pool, ADR 결정
+                # 12) — 둘 다 실제 CrewAI Tool이라 같은 리스트에 합친다.
                 tools=(
                     _mcp_tools(mcp_stack, json.loads(row["mcp_servers"]))
-                    + _skill_based_tools(conn, json.loads(row["skill_tags"]))
+                    + _skill_based_tools(
+                        conn,
+                        mcp_stack,
+                        json.loads(row["skill_tags"]),
+                        agent_id=row["id"],
+                    )
                 ),
                 verbose=False,
             )

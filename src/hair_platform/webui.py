@@ -216,6 +216,7 @@ const TABS = [
   { id: "jobs", label: "AI 에이전트 생성", group: "admin", roles: ["admin", "manager"], render: renderJobs },
   { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "agentpool", label: "AI 에이전트 관리", group: "admin", roles: ["admin", "manager"], render: renderAgentPool },
+  { id: "poolregistry", label: "도구/스킬 Pool", group: "admin", roles: ["admin", "manager"], render: renderPoolRegistry },
   { id: "crew", label: "Crew 실행", group: "admin", roles: ["admin", "manager"], render: renderCrew },
   { id: "cost", label: "비용", group: "admin", roles: ["admin", "manager"], render: renderCost },
   { id: "fairness", label: "공정성 지표", group: "admin", roles: ["admin", "manager"], render: renderFairness },
@@ -627,7 +628,7 @@ async function renderAgentPool(content) {
   const isAdmin = ME.role === "admin";
   const canExecute = ["admin", "manager"].includes(ME.role);
   content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
-    '<p class="muted">"모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11). "지식 색인"은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생). "MCP 서버(JSON)"에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다(ADR 결정 10) — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다.</p>' +
+    '<p class="muted">"모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11). "지식 색인"은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생). "MCP 서버(JSON)"에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다(ADR 결정 10) — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다. "Tool Pool ID"에 "도구/스킬 Pool" 탭에서 등록한 도구 ID를 넣고 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다(ADR 결정 12).</p>' +
     table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "생성방식", "LLM", "최근 산출물", "동작"], agents.map(a => {
       let actions = "";
       if (isAdmin) {
@@ -651,6 +652,13 @@ async function renderAgentPool(content) {
       if (canExecute && a.status === "active") {
         actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
         actions += '<button class="small" data-index-knowledge="' + a.id + '">지식 색인</button>';
+      }
+      if (canExecute) {
+        actions +=
+          '<input placeholder="Tool Pool ID" id="linktool-' + a.id + '" type="number" min="1">' +
+          '<span class="pair"><button class="small" data-link-tool="' + a.id + '">연결</button>' +
+          '<button class="small" data-unlink-tool="' + a.id + '">해제</button></span>' +
+          '<span class="muted">연결된 도구 ID: ' + (a.linked_tool_ids.length ? esc(a.linked_tool_ids.join(", ")) : "없음(스킬 기반 자동 연결은 별도)") + '</span>';
       }
       const output = a.last_output ? esc(a.last_output).slice(0, 80) + (a.last_output.length > 80 ? "…" : "") : "-";
       const llmInfo = a.llm_provider ? esc(a.llm_provider) + "/" + esc(a.llm_model || "") : "-";
@@ -718,6 +726,103 @@ async function renderAgentPool(content) {
         showMsg("global-msg", "지식 색인을 완료했습니다.", "ok");
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
+  });
+  content.querySelectorAll("[data-link-tool]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.linkTool;
+      const toolId = document.getElementById("linktool-" + id).value;
+      if (!toolId) { showMsg("global-msg", "Tool Pool ID를 입력하세요.", "error"); return; }
+      try {
+        await api("POST", "/api/agent-pool/" + id + "/tools/" + toolId);
+        showMsg("global-msg", "도구를 연결했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-unlink-tool]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.unlinkTool;
+      const toolId = document.getElementById("linktool-" + id).value;
+      if (!toolId) { showMsg("global-msg", "Tool Pool ID를 입력하세요.", "error"); return; }
+      try {
+        await api("DELETE", "/api/agent-pool/" + id + "/tools/" + toolId);
+        showMsg("global-msg", "도구 연결을 해제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+}
+
+/* ---------- 도구/스킬 Pool(ADR 결정 12) ---------- */
+
+async function renderPoolRegistry(content) {
+  const [tools, skills] = await Promise.all([
+    api("GET", "/api/tool-pool"),
+    api("GET", "/api/skill-pool"),
+  ]);
+  content.innerHTML =
+    '<section class="card"><h2>Tool Pool — 재사용 가능한 도구</h2>' +
+    '<p class="muted">MCP 서버나 native 도구(VectorDB/GraphDB)를 이름으로 등록해 여러 Agent가 재사용합니다. native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"}만 지원합니다. MCP는 {"url":...,"transport":...} 또는 {"command":...,"args":[...]} 형태입니다.</p>' +
+    table(["ID", "이름", "종류", "설명", "활성"], tools.map(t => [
+      t.id, esc(t.name), esc(t.kind), esc(t.description), t.is_active ? "활성" : "비활성",
+    ])) +
+    '<form class="inline" id="tool-form">' +
+    '<input id="tp-name" placeholder="이름" required>' +
+    '<select id="tp-kind"><option value="native">native</option><option value="mcp_remote">mcp_remote</option><option value="mcp_stdio">mcp_stdio</option></select>' +
+    '<input id="tp-description" placeholder="설명" style="flex:1;min-width:160px">' +
+    '<input id="tp-config" placeholder="config JSON, 예: {&#39;native_id&#39;:&#39;vectordb_search&#39;}" style="flex:1;min-width:220px">' +
+    '<button class="primary" type="submit">도구 등록</button></form>' +
+    "</section>" +
+    '<section class="card"><h2>Skill Pool — skill_tags 정식 등록</h2>' +
+    '<p class="muted">augmentation_mode="tool"인 스킬은 default_tool_pool_ids가 가리키는 도구를 이 스킬을 가진 모든 Agent에 자동으로 붙입니다(run_crew/crewai_agent_generator 실행마다 다시 계산).</p>' +
+    table(["ID", "이름", "설명", "기본 도구 ID", "모드"], skills.map(s => [
+      s.id, esc(s.name), esc(s.description), esc(s.default_tool_pool_ids.join(", ") || "-"), esc(s.augmentation_mode),
+    ])) +
+    '<form class="inline" id="skill-form">' +
+    '<input id="sp-name" placeholder="스킬명(skill_tags와 일치)" required>' +
+    '<input id="sp-description" placeholder="설명" style="flex:1;min-width:160px">' +
+    '<input id="sp-tool-ids" placeholder="기본 도구 ID(콤마)" style="width:140px">' +
+    '<select id="sp-mode"><option value="tool">tool(자동 호출)</option><option value="always">always</option><option value="none">none</option></select>' +
+    '<button class="primary" type="submit">스킬 등록</button></form>' +
+    "</section>";
+
+  document.getElementById("tool-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    let config = {};
+    const raw = document.getElementById("tp-config").value.trim();
+    if (raw) {
+      try { config = JSON.parse(raw); } catch (e) {
+        showMsg("global-msg", "config가 올바른 JSON이 아닙니다: " + e.message, "error"); return;
+      }
+    }
+    try {
+      await api("POST", "/api/tool-pool", {
+        name: document.getElementById("tp-name").value,
+        kind: document.getElementById("tp-kind").value,
+        description: document.getElementById("tp-description").value,
+        config,
+      });
+      showMsg("global-msg", "도구를 등록했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  document.getElementById("skill-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const idsRaw = document.getElementById("sp-tool-ids").value.trim();
+    const default_tool_pool_ids = idsRaw
+      ? idsRaw.split(",").map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0)
+      : [];
+    try {
+      await api("POST", "/api/skill-pool", {
+        name: document.getElementById("sp-name").value,
+        description: document.getElementById("sp-description").value,
+        default_tool_pool_ids,
+        augmentation_mode: document.getElementById("sp-mode").value,
+      });
+      showMsg("global-msg", "스킬을 등록했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 }
 

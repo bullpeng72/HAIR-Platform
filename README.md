@@ -5,7 +5,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 109
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 118
 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
@@ -43,8 +43,11 @@ Crew 협업에는 빠져 있던 실사용 갭을 발견·수정했다(`docs/LIMI
 `graphquery.as_crewai_tool()`(`crewai.tools.tool` 데코레이터 기반)을
 `run_crew()`(이미 온보딩된 Agent)와 `crewai_agent_generator()`(F4로 새로
 생성되는 Agent) 양쪽에 연결해, Agent가 검색 필요 여부를 스스로 판단해
-호출하게 했다(`AgentModelConfig`와 같은 재사용 레지스트리인 `tool_pool`·
-`skill_pool`은 여전히 기획만 — `docs/LIMITS.md` §18, ADR 결정 12).
+호출하게 했다. 이어서 **Tool Pool·Skill Pool도 실제로 구현했다** —
+`tool_pool`·`skill_pool`·`agent_tool_links` 3개 신규 테이블,
+`pool_registry.py`(CRUD+도구 조립), API, "도구/스킬 Pool" Web UI 탭까지
+붙여서, 이전에 `agent_runtime.py`에 하드코딩됐던 "스킬→도구" 매핑을
+데이터로 완전히 옮겼다(ADR 결정 12, `docs/LIMITS.md` §18).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -60,7 +63,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 110건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 118건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -131,7 +134,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(39개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(46개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -150,6 +153,7 @@ src/hair_platform/
   crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임)
   vectorstore.py     # 지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
   graphquery.py      # 관계분석 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의, NF9 경계
+  pool_registry.py   # Skill Pool·Tool Pool(ADR 결정 12) — 스킬→도구 매핑 데이터화, CrewAI Tool 조립
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
   ADR.md             # 설계 결정 11건
@@ -157,7 +161,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 110건
+tests/unit/                            # 골든셋 118건
 ```
 
 ## 로드맵

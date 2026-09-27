@@ -44,6 +44,7 @@ from hair_platform import (
     jobs,
     performance,
     pool,
+    pool_registry,
     webui,
 )
 from hair_platform import approvals as approvals_mod
@@ -71,7 +72,10 @@ from hair_platform.models import (
     LoginRequest,
     ManagerUpdate,
     PerformanceScoreRequest,
+    SkillPoolCreate,
     TaskDecomposition,
+    ToolActiveUpdate,
+    ToolPoolCreate,
     UserCreate,
 )
 
@@ -547,6 +551,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "last_output": row["last_output"],
                 "framework": row["framework"],
                 "mcp_servers": json.loads(row["mcp_servers"]),
+                "linked_tool_ids": pool_registry.list_agent_tool_ids(conn, row["id"]),
             }
             for row in rows
         ]
@@ -640,6 +645,111 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             status_code = 404 if str(exc) == "agent_not_found" else 400
             raise HTTPException(status_code=status_code, detail=detail) from exc
         return {"id": agent_id, "chunk_id": chunk_id}
+
+    @app.get("/api/tool-pool")
+    def list_tool_pool(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """ADR 결정 12 — 재사용 가능한 도구(MCP 서버 또는 native Tool)
+        레지스트리 조회."""
+        return pool_registry.list_tools(conn)
+
+    @app.post("/api/tool-pool", status_code=201)
+    def create_tool_pool_entry(
+        payload: ToolPoolCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            tool_id = pool_registry.create_tool(
+                conn,
+                user["id"],
+                payload.name,
+                payload.description,
+                payload.kind,
+                payload.config,
+                payload.tool_names,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"이미 있는 이름입니다: {payload.name}"
+            ) from exc
+        return {"id": tool_id}
+
+    @app.patch("/api/tool-pool/{tool_id}/active")
+    def set_tool_pool_active(
+        tool_id: int,
+        payload: ToolActiveUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            pool_registry.set_tool_active(conn, user["id"], tool_id, payload.is_active)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="도구를 찾을 수 없습니다"
+            ) from exc
+        return {"id": tool_id, "is_active": payload.is_active}
+
+    @app.get("/api/skill-pool")
+    def list_skill_pool(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """ADR 결정 12 — `skill_tags`를 정식 엔티티로 승격한 Skill Pool
+        조회. `augmentation_mode="tool"`인 스킬은 `default_tool_pool_ids`가
+        가리키는 도구를 이 스킬을 가진 모든 Agent에 자동으로 붙인다."""
+        return pool_registry.list_skills(conn)
+
+    @app.post("/api/skill-pool", status_code=201)
+    def create_skill_pool_entry(
+        payload: SkillPoolCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            skill_id = pool_registry.create_skill(
+                conn,
+                user["id"],
+                payload.name,
+                payload.description,
+                payload.default_tool_pool_ids,
+                payload.augmentation_mode,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"이미 있는 이름입니다: {payload.name}"
+            ) from exc
+        return {"id": skill_id}
+
+    @app.post("/api/agent-pool/{agent_id}/tools/{tool_pool_id}", status_code=201)
+    def link_agent_tool_endpoint(
+        agent_id: int,
+        tool_pool_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """Agent별로 skill 매칭과 무관하게 Tool Pool 항목을 하나 더 붙인다
+        (ADR 결정 12) — 다음 `run_crew()`/`crewai_agent_generator()` 실행
+        부터 반영된다."""
+        try:
+            pool_registry.link_agent_tool(conn, user["id"], agent_id, tool_pool_id)
+        except ValueError as exc:
+            detail = (
+                "Agent를 찾을 수 없습니다"
+                if str(exc) == "agent_not_found"
+                else "도구를 찾을 수 없습니다"
+            )
+            raise HTTPException(status_code=404, detail=detail) from exc
+        return {"agent_id": agent_id, "tool_pool_id": tool_pool_id}
+
+    @app.delete("/api/agent-pool/{agent_id}/tools/{tool_pool_id}")
+    def unlink_agent_tool_endpoint(
+        agent_id: int,
+        tool_pool_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        pool_registry.unlink_agent_tool(conn, user["id"], agent_id, tool_pool_id)
+        return {"agent_id": agent_id, "tool_pool_id": tool_pool_id}
 
     @app.post("/api/crew/run", status_code=201)
     def run_crew_endpoint(
