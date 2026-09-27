@@ -211,11 +211,29 @@ def run_crew(
     worker_tasks = [t for i, t in enumerate(tasks) if i != manager_index]
     worker_rows = [r for i, r in enumerate(rows) if i != manager_index]
 
+    task_completions: list[dict] = []
+
+    def _capture_task_completion(task_output) -> None:
+        task_completions.append(
+            {
+                "agent_role": task_output.agent,
+                "output_preview": (task_output.raw or "")[:200],
+            }
+        )
+
     crew_kwargs: dict[str, object] = {
         "agents": worker_agents,
         "tasks": worker_tasks,
         "verbose": False,
         "memory": True,
+        # 사용자 요청(2026-09-27, "다른 리뷰 항목 마저 진행해줘")으로 Task
+        # 완료마다 감사로그를 남긴다. `step_callback`은 일부러 안 쓴다 —
+        # CrewAI가 콜백에 넘기는 AgentAction/AgentFinish에는 어느 Agent가
+        # 낸 스텝인지 식별할 필드가 없어(실측 확인: thought/tool/tool_input/
+        # text/result 뿐) 감사로그에 "누가"를 못 남긴다. 반면 task_callback이
+        # 받는 TaskOutput.agent는 role 이름을 갖고 있어 정확히 귀속시킬 수
+        # 있다.
+        "task_callback": _capture_task_completion,
     }
     if process == "hierarchical":
         crew_kwargs["process"] = Process.hierarchical
@@ -286,6 +304,15 @@ def run_crew(
             "agent_pool",
             None,
             after=delegation,
+        )
+    for completion in task_completions:
+        audit.record(
+            conn,
+            actor_id,
+            "crew_task_completed",
+            "crew_run",
+            None,
+            after=completion,
         )
     conn.commit()
 

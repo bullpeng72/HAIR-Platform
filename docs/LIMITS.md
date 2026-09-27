@@ -458,9 +458,31 @@ GC100). CrewAI 기본값이 이미 25로 완전 무제한은 아니었지만, �
 `knowledge_sources`는 저장소로 ChromaDB류 별도 벡터스토어를 요구해
 SQLite 중심 저장 정책(결정 5)과 상충한다 — `vectorstore.py`를 직접 만든
 선택은 "원칙4: 이미 있는 것을 재사용" 위반이 아니라 오히려 일관됨을
-재확인했다. `max_rpm`/`step_callback`/`task_callback` 미사용은 기능
-공백이지 버그는 아니며(감사 로깅은 이벤트버스로 이미 처리 중), 이번
-리뷰에서는 손대지 않았다(오픈 이슈로만 남김).
+재확인했다.
+
+**5) [사용자 요청, 2026-09-27, "다른 리뷰 항목 마저 진행해줘"] `task_callback`으로
+감사로그 세분화**: 기존에는 `crew_run_completed`(집계 1건)와
+`agent_delegation_occurred`(위임 발생 시)만 감사로그에 남았다 —
+Task 단위로 누가 무엇을 완료했는지는 최종 반환값에만 있고 감사로그에는
+없었다. `run_crew()`에 `task_callback`을 연결해 Task가 완료될 때마다
+`crew_task_completed`(agent_role, output_preview 200자) 감사로그를
+남기도록 확장했다(회귀 테스트 GC101 — 실제 CrewAI가 하는 것과 동일하게
+`crew.task_callback(task_output)`을 호출하는 kickoff side_effect로 콜백
+배선 자체를 검증).
+
+`step_callback`은 **의도적으로 안 붙였다** — CrewAI 소스(`crew_agent_
+executor.py`)를 실측 확인한 결과 콜백에 넘어오는 `AgentAction`/
+`AgentFinish` 객체에는 `thought`/`tool`/`tool_input`/`text`/`result`
+(또는 `output`)만 있고 **어느 Agent가 낸 스텝인지 식별할 필드가 없다**
+— Crew 전체에 콜백 하나만 걸 수 있는 구조라 스텝 단위로는 귀속(attribution)이
+불가능하다. 식별 못 하는 로그를 대량으로 쌓는 것보다는 안 쌓는 쪽이
+정직하다고 판단해 `max_rpm`과 함께 오픈 이슈로만 남긴다.
+
+**부수적으로 발견한 것**: `task_callback`에 클로저(nested function)를
+넘기면 pydantic이 `UserWarning: function callbacks cannot be serialized
+and will prevent checkpointing`을 낸다 — CrewAI의 체크포인트/재개 기능을
+쓰지 않는 한 무해하지만, 나중에 그 기능을 쓰게 되면 모듈 최상위 함수로
+바꿔야 한다(오픈 이슈로 기록만 해둔다).
 
 ## 요약
 
@@ -484,3 +506,4 @@ SQLite 중심 저장 정책(결정 5)과 상충한다 — `vectorstore.py`를 �
 | 실사용 중 발견된 500 에러(agent_pool 스키마 마이그레이션 누락) | **사용자 보고 → 발견·수정 완료**(`db._migrate_schema()`, GC95–97) |
 | CrewAI 기능 적용 리뷰: manager_agent_id+hierarchical 크래시 | **발견 → 수정 완료**(GC98–99) |
 | CrewAI 기능 적용 리뷰: memory=True·max_iter 문서-코드 불일치 | **발견 → 수정 완료**(GC100) |
+| CrewAI 기능 적용 리뷰: task_callback 감사로그 세분화 | **구현 완료**(GC101), step_callback은 Agent 식별 불가로 의도적 보류 |

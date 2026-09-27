@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -335,6 +336,45 @@ def test_gc100_run_crew_sets_max_iter_and_memory_by_default(client_and_conn):
     crew = captured["crew"]
     assert crew.memory is True
     assert all(a.max_iter == crew_runtime.DELEGATION_MAX_ITER for a in crew.agents)
+
+
+def test_gc101_run_crew_records_audit_log_per_task_via_task_callback(client_and_conn):
+    """사용자 요청(2026-09-27, "다른 리뷰 항목 마저 진행해줘") — task_callback으로
+    Task 완료마다 감사로그를 남기는지 확인한다. `crewai.Crew.kickoff`를
+    실제 CrewAI가 하는 것과 동일하게 각 Task 완료 시점마다
+    `self.task_callback(task_output)`을 호출하는 side_effect로 대체해
+    콜백 배선 자체가 진짜로 동작하는지 검증한다(추측 아님, GC81과 같은
+    정신)."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)
+
+    def _kickoff_with_task_callback(self, *args, **kwargs):
+        from crewai.tasks.task_output import TaskOutput
+
+        outputs = [
+            TaskOutput(description="task-0", agent="기획자", raw="기획서"),
+            TaskOutput(description="task-1", agent="분석가", raw="분석서"),
+        ]
+        for output in outputs:
+            self.task_callback(output)
+        return _crew_output("최종 산출물", ["기획서", "분석서"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_with_task_callback):
+        crew_runtime.run_crew(
+            conn, [agent1, agent2], ["a", "b"], admin_id, provider="openai"
+        )
+
+    rows = conn.execute(
+        "SELECT action, after_value FROM audit_log WHERE action = 'crew_task_completed' "
+        "ORDER BY id"
+    ).fetchall()
+    assert len(rows) == 2
+    roles = [json.loads(r["after_value"])["agent_role"] for r in rows]
+    assert roles == ["기획자", "분석가"]
+    assert json.loads(rows[0]["after_value"])["output_preview"] == "기획서"
 
 
 # ---------- vectorstore(VectorDB 지식검색 Agent) ----------
