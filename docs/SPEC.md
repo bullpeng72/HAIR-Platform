@@ -129,6 +129,7 @@
 | Ollama + Agent별 모델 설정(사용자 요청) | Ollama 추가 + `PATCH /api/agent-pool/{id}/model`(`docs/LIMITS.md` §11) | 4건(GC69–72, mock 기반) |
 | 관리자/일반 사용자 UI 분리(사용자 요청) | Web UI 내비게이션 "내 업무"/"관리자 도구" 2구역화(ADR 결정 9) | 4건(GC73–76, 소스 검사 기반) |
 | 실제 CrewAI 연동 + VectorDB/GraphDB Agent(사용자 요청, "실제 구현해줘") | `crew_runtime.py`(단일 생성+다중 협업)·`vectorstore.py`·`graphquery.py` 구현(ADR 결정 10·11, `docs/LIMITS.md` §12) | 18건(GC77–94, 실제 crewai 패키지로 통합 검증) |
+| 실사용 500 에러 수정(사용자 보고) | `agent_pool` 스키마 마이그레이션 누락 발견·수정(`db._migrate_schema()`, `docs/LIMITS.md` §13) | 3건(GC95–97) |
 
 ## 10. 설계 결정
 
@@ -150,7 +151,7 @@
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB, 총 97건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB, 총 100건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
 - [x] F11 — 인증된 Web UI 셸에서 F1–F14 전부 조작 가능(`webui.py`, 단일 페이지 바닐라 JS, R4에서 뒤늦게 구현 — `docs/LIMITS.md` §10 참고. 실제 브라우저 수동 조작은 미검증, TestClient 전체 플로우 통합 테스트로 대체)
 - [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 실제 실행은 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동

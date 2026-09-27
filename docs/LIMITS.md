@@ -375,6 +375,33 @@ import가 실패). 이 프로젝트와 무관한 플러그인이라 `pyproject.t
   환경에는 `pip install -e ".[crewai]"`를 명시적으로 실행해야 한다
   (기본 설치에는 포함되지 않음).
 
+## 13. 실제 500 에러 발견·수정 — `agent_pool` 스키마 마이그레이션 누락
+(사용자 보고, 2026-09-27)
+
+**발견 경위**: CrewAI/VectorDB/GraphDB 구현을 배포한 뒤 사용자가 실제로
+"AI 에이전트 관리"·"Crew 실행" 메뉴에서 500 Internal Server Error를
+겪었다 — 이 세션이 미리 예상하지 못한, 실사용 중 발견된 진짜 버그다.
+
+**원인**: `db.py`의 `agent_pool` 테이블 정의에 `framework` 컬럼을
+추가했지만, 데모 서버가 쓰던 `hair.db` 파일은 그 컬럼이 생기기 **전에**
+이미 만들어진 것이었다. `init_schema()`가 매 기동 시 실행하는
+`CREATE TABLE IF NOT EXISTS`는 테이블이 이미 있으면 아무 것도 하지
+않는다 — 즉 새 컬럼이 기존 DB 파일에는 영영 추가되지 않는다.
+`GET /api/agent-pool`가 `row["framework"]`에 접근하는 순간 SQLite
+Row에 없는 키라 예외가 나 500으로 이어졌다.
+
+**수정**: `db._migrate_schema()`를 추가해 `init_schema()`가 스키마
+스크립트 실행 후 `agent_pool`의 `llm_provider`·`llm_model`·
+`last_output`·`framework` 컬럼이 없으면 `ALTER TABLE ... ADD COLUMN`으로
+채워 넣는다. 회귀 테스트(GC95-97)가 "새 컬럼이 생기기 전의 옛 스키마"를
+실제로 재현해 마이그레이션이 데이터를 보존하면서 동작하는지 검증한다.
+
+**한계**: 이 마이그레이션 함수는 지금까지 추가된 컬럼만 하드코딩돼 있다
+— 앞으로 스키마를 바꿀 때마다 `_migrate_schema()`에 새 `_ensure_column()`
+호출을 잊지 않고 추가해야 한다(자동 감지 방식이 아니다). 프로덕션급
+마이그레이션 도구(Alembic 등) 도입은 오픈 이슈로 남긴다 — 지금 규모에는
+과할 수 있다.
+
 ## 요약
 
 | 항목 | 상태 |
@@ -394,3 +421,4 @@ import가 실패). 이 프로젝트와 무관한 플러그인이라 `pyproject.t
 | 실제 CrewAI 연동(단일 생성+다중 Agent 협업) | 구현 완료, 실제 crewai 패키지로 통합 검증(GC77–82, LLM 호출만 mock) — 검증 중 실제 API 호출 사고 발생 → `Crew.kickoff` 경계로 수정 |
 | VectorDB 지식검색 Agent + GraphDB 관계분석 Agent | 구현 완료(GC83–92), NF9 경계 소스 검사로 강제. 실제 임베딩 API 실측은 미검증(mock만) |
 | crewai 설치로 인한 pytest 전역 파손(arize-phoenix 충돌) | **발견 → 수정 완료**(`addopts = "-p no:phoenix"`) |
+| 실사용 중 발견된 500 에러(agent_pool 스키마 마이그레이션 누락) | **사용자 보고 → 발견·수정 완료**(`db._migrate_schema()`, GC95–97) |
