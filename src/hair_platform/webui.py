@@ -692,6 +692,7 @@ async function renderCrew(content) {
 
   document.getElementById("crew-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    showMsg("global-msg", "", "");  // 이전 시도의 에러 배너가 남아 새 결과와 헷갈리지 않도록 지운다
     const lines = document.getElementById("crew-lines").value.split("\\n").map(l => l.trim()).filter(Boolean);
     const agentIds = [];
     const taskDescriptions = [];
