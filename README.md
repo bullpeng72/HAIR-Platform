@@ -183,6 +183,8 @@ docs/
   ADR.md             # 설계 결정 11건
   LIMITS.md          # 알려진 갭(정직하게 기록)
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
+  COLLABORATION_PLATFORM_PLAN.md  # 사람-AI 협업(결과물 전달/HITL/HOTL) 기획안 — 아직 미구현
+  HAIR_MASTER_PLAN.md             # 위 기획안을 포함하는 종합 기획/설계/개발 계획 — 아직 미구현
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
 tests/unit/                            # 골든셋 129건
