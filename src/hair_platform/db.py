@@ -265,6 +265,159 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
             (name, description, json.dumps([tool_ids[native_id]])),
         )
 
+    # 사용자 요청(2026-09-28, "도구/스킬 Pool에 기본 노출해줘") — HAIR-Platform이
+    # 모델링하는 SDLC 팀(백엔드 개발자·QA 등 역할의 AI 에이전트)이 실제로 이
+    # 하니스 방법론/agent-evaluator 생태계를 따르는 조직이라는 전제 하에, 그
+    # 생태계의 절차 스킬(SKILL.md)들을 Skill Pool에 기본 노출한다. 15개는
+    # agent-evaluator[sdk] 기본 배포(Skills/)에 이미 포함된 것, 3개는 이
+    # 저장소(AgentForge_Workbook)에서 자체 발굴했지만 아직 그 기본 배포로
+    # 역이식되지 않은 것(`.claude/skills/background-real-verification` 등).
+    # `augmentation_mode='none'`인 이유: 이 스킬들은 CrewAI Tool로 감쌀 수 있는
+    # 실행 가능한 함수가 아니라 Claude Code/OpenCode 세션이 참고하는 절차
+    # 문서라서, VectorDB/GraphDB처럼 자동으로 붙일 도구가 없다 — Agent가 이
+    # skill_tag를 갖고 있다는 표시만 남긴다(도구 자동화가 생기면 'tool'로
+    # 승격 가능).
+    agent_eval_skills = [
+        (
+            "abtest-decision-workflow",
+            (
+                '"agent-eval abtest"로 두 버전(또는 세 버전 이상)을 비교하기 전에 '
+                "주 지표(guardrail metric)를 미리 정하고, 결과를 책임 있게 해석한다."
+            ),
+        ),
+        (
+            "checklist-confidence-audit",
+            (
+                "승인 큐의 체크리스트 자동채점이 실제로 얼마나 정확한지 주기적으로 "
+                "점검한다."
+            ),
+        ),
+        (
+            "claims-audit-ci",
+            (
+                'CI에 "agent-eval claims audit"를 등록해 TTL 초과·겹치는 active '
+                "클레임을 병합 전에 자동으로 잡는다."
+            ),
+        ),
+        (
+            "config-silent-noop-check",
+            (
+                "Harness Config를 배선했는데 Gate 점수나 가드레일이 기대와 다르게 "
+                "반응하지 않을 때, 그 Config가 실제로 채점/차단 경로에 연결돼 있는지 "
+                "SDK 소스 레벨에서 확인하는 절차."
+            ),
+        ),
+        (
+            "eval-run-directory-hygiene",
+            (
+                "agent-eval trend/abtest/--baseline이 가짜 회귀를 경고하거나 조용히 "
+                "아무 것도 못 찾을 때, 서로 다른 목적의 실행 결과가 한 디렉터리에 "
+                "섞였는지 확인하고 정리하는 절차."
+            ),
+        ),
+        (
+            "gate-improvement-loop",
+            (
+                "하나의 Gate 점수를 목표선 위로 올리는 반복 절차 — 한 번에 한 가지만 "
+                "바꿔 재측정하고 이터레이션 로그에 남긴다."
+            ),
+        ),
+        (
+            "harness-autopilot",
+            (
+                "Harness Methodology 파이프라인(Phase 0~8)의 현재 위치를 판단하고, "
+                "반복되는 초안 작업을 대신 만들고, 사람이 필요한 HITL 관문에서 정확히 "
+                "멈춘다."
+            ),
+        ),
+        (
+            "harness-gate-ci",
+            (
+                'CI에 "agent-eval gate"를 연결해 절대 임계값·baseline 회귀·골든셋 '
+                "회귀·케이스 회귀를 별개의 CI 스텝으로 나누고 종료 코드별로 다른 "
+                "알림으로 라우팅한다."
+            ),
+        ),
+        (
+            "liveguardrail-standard-config",
+            (
+                "새 프로젝트에 LiveGuardrail을 설치할 때 팀 표준 설정(위험 패턴, "
+                "스코프, 브랜치 보호)을 그대로 적용한다."
+            ),
+        ),
+        (
+            "recommend-fix-workflow",
+            (
+                "Gate A-G 중 하나가 fail/warn일 때 코드를 고치기 전에 조치 후보를 "
+                "조회하고, 적용 후 실제로 통했는지 검증하는 절차."
+            ),
+        ),
+        (
+            "spec-driven-artifacts",
+            (
+                "코드를 짜기 전에 Spec·실패 모드 카탈로그·최소 골든셋·세션 목표 "
+                "템플릿 + Gate 매핑 초안을 만든다."
+            ),
+        ),
+        (
+            "sync-drift-check",
+            (
+                "GitHub PR 라벨(Phase 상태)과 오토파일럿의 .aoo/tasks/<id>.json이 "
+                "서로 어긋나지 않았는지 주기적으로 대조한다."
+            ),
+        ),
+        (
+            "tdd-ai-workflow-checklist",
+            (
+                "TDD-AI(Test-Driven Agent Iteration)의 red-green-refactor 순환을 "
+                "실행 세션에서 체크리스트로 따라간다."
+            ),
+        ),
+        (
+            "threshold-realism-review",
+            (
+                "exit 75(통계적으로 애매한 통과)가 같은 사유로 5회 넘게 반복될 때, "
+                "Gate 임계값 자체가 현실과 안 맞는 것인지 재검토하는 절차."
+            ),
+        ),
+        (
+            "unattended-session-recovery",
+            (
+                "무인으로 재트리거된 Claude Code/OpenCode 세션이 응답 없이 멈추거나 "
+                "중간에 죽었을 때의 표준 복구 절차."
+            ),
+        ),
+        (
+            "background-real-verification",
+            (
+                "실제 API 호출이 필요한 배치 실행을 백그라운드로 돌리고, 완료 알림을 "
+                "받은 뒤에만 결과를 보고하는 절차 — 아직 안 끝난 실행 결과를 추측해서 "
+                "보고하지 않는다."
+            ),
+        ),
+        (
+            "evidence-based-gate-fix",
+            (
+                "Gate 점수가 fail/warn일 때, SDK 소스 코드를 직접 읽어 채점 공식을 "
+                "확인한 뒤 조치하는 절차 — 추측으로 임계값을 조정하지 않는다."
+            ),
+        ),
+        (
+            "honest-refuted-experiment-logging",
+            (
+                "agent-eval experiment/improve verify 결과가 refuted로 나왔을 때, "
+                "이걸 지우거나 조용히 넘어가지 않고 커밋·문서에 그대로 남기는 절차."
+            ),
+        ),
+    ]
+    for name, description in agent_eval_skills:
+        conn.execute(
+            "INSERT OR IGNORE INTO skill_pool "
+            "(name, description, default_tool_pool_ids, augmentation_mode) "
+            "VALUES (?, ?, '[]', 'none')",
+            (name, description),
+        )
+
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)

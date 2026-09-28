@@ -36,12 +36,13 @@ def test_gc108_init_schema_seeds_default_vectordb_graphdb_pools():
         assert t["is_active"] is True
 
     skills = pool_registry.list_skills(conn)
-    assert len(skills) == 4
     skill_names = {s["name"] for s in skills}
-    assert skill_names == {"vectordb", "rag", "graphdb", "관계질의"}
+    vectordb_graphdb_names = {"vectordb", "rag", "graphdb", "관계질의"}
+    assert vectordb_graphdb_names <= skill_names
     for s in skills:
-        assert s["augmentation_mode"] == "tool"
-        assert len(s["default_tool_pool_ids"]) == 1
+        if s["name"] in vectordb_graphdb_names:
+            assert s["augmentation_mode"] == "tool"
+            assert len(s["default_tool_pool_ids"]) == 1
 
 
 def test_gc109_create_tool_rejects_unknown_kind_and_native_id():
@@ -242,7 +243,9 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
 
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
-    assert len(resp.json()) == 4  # 시드된 4개
+    assert (
+        len(resp.json()) == 22
+    )  # 시드된 22개(vectordb/graphdb 4 + agent-eval 절차 스킬 18, Phase 16)
 
     resp = client.post(
         "/api/skill-pool",

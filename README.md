@@ -5,7 +5,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 127
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 129
 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
@@ -54,7 +54,13 @@ Crew 협업에는 빠져 있던 실사용 갭을 발견·수정했다(`docs/LIMI
 `data_admin.py`+6개 ADMIN 전용 DELETE 엔드포인트를 구현했다. FK 순서
 버그(`sqlite3.IntegrityError`)를 실측으로 발견·수정했고, `confirmed`
 상태 배정이 있는 대상은 삭제를 막는 안전장치를 뒀다(`docs/LIMITS.md`
-§19).
+§19). 이어서 사용자가 Agent-Evaluator SDK의 GitHub Skills 링크를 검토해
+달라고 요청한 것을 계기로 **"도구/스킬 Pool"에 하니스 방법론 절차
+스킬 18개(agent-evaluator 기본 배포 15개 + 이 워크북 자체 발굴 3개)를
+기본 노출했다** — HAIR-Platform이 모델링하는 SDLC 팀(AI 에이전트)이
+실제로 이 방법론을 따른다는 전제. 실행 가능한 CrewAI Tool이 없어
+`augmentation_mode='none'`으로 skill_tag 노출만 한다(`docs/LIMITS.md`
+§20).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -70,7 +76,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 127건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 129건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -169,7 +175,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 127건
+tests/unit/                            # 골든셋 129건
 ```
 
 ## 로드맵

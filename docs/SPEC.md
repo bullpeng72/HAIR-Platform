@@ -137,6 +137,7 @@
 | CrewAI 개념 활용도 감사(사용자 요청, "전체적으로 CrewAI 기능/개념을 제대로 활용하도록 구현되어 있는지 확인해줘") | RAG 증강이 개별 실행에만 있고 Crew 협업에는 없던 실사용 갭 발견·수정, `human_input`/`token_usage`/`allow_delegation`/`planning` 4건 실측 판단(`docs/LIMITS.md` §17) | 1건(GC106, 이후 아래 항목에서 Tool 방식으로 갱신) |
 | Skill Pool·Tool Pool + VectorDB/GraphDB의 CrewAI Tool 전환(사용자 요청, "Skills, MCP Tool 등을 Pool로 구성... 개선점을 찾아줘" + "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘" + "tool_pool·skill_pool 테이블도 실제로 구현해줘") | 실제 데모 DB 확인 결과 VectorDB/GraphDB Agent가 실사용 중엔 하나도 없었음을 먼저 확인. VectorDB/GraphDB를 정적 프롬프트 주입 대신 `crewai.tools.tool` 기반 진짜 CrewAI Tool로 전환(`run_crew()`+`crewai_agent_generator()` 양쪽 연결, `GeneratorFn` 계약에 `conn` 추가)한 데 이어, `tool_pool`/`skill_pool`/`agent_tool_links` 3개 신규 테이블+`pool_registry.py`+CRUD API+Web UI까지 실제 구현해 하드코딩된 스킬→도구 매핑을 데이터로 완전 대체(ADR 결정 12, `docs/LIMITS.md` §18) | 10건(GC106 갱신+GC107–115 신규) |
 | 데이터 삭제/초기화 기능(사용자 요청, "각 메뉴에서 데이터 삭제나, 초기화 기능 추가") | 사용자가 명시적으로 선택한 범위(도구/스킬 Pool+사람/AI 에이전트 Pool+brief/task, 활동 기록은 NF10 트리거로 애초에 불가해 제외)에 대해 `data_admin.py`(brief/task/human/agent)+`pool_registry.py`(tool/skill) 연쇄 삭제 로직과 6개 ADMIN 전용 DELETE 엔드포인트, Web UI 삭제 버튼까지 구현. FK 순서 버그(`sqlite3.IntegrityError`)와 테스트 self-approval 세션 버그를 실측으로 발견·수정, `confirmed` 배정 보호 안전장치 설계(`docs/LIMITS.md` §19) | 9건(GC116–124) |
+| Agent-Evaluator/하니스 방법론 절차 스킬을 Skill Pool에 기본 노출(사용자 요청, GitHub Skills 링크 검토 후 "도구/스킬 Pool에 기본 노출해줘") | `agent-evaluator[sdk]` 기본 배포(Skills/) 15개 + 이 워크북 자체 발굴 3개, 총 18개 절차 스킬을 `db._seed_default_pools()`에서 `skill_pool`에 `augmentation_mode='none'`으로 추가 시드(실행 가능한 CrewAI Tool이 없어 skill_tag 노출만). 기존 GC108/GC114의 "정확히 4개" 단언을 부분집합 검사로 완화(`docs/LIMITS.md` §20) | 2건(GC125–126) |
 
 ## 10. 설계 결정
 
@@ -160,7 +161,7 @@
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동+CrewAI 개념 활용도 감사+Skill/Tool Pool 구현+데이터 삭제/초기화 기능, 총 127건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동+CrewAI 개념 활용도 감사+Skill/Tool Pool 구현+데이터 삭제/초기화 기능+Agent-Evaluator 절차 스킬 기본 노출, 총 129건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
 - [x] F11 — 인증된 Web UI 셸에서 F1–F14 전부 조작 가능(`webui.py`, 단일 페이지 바닐라 JS, R4에서 뒤늦게 구현 — `docs/LIMITS.md` §10 참고. 실제 브라우저 수동 조작은 미검증, TestClient 전체 플로우 통합 테스트로 대체)
 - [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 저장 버그 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공(TCR 100% PASS, Gate A/G 미달 확인) — `improve verify`로 confirmed까지 완주하는 반복은 여전히 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동

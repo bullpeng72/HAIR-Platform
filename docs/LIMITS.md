@@ -881,6 +881,57 @@ UPDATE/DELETE 자체를 막고 있어 삭제 API를 만들어도 트리거가 �
 골든셋 GC116–GC124(`tests/unit/test_phase15_data_deletion.py`, 9건)로
 FK 연쇄 삭제·안전장치·RBAC·에러 매핑을 전부 검증했다. 총 127건 통과.
 
+## 20. Agent-Evaluator/하니스 방법론 절차 스킬을 Skill Pool에 기본 노출 —
+    사용자 요청(2026-09-28)
+
+사용자가 GitHub 저장소(`bullpeng72/Agent-Evaluator`, `Agent-Evaluator`
+브랜치)의 `Skills/` 링크를 주며 "검토하고 호환가능하면 기본 배포에
+포함되도록 해줘"라고 요청했다. 조사해보니:
+
+- 그 링크의 내용은 이미 이 워크북이 의존하는 `agent-evaluator[sdk]`
+  패키지(로컬 editable 설치, `/Users/fomalhaut/Projects/Agent-Evaluator`)의
+  기본 배포(`Skills/`, 15개)와 완전히 동일했다(`git diff`로 확인, 차이
+  없음) — 그 자체로는 추가할 게 없었다.
+- 오히려 반대 방향의 갭이 있었다: 이 워크북 저장소(`AgentForge_Workbook`)
+  의 `.claude/skills/`에는 그 15개 외에 `background-real-verification`·
+  `evidence-based-gate-fix`·`honest-refuted-experiment-logging` 3개가
+  더 있는데, 아직 Agent-Evaluator의 기본 배포로 역이식되지 않은
+  상태였다(과거 CHANGELOG.md 이력을 보면 이런 역이식을 두 차례 해온
+  패턴이 있음).
+
+1차 질의응답에서 사용자에게 "URL 내용은 이미 기본 배포에 포함돼 있어
+추가로 할 일이 없다 vs. 우리 쪽 3개를 역으로 Agent-Evaluator에
+백포트한다" 둘 중 뭘 원하는지 물었더니 **둘 다 아니었다** — 사용자의
+실제 의도는 **HAIR-Platform의 "도구/스킬 Pool" 화면(§18)에 이 절차
+스킬들을 기본으로 노출하라**는 것이었다(HAIR-Platform이 모델링하는
+SDLC 팀 — 백엔드 개발자·QA 등 역할의 AI 에이전트 — 이 실제로 이
+방법론을 따르는 조직이라는 전제).
+
+**구현**: `db._seed_default_pools()`에 18개 절차 스킬(agent-evaluator
+기본 배포 15개 + 이 워크북 자체 발굴 3개)을 `skill_pool`에 추가로
+시드했다. `augmentation_mode='none'`으로 등록했다 — VectorDB/GraphDB
+스킬과 달리 이 절차 스킬들은 CrewAI Tool로 감쌀 수 있는 실행 가능한
+함수가 아니라 Claude Code/OpenCode 세션이 참고하는 절차 문서(SKILL.md)
+이기 때문에, 자동으로 붙일 도구가 없다 — Agent가 이 skill_tag를
+"보유하고 있다"는 표시만 남기고, 실제 자동화(예: 에이전트가 이 절차를
+CLI로 직접 실행)는 향후 과제로 남긴다.
+
+기존 골든셋(GC108, GC114)이 skill_pool 시드 개수를 4개로 못박고
+있었는데(정확히 vectordb/rag/graphdb/관계질의 4개만 있다고 단언), 이번
+변경으로 22개가 되므로 두 테스트를 "정확히 4개"에서 "그 4개가 부분
+집합으로 포함돼 있다"는 형태로 완화했다 — 실제 동작 변화를 반영한
+의도된 수정이지 회귀가 아니다. 신규 골든셋 GC125–126
+(`tests/unit/test_phase16_default_skill_exposure.py`)으로 18개 전체가
+정확히 시드되는지(이름·설명·augmentation_mode='none'·빈 도구 목록·
+멱등성)와 매니저 role도 `GET /api/skill-pool`로 볼 수 있는지 검증했다.
+총 129건 통과.
+
+**오픈 이슈**: 이 18개는 "노출"만 됐을 뿐 실제 실행 경로는 없다 —
+`augmentation_mode='none'`이라 Agent가 이 스킬을 갖고 있어도 CrewAI
+Crew 실행 시 아무 도구도 자동으로 붙지 않는다. 만약 향후 "AI Agent가
+`agent-eval` CLI를 실제로 호출하게 한다" 같은 요구가 생기면 그때 native
+Tool로 승격하는 별도 작업이 필요하다.
+
 ## 요약
 
 | 항목 | 상태 |
@@ -910,3 +961,4 @@ FK 연쇄 삭제·안전장치·RBAC·에러 매핑을 전부 검증했다. 총 
 | CrewAI 개념 활용도 감사 — RAG 증강이 Crew 협업에서 누락됨 | **실사용 갭 발견 → 수정 완료**(당시 GC106), human_input/token_usage/delegation/planning 4건 실측 판단(§17) — 이후 §18에서 정적 주입 자체를 Tool 방식으로 대체하며 GC106 내용도 갱신됨 |
 | Skill Pool·Tool Pool + VectorDB/GraphDB의 CrewAI Tool 전환 | **구현 완료**(GC106-115) — 3개 신규 테이블·`pool_registry.py`·CRUD API·Web UI까지 실제 구현, 하드코딩된 스킬→도구 매핑을 데이터로 완전 대체(§18) |
 | 데이터 삭제/초기화 기능(도구/스킬/사람/에이전트/brief/task) | **구현 완료**(GC116-124) — FK 순서 버그·테스트 self-approval 버그 실측으로 발견·수정, confirmed 배정 안전장치, 활동 기록은 NF10 트리거로 삭제 불가라 범위 제외(§19) |
+| Agent-Evaluator/하니스 방법론 절차 스킬 18개를 Skill Pool에 기본 노출 | **구현 완료**(GC125-126) — `augmentation_mode='none'`(실행 도구 없음, skill_tag 노출만), 기존 GC108/GC114 시드 개수 단언을 실제 동작에 맞게 완화(§20) |
