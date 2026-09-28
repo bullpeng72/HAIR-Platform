@@ -34,6 +34,7 @@ from fastapi.responses import HTMLResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from hair_platform import (
+    agent_evaluation,
     agent_runtime,
     assignments,
     audit,
@@ -111,6 +112,12 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
 
     conn = db.get_connection(db_path)
     db.init_schema(conn)
+    # 실측으로 발견(2026-09-28, 리뷰) — 이전 프로세스가 실행 도중
+    # 죽으면 agent_execution_jobs가 영원히 'running'으로 남아 해당
+    # task의 실행 버튼이 복구 불가능하게 막힌다. 단일 프로세스 전제
+    # (docs/LIMITS.md §3)이므로 기동 시점의 'running'은 전부 이전
+    # 프로세스의 잔재로 확정하고 정리한다.
+    deliverables.reap_orphaned_execution_jobs(conn)
     app.state.db = conn
 
     @app.post("/login")
@@ -832,7 +839,14 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     ):
         """Web UI가 F9(온보딩/오프보딩) 화면에서 status 무관 전체 목록을 봐야
         한다 — F3 검색(`/api/pool/search`)은 `status='active'`만 노출해서
-        온보딩 대기(pending_onboarding) 항목을 찾을 방법이 없었다."""
+        온보딩 대기(pending_onboarding) 항목을 찾을 방법이 없었다.
+
+        **실측으로 발견한 갭(2026-09-28, "Phase1~4까지... 분석하고
+        개선해줘" 리뷰 중)**: Phase 3가 만든 `agent_evaluation.
+        aggregate_agent_score()`(§5-2 "자동값과 수동값을 구분해서
+        보여준다")가 실제로는 어떤 API/화면에도 연결돼 있지 않아 테스트
+        말고는 아무도 못 보고 있었다 — `auto_evaluation`으로 여기 얹어서
+        `performance_score`(관리자 수동)와 나란히 노출한다."""
         rows = conn.execute("SELECT * FROM agent_pool ORDER BY id DESC").fetchall()
         return [
             {
@@ -841,6 +855,9 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "skill_tags": json.loads(row["skill_tags"]),
                 "cost_estimate": row["cost_estimate"],
                 "performance_score": row["performance_score"],
+                "auto_evaluation": agent_evaluation.aggregate_agent_score(
+                    conn, row["id"]
+                ),
                 "status": row["status"],
                 "llm_provider": row["llm_provider"],
                 "llm_model": row["llm_model"],

@@ -105,9 +105,60 @@ def _delete_assignments_for_tasks(conn: sqlite3.Connection, task_ids: list[int])
     return len(assignment_ids)
 
 
+def _delete_deliverables_for_tasks(
+    conn: sqlite3.Connection, task_ids: list[int]
+) -> int:
+    """**실측으로 발견한 갭(2026-09-28, "Phase1~4까지... 분석하고
+    개선해줘" 리뷰 중)**: 이 함수가 처음 작성됐을 때(§19)는 `deliverables`
+    테이블이 아직 없었다 — Phase 1-4가 그 뒤에 추가한 `deliverables`/
+    `deliverable_comments`/`agent_evaluations`/`agent_execution_jobs`를
+    이 모듈이 몰라서, "배정이 superseded된 뒤(더 이상 confirmed가 아님)
+    deliverable은 남아있는" task를 지우면 `sqlite3.IntegrityError`(FK
+    위반)가 그대로 사용자에게 500으로 노출되는 걸
+    `test_probe_delete_task_after_supersede_with_existing_deliverable`로
+    재현 확인했다. 이 모듈의 설계 원칙 1번("FK 순서를 지킨 완전한 연쇄
+    삭제... 고아 행을 남기지 않는다")을 그대로 따라 여기도 연쇄
+    삭제하도록 채워 넣었다 — job_items/assignments와 같은 패턴."""
+    if not task_ids:
+        return 0
+    t_placeholders = ",".join("?" * len(task_ids))
+    deliverable_ids = [
+        r["id"]
+        for r in conn.execute(
+            f"SELECT id FROM deliverables WHERE task_id IN ({t_placeholders})",
+            task_ids,
+        ).fetchall()
+    ]
+    conn.execute(
+        f"DELETE FROM agent_execution_jobs WHERE task_id IN ({t_placeholders})",
+        task_ids,
+    )
+    if deliverable_ids:
+        d_placeholders = ",".join("?" * len(deliverable_ids))
+        conn.execute(
+            f"DELETE FROM deliverable_comments WHERE deliverable_id IN ({d_placeholders})",
+            deliverable_ids,
+        )
+        conn.execute(
+            f"DELETE FROM agent_evaluations WHERE deliverable_id IN ({d_placeholders})",
+            deliverable_ids,
+        )
+        conn.execute(
+            "DELETE FROM approvals WHERE subject_type = 'deliverable' AND subject_id IN "
+            f"({d_placeholders})",
+            deliverable_ids,
+        )
+    conn.execute(
+        f"DELETE FROM deliverables WHERE task_id IN ({t_placeholders})", task_ids
+    )
+    return len(deliverable_ids)
+
+
 def delete_task(conn: sqlite3.Connection, actor_id: int, task_id: int) -> None:
-    """할 일(task) 하나를 그 아래 assignments·job_items까지 전부 지운다.
-    `confirmed` 상태 배정이 있으면 막는다(먼저 정리하도록 유도)."""
+    """할 일(task) 하나를 그 아래 assignments·job_items·deliverables까지
+    전부 지운다. `confirmed` 상태 배정이 있으면 막는다(먼저 정리하도록
+    유도) — deliverable 존재 자체는 막지 않는다(§19 설계 원칙 1번,
+    "완전한 연쇄 삭제"를 그대로 따른다)."""
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
@@ -115,6 +166,7 @@ def delete_task(conn: sqlite3.Connection, actor_id: int, task_id: int) -> None:
         raise PermissionError("confirmed_assignment_exists")
 
     deleted_assignments = _delete_assignments_for_tasks(conn, [task_id])
+    _delete_deliverables_for_tasks(conn, [task_id])
     conn.execute(
         "UPDATE agent_pool SET source_job_item_id = NULL WHERE source_job_item_id IN "
         "(SELECT id FROM job_items WHERE task_id = ?)",
@@ -135,8 +187,8 @@ def delete_task(conn: sqlite3.Connection, actor_id: int, task_id: int) -> None:
 
 
 def delete_brief(conn: sqlite3.Connection, actor_id: int, brief_id: int) -> None:
-    """업무 요청(brief) 하나를 그 아래 tasks·jobs·assignments까지 전부
-    지운다. 아래 어떤 task에든 `confirmed` 배정이 있으면 막는다."""
+    """업무 요청(brief) 하나를 그 아래 tasks·jobs·assignments·deliverables까지
+    전부 지운다. 아래 어떤 task에든 `confirmed` 배정이 있으면 막는다."""
     brief = conn.execute("SELECT * FROM briefs WHERE id = ?", (brief_id,)).fetchone()
     if brief is None:
         raise ValueError("brief_not_found")
@@ -151,6 +203,7 @@ def delete_brief(conn: sqlite3.Connection, actor_id: int, brief_id: int) -> None
         raise PermissionError("confirmed_assignment_exists")
 
     deleted_assignments = _delete_assignments_for_tasks(conn, task_ids)
+    _delete_deliverables_for_tasks(conn, task_ids)
     if task_ids:
         placeholders = ",".join("?" * len(task_ids))
         conn.execute(

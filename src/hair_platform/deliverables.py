@@ -487,3 +487,30 @@ def list_execution_jobs(conn: sqlite3.Connection, task_id: int) -> list[dict]:
         (task_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def reap_orphaned_execution_jobs(conn: sqlite3.Connection) -> int:
+    """**실측으로 발견한 갭(2026-09-28, "Phase1~4까지... 분석하고
+    개선해줘" 리뷰 중)**: `status='running'`인 job은 프로세스가 죽기
+    전엔 절대 그 상태로 남을 이유가 없다(`run_agent_execution_job()`이
+    항상 `succeeded`/`failed`로 마무리한다) — 그런데 서버 프로세스가
+    실행 도중 죽으면(배포 재시작, 크래시) 그 job은 영원히 `running`으로
+    남고, Web UI는 그 task의 "AI 에이전트 실행" 버튼을 계속 비활성화한
+    채로 막아버린다(재시작해도 절대 안 풀림 — 새로고침을 아무리 해도
+    복구 불가능한 UI 먹통 상태였다). `docs/LIMITS.md` §3이 이미 이
+    앱을 "단일 프로세스" 전제로 명시하므로, `create_app()` 기동 시점에
+    `running`으로 남은 job은 전부 이전 프로세스의 잔재로 확정할 수
+    있다 — 그래서 앱 기동 시 이 함수로 전부 `failed`로 정리한다."""
+    rows = conn.execute(
+        "SELECT id FROM agent_execution_jobs WHERE status = 'running'"
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "UPDATE agent_execution_jobs SET status = 'failed', "
+            "error = '서버가 재시작되어 실행이 중단되었습니다', "
+            "finished_at = datetime('now') WHERE id = ?",
+            (row["id"],),
+        )
+    if rows:
+        conn.commit()
+    return len(rows)

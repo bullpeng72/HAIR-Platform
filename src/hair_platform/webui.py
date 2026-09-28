@@ -588,7 +588,7 @@ async function renderBriefs(content) {
   });
   content.querySelectorAll("[data-delete-brief]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 업무 요청과 그 아래 할 일·배정을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      if (!window.confirm("이 업무 요청과 그 아래 할 일·배정·결과물(산출물 평가 이력 포함)을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
       try {
         await api("DELETE", "/api/briefs/" + btn.dataset.deleteBrief);
         showMsg("global-msg", "업무 요청을 삭제했습니다.", "ok");
@@ -645,7 +645,7 @@ async function renderTaskList(briefId) {
     '<p class="muted">할 일 ID는 "인력 매칭/배정", "AI 에이전트 생성" 탭에서 사용합니다.</p>';
   detail.querySelectorAll("[data-delete-task]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 할 일과 그 배정을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      if (!window.confirm("이 할 일과 그 배정·결과물(산출물 평가 이력 포함)을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
       try {
         await api("DELETE", "/api/briefs/" + briefId + "/tasks/" + btn.dataset.deleteTask);
         showMsg("global-msg", "할 일을 삭제했습니다.", "ok");
@@ -917,7 +917,7 @@ async function renderAgentPool(content) {
   const canExecute = ["admin", "manager"].includes(ME.role);
   content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
     '<p class="muted">"생성방식" 열은 "AI 에이전트 생성" 탭에서 어떤 옵션(stub/simple_llm/crewai)으로 태어났는지를 보여줍니다 — crewai로 만든 Agent만 그 시점에 스킬 매칭 도구를 갖고 태어납니다. 신규 Agent는 전부 pending_onboarding 상태로 생기고, "온보딩 승인"을 눌러야 active가 돼 "인력 검색"·매칭 후보로 노출됩니다. "오프보딩"(active→deprecated)은 이 화면에서 되돌릴 버튼이 없습니다 — 다시 쓰려면 관리자가 API/DB를 직접 손대야 합니다. "모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11). "지식 색인"은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생). "MCP 서버(JSON)"에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다(ADR 결정 10) — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다. "Tool Pool ID"에 "도구/스킬 Pool" 탭에서 등록한 도구 ID를 넣고 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다(ADR 결정 12). "삭제"(관리자 전용)는 레코드를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 막힙니다.</p>' +
-    table(["ID", "역할", "스킬", "비용", "성과점수", "상태", "생성방식", "LLM", "최근 산출물", "동작"], agents.map(a => {
+    table(["ID", "역할", "스킬", "비용", "성과점수(수동)", "자동평가(Gate/TCR)", "상태", "생성방식", "LLM", "최근 산출물", "동작"], agents.map(a => {
       let actions = "";
       if (isAdmin) {
         if (a.status === "pending_onboarding") actions += '<button class="small" data-onboard="' + a.id + '">온보딩 승인</button>';
@@ -951,8 +951,16 @@ async function renderAgentPool(content) {
       }
       const output = a.last_output ? esc(a.last_output).slice(0, 80) + (a.last_output.length > 80 ? "…" : "") : "-";
       const llmInfo = a.llm_provider ? esc(a.llm_provider) + "/" + esc(a.llm_model || "") : "-";
+      // Phase 3 aggregate_agent_score() — 관리자 수동 점수와 별도로,
+      // 이 Agent가 만든 산출물들의 실측 Gate A-G/TCR 평균을 보여준다
+      // (사용자 요청, 2026-09-28, "Phase1~4까지... 분석하고 개선해줘"
+      // 리뷰 중 발견 — 이전까지 API에 있어도 화면 어디에도 안 보였다).
+      const autoEval = a.auto_evaluation
+        ? (a.auto_evaluation.avg_tcr === null ? "TCR 미측정" : "TCR " + a.auto_evaluation.avg_tcr.toFixed(0) + "%") +
+          " (n=" + a.auto_evaluation.sample_count + ")"
+        : "-";
       return [a.id, esc(a.role_name), esc(a.skill_tags.join(", ")), a.cost_estimate,
-        a.performance_score === null ? "-" : a.performance_score, esc(label(a.status)), esc(a.framework), llmInfo, output,
+        a.performance_score === null ? "-" : a.performance_score, autoEval, esc(label(a.status)), esc(a.framework), llmInfo, output,
         '<div class="actions">' + actions + "</div>"];
     })) + '<div id="execute-result"></div></section>';
 

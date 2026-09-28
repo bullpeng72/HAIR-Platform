@@ -8,7 +8,18 @@ simple_llm 호출... skill을 사용할 수 있도록").
 (산출물 승인 게이트, 사용자 요청 2026-09-28 "다음 단계 진행해줘")의
 GC138-142, Phase 3(Agent 평가 인라인 연결, 사용자 요청 2026-09-28
 "Phase 3 진행해줘")의 GC143-145, Phase 4(execute-agent 비동기화, 사용자
-요청 2026-09-28 "Phase 4 진행해줘")의 GC146-148도 이 파일에 담는다.
+요청 2026-09-28 "Phase 4 진행해줘")의 GC146-148, Phase 1-4 리뷰(사용자
+요청 2026-09-28 "Phase1~4까지... 분석하고 개선해줘")의 GC149-152도 이
+파일에 담는다(GC153은 `test_phase15_data_deletion.py`에 있다 — 그
+파일의 `delete_task()`를 고치는 내용이라 그쪽에 뒀다).
+
+**실측으로 발견한 진짜 크로스-Phase 버그(리뷰 중)**: `assignments.
+resolve_assignment_decision()`은 원래 `resource_type` 구분 없이 같은
+task의 confirmed 배정을 전부 supersede했다 — Phase 1 이전엔 "task 하나엔
+활성 배정 하나"만 있던 시절이라 문제가 없었지만, 협업 워크스페이스가
+"사람 당사자 + Agent 요청자가 같은 task에 함께 confirmed"를 전제로
+하면서 먼저 확정된 쪽이 나중 확정에 조용히 superseded되는 버그가 됐다
+(`docs/LIMITS.md` §26 참고). GC149로 재현·수정 확인.
 
 **Phase 4 테스트 관례**: `TestClient`는 FastAPI `BackgroundTasks`를 응답
 반환 *전에* 동기로 실행한다는 것을 별도 probe 스크립트로 실측 확인했다
@@ -598,3 +609,184 @@ def test_gc148_execution_jobs_endpoint_respects_participant_rbac(client_and_conn
     resp = client.get(f"/api/tasks/{task_id}/agent-execution-jobs")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+# ---------- Phase 1-4 리뷰(사용자 요청, 2026-09-28, "Phase1~4까지... 분석하고 개선해줘") ----------
+
+
+def test_gc149_human_assignee_and_agent_requester_coexist_confirmed(client_and_conn):
+    """실측으로 발견한 크로스-Phase 버그 — 사람 당사자를 먼저 confirmed한
+    뒤 같은 task에 Agent 배정도 confirmed하면(협업 워크스페이스의 핵심
+    시나리오), 예전 F5/F6 "재배치" 로직이 resource_type을 구분하지 않아
+    먼저 확정된 사람 배정이 조용히 superseded 됐었다 — 이제는 서로 다른
+    resource_type끼리는 supersede하지 않아야 한다."""
+    client, conn = client_and_conn
+    brief_id, task_id = _make_brief_and_task(client, "겸용 업무")
+    assert brief_id
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "겸용 사람", "role": "겸용 업무", "skill_tags": []},
+    )
+    human_id = resp.json()["id"]
+    _link_human_to_member1(client, conn, human_id)
+    _confirm_assignment(
+        client, task_id, "human", human_id, requester=("manager1", "managerpass")
+    )
+
+    cur = conn_from_client(client).execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[]', 'active')",
+        ("겸용 업무",),
+    )
+    conn_from_client(client).commit()
+    agent_id = cur.lastrowid
+    _confirm_assignment(
+        client, task_id, "agent", agent_id, requester=("manager1", "managerpass")
+    )
+
+    rows = conn.execute(
+        "SELECT resource_type, status FROM assignments WHERE task_id = ?", (task_id,)
+    ).fetchall()
+    statuses = {r["resource_type"]: r["status"] for r in rows}
+    assert statuses == {"human": "confirmed", "agent": "confirmed"}
+
+    # task_participant_relationship()도 둘 다 정상적으로 인식해야 한다.
+    _login(client, "member1", "memberpass")
+    resp = client.get("/api/my-work")
+    rel = next(r for r in resp.json() if r["task_id"] == task_id)
+    assert rel["my_relationship"] == "assignee"
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get("/api/my-work")
+    rel = next(r for r in resp.json() if r["task_id"] == task_id)
+    assert rel["my_relationship"] == "requester"
+
+
+def test_gc150_reassignment_within_same_resource_type_still_supersedes(
+    client_and_conn,
+):
+    """GC149 수정이 기존 "같은 타입 재배치" 동작(`test_v2_pipeline.py`)을
+    깨지 않았는지 이 파일의 헬퍼로도 재확인 — 같은 resource_type끼리는
+    여전히 supersede돼야 한다."""
+    client, conn = client_and_conn
+    brief_id, task_id = _make_brief_and_task(client, "재배치 업무")
+    assert brief_id
+
+    _login(client, "admin1", "adminpass")
+    resp_a = client.post(
+        "/api/human-pool",
+        json={"name": "후보A", "role": "재배치 업무", "skill_tags": []},
+    )
+    human_a = resp_a.json()["id"]
+    _confirm_assignment(
+        client, task_id, "human", human_a, requester=("manager1", "managerpass")
+    )
+
+    resp_b = client.post(
+        "/api/human-pool",
+        json={"name": "후보B", "role": "재배치 업무", "skill_tags": []},
+    )
+    human_b = resp_b.json()["id"]
+    _confirm_assignment(
+        client, task_id, "human", human_b, requester=("manager1", "managerpass")
+    )
+
+    rows = {
+        r["resource_id"]: r["status"]
+        for r in conn.execute(
+            "SELECT resource_id, status FROM assignments WHERE task_id = ? "
+            "AND resource_type = 'human'",
+            (task_id,),
+        ).fetchall()
+    }
+    assert rows[human_a] == "superseded"
+    assert rows[human_b] == "confirmed"
+
+
+def test_gc151_orphaned_running_jobs_are_reaped_on_startup(client_and_conn):
+    """실측으로 발견한 갭 — 서버 프로세스가 실행 도중 죽으면 `running`
+    job이 영원히 남아 해당 task의 실행 버튼이 복구 불가능하게 막힌다.
+    `create_app()`이 기동 시점에 `reap_orphaned_execution_jobs()`로
+    이걸 정리해야 한다."""
+    from hair_platform import deliverables
+    from hair_platform.app import create_app
+
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    # 프로세스가 죽어 'running'으로 멈춘 상황을 흉내낸다.
+    conn.execute(
+        "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
+        "VALUES (?, 1, 'running')",
+        (task_id,),
+    )
+    conn.commit()
+
+    # 직접 호출로도 확인.
+    reaped = deliverables.reap_orphaned_execution_jobs(conn)
+    assert reaped == 1
+    row = conn.execute(
+        "SELECT status, error FROM agent_execution_jobs WHERE task_id = ?", (task_id,)
+    ).fetchone()
+    assert row["status"] == "failed"
+    assert row["error"]
+
+    # create_app() 기동 경로에도 실제로 연결돼 있는지 별도 DB 파일로 확인.
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        from hair_platform import db as db_mod
+
+        setup_conn = db_mod.get_connection(tmp.name)
+        db_mod.init_schema(setup_conn)
+        setup_conn.execute(
+            "INSERT INTO users (username, password_hash, role) VALUES ('u', 'h', 'admin')"
+        )
+        setup_conn.execute(
+            "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (1, 't', '[]')"
+        )
+        setup_conn.execute(
+            "INSERT INTO tasks (brief_id, role_name, required_skills) "
+            "VALUES (1, 't', '[]')"
+        )
+        setup_conn.execute(
+            "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
+            "VALUES (1, 1, 'running')"
+        )
+        setup_conn.commit()
+        setup_conn.close()
+
+        app = create_app(tmp.name)
+        row = app.state.db.execute("SELECT status FROM agent_execution_jobs").fetchone()
+        assert row["status"] == "failed"
+
+
+def test_gc152_agent_pool_endpoint_exposes_auto_evaluation(client_and_conn):
+    """실측으로 발견한 갭 — Phase 3가 만든 `aggregate_agent_score()`가
+    `GET /api/agent-pool` 응답의 `auto_evaluation`으로 실제 노출되는지
+    확인한다(이전까지는 어떤 API에도 연결돼 있지 않아 테스트 말고는
+    아무도 못 보는 죽은 코드였다)."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, agent_id = _setup_agent_requester_task(client)
+
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/agent-pool")
+    assert resp.status_code == 200
+    row = next(a for a in resp.json() if a["id"] == agent_id)
+    assert row["auto_evaluation"] is None  # 아직 평가 이력 없음
+
+    _execute_agent_and_get_deliverable(client, task_id)
+
+    resp = client.get("/api/agent-pool")
+    row = next(a for a in resp.json() if a["id"] == agent_id)
+    assert row["auto_evaluation"]["sample_count"] == 1
+    assert set(row["auto_evaluation"]["gate_averages"].keys()) == {
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+    }

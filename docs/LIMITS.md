@@ -1258,6 +1258,69 @@ end-to-end로 확인) — 하지만 향후 이 종류의 검증을 할 땐 `.env
 임시로 옮기거나(`mv .env /tmp/`) 별도 빈 작업 디렉터리에서 서버를
 띄워야 한다.
 
+## 26. Phase 1-4 리뷰 — 실측으로 발견한 크로스-Phase 버그 3건 — 사용자
+    요청(2026-09-28, "Phase1~4까지 누락되거나, 오류, 개선이 필요한
+    부분이 있는지 분석하고 개선해줘")
+
+Phase 1-4를 다시 읽으며 실제로 재현되는지 하나씩 테스트로 확인한
+리뷰다. 추측이 아니라 전부 실패하는 테스트를 먼저 만들어 재현한 뒤
+고쳤다.
+
+**1) `assignments.resolve_assignment_decision()`의 resource_type 무시
+(가장 심각)**: 협업 워크스페이스(Phase 1-4)의 핵심 전제는 "사람 당사자 +
+Agent 요청자가 같은 task에 함께 confirmed"다(`deliverables.
+task_participant_relationship()`가 이걸 그대로 가정하고 짜여 있다). 그런데
+F5/F6 시절부터 있던 "재배치 시 같은 task의 confirmed 배정을 supersede"
+로직이 `resource_type`을 구분하지 않아서, 사람 배정을 먼저 확정한 뒤
+Agent 배정을 확정하면(또는 반대 순서) **먼저 확정된 쪽이 조용히
+superseded**됐다 — 즉 "사람이 초안을 쓰고 Agent가 이어받는" 협업의
+가장 기본적인 설정 자체가 깨져 있었다. `resource_type`이 같을 때만
+supersede하도록 좁혀서 고쳤다(기존 "같은 역할 재배치" 테스트는 항상
+human→human만 다뤄서 이 교차 케이스를 잡아내지 못했었다). 골든셋
+GC149(재현)·GC150(기존 동작 유지 재확인)로 검증.
+
+**2) `data_admin.py`가 Phase 1-4의 새 테이블을 모름**: `delete_task()`/
+`delete_brief()`(§19)는 `deliverables` 테이블이 생기기 전에 작성됐다.
+Agent 배정이 confirmed였다가 나중에 재배치로 superseded되면(더 이상
+`confirmed`가 아니므로 삭제 보호를 벗어남) 그 task를 지울 때, 여전히
+그 task를 참조하는 `deliverables`/`agent_execution_jobs`(및 그 자식인
+`deliverable_comments`/`agent_evaluations`) 행 때문에 FK 위반
+(`sqlite3.IntegrityError`)이 그대로 500 에러로 사용자에게 노출됐다.
+§19의 설계 원칙 1번("FK 순서를 지킨 완전한 연쇄 삭제 — 고아 행을
+남기지 않는다")을 그대로 따라 `_delete_deliverables_for_tasks()`를
+추가해 job_items/assignments와 같은 패턴으로 연쇄 삭제하게 했다. Web UI
+삭제 확인 문구에도 "결과물(산출물 평가 이력 포함)"을 명시해 뭐가
+같이 지워지는지 숨기지 않았다. 골든셋 GC153(`test_phase15_data_
+deletion.py`)로 검증.
+
+**3) 오래 실행 중이던 job이 서버 재시작 후 영원히 멈춰 보이는 문제**:
+Phase 4의 `agent_execution_jobs.status='running'`은 프로세스가 살아
+있는 동안엔 항상 `succeeded`/`failed`로 끝난다 — 그런데 프로세스가
+실행 도중 죽으면(배포 재시작, 크래시) 그 job은 영원히 `running`으로
+DB에 남고, Web UI는 그 task의 "AI 에이전트 실행" 버튼을 영구히
+비활성화한 채로 막아버린다(새로고침해도 절대 안 풀림 — 실제로 만들어
+보기 전엔 눈에 안 띄는 종류의 버그다). 이 앱이 이미 "단일 프로세스"
+전제(§3)이므로, `create_app()` 기동 시점에 `running`으로 남은 job은
+전부 이전 프로세스의 잔재로 확정할 수 있다 — `reap_orphaned_
+execution_jobs()`를 만들어 기동 시 자동으로 `failed`(에러 메시지 포함)
+로 정리하게 했다. 골든셋 GC151로 검증(직접 호출 + `create_app()` 경로
+양쪽).
+
+**추가로 발견한 죽은 코드**: Phase 3의 `agent_evaluation.
+aggregate_agent_score()`(§5-2 "자동값과 수동값을 구분해서 보여준다")가
+실제로는 **어떤 API에도 연결돼 있지 않았다** — 테스트 말고는 아무도
+그 값을 볼 방법이 없었다. `GET /api/agent-pool` 응답에 `auto_evaluation`
+필드로 추가하고, Web UI "AI 에이전트" 탭에 "자동평가(Gate/TCR)" 열을
+새로 붙여 관리자 수동 "성과점수"와 나란히 보이게 했다. 골든셋 GC152로
+검증.
+
+**검증**: 골든셋 GC149(assignments 교차 케이스)·GC150(재배치 유지
+재확인)·GC151(orphaned job 정리)·GC152(auto_evaluation 노출, 이상 전부
+`test_phase17_collab_workspace.py`)·GC153(delete 연쇄,
+`test_phase15_data_deletion.py`) 추가. `node --check`로 웹 UI 문법 확인.
+ruff check/format 클린. 전체 골든셋 156건 통과(기존 151 + 이번 리뷰에서
+5건 추가).
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |
@@ -1291,3 +1354,4 @@ end-to-end로 확인) — 하지만 향후 이 종류의 검증을 할 땐 `.env
 | Phase 2: 산출물 승인 게이트(HITL) | **구현 완료**(GC138-142) — 새 승인 로직 없이 F7 다단계 결재라인+ADR 3-A 자기승인 방지를 `subject_type='deliverable'`로 그대로 재사용. "수정 후 재제출" 연결 기준은 아직 미정이라 의도적으로 스코프 밖(§23) |
 | Phase 3: Agent 평가 인라인 연결(Gate A-G) | **구현 완료**(GC143-145) — `eval_wiring.py`(수동 probe)와 별도로 매 execute-agent 실행마다 자동 채점하는 `agent_evaluation.py` 신설. `agent_pool.performance_score`(수동)와 분리된 `agent_evaluations` 테이블(append-only). Gate B/D/E는 도구 호출 없는 단발 LLM 호출 특성상 not_measured 가능, Gate G는 현재 프롬프트가 판단 근거를 요구하지 않아 낮게 나올 수 있음 — 정직하게 문서화(§24) |
 | Phase 4: execute-agent 비동기화 | **구현 완료**(GC146-148) — 사용자가 두 스코프(워크스페이스 비동기화 vs CrewAI Crew 정지/재개) 중 저위험 쪽을 선택. `start_agent_execution()`+`run_agent_execution_job()`으로 분리, `agent_execution_jobs` 신규 테이블(SQLite CHECK 제약은 ALTER 불가라 `deliverables.status` 확장 대신 새 테이블 선택). API 계약 파괴적 변경(201→202+job_id). `TestClient`가 `BackgroundTasks`를 응답 전에 동기 실행한다는 것을 실측 확인. 도구 호출 단위 일시정지(`crew_runtime.run_crew()` 대상)는 별도 세션/ADR 필요 항목으로 명시적으로 남김(§25) |
+| Phase 1-4 리뷰: 크로스-Phase 버그 3건 + 죽은 코드 1건 | **전부 발견 → 전부 수정 완료**(GC149-153) — (1) 사람+Agent를 같은 task에 함께 confirmed하면 F5/F6 시절 재배치 로직이 resource_type을 안 가려 먼저 확정된 쪽이 조용히 superseded되던 버그(협업의 기본 전제 자체가 깨져 있었음), (2) `data_admin.py`가 Phase 1-4의 새 테이블을 몰라 deliverable이 남은 task 삭제 시 FK 위반 500 에러, (3) 서버 재시작 시 'running' job이 영원히 멈춰 보이던 문제(`reap_orphaned_execution_jobs()` 신설). 추가로 Phase 3의 `aggregate_agent_score()`가 어떤 API/화면에도 연결 안 돼 있던 죽은 코드를 발견해 `GET /api/agent-pool`+Web UI에 연결(§26) |

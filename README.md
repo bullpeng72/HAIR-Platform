@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 151 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 156 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -97,7 +97,18 @@ FastAPI `BackgroundTasks`로 응답 전송 후 처리된다. 신규
 완료되면 갱신한다. 원래 설계(`docs/COLLABORATION_PLATFORM_PLAN.md`
 Phase C)가 그렸던 CrewAI 도구 호출 단위 일시정지는 협업 워크스페이스가
 실제로 쓰는 경로(단일 LLM 호출)엔 적용 대상이 없어 스코프에서 제외했다
-(`docs/LIMITS.md` §25).
+(`docs/LIMITS.md` §25). 이어서 사용자 요청("Phase1~4까지... 분석하고
+개선해줘")에 따라 **Phase 1-4를 다시 감사해 크로스-Phase 버그 3건을
+실제로 재현·수정했다** — (1) 사람 당사자와 Agent 요청자를 같은 task에
+함께 confirmed하면(협업의 기본 전제) F5/F6 시절 재배치 로직이
+resource_type을 구분하지 않아 먼저 확정된 쪽이 조용히 superseded되던
+버그, (2) `data_admin.py`가 Phase 1-4의 새 테이블(`deliverables` 등)을
+몰라 남아있는 산출물 때문에 task 삭제가 FK 위반 500으로 실패하던 버그,
+(3) 서버가 실행 도중 죽으면 `agent_execution_jobs`가 영원히 'running'
+으로 남아 실행 버튼이 복구 불가능하게 막히던 문제. 추가로 Phase 3의
+`aggregate_agent_score()`가 실제로는 어떤 화면에도 연결 안 돼 있던 걸
+발견해 "AI 에이전트" 탭에 "자동평가(Gate/TCR)" 열로 노출했다
+(`docs/LIMITS.md` §26).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -113,7 +124,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 151건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 156건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -217,7 +228,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 151건
+tests/unit/                            # 골든셋 156건
 ```
 
 ## 로드맵

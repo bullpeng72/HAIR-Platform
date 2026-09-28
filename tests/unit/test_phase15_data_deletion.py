@@ -8,6 +8,11 @@
 전부 `PRAGMA foreign_keys=ON`(`db.get_connection`)이 걸린 채로 테스트해
 FK 순서를 어기면 `sqlite3.IntegrityError`가 실제로 나는 것까지 확인한다
 (추측이 아니라 진짜 제약 위반 여부를 실측).
+
+GC153(Phase 1-4 리뷰, 사용자 요청 2026-09-28 "Phase1~4까지... 분석하고
+개선해줘")도 이 파일에 담는다 — `delete_task()`가 이 파일 작성 당시엔
+없던 `deliverables`/`agent_evaluations`/`agent_execution_jobs`(Phase
+1/3/4)를 몰라 FK 위반을 냈던 갭을 재현·검증한다.
 """
 
 from __future__ import annotations
@@ -310,3 +315,93 @@ def test_gc124_delete_endpoints_rbac_and_error_mapping(client_and_conn):
     assert resp.status_code == 200
     resp = client.delete(f"/api/tool-pool/{tool_id}")
     assert resp.status_code == 404
+
+
+def test_gc153_delete_task_cascades_deliverables_after_assignment_superseded(
+    client_and_conn,
+):
+    """실측으로 발견한 갭(사용자 요청, 2026-09-28, "Phase1~4까지...
+    분석하고 개선해줘") — 이 함수는 §19(Phase 15) 때 작성돼 그 뒤에
+    생긴 `deliverables`/`deliverable_comments`/`agent_evaluations`/
+    `agent_execution_jobs`(Phase 1/3/4)를 몰랐다. Agent 배정이
+    confirmed였다가 재배치로 superseded되면(더 이상 `confirmed`가
+    아니므로 `_confirmed_assignment_exists`를 통과) task를 지울 때
+    남아있는 deliverable이 FK 위반(`sqlite3.IntegrityError`)을 일으켰다
+    — 이제는 §19 설계 원칙 1번("완전한 연쇄 삭제")대로 전부 같이
+    지워져야 한다."""
+    from unittest.mock import patch
+
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_name = "겸용 업무"
+    resp = client.post("/api/briefs", json={"raw_text": task_name})
+    brief_id = resp.json()["id"]
+    resp = client.post(
+        f"/api/briefs/{brief_id}/tasks",
+        json={"tasks": [{"role_name": task_name, "required_skills": []}]},
+    )
+    task_id = resp.json()["tasks"][0]["id"]
+
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[]', 'active')",
+        (task_name,),
+    )
+    conn.commit()
+    agent_id = cur.lastrowid
+    _confirm_assignment(client, task_id, "agent", agent_id)
+
+    with patch("hair_platform.llm.call_llm", return_value="산출물"):
+        resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
+    assert resp.status_code == 202, resp.text
+    deliverable_id = conn.execute(
+        "SELECT id FROM deliverables WHERE task_id = ?", (task_id,)
+    ).fetchone()["id"]
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM agent_evaluations WHERE deliverable_id = ?",
+            (deliverable_id,),
+        ).fetchone()["c"]
+        == 1
+    )
+
+    # 재배치로 superseded — 더 이상 confirmed가 아니라 삭제 보호를 벗어난다.
+    conn.execute(
+        "UPDATE assignments SET status = 'superseded' WHERE task_id = ? "
+        "AND resource_type = 'agent'",
+        (task_id,),
+    )
+    conn.commit()
+
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    data_admin.delete_task(conn, admin_id, task_id)  # IntegrityError면 여기서 실패
+
+    assert (
+        conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone() is None
+    )
+    for table, column in [
+        ("deliverables", "task_id"),
+        ("agent_execution_jobs", "task_id"),
+    ]:
+        assert (
+            conn.execute(
+                f"SELECT COUNT(*) AS c FROM {table} WHERE {column} = ?", (task_id,)
+            ).fetchone()["c"]
+            == 0
+        )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM agent_evaluations WHERE deliverable_id = ?",
+            (deliverable_id,),
+        ).fetchone()["c"]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM approvals WHERE subject_type = 'deliverable' "
+            "AND subject_id = ?",
+            (deliverable_id,),
+        ).fetchone()["c"]
+        == 0
+    )
