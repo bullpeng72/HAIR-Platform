@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 174 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 179 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -157,7 +157,19 @@ Gate 평균·대기 승인 건수·비용 추이(새 계측 없이 기존 감사
 버그, 브라우저 테스트 인프라가 없어 코드 읽기로 검증), Gate 배지가
 "측정 0개"를 "0/0 통과"로 잘못 표시하던 것, Agent 오프보딩 버튼에만
 확인 창이 없던 것, 성과 리뷰 화면의 낡은 안내 문구를 정정했다
-(`docs/LIMITS.md` §32).
+(`docs/LIMITS.md` §32). 이어서 사용자 요청으로 **대표 시나리오 3건
+(개발/일반 업무/CS, `docs/SCENARIOS.md`)을 기획**하고, "시나리오를
+진행하며... 버그를 찾아 수정해달라"는 요청에 따라 실제로 떠 있는
+서버에 `httpx`로 실제 HTTP 요청을 쏘며 3개 시나리오를 전부 끝까지
+수행했다(코드를 읽는 게 아니라 처음으로 **라이브 실행**으로 검증한
+리뷰) — 새 코드 버그는 없었고, 이 세션이 직접 쓴 시나리오 문서 자체의
+과장(사람 산출물도 승인된다는 서술)을 발견해 정정했다(`docs/LIMITS.md`
+§33). 이어서 그 리뷰가 "새 기능 스코프라 범위 밖"으로 남겨둔 갭을
+사용자가 진행하기로 결정해 **사람 deliverable 제출/승인 메커니즘을
+추가했다** — `submit_deliverable()`(신규)이 Agent 산출물과 같은 결재
+체인을 재사용해 사람도 명시적으로 "검토 요청"을 누르면 승인/반려
+대상이 되게 했다(`POST /api/deliverables/{id}/submit`, 웹 UI 버튼
+포함, GC172-176, `docs/LIMITS.md` §34).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -173,7 +185,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 174건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 179건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -244,7 +256,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(63개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(64개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -279,7 +291,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 174건
+tests/unit/                            # 골든셋 179건
 ```
 
 ## 로드맵

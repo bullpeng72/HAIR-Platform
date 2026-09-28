@@ -478,6 +478,13 @@ async function renderCollabWorkspace(taskId) {
       ? '<div class="actions"><button class="small" data-decide-deliverable="' + d.approval_id + '" data-approve="1">승인</button>' +
         '<button class="small danger" data-decide-deliverable="' + d.approval_id + '" data-approve="0">반려</button></div>'
       : (d.approval_id ? '<p class="muted">결재 대기 중 — "결재" 탭 또는 담당 매니저/관리자가 처리합니다.</p>' : '');
+    // Phase 2 후속(라이브 시나리오 실행에서 발견한 갭 보완, docs/LIMITS.md
+    // §33-34) — 사람 draft는 본인이 명시적으로 "검토 요청"을 눌러야만
+    // 결재 체인이 붙는다(Agent처럼 자동 제출되지 않음). 본인 draft에만
+    // 노출한다(대리 제출 금지).
+    const submitAction = (d.author_type === "human" && d.status === "draft" && d.author_id === ME.id)
+      ? '<div class="actions"><button class="small" data-submit-deliverable="' + d.id + '">검토 요청</button></div>'
+      : '';
     // 실측으로 발견한 갭(사용자 요청, 2026-09-28, "UI/UX 내용 중... 분석
     // 하고 개선해줘") — measured.length가 0일 때 passed===measured.length
     // (0===0)가 참이 돼 "Gate 0/0 통과"를 녹색(gate-ok)으로 보여줬다.
@@ -501,6 +508,7 @@ async function renderCollabWorkspace(taskId) {
     '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + " " + gateBadge + '</div>' +
     '<div>' + esc(d.content).replace(/\\n/g, "<br>") + '</div>' +
     decideActions +
+    submitAction +
     '<div id="comments-' + d.id + '"></div>' +
     '<form class="inline" data-comment-form="' + d.id + '">' +
     '<input placeholder="댓글" id="comment-input-' + d.id + '" style="flex:1">' +
@@ -546,6 +554,16 @@ async function renderCollabWorkspace(taskId) {
           approve: btn.dataset.approve === "1",
         });
         showMsg("global-msg", "처리했습니다.", "ok");
+        renderCollabWorkspace(taskId);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  detail.querySelectorAll("[data-submit-deliverable]").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        await api("POST", "/api/deliverables/" + btn.dataset.submitDeliverable + "/submit", {});
+        showMsg("global-msg", "검토를 요청했습니다.", "ok");
         renderCollabWorkspace(taskId);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };

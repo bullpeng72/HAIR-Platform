@@ -458,8 +458,9 @@ def test_gc141_deliverable_approval_appears_in_admin_inbox(client_and_conn):
 
 
 def test_gc142_human_draft_deliverable_never_has_approval_id(client_and_conn):
-    """사람이 작성한 deliverable은 애초에 승인 게이트 대상이 아니다 —
-    approval_id가 항상 null이어야 한다."""
+    """사람이 작성한 deliverable은 생성 직후(아직 'draft')엔 승인 게이트
+    대상이 아니다 — approval_id가 null이어야 한다. `submit_deliverable()`로
+    명시적으로 제출해야만 결재 체인이 붙는다(GC172 이하)."""
     client, conn = client_and_conn
     _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
 
@@ -473,6 +474,119 @@ def test_gc142_human_draft_deliverable_never_has_approval_id(client_and_conn):
     row = next(d for d in resp.json() if d["author_type"] == "human")
     assert row["status"] == "draft"
     assert row["approval_id"] is None
+
+
+# ---------- Phase 2 후속 — 사람 deliverable 제출/승인(라이브 시나리오 실행에서
+# 발견한 갭 보완, `docs/LIMITS.md` §33-34) ----------
+
+
+def test_gc172_submit_human_deliverable_creates_approval_chain(client_and_conn):
+    """member1이 본인 draft를 제출하면 Agent 경로와 같은 결재 체인이 붙고,
+    admin 결재함(scope=inbox)에도 뜬다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
+
+    _login(client, "member1", "memberpass")
+    resp = client.post(
+        f"/api/tasks/{task_id}/deliverables", json={"content": "사람이 쓴 초안"}
+    )
+    deliverable_id = resp.json()["id"]
+
+    resp = client.post(f"/api/deliverables/{deliverable_id}/submit")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"deliverable_id": deliverable_id, "status": "pending_review"}
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    row = next(d for d in resp.json() if d["id"] == deliverable_id)
+    assert row["status"] == "pending_review"
+    assert row["approval_id"] is not None
+
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/approvals", params={"scope": "inbox"})
+    assert resp.status_code == 200
+    matches = [a for a in resp.json() if a["id"] == row["approval_id"]]
+    assert len(matches) == 1
+    assert matches[0]["subject_type"] == "deliverable"
+
+
+def test_gc173_admin_approves_submitted_human_deliverable(client_and_conn):
+    """제출된 사람 deliverable도 Agent 산출물과 똑같은 승인 경로로
+    'approved'가 되고 approval_id가 다시 null이 된다(같은 결재 로직
+    재사용을 실측 확인)."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
+
+    _login(client, "member1", "memberpass")
+    resp = client.post(
+        f"/api/tasks/{task_id}/deliverables", json={"content": "사람이 쓴 초안"}
+    )
+    deliverable_id = resp.json()["id"]
+    client.post(f"/api/deliverables/{deliverable_id}/submit")
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    approval_id = next(
+        d for d in resp.json() if d["id"] == deliverable_id
+    )["approval_id"]
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deliverable"] == {
+        "deliverable_id": deliverable_id,
+        "status": "approved",
+    }
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    row = next(d for d in resp.json() if d["id"] == deliverable_id)
+    assert row["status"] == "approved"
+    assert row["approval_id"] is None
+
+
+def test_gc174_only_author_can_submit_own_human_deliverable(client_and_conn):
+    """대리 제출 금지 — `create_deliverable()`의 본인만 원칙을 제출에도
+    그대로 적용한다. 관리자도 남 대신 제출 못 한다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
+
+    _login(client, "member1", "memberpass")
+    resp = client.post(
+        f"/api/tasks/{task_id}/deliverables", json={"content": "사람이 쓴 초안"}
+    )
+    deliverable_id = resp.json()["id"]
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(f"/api/deliverables/{deliverable_id}/submit")
+    assert resp.status_code == 403
+
+
+def test_gc175_agent_deliverable_cannot_be_submitted(client_and_conn):
+    """Agent 산출물은 생성 즉시 자동으로 결재 체인이 붙으므로,
+    `submit_deliverable()`의 대상이 아니다(400)."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+    deliverable_id, _row = _execute_agent_and_get_deliverable(client, task_id)
+
+    _login(client, "manager1", "managerpass")
+    resp = client.post(f"/api/deliverables/{deliverable_id}/submit")
+    assert resp.status_code == 400
+
+
+def test_gc176_cannot_resubmit_already_submitted_deliverable(client_and_conn):
+    """제출→승인 체인을 우회해 같은 deliverable을 두 번 제출할 수 없다
+    (NF3와 같은 원칙 — 이미 처리된 것의 재처리 금지)."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
+
+    _login(client, "member1", "memberpass")
+    resp = client.post(
+        f"/api/tasks/{task_id}/deliverables", json={"content": "사람이 쓴 초안"}
+    )
+    deliverable_id = resp.json()["id"]
+    resp = client.post(f"/api/deliverables/{deliverable_id}/submit")
+    assert resp.status_code == 200
+
+    resp = client.post(f"/api/deliverables/{deliverable_id}/submit")
+    assert resp.status_code == 409
 
 
 # ---------- Phase 3 — Agent 평가 인라인 연결(사용자 요청, 2026-09-28, "Phase 3 진행해줘") ----------

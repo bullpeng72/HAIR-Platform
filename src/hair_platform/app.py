@@ -668,6 +668,33 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             ) from None
         return {"id": deliverable_id}
 
+    @app.post("/api/deliverables/{deliverable_id}/submit")
+    def submit_task_deliverable(
+        deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """§2-3 후속(라이브 시나리오 실행에서 발견한 갭 보완, `docs/LIMITS.md`
+        §33-34) — 사람이 작성한 결과물을 명시적으로 검토 대상으로 제출한다.
+        Agent 산출물과 같은 결재 체인을 재사용한다."""
+        try:
+            result = deliverables.submit_deliverable(conn, deliverable_id, user["id"])
+        except ValueError as exc:
+            if str(exc) == "deliverable_not_found":
+                raise HTTPException(
+                    status_code=404, detail="결과물을 찾을 수 없습니다"
+                ) from None
+            if str(exc) == "not_human_deliverable":
+                raise HTTPException(
+                    status_code=400, detail="Agent 산출물은 생성 즉시 자동으로 제출됩니다"
+                ) from None
+            raise HTTPException(
+                status_code=409, detail="이미 제출되었거나 처리된 결과물입니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="본인이 작성한 결과물만 제출할 수 있습니다"
+            ) from None
+        return result
+
     @app.get("/api/deliverables/{deliverable_id}/comments")
     def get_deliverable_comments(
         deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)

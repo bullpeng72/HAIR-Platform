@@ -51,9 +51,16 @@ CHECK을 안전하게 넓힐 방법이 없어, 진행 중 상태는 완전히 �
 (`requested_by`=execute-agent를 트리거한 사람, `subject_type=
 'deliverable'`) — F7의 다단계 결재라인·ADR 3-A 자기승인 방지를 그대로
 재사용한다(새 승인 로직을 따로 만들지 않는다). 사람이 작성한
-deliverable(`'draft'`)은 승인 대상이 아니다 — Agent 산출물만 게이트를
-탄다. "수정 후 재제출"(`revises_id`)은 Phase 2 스코프 밖으로 남긴다
-(`docs/LIMITS.md` 참고).
+deliverable(`'draft'`)은 자동으로는 승인 대상이 아니다 — Agent 산출물만
+생성 즉시 게이트를 탄다. "수정 후 재제출"(`revises_id`)은 Phase 2
+스코프 밖으로 남긴다(`docs/LIMITS.md` 참고).
+
+**Phase 2 후속(2026-09-29, 라이브 시나리오 실행에서 발견, `docs/LIMITS.md`
+§33-34)**: 사람 deliverable이 'draft'에 영영 머물고 완료 판정 경로가
+전혀 없다는 갭이 드러나, `submit_deliverable()`로 본인이 명시적으로
+"검토해달라"고 제출하면 그때 같은 결재 체인이 붙도록 했다 — Agent
+경로와 대칭이지만 자동이 아니라 사람이 스스로 트리거해야 한다는 점만
+다르다.
 """
 
 from __future__ import annotations
@@ -229,6 +236,49 @@ def create_deliverable(
     )
     conn.commit()
     return deliverable_id
+
+
+def submit_deliverable(
+    conn: sqlite3.Connection, deliverable_id: int, actor_id: int
+) -> dict:
+    """`POST /api/deliverables/{id}/submit` — 라이브 시나리오 실행에서 드러난
+    갭(`docs/LIMITS.md` §33)을 메운다: 사람이 작성한 deliverable은 지금까지
+    'draft'에 영영 머물렀고 완료 판정 경로가 API에 전혀 없었다. Agent
+    산출물이 이미 쓰는 결재 체인(`approvals.create_approval_chain()`)을
+    그대로 재사용해 "다 됐으니 검토해달라"는 명시적 제출을 추가한다 — 새
+    승인 로직을 만들지 않는다(모듈 docstring의 Phase 2 원칙 그대로 유지).
+
+    본인이 작성한 'draft' 상태의 human deliverable만 제출할 수 있다(대리
+    제출 금지 — `create_deliverable()`의 참가자 본인 원칙과 통일). Agent
+    산출물은 생성 즉시 자동으로 결재 체인이 붙으므로 이 함수의 대상이
+    아니다."""
+    row = conn.execute(
+        "SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("deliverable_not_found")
+    if row["author_type"] != "human":
+        raise ValueError("not_human_deliverable")
+    if row["status"] != "draft":
+        raise ValueError("not_in_draft_status")
+    if row["author_id"] != actor_id:
+        raise PermissionError("not_the_author")
+
+    conn.execute(
+        "UPDATE deliverables SET status = 'pending_review' WHERE id = ?",
+        (deliverable_id,),
+    )
+    approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
+    audit.record(
+        conn,
+        actor_id,
+        "deliverable_submitted",
+        "deliverables",
+        deliverable_id,
+        after={"status": "pending_review"},
+    )
+    conn.commit()
+    return {"deliverable_id": deliverable_id, "status": "pending_review"}
 
 
 def list_comments(conn: sqlite3.Connection, deliverable_id: int) -> list[dict]:
