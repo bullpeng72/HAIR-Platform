@@ -964,6 +964,17 @@ role의 조회 권한을 검증했다. 총 129건 통과.
   `connect_mcp_tools()`의 지연 import에서 실패한다(신규 실패 모드
   아님, HAIR-Platform 자체 venv에는 이미 설치돼 있어 데모에서는
   문제없이 동작한다).
+- **실측으로 발견한 진짜 마이그레이션 갭**: 이 데모 서버는 `recommend-
+  fix-workflow`가 `augmentation_mode='none'`이던 이전 커밋 상태로 이미
+  한 번 `init_schema()`가 실행된 `hair.db`를 갖고 있었다. `INSERT OR
+  IGNORE`(관리자가 이후 수정해도 재기동 때 안 덮어쓰는 설계, §18/§20
+  공통 원칙)는 `name` UNIQUE 제약으로 그 기존 skill_pool 행을 그대로
+  둬서, 코드를 배포하고 서버를 재시작해도 `recommend-fix-workflow`가
+  자동으로 `'tool'`로 승격되지 않았다(재시작 후 API로 직접 확인해서
+  발견) — **시드 값 자체가 바뀌는 마이그레이션은 `INSERT OR IGNORE`로
+  커버되지 않는다**는 일반적 한계다. 이번 데모 인스턴스는 `sqlite3
+  hair.db`로 그 한 행을 수동으로 맞춰줬다(운영 배포라면 별도 데이터
+  마이그레이션 스크립트가 필요하다는 뜻).
 
 ## 요약
 
