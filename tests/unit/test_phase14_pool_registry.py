@@ -28,12 +28,13 @@ def test_gc108_init_schema_seeds_default_vectordb_graphdb_pools():
     db.init_schema(conn)  # 멱등성 확인
 
     tools = pool_registry.list_tools(conn)
-    assert len(tools) == 2
     tool_names = {t["name"] for t in tools}
-    assert tool_names == {"VectorDB 지식검색", "GraphDB 관계조회"}
+    native_names = {"VectorDB 지식검색", "GraphDB 관계조회"}
+    assert native_names <= tool_names
     for t in tools:
-        assert t["kind"] == "native"
-        assert t["is_active"] is True
+        if t["name"] in native_names:
+            assert t["kind"] == "native"
+            assert t["is_active"] is True
 
     skills = pool_registry.list_skills(conn)
     skill_names = {s["name"] for s in skills}
@@ -208,7 +209,7 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
 
     resp = client.get("/api/tool-pool")
     assert resp.status_code == 200
-    assert len(resp.json()) == 2  # 시드된 VectorDB/GraphDB 도구
+    assert len(resp.json()) == 3  # 시드된 VectorDB/GraphDB/recommend_fix 도구(Phase 16)
 
     resp = client.post(
         "/api/tool-pool",

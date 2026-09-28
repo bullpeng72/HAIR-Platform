@@ -916,21 +916,54 @@ SDLC 팀 — 백엔드 개발자·QA 등 역할의 AI 에이전트 — 이 실�
 "보유하고 있다"는 표시만 남기고, 실제 자동화(예: 에이전트가 이 절차를
 CLI로 직접 실행)는 향후 과제로 남긴다.
 
-기존 골든셋(GC108, GC114)이 skill_pool 시드 개수를 4개로 못박고
-있었는데(정확히 vectordb/rag/graphdb/관계질의 4개만 있다고 단언), 이번
-변경으로 22개가 되므로 두 테스트를 "정확히 4개"에서 "그 4개가 부분
-집합으로 포함돼 있다"는 형태로 완화했다 — 실제 동작 변화를 반영한
-의도된 수정이지 회귀가 아니다. 신규 골든셋 GC125–126
-(`tests/unit/test_phase16_default_skill_exposure.py`)으로 18개 전체가
-정확히 시드되는지(이름·설명·augmentation_mode='none'·빈 도구 목록·
-멱등성)와 매니저 role도 `GET /api/skill-pool`로 볼 수 있는지 검증했다.
-총 129건 통과.
+기존 골든셋(GC108, GC114)이 skill_pool/tool_pool 시드 개수를 각각 4개·
+2개로 못박고 있었는데(정확히 vectordb/rag/graphdb/관계질의 4개, VectorDB/
+GraphDB 도구 2개만 있다고 단언), 이번 변경으로 각각 22개·3개가 되므로
+두 테스트를 "정확히 N개"에서 "그 N개가 부분집합으로 포함돼 있다"는
+형태로 완화했다 — 실제 동작 변화를 반영한 의도된 수정이지 회귀가
+아니다.
 
-**오픈 이슈**: 이 18개는 "노출"만 됐을 뿐 실제 실행 경로는 없다 —
-`augmentation_mode='none'`이라 Agent가 이 스킬을 갖고 있어도 CrewAI
-Crew 실행 시 아무 도구도 자동으로 붙지 않는다. 만약 향후 "AI Agent가
-`agent-eval` CLI를 실제로 호출하게 한다" 같은 요구가 생기면 그때 native
-Tool로 승격하는 별도 작업이 필요하다.
+이어서 사용자가 "CrewAI AI Agent가 개발 단계에 필요한 기능일지 확인하고,
+필요한 경우 AI Agent가 호출할 수 있도록 변형해줘"라고 재요청해서 18개를
+하나씩 실제로 검토했다:
+
+- **17개**는 git/PR 라벨 판단, SDK 소스 코드 직접 읽기, CI 신호 해석,
+  `.aoo/` 상태 파일 대조 같은 HITL(사람 또는 Claude Code 세션의 판단)
+  절차라서, 안전하게 단일 함수 호출로 옮길 방법이 없었다 — 억지로
+  "도구"로 만들면 속 빈 no-op이 되거나, AI Agent에게 임의 CLI 실행/저장소
+  쓰기 권한을 새로 열어줘야 해서(보안 위험 확대) 그대로 `augmentation_mode
+  ='none'`(skill_tag 노출만) 유지했다.
+- **`recommend-fix-workflow`만 예외였다** — 실제로 `agent_evaluator.
+  integrations.recommend_fix_mcp`가 이미 읽기 전용 stdio MCP 서버로
+  구현돼 있었다(`recommend_fix(gate, metric, value) -> str`, 노출 도구
+  단 하나). `.aoo` 실행 이력이 없어도 정적 지식만으로 안전하게 동작하고
+  부작용이 없어서, `tool_pool`에 `kind='mcp_stdio'`로 등록하고
+  (`command=sys.executable`, HAIR-Platform이 실행 중인 바로 그 venv를
+  보장) `recommend-fix-workflow` 스킬을 `augmentation_mode='tool'`로
+  승격해 실제로 연결했다.
+
+**실측 검증(추측 아님)**: `agent_pool`에 `skill_tags=["recommend-fix-
+workflow"]`인 Agent를 만들고 `pool_registry.resolve_pool_tools()`를 mock
+없이 그대로 호출해, `recommend_fix` MCP 서버가 실제로 서브프로세스로
+뜨고(`ListToolsRequest`/`CallToolRequest` 로그 확인) `gate="D"` 호출이
+"[Gate D — Performance Contract] SLA threshold exceeded..." 같은 실제
+정적 지식을 반환하는 것까지 확인했다.
+
+신규 골든셋 GC125–126(`tests/unit/test_phase16_default_skill_exposure.py`)
+으로 17개는 `augmentation_mode='none'`+빈 도구 목록, `recommend-fix-
+workflow` 하나만 `'tool'`+`mcp_stdio` 도구 연결인 것과 멱등성, 매니저
+role의 조회 권한을 검증했다. 총 129건 통과.
+
+**오픈 이슈**:
+- 나머지 17개는 여전히 "노출"만 됐을 뿐 실제 실행 경로가 없다 — 향후
+  "AI Agent가 `agent-eval` CLI를 직접 호출하게 한다" 같은 요구가 생기면
+  그때 개별적으로 안전한 wrapping 방법(예: 화이트리스트된 서브커맨드만
+  허용하는 native Tool)을 다시 설계해야 한다.
+- `recommend_fix` 도구는 `agent-evaluator[mcp]`(=`mcp` 패키지)가 설치돼
+  있어야 실제로 접속된다 — 없으면 기존 MCP 기능과 동일하게
+  `connect_mcp_tools()`의 지연 import에서 실패한다(신규 실패 모드
+  아님, HAIR-Platform 자체 venv에는 이미 설치돼 있어 데모에서는
+  문제없이 동작한다).
 
 ## 요약
 
@@ -961,4 +994,4 @@ Tool로 승격하는 별도 작업이 필요하다.
 | CrewAI 개념 활용도 감사 — RAG 증강이 Crew 협업에서 누락됨 | **실사용 갭 발견 → 수정 완료**(당시 GC106), human_input/token_usage/delegation/planning 4건 실측 판단(§17) — 이후 §18에서 정적 주입 자체를 Tool 방식으로 대체하며 GC106 내용도 갱신됨 |
 | Skill Pool·Tool Pool + VectorDB/GraphDB의 CrewAI Tool 전환 | **구현 완료**(GC106-115) — 3개 신규 테이블·`pool_registry.py`·CRUD API·Web UI까지 실제 구현, 하드코딩된 스킬→도구 매핑을 데이터로 완전 대체(§18) |
 | 데이터 삭제/초기화 기능(도구/스킬/사람/에이전트/brief/task) | **구현 완료**(GC116-124) — FK 순서 버그·테스트 self-approval 버그 실측으로 발견·수정, confirmed 배정 안전장치, 활동 기록은 NF10 트리거로 삭제 불가라 범위 제외(§19) |
-| Agent-Evaluator/하니스 방법론 절차 스킬 18개를 Skill Pool에 기본 노출 | **구현 완료**(GC125-126) — `augmentation_mode='none'`(실행 도구 없음, skill_tag 노출만), 기존 GC108/GC114 시드 개수 단언을 실제 동작에 맞게 완화(§20) |
+| Agent-Evaluator/하니스 방법론 절차 스킬 18개를 Skill Pool에 기본 노출 | **구현 완료**(GC125-126) — 17개는 `augmentation_mode='none'`(HITL 절차라 안전한 도구화 불가), `recommend-fix-workflow` 1개는 실제 `recommend_fix` stdio MCP 도구로 승격해 실측 연결까지 확인. 기존 GC108/GC114 시드 개수 단언을 실제 동작에 맞게 완화(§20) |

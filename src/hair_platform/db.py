@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 
@@ -346,13 +347,6 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
             ),
         ),
         (
-            "recommend-fix-workflow",
-            (
-                "Gate A-G 중 하나가 fail/warn일 때 코드를 고치기 전에 조치 후보를 "
-                "조회하고, 적용 후 실제로 통했는지 검증하는 절차."
-            ),
-        ),
-        (
             "spec-driven-artifacts",
             (
                 "코드를 짜기 전에 Spec·실패 모드 카탈로그·최소 골든셋·세션 목표 "
@@ -417,6 +411,60 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
             "VALUES (?, ?, '[]', 'none')",
             (name, description),
         )
+
+    # 사용자 요청(2026-09-28, "CrewAI AI Agent가 개발 단계에 필요한 기능일지
+    # 확인하고, 필요한 경우 AI Agent가 호출할 수 있도록 변형해줘") — 18개 중
+    # 17개는 git/PR/CLI 판단·SDK 소스 읽기 같은 HITL 절차라 실행 가능한 도구로
+    # 옮길 안전한 방법이 없었지만(§20 오픈 이슈 그대로 유지), 이거 하나는
+    # 예외다: `agent_evaluator.integrations.recommend_fix_mcp`가 이미 실제
+    # stdio MCP 서버로 구현돼 있고(`recommend_fix(gate, metric, value) -> str`
+    # 노출), `.aoo`/평가 결과 파일이 없어도 정적 지식만으로 안전하게 동작한다
+    # (읽기 전용, 부작용 없음) — 그래서 이것만 mcp_stdio Tool Pool 항목으로
+    # 승격해 "recommend-fix-workflow" 스킬에 실제로 연결한다. vectordb/graphdb와
+    # 같은 이유로 `INSERT OR IGNORE`만 쓴다 — 관리자가 이후 이 스킬의 연결을
+    # 직접 바꿔도 재기동 때마다 덮어쓰지 않는다(이미 있으면 아무 것도 안 함).
+    # `command`는 `sys.executable`을 그대로 써서, MCPServerAdapter가 스폰하는
+    # 서브프로세스가 HAIR-Platform이 실행 중인 바로 그 venv(따라서 같은
+    # `agent_evaluator`/`mcp` 패키지)를 쓰도록 보장한다 — PATH의 임의
+    # "python"에 의존하지 않는다. `agent-evaluator[mcp]`(=`mcp` 패키지)가
+    # 설치돼 있어야 실제로 접속되며, 없으면 기존 MCP 기능과 동일하게
+    # `connect_mcp_tools()`의 지연 import에서 실패한다(신규 실패 모드 아님).
+    conn.execute(
+        "INSERT OR IGNORE INTO tool_pool (name, description, kind, config) "
+        "VALUES (?, ?, 'mcp_stdio', ?)",
+        (
+            "Gate 조치 지식 조회(recommend_fix)",
+            (
+                "agent_evaluator.integrations.recommend_fix_mcp — Gate A-G/지표가 "
+                "나쁠 때 정적 지식으로 조치를 추천하는 읽기 전용 stdio MCP 서버. "
+                ".aoo 실행 이력이 없어도 안전하게 동작한다."
+            ),
+            json.dumps(
+                {
+                    "command": sys.executable,
+                    "args": ["-m", "agent_evaluator.integrations.recommend_fix_mcp"],
+                }
+            ),
+        ),
+    )
+    recommend_fix_tool_row = conn.execute(
+        "SELECT id FROM tool_pool WHERE name = ?",
+        ("Gate 조치 지식 조회(recommend_fix)",),
+    ).fetchone()
+    conn.execute(
+        "INSERT OR IGNORE INTO skill_pool "
+        "(name, description, default_tool_pool_ids, augmentation_mode) "
+        "VALUES (?, ?, ?, 'tool')",
+        (
+            "recommend-fix-workflow",
+            (
+                "Gate A-G 중 하나가 fail/warn일 때 코드를 고치기 전에 조치 후보를 "
+                "조회하고, 적용 후 실제로 통했는지 검증하는 절차 — recommend_fix "
+                "MCP 도구가 실제로 붙어 있어 Agent가 직접 조회를 호출할 수 있다."
+            ),
+            json.dumps([recommend_fix_tool_row["id"]]),
+        ),
+    )
 
 
 def init_schema(conn: sqlite3.Connection) -> None:

@@ -58,8 +58,14 @@ Crew 협업에는 빠져 있던 실사용 갭을 발견·수정했다(`docs/LIMI
 달라고 요청한 것을 계기로 **"도구/스킬 Pool"에 하니스 방법론 절차
 스킬 18개(agent-evaluator 기본 배포 15개 + 이 워크북 자체 발굴 3개)를
 기본 노출했다** — HAIR-Platform이 모델링하는 SDLC 팀(AI 에이전트)이
-실제로 이 방법론을 따른다는 전제. 실행 가능한 CrewAI Tool이 없어
-`augmentation_mode='none'`으로 skill_tag 노출만 한다(`docs/LIMITS.md`
+실제로 이 방법론을 따른다는 전제. 이어서 "CrewAI AI Agent가 실제로
+필요한 기능인지 확인하고, 필요하면 호출 가능하게 변형해달라"는 요청에
+18개를 하나씩 검토한 결과, 17개는 git/PR 판단·SDK 소스 읽기 같은 HITL
+절차라 안전하게 도구화할 방법이 없어 `augmentation_mode='none'`(skill_tag
+노출만)로 남기고, `recommend-fix-workflow` 1개는 실제 존재하는
+`agent_evaluator.integrations.recommend_fix_mcp`(읽기 전용 stdio MCP
+서버)를 Tool Pool에 등록해 `augmentation_mode='tool'`로 승격했다 —
+mock 없이 실제 서브프로세스 연결·호출까지 실측 확인했다(`docs/LIMITS.md`
 §20).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
