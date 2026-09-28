@@ -66,7 +66,11 @@ Crew 협업에는 빠져 있던 실사용 갭을 발견·수정했다(`docs/LIMI
 `agent_evaluator.integrations.recommend_fix_mcp`(읽기 전용 stdio MCP
 서버)를 Tool Pool에 등록해 `augmentation_mode='tool'`로 승격했다 —
 mock 없이 실제 서브프로세스 연결·호출까지 실측 확인했다(`docs/LIMITS.md`
-§20).
+§20). 사용자가 "AI 에이전트 생성" 메뉴의 stub/simple_llm/crewai 차이를
+물어본 것을 계기로, **14개 탭 전부의 안내 문구를 실제 백엔드 로직 기준으로
+상세히 보강했다** — 이 과정에서 스펙 코드 노출 금지 골든셋(GC60, 코드
+재점검 R5)이 새로 쓴 문구의 회귀를 실제로 잡아내 수정했다(`docs/LIMITS.md`
+§21).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
