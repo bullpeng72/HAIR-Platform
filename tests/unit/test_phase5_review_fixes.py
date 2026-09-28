@@ -97,12 +97,12 @@ def test_gc43_pool_search_filters_apply_to_agents_too(client_and_conn):
     # role 필터에 안 맞으면 이 Agent가 결과에 나오면 안 된다(수정 전엔 버그로 나왔다).
     resp = client.get("/api/pool/search", params={"role": "백엔드"})
     assert resp.status_code == 200
-    ids = [c["id"] for c in resp.json() if c["type"] == "agent"]
+    ids = [c["id"] for c in resp.json()["items"] if c["type"] == "agent"]
     assert agent_id not in ids
 
     # role이 맞으면 나온다.
     resp = client.get("/api/pool/search", params={"role": "디자이너"})
-    ids = [c["id"] for c in resp.json() if c["type"] == "agent"]
+    ids = [c["id"] for c in resp.json()["items"] if c["type"] == "agent"]
     assert agent_id in ids
 
 

@@ -22,8 +22,14 @@ def human_pool_candidates(
     conn: sqlite3.Connection,
     role: str | None = None,
     skill: str | None = None,
-    available_only: bool = False,
+    availability: str | None = None,
 ) -> list[ResourceCandidate]:
+    """Phase 5(`docs/HAIR_MASTER_PLAN.md` §6 "검색/필터 스케일")에서
+    `available_only: bool`을 `availability: 'available' | 'unavailable'`
+    로 넓혔다 — 이전엔 "가용한 사람만" 걸러낼 순 있어도 "지금 바쁜
+    사람만"(예: 언제 풀리는지 확인하려고) 찾아볼 방법이 없었다.
+    `'offboarded'`는 여기 값으로 못 넣는다 — 아래 WHERE절이 항상 이미
+    제외하는 별개 상태다(퇴사자는 애초에 검색 후보가 아니다)."""
     # 코드 재점검(R3)에서 추가한 오프보딩 상태 — 퇴사한 사람은 검색/매칭에서
     # 완전히 배제한다(단순 unavailable과 달리 아예 후보군에서 제외).
     query = "SELECT * FROM human_pool WHERE availability != 'offboarded'"
@@ -31,8 +37,9 @@ def human_pool_candidates(
     if role:
         query += " AND role LIKE ?"
         params.append(f"%{role}%")
-    if available_only:
-        query += " AND availability = 'available'"
+    if availability in ("available", "unavailable"):
+        query += " AND availability = ?"
+        params.append(availability)
 
     rows = conn.execute(query, params).fetchall()
     candidates = []
@@ -66,7 +73,7 @@ def agent_pool_candidates(
 
     F3 검색 버그 수정(코드 재점검): `role`/`skill` 필터가 human_pool_candidates
     에만 있고 여기엔 없어서 검색 결과에 무관한 Agent가 항상 섞여 나왔다 —
-    human_pool_candidates와 동일한 필터 규약을 맞춘다. `available_only`는
+    human_pool_candidates와 동일한 필터 규약을 맞춘다. `availability`는
     Agent에 해당 없다(온보딩된 Agent는 항상 available).
     """
     query = "SELECT * FROM agent_pool WHERE status = 'active'"

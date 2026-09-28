@@ -40,10 +40,12 @@ from hair_platform import (
     audit,
     cost,
     crew_runtime,
+    dashboard,
     data_admin,
     db,
     deliverables,
     fairness,
+    inbox,
     jobs,
     performance,
     pool,
@@ -498,26 +500,48 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     def search_pool(
         role: str | None = None,
         skill: str | None = None,
-        available_only: bool = False,
+        availability: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
         user: sqlite3.Row = Depends(get_current_user),
     ):
         """F3 — Human Pool + Agent Pool(스텁) 통합 검색. 전원 조회 가능(RBAC 매트릭스).
 
         코드 재점검(2026-09-26)에서 발견: role/skill 필터가 human_pool에만 걸리고
         Agent Pool은 무조건 전부 반환되던 버그를 수정 — 양쪽에 동일 필터를 적용한다.
+
+        Phase 5(`docs/HAIR_MASTER_PLAN.md` §6 "검색/필터 스케일") — `available_only`
+        (boolean)를 `availability`(가능/불가 둘 다 명시적으로 찾을 수 있게)로
+        넓히고, 감사로그(§13)와 같은 `limit`/`offset`+`total` 페이지네이션
+        규약을 적용했다. Human+Agent를 하나로 합친 뒤 자르는 방식이라(두
+        풀을 SQL에서 각각 페이지네이션하면 "한 페이지"가 한쪽 풀로만 채워질
+        수 있어 부정확해진다) 큰 풀에서는 비효율적일 수 있다 — 이 저장소가
+        전제하는 소규모 팀 규모에서는 허용 가능한 트레이드오프다.
+
+        "부서" 필터(§6 원안)는 넣지 않았다 — 이 스키마엔 애초에 "부서"라는
+        필드가 없다(조직 구조는 `manager_id` 상사 체인/조직도로만 표현된다).
+        존재하지 않는 데이터를 필터로 꾸며내지 않고, 이미 있는 `role`이
+        사실상 같은 역할(직군 단위 검색)을 한다는 점을 그대로 문서화한다.
         """
+        limit = max(1, min(limit, 200))
         candidates = pool.human_pool_candidates(
-            conn, role=role, skill=skill, available_only=available_only
+            conn, role=role, skill=skill, availability=availability
         ) + pool.agent_pool_candidates(conn, role=role, skill=skill)
         rows = conn.execute("SELECT id, name FROM human_pool").fetchall()
         name_by_id = {row["id"]: row["name"] for row in rows}
-        return [
+        items = [
             {
                 **c.model_dump(),
                 "name": name_by_id.get(c.id) if c.type == "human" else None,
             }
             for c in candidates
         ]
+        return {
+            "items": items[offset : offset + limit],
+            "total": len(items),
+            "limit": limit,
+            "offset": offset,
+        }
 
     @app.post("/api/tasks/{task_id}/match")
     def match_task(
@@ -574,6 +598,15 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     ):
         """§2-1 — 확정된 배정 중 내가 당사자이거나(사람) 요청자인(Agent) task."""
         return deliverables.list_my_work(conn, user["id"], limit, offset)
+
+    @app.get("/api/inbox")
+    def get_inbox_endpoint(user: sqlite3.Row = Depends(get_current_user)):
+        """Phase 5 — 통합 인박스(`docs/HAIR_MASTER_PLAN.md` §6). 결재
+        대기(Admin/매니저)·Agent 실행 실패·낮은 Gate 점수 경고를 한
+        목록으로 합쳐 반환한다. 새 권한 규칙을 추가하지 않는다 — 각
+        항목은 기존 조회 함수(`approvals.list_inbox`/`deliverables.
+        list_my_work`)가 이미 강제하는 접근 범위를 그대로 물려받는다."""
+        return inbox.get_inbox(conn, user["id"], user["role"])
 
     @app.get("/api/tasks/{task_id}/deliverables")
     def list_task_deliverables(
@@ -1033,6 +1066,15 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         가리키는 도구를 이 스킬을 가진 모든 Agent에 자동으로 붙인다."""
         return pool_registry.list_skills(conn)
 
+    @app.get("/api/skill-pool/names")
+    def list_skill_pool_names(user: sqlite3.Row = Depends(get_current_user)):
+        """Phase 5 — Skill 자동완성(사용자 요청, "협업 워크스페이스 UX
+        개선"). `/api/skill-pool`은 도구 연결 상세(augmentation_mode 등)
+        까지 담아 Admin/매니저 전용이지만, 스킬 "이름"만 필요한 자동완성은
+        `required_skills`/`skill_tags`를 입력하는 모든 role(팀원 포함)이
+        써야 한다 — 이름만 떼어 노출하는 별도 엔드포인트를 둔다."""
+        return [s["name"] for s in pool_registry.list_skills(conn)]
+
     @app.post("/api/skill-pool", status_code=201)
     def create_skill_pool_entry(
         payload: SkillPoolCreate,
@@ -1348,6 +1390,15 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         """F10 — 비용 조회(Admin·매니저 전용, RBAC 매트릭스)."""
         return cost.report(conn)
 
+    @app.get("/api/dashboard")
+    def get_dashboard(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """Phase 5 — 매니저 대시보드(`docs/HAIR_MASTER_PLAN.md` §6). 팀
+        Agent 평균 Gate 점수·대기 승인 건수·비용 추이를 한 번에 담는다.
+        F10/F13과 같은 이유로 Admin·매니저 전용이다."""
+        return dashboard.summary(conn, user["id"], user["role"])
+
     @app.get("/api/fairness-report")
     def get_fairness_report(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
@@ -1437,19 +1488,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 status_code=403,
                 detail="승인 대기함은 Admin/매니저만 조회할 수 있습니다",
             )
-        if user["role"] == Role.ADMIN.value:
-            rows = conn.execute(
-                "SELECT * FROM approvals WHERE status = 'pending' AND requested_by != ? "
-                "ORDER BY id ASC",
-                (user["id"],),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM approvals WHERE status = 'pending' AND requested_by != ? "
-                "AND (approver_id IS NULL OR approver_id = ?) ORDER BY id ASC",
-                (user["id"], user["id"]),
-            ).fetchall()
-        return [dict(row) for row in rows]
+        return approvals_mod.list_inbox(conn, user["id"], user["role"])
 
     @app.post("/api/approvals", status_code=201)
     def create_approval(

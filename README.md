@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 159 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 172 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -119,7 +119,20 @@ Agent가 삭제/오프보딩되면 `agent_not_active` 같은 내부 코드 문�
 `decide_approval()`은 승인/반려 둘 다 감사로그에 남기는데 Agent 실행은
 성공만 기록하고 실패는 전혀 안 남아 HOTL 감독자가 실패 이력을
 감사로그 화면에서 볼 수 없던 비대칭을 발견해 `agent_execution_failed`
-액션을 추가했다(`docs/LIMITS.md` §28).
+액션을 추가했다(`docs/LIMITS.md` §28). 이어서 사용자 요청("Phase
+5(기업용 UI/UX)에 포함할 항목을 고르세요")에 따라 **Phase 5(기업용
+UI/UX 고도화)를 부분 구현했다** — 6개 제안 항목 중 사용자가 고른
+4개(통합 인박스·매니저 대시보드·검색/필터 스케일·협업 워크스페이스
+UX)와 제한적 반응형만 넣었다(다크모드는 명시적으로 제외). 통합
+인박스(`GET /api/inbox`)는 결재 대기·Agent 실행 실패·낮은 Gate 점수
+경고를 한 곳에 모으고, 매니저 대시보드(`GET /api/dashboard`)는 팀
+Gate 평균·대기 승인 건수·비용 추이(새 계측 없이 기존 감사로그 재사용)
+를 보여준다. 검색은 "가능만"뿐이던 가용성 필터를 양방향으로 넓히고
+페이지네이션을 추가했다(응답 계약 변경) — "부서" 필터는 그 데이터
+자체가 스키마에 없어 넣지 않았다. 협업 워크스페이스는 채팅형 좌우
+타임라인 + Skill 자동완성을 추가하면서, Phase 3부터 API에 있었지만
+어떤 화면에도 렌더링된 적 없던 Gate 평가 배지를 처음 노출했다
+(`docs/LIMITS.md` §29).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -135,7 +148,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 159건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 172건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -206,7 +219,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(60개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(63개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -229,6 +242,8 @@ src/hair_platform/
   pool_registry.py   # Skill Pool·Tool Pool(ADR 결정 12) — 스킬→도구 매핑 데이터화, CrewAI Tool 조립
   data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호)
   deliverables.py    # 협업 워크스페이스 Phase 1-4 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)
+  inbox.py           # Phase 5 — 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고)
+  dashboard.py       # Phase 5 — 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이)
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
   ADR.md             # 설계 결정 11건
@@ -239,7 +254,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 159건
+tests/unit/                            # 골든셋 172건
 ```
 
 ## 로드맵

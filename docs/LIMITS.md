@@ -1376,6 +1376,72 @@ execution_job()`의 성공 경로는 `deliverable_created`를 기록하면서
 **검증**: 골든셋 GC156(1건) 추가. `node --check`로 웹 UI 문법 확인.
 ruff check/format 클린. 전체 골든셋 159건 통과.
 
+## 29. Phase 5 구현 — 기업용 UI/UX 고도화(부분) — 사용자 요청
+    (2026-09-28, "Phase 5(기업용 UI/UX)에 포함할 항목을 고르세요")
+
+`docs/HAIR_MASTER_PLAN.md` §6의 6개 항목 중 사용자가 AskUserQuestion으로
+4개(통합 인박스·매니저 대시보드·검색/필터 스케일·협업 워크스페이스
+UX)와 제한적 반응형을 선택했다. 다크모드는 명시적으로 제외.
+
+**1) 통합 인박스(`inbox.py`, `GET /api/inbox`)**: 결재 대기·Agent 실행
+실패·낮은 Gate 점수 경고(승인/반려 전인 것만) 3종을 한 목록으로 합친다.
+새 권한 규칙을 추가하지 않고 기존 `approvals.list_inbox()`(원래
+`app.py`에 인라인으로 있던 것을 이 기회에 재사용 가능하게 추출,
+동작 변경 없음)·`deliverables.list_my_work()`가 이미 강제하는 접근
+범위를 그대로 물려받는다. **정직한 한계**: `approvals` 테이블에
+`created_at`이 없어(F7 설계 당시부터) 3종을 하나의 타임스탬프로 완전히
+통합 정렬할 수 없다 — 타입별로 묶어서 반환한다.
+
+**2) 매니저 대시보드(`dashboard.py`, `GET /api/dashboard`)**: 팀 Agent
+평균 Gate 점수·대기 승인 건수·비용 추이를 한 화면에. **"비용 추이"
+관련 실측 확인**: 처음엔 시계열 비용 데이터가 전혀 없다고 생각했다
+(`cost.py`의 `cost_estimate`는 그때그때 값 하나뿐) — 하지만
+`agent_cost_updated`/`human_pool_updated` 감사로그 액션이 이미
+`after_value.cost_estimate`+`audit_log.created_at`을 갖고 있다는 걸
+확인해, 새 계측 없이 그 이력을 그대로 "추이"로 재사용했다. DB를 새로
+부트스트랩했고 지금까지 아무도 비용을 바꾼 적이 없으면 이력이
+비어있을 수 있다(과거로 소급해 데이터를 만들어낼 방법은 없음).
+
+**3) 검색/필터 스케일(`GET /api/pool/search`)**: `available_only: bool`
+을 `availability: 'available'|'unavailable'`로 넓히고(이전엔 "가능만"
+필터만 있고 "불가만"을 못 찾았다), 감사로그(§13)와 같은 `limit`
+(최대 200)/`offset`+`total` 페이지네이션 규약을 적용했다 — 응답 계약이
+`[...]`(배열)에서 `{"items", "total", "limit", "offset"}`으로 바뀌는
+파괴적 변경이라 기존 호출부(webui.py, 테스트 4개 파일)를 전부 갱신했다.
+**"부서" 필터는 넣지 않았다** — 이 스키마엔 애초에 "부서" 필드가 없다
+(조직 구조는 `manager_id` 상사 체인/조직도로만 표현된다). 존재하지
+않는 데이터를 필터로 꾸며내지 않고, 이미 있는 `role`이 사실상 같은
+구실(직군 단위 검색)을 한다는 걸 그대로 문서화했다. 페이지네이션은
+Human+Agent 두 풀을 하나로 합친 뒤 파이썬에서 자르는 방식이다(SQL에서
+각각 자르면 "한 페이지"가 한쪽 풀로만 채워질 수 있어 부정확해진다) —
+이 저장소가 전제하는 소규모 팀 규모에서만 허용 가능한 트레이드오프다.
+
+**4) 협업 워크스페이스 UX**: 공유 스레드/채팅형 타임라인 — 작성자
+타입별로 카드를 좌우로 나눠(`.chat-human`/`.chat-agent`) "누가 쓴
+건지" 한눈에 보이게 했다. **부수적으로 발견한 갭**: Phase 3부터
+`list_deliverables()` API 응답에 `evaluation`(Gate 점수+TCR)이 있었는데
+**어떤 화면에도 한 번도 렌더링된 적이 없었다** — 타임라인 카드에 Gate
+통과 배지("Gate 3/7 통과 · TCR 92%")로 처음 노출했다. Skill
+자동완성은 `skill_pool` 이름을 `<datalist>`로 내려 "필요 스킬"/"스킬"
+입력창(작업 분해·사람 등록·검색)에 붙였다 — Skill 주입(§4)이 이름
+"정확히 일치"를 요구하므로 오타로 조용히 매칭이 안 되는 걸 줄이는
+목적. **부수적으로 발견한 RBAC 갭**: 기존 `GET /api/skill-pool`이
+Admin/매니저 전용이라 팀원은 자동완성을 못 받았다 — 이름만 노출하는
+`GET /api/skill-pool/names`를 전 role에 새로 열어 해결했다(도구 연결
+상세 같은 관리 정보는 여전히 노출 안 함).
+
+**5) 제한적 반응형**: 전체 반응형 재설계는 스코프 밖으로 명시적으로
+뺐다(§6 원안이 이미 "반응형 포함 시 상" 난이도로 경고). `@media
+(max-width: 640px)` 하나로 메인 레이아웃 여백·헤더 크기·채팅 카드
+여백·대시보드 그리드만 좁혔다 — 표가 많은 관리자 화면(인력 매칭,
+Agent 관리 등)은 건드리지 않았다(의도적 스코프 축소, 표 반응형까지
+하려면 별도 세션이 필요).
+
+**검증**: 골든셋 GC157-169(13건) 추가 — 통합 인박스(GC157-160), 매니저
+대시보드(GC161-164), 검색/필터(GC165-167), Skill Pool 이름 노출
+(GC168-169). `node --check`로 웹 UI 문법 확인. ruff check/format 클린.
+전체 골든셋 172건 통과.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |
@@ -1412,3 +1478,4 @@ ruff check/format 클린. 전체 골든셋 159건 통과.
 | Phase 1-4 리뷰: 크로스-Phase 버그 3건 + 죽은 코드 1건 | **전부 발견 → 전부 수정 완료**(GC149-153) — (1) 사람+Agent를 같은 task에 함께 confirmed하면 F5/F6 시절 재배치 로직이 resource_type을 안 가려 먼저 확정된 쪽이 조용히 superseded되던 버그(협업의 기본 전제 자체가 깨져 있었음), (2) `data_admin.py`가 Phase 1-4의 새 테이블을 몰라 deliverable이 남은 task 삭제 시 FK 위반 500 에러, (3) 서버 재시작 시 'running' job이 영원히 멈춰 보이던 문제(`reap_orphaned_execution_jobs()` 신설). 추가로 Phase 3의 `aggregate_agent_score()`가 어떤 API/화면에도 연결 안 돼 있던 죽은 코드를 발견해 `GET /api/agent-pool`+Web UI에 연결(§26) |
 | Phase 1-4 리뷰 2회차: 중복 실행 트리거 + 불친절한 에러 메시지 | **전부 발견 → 전부 수정 완료**(GC154-155) — (1) `start_agent_execution()`이 같은 task에 이미 'running' job이 있어도 확인 없이 새 job을 또 만들어, 빠른 연속 클릭·여러 탭·직접 API 호출로 같은 트리거에 실제 LLM 호출이 두 번(비용 이중 지출) 나갈 수 있었음 — 서버 쪽에도 409 가드 추가. (2) 트리거 이후·실행 전 Agent가 삭제/오프보딩되면 `agent_not_active` 같은 내부 코드 문자열이 그대로 Web UI에 노출되던 것을 사람이 읽을 수 있는 문구로 번역(§27) |
 | Phase 1-4 리뷰 3회차: 감사로그 비대칭 + 라벨 누락 | **전부 발견 → 전부 수정 완료**(GC156) — Agent 실행 성공은 감사로그에 남는데 실패는 안 남아 F13 관례(승인/반려 둘 다 기록)와 어긋나 있었음 — `agent_execution_failed` 액션 추가. 부수적으로 `agent_execution_jobs` subject_type의 Web UI 라벨이 아예 없어 감사로그 표에 영어 원문이 노출되던 것도 수정(§28) |
+| Phase 5: 기업용 UI/UX 고도화(부분, 사용자 선택 4항목+제한적 반응형) | **구현 완료**(GC157-169) — 통합 인박스(`inbox.py`)·매니저 대시보드(`dashboard.py`, 비용 추이는 기존 감사로그 재사용)·검색/필터 스케일(availability 양방향 필터+페이지네이션, "부서"는 데이터 자체가 없어 의도적 제외)·협업 워크스페이스 UX(채팅형 타임라인+Gate 배지+Skill 자동완성)+제한적 반응형(`@media max-width:640px`). 부수적으로 Phase 3부터 있던 `evaluation` 필드가 어떤 화면에도 렌더링된 적 없던 갭과 Skill Pool 조회가 Admin/매니저 전용이라 팀원이 자동완성을 못 받던 RBAC 갭을 발견·수정. 다크모드는 명시적으로 스코프 밖(§29) |

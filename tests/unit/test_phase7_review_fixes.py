@@ -129,7 +129,7 @@ def test_gc55_human_offboard_excludes_from_search_and_matching(client_and_conn):
     human_id = resp.json()["id"]
 
     resp = client.get("/api/pool/search", params={"role": "백엔드"})
-    assert human_id in {c["id"] for c in resp.json() if c["type"] == "human"}
+    assert human_id in {c["id"] for c in resp.json()["items"] if c["type"] == "human"}
 
     resp = client.post(f"/api/human-pool/{human_id}/offboard")
     assert resp.status_code == 200
@@ -137,7 +137,9 @@ def test_gc55_human_offboard_excludes_from_search_and_matching(client_and_conn):
 
     # 오프보딩 후엔 검색에서 완전히 사라진다(단순 unavailable과 다르다).
     resp = client.get("/api/pool/search", params={"role": "백엔드"})
-    assert human_id not in {c["id"] for c in resp.json() if c["type"] == "human"}
+    assert human_id not in {
+        c["id"] for c in resp.json()["items"] if c["type"] == "human"
+    }
 
     resp = client.post("/api/human-pool/999999/offboard")
     assert resp.status_code == 404

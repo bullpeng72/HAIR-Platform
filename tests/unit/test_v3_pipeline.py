@@ -118,7 +118,7 @@ def test_gc22_onboard_then_deprecate_agent_controls_f3_visibility(client_and_con
 
     # 아직 pending_onboarding 상태라 F3(Pool 검색)에는 노출되지 않는다
     resp = client.get("/api/pool/search", params={"role": "QA"})
-    assert resp.json() == []
+    assert resp.json()["items"] == []
 
     agent_row = conn.execute(
         "SELECT id FROM agent_pool ORDER BY id DESC LIMIT 1"
@@ -135,13 +135,13 @@ def test_gc22_onboard_then_deprecate_agent_controls_f3_visibility(client_and_con
     assert resp.json()["status"] == "active"
 
     resp = client.get("/api/pool/search", params={"role": "QA"})
-    assert len(resp.json()) == 1
-    assert resp.json()[0]["type"] == "agent"
+    assert len(resp.json()["items"]) == 1
+    assert resp.json()["items"][0]["type"] == "agent"
 
     resp = client.post(f"/api/agent-pool/{agent_id}/deprecate")
     assert resp.status_code == 200
     resp = client.get("/api/pool/search", params={"role": "QA"})
-    assert resp.json() == []
+    assert resp.json()["items"] == []
 
 
 # ---- F13: 감사로그 ----------------------------------------------------------

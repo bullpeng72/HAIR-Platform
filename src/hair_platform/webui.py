@@ -48,6 +48,14 @@ INDEX_HTML = """<!DOCTYPE html>
   section.card { background: #fff; border: 1px solid #e2e4e8; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
   .deliverable-card { background: #f9fafb; border: 1px solid #e2e4e8; border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 0.6rem; }
   .deliverable-card + .deliverable-card { margin-top: 0; }
+  .deliverable-card.chat-human { margin-right: 12%; border-left: 3px solid #2563eb; }
+  .deliverable-card.chat-agent { margin-left: 12%; border-left: 3px solid #7c3aed; background: #f5f3ff; }
+  .gate-badge { display: inline-block; padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.85em; }
+  .gate-badge.gate-ok { background: #dcfce7; color: #166534; }
+  .gate-badge.gate-warn { background: #fef3c7; color: #92400e; }
+  .dashboard-grid { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .dashboard-grid .card { flex: 1; min-width: 200px; margin-bottom: 0; }
+  .dashboard-grid .stat-row { display: flex; justify-content: space-between; padding: 0.15rem 0; border-bottom: 1px solid #eee; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #eee; vertical-align: top; }
   th { background: #f0f1f4; }
@@ -73,6 +81,22 @@ INDEX_HTML = """<!DOCTYPE html>
   #login-view .card { width: 320px; }
   #login-view input { width: 100%; margin-bottom: 0.5rem; box-sizing: border-box; }
   code { background: #f0f1f4; padding: 0 0.25rem; border-radius: 3px; }
+
+  /* Phase 5(사용자 요청, 2026-09-28, "반응형만 포함(내 업무/알림 확인용)")
+     — 이 앱은 고정 1100px 레이아웃(과거 다크모드 회귀 회피와 같은 이유로
+     의도적 단순화)이었다. 전체 반응형 재설계는 스코프 밖으로 명시적으로
+     뺐고, 사용자가 고른 범위대로 "인박스"·"내 업무"(승인 알림 확인의
+     실질적 진입점)만 좁게 고친다 — 표가 많은 관리자 화면은 건드리지
+     않는다(그 화면들까지 좁히면 표가 깨질 위험이 더 크다). */
+  @media (max-width: 640px) {
+    main { max-width: 100%; padding: 0.6rem; }
+    header { padding: 0.6rem; gap: 0.5rem; }
+    header h1 { font-size: 1rem; }
+    .deliverable-card.chat-human { margin-right: 4%; }
+    .deliverable-card.chat-agent { margin-left: 4%; }
+    .dashboard-grid { flex-direction: column; }
+    .dashboard-grid .card { min-width: 0; }
+  }
 </style>
 </head>
 <body>
@@ -202,6 +226,27 @@ function table(headers, rows) {
   return html;
 }
 
+/* Phase 5(사용자 요청, 2026-09-28, "협업 워크스페이스 UX 개선" — Skill
+   자동완성). skill_pool에 등록된 이름을 <datalist>로 내려줘 스킬을 자유
+   텍스트로 입력하는 곳마다 브라우저 기본 자동완성이 뜨게 한다 — Skill
+   주입(§4)이 skill_pool 이름과 "정확히 일치"해야 매칭되므로, 오타로
+   조용히 매칭이 안 되는 걸 줄이는 게 목적이다. 한계: 콤마로 여러 개를
+   입력하는 필드(d-skills/hp-skills)는 브라우저가 입력값 전체를 기준으로
+   맞추기 때문에, 이미 뭔가 입력한 뒤 콤마 다음 항목에는 자동완성이 잘
+   안 먹는다(단일 값 필드인 검색의 s-skill은 문제없이 동작) — 완전한
+   태그 입력 위젯을 새로 만들진 않고 이 정도로 그쳤다. */
+async function skillDatalistHtml() {
+  let names;
+  try {
+    names = await api("GET", "/api/skill-pool/names");
+  } catch (e) {
+    return "";
+  }
+  return '<datalist id="skill-datalist">' +
+    names.map(n => '<option value="' + esc(n) + '">').join("") +
+    "</datalist>";
+}
+
 let ME = null;
 
 /* 코드 재점검(2026-09-26) 사용자 요청 — 관리자 기능과 일반 업무 기능을
@@ -211,12 +256,14 @@ let ME = null;
    내비게이션을 둘로 나눠 보여준다. adminOnly: true는 그중에서도 ADMIN
    role만 되는 항목(매니저도 접근 가능한 관리자 도구와 구분 표시). */
 const TABS = [
+  { id: "inbox", label: "인박스", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderInbox },
   { id: "mywork", label: "내 업무", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderMyWork },
   { id: "briefs", label: "업무 요청", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBriefs },
   { id: "approvals", label: "결재", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderApprovals },
   { id: "search", label: "인력 검색", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
   { id: "orgchart", label: "조직도", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
   { id: "performance", label: "성과 리뷰", group: "user", roles: ["admin", "manager", "member"], render: renderPerformance },
+  { id: "dashboard", label: "대시보드", group: "admin", roles: ["admin", "manager"], render: renderDashboard },
   { id: "match", label: "인력 매칭/배정", group: "admin", roles: ["admin", "manager"], render: renderMatch },
   { id: "jobs", label: "AI 에이전트 생성", group: "admin", roles: ["admin", "manager"], render: renderJobs },
   { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
@@ -319,6 +366,46 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
   await boot();
 });
 
+/* ---------- 통합 인박스(Phase 5, 사용자 요청 2026-09-28) ---------- */
+
+async function renderInbox(content) {
+  const items = await api("GET", "/api/inbox");
+  const labelOf = {
+    approval_pending: "결재 대기",
+    execution_failed: "AI 에이전트 실행 실패",
+    low_gate_score: "낮은 Gate 점수 경고",
+  };
+  const cards = items.map(item => {
+    if (item.type === "approval_pending") {
+      return '<div class="deliverable-card"><div class="muted">' + labelOf[item.type] + " · " + esc(label(item.subject_type)) + " #" + item.subject_id + '</div>' +
+        '<button class="small" data-goto-approvals>결재 화면으로 이동</button></div>';
+    }
+    if (item.type === "execution_failed") {
+      return '<div class="deliverable-card"><div class="muted">' + labelOf[item.type] + " · " + esc(item.role_name) + '</div>' +
+        '<div>' + esc(item.error || "") + '</div>' +
+        '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
+    }
+    return '<div class="deliverable-card"><div class="muted">' + labelOf[item.type] + " · " + esc(item.role_name) + '</div>' +
+      '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
+  }).join("");
+
+  content.innerHTML =
+    '<section class="card"><h2>내게 필요한 조치</h2>' +
+    '<p class="muted">결재 대기·AI 에이전트 실행 실패·낮은 Gate 점수 경고(승인/반려 전인 것만)를 한 곳에 모았습니다. 완전한 시간순 통합은 아니고 종류별로 묶여 있습니다 — 처리는 각 항목의 원래 화면(결재/내 업무)에서 합니다.</p>' +
+    (items.length ? cards : '<p class="muted">지금 조치가 필요한 항목이 없습니다.</p>') +
+    '</section>';
+
+  content.querySelectorAll("[data-goto-approvals]").forEach(btn => {
+    btn.onclick = () => selectTab("approvals");
+  });
+  content.querySelectorAll("[data-goto-task]").forEach(btn => {
+    btn.onclick = async () => {
+      await selectTab("mywork");
+      renderCollabWorkspace(Number(btn.dataset.gotoTask));
+    };
+  });
+}
+
 /* ---------- 내 업무(협업 워크스페이스, 사용자 요청 2026-09-28) ---------- */
 
 async function renderMyWork(content) {
@@ -375,19 +462,35 @@ async function renderCollabWorkspace(taskId) {
   // 나타나므로 여기서 다시 보여줄 필요 없음).
   const latestJob = jobs[0];
   const jobCard = (latestJob && latestJob.status === "running")
-    ? '<div class="deliverable-card"><div class="muted">AI 에이전트 · 생성 중…</div></div>'
+    ? '<div class="deliverable-card chat-agent"><div class="muted">AI 에이전트 · 생성 중…</div></div>'
     : (latestJob && latestJob.status === "failed"
-      ? '<div class="deliverable-card"><div class="muted">AI 에이전트 · 실행 실패(' + esc(latestJob.finished_at) + ')</div>' +
+      ? '<div class="deliverable-card chat-agent"><div class="muted">AI 에이전트 · 실행 실패(' + esc(latestJob.finished_at) + ')</div>' +
         '<div>' + esc(latestJob.error || "알 수 없는 오류") + '</div></div>'
       : '');
 
+  // Phase 5(사용자 요청, 2026-09-28, "협업 워크스페이스 UX 개선") — 공유
+  // 스레드/채팅형 타임라인: 작성자 타입별로 카드를 좌우로 구분해 "누가
+  // 쓴 건지" 한눈에 보이게 한다. Gate 요약 배지도 여기서 처음 노출한다
+  // — d.evaluation(Phase 3부터 API엔 있었지만 이전까지 화면 어디에도
+  // 안 나오고 있었다).
   const deliverableCards = items.map(d => {
     const decideActions = (isSupervisor && d.approval_id)
       ? '<div class="actions"><button class="small" data-decide-deliverable="' + d.approval_id + '" data-approve="1">승인</button>' +
         '<button class="small danger" data-decide-deliverable="' + d.approval_id + '" data-approve="0">반려</button></div>'
       : (d.approval_id ? '<p class="muted">결재 대기 중 — "결재" 탭 또는 담당 매니저/관리자가 처리합니다.</p>' : '');
-    return '<div class="deliverable-card">' +
-    '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + '</div>' +
+    const gateBadge = d.evaluation
+      ? (() => {
+          const gates = Object.values(d.evaluation.gate_scores);
+          const measured = gates.filter(g => !g.not_measured);
+          const passed = measured.filter(g => g.passed).length;
+          const cls = passed === measured.length ? "gate-ok" : "gate-warn";
+          return '<span class="gate-badge ' + cls + '">Gate ' + passed + "/" + measured.length +
+            " 통과" + (d.evaluation.tcr === null ? "" : " · TCR " + d.evaluation.tcr.toFixed(0) + "%") + '</span>';
+        })()
+      : "";
+    const side = d.author_type === "agent" ? "chat-agent" : "chat-human";
+    return '<div class="deliverable-card ' + side + '">' +
+    '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + " " + gateBadge + '</div>' +
     '<div>' + esc(d.content).replace(/\\n/g, "<br>") + '</div>' +
     decideActions +
     '<div id="comments-' + d.id + '"></div>' +
@@ -599,21 +702,23 @@ async function renderBriefs(content) {
   });
 }
 
-function renderDecomposeForm(briefId, stubRoles) {
+async function renderDecomposeForm(briefId, stubRoles) {
   const detail = document.getElementById("brief-detail");
   const suggestions = (stubRoles || []).length
     ? '<p class="muted">제안된 역할(클릭하면 아래 입력창에 채워집니다 — 브리프를 줄바꿈으로 나눈 것뿐이라 다듬어서 쓰세요): ' +
       stubRoles.map(r => '<button type="button" class="small" data-fill-role="' + esc(r) + '">' + esc(r) + '</button>').join(" ") +
       "</p>"
     : "";
+  const skillDatalist = await skillDatalistHtml();
   detail.innerHTML =
     '<h3>업무 요청 #' + esc(briefId) + ' — 할 일 나누기</h3>' +
     suggestions +
     '<form class="inline" id="decompose-form">' +
     '<input id="d-role" placeholder="필요한 역할(예: 백엔드 개발자)" required>' +
-    '<input id="d-skills" placeholder="필요 스킬(콤마로 구분)">' +
+    '<input id="d-skills" placeholder="필요 스킬(콤마로 구분)" list="skill-datalist">' +
     '<input id="d-headcount" type="number" min="1" value="1" style="width:70px" title="인원 수">' +
-    '<button class="primary" type="submit">할 일 추가</button></form>';
+    '<button class="primary" type="submit">할 일 추가</button></form>' +
+    skillDatalist;
   detail.querySelectorAll("[data-fill-role]").forEach(btn => {
     btn.onclick = () => { document.getElementById("d-role").value = btn.dataset.fillRole; };
   });
@@ -814,14 +919,18 @@ function renderJobResult(result) {
 /* ---------- 사람 인력 ---------- */
 
 async function renderHumanPool(content) {
-  const people = await api("GET", "/api/human-pool");
+  const [people, skillDatalist] = await Promise.all([
+    api("GET", "/api/human-pool"),
+    skillDatalistHtml(),
+  ]);
   const isAdmin = ME.role === "admin";
   content.innerHTML =
     '<section class="card"><h2>사람 인력 등록</h2>' +
     '<form class="inline" id="hp-form">' +
     '<input id="hp-name" placeholder="이름" required>' +
     '<input id="hp-role" placeholder="역할" required>' +
-    '<input id="hp-skills" placeholder="스킬(콤마로 구분)">' +
+    '<input id="hp-skills" placeholder="스킬(콤마로 구분)" list="skill-datalist">' +
+    skillDatalist +
     '<input id="hp-cost" type="number" step="0.01" placeholder="비용" value="0">' +
     '<button class="primary" type="submit">등록</button></form>' +
     '<p class="muted">"비용"은 인력 매칭 점수의 25%(또는 성과점수가 없으면 40%)를 차지합니다 — 낮을수록 유리합니다. 아직 성과 데이터가 없으니 초기엔 "가능" 상태여야 매칭 후보로 잡히고(가용성이 매칭 점수의 40~60%), 스킬은 할 일의 필요 스킬과 겹칠수록 유리합니다.</p>' +
@@ -1237,28 +1346,58 @@ function renderCrewResult(result) {
 /* ---------- 인력 검색 ---------- */
 
 async function renderSearch(content) {
+  const PAGE_SIZE = 20;
+  let offset = 0;
+
+  const skillDatalist = await skillDatalistHtml();
   content.innerHTML =
     '<section class="card"><h2>사람·AI 에이전트 통합 검색</h2>' +
-    '<p class="muted">이 화면은 매칭 알고리즘 없이 필터로 후보를 훑어보는 용도입니다(실제 배정 점수·순위를 보려면 "인력 매칭/배정" 탭을 쓰세요). AI 에이전트는 온보딩 승인(active) 안 된 것(pending_onboarding/deprecated)은 여기 안 뜹니다 — "AI 에이전트 관리" 탭에서 상태 무관 전체 목록을 볼 수 있습니다. 오프보딩된 사람도 마찬가지로 빠집니다.</p>' +
+    '<p class="muted">이 화면은 매칭 알고리즘 없이 필터로 후보를 훑어보는 용도입니다(실제 배정 점수·순위를 보려면 "인력 매칭/배정" 탭을 쓰세요). AI 에이전트는 온보딩 승인(active) 안 된 것(pending_onboarding/deprecated)은 여기 안 뜹니다 — "AI 에이전트 관리" 탭에서 상태 무관 전체 목록을 볼 수 있습니다. 오프보딩된 사람도 마찬가지로 빠집니다. "부서" 필터는 없습니다 — 이 시스템엔 부서 데이터가 없고, "역할"이 사실상 같은 구실을 합니다.</p>' +
     '<form class="inline" id="search-form">' +
-    '<input id="s-role" placeholder="역할"><input id="s-skill" placeholder="스킬">' +
-    '<label><input id="s-avail" type="checkbox"> 가용만</label>' +
+    '<input id="s-role" placeholder="역할"><input id="s-skill" placeholder="스킬" list="skill-datalist">' +
+    '<select id="s-avail"><option value="">가용 전체</option><option value="available">가능만</option><option value="unavailable">불가만</option></select>' +
     '<button class="primary" type="submit">검색</button></form>' +
-    '<div id="search-result"></div></section>';
+    skillDatalist +
+    '<div id="search-result"></div>' +
+    '<div class="inline" style="margin-top:0.5rem">' +
+    '<button class="small" id="search-prev">이전</button>' +
+    '<span id="search-page-info" class="muted"></span>' +
+    '<button class="small" id="search-next">다음</button>' +
+    '</div></section>';
+
+  const load = async () => {
+    const body = await api("GET", qs("/api/pool/search", {
+      role: document.getElementById("s-role").value,
+      skill: document.getElementById("s-skill").value,
+      availability: document.getElementById("s-avail").value,
+      limit: PAGE_SIZE,
+      offset,
+    }));
+    document.getElementById("search-result").innerHTML = table(
+      ["타입", "ID", "이름", "역할", "가용", "비용", "스킬", "성과점수"],
+      body.items.map(c => [esc(label(c.type)), c.id, esc(c.name || "-"), esc(c.role), c.is_available ? "가능" : "불가", c.cost, esc(c.skill_tags.join(", ")), c.performance_score === null ? "-" : c.performance_score])
+    );
+    const shown = body.items.length ? offset + 1 : 0;
+    document.getElementById("search-page-info").textContent =
+      "전체 " + body.total + "건 중 " + shown + "-" + (offset + body.items.length) + "건";
+    document.getElementById("search-prev").disabled = offset === 0;
+    document.getElementById("search-next").disabled = offset + PAGE_SIZE >= body.total;
+  };
+
   document.getElementById("search-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    try {
-      const results = await api("GET", qs("/api/pool/search", {
-        role: document.getElementById("s-role").value,
-        skill: document.getElementById("s-skill").value,
-        available_only: document.getElementById("s-avail").checked ? "true" : "",
-      }));
-      document.getElementById("search-result").innerHTML = table(
-        ["타입", "ID", "이름", "역할", "가용", "비용", "스킬", "성과점수"],
-        results.map(c => [esc(label(c.type)), c.id, esc(c.name || "-"), esc(c.role), c.is_available ? "가능" : "불가", c.cost, esc(c.skill_tags.join(", ")), c.performance_score === null ? "-" : c.performance_score])
-      );
-    } catch (e) { showMsg("global-msg", e.message, "error"); }
+    offset = 0;
+    try { await load(); } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
+  document.getElementById("search-prev").addEventListener("click", async () => {
+    offset = Math.max(0, offset - PAGE_SIZE);
+    try { await load(); } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+  document.getElementById("search-next").addEventListener("click", async () => {
+    offset += PAGE_SIZE;
+    try { await load(); } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+  await load();
 }
 
 /* ---------- 조직도 ---------- */
@@ -1290,6 +1429,34 @@ async function renderPerformance(content) {
       r.performance_score === null ? "-" : r.performance_score,
       r.confirmed_assignments,
     ])) + "</section>";
+}
+
+/* ---------- 매니저 대시보드(Phase 5, 사용자 요청 2026-09-28) ---------- */
+
+async function renderDashboard(content) {
+  const d = await api("GET", "/api/dashboard");
+  const gs = d.team_gate_scores;
+  const gateRow = ["A", "B", "C", "D", "E", "F", "G"].map(g => {
+    const v = gs.gate_averages[g];
+    return '<div class="stat-row"><span>' + g + '</span><span>' + (v === null ? "-" : v.toFixed(2)) + '</span></div>';
+  }).join("");
+
+  const trendRows = d.cost_trend.map(t => [
+    esc(t.created_at), esc(label(t.subject_type)), t.subject_id, t.cost_estimate,
+  ]);
+
+  content.innerHTML =
+    '<section class="card"><h2>매니저 대시보드</h2>' +
+    '<p class="muted">팀 전체 Agent Gate 점수 평균·대기 승인 건수·비용 변경 이력을 한 화면에 모았습니다. Gate 점수는 실제로 측정된 산출물이 있을 때만 값이 나옵니다(not_measured는 평균에서 제외). 비용 추이는 "AI 에이전트 관리"·"사람 인력 관리" 탭에서 단가를 바꿀 때마다 남는 감사로그 이력이라, 지금까지 아무도 단가를 바꾼 적이 없으면 비어 있습니다.</p>' +
+    '<div class="dashboard-grid">' +
+    '<div class="card"><h3>팀 Agent 평균 Gate 점수(표본 ' + gs.sample_count + '건)</h3>' + gateRow +
+    '<div class="stat-row"><span>평균 TCR</span><span>' + (gs.avg_tcr === null ? "-" : gs.avg_tcr.toFixed(1) + "%") + '</span></div></div>' +
+    '<div class="card"><h3>대기 승인 건수</h3><p style="font-size:2em;margin:0">' + d.pending_approval_count + '</p></div>' +
+    '<div class="card"><h3>현재 비용 스냅샷</h3><p style="font-size:2em;margin:0">' + d.cost_snapshot.total_cost + '</p></div>' +
+    '</div>' +
+    '<h3>비용 변경 이력(최근 ' + d.cost_trend.length + '건)</h3>' +
+    table(["시각", "대상 종류", "대상 ID", "변경된 단가"], trendRows) +
+    '</section>';
 }
 
 /* ---------- 비용 ---------- */

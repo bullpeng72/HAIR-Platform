@@ -55,7 +55,7 @@ def test_gc9_f2_task_decomposition_and_f3_pool_search(client_and_conn):
     _login(client, "viewer1", "viewerpass")
     resp = client.get("/api/pool/search", params={"role": "백엔드"})
     assert resp.status_code == 200
-    results = resp.json()
+    results = resp.json()["items"]
     assert len(results) == 1
     assert results[0]["name"] == "김하니"
 

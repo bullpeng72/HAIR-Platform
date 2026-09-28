@@ -86,3 +86,27 @@ def skip_remaining_steps(
         "AND status IN ('pending', 'waiting')",
         (subject_type, subject_id, from_step),
     )
+
+
+def list_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
+    """Phase 5(통합 인박스, `docs/HAIR_MASTER_PLAN.md` §6)를 위해
+    `app.py`의 `GET /api/approvals?scope=inbox`에 있던 로직을 재사용
+    가능하게 뽑아냈다(동작 변경 없음, 순수 추출) — "내가 지금 결정할 수
+    있는 건"만 보여준다: 아직 `pending`이고, 내가 요청자가 아니며
+    (self-approval 제외, ADR 결정 3-A), Admin이면 전부, 매니저면 승인자
+    미지정이거나 나로 지정된 건만. Admin/매니저가 아니면 빈 리스트."""
+    if role == "admin":
+        rows = conn.execute(
+            "SELECT * FROM approvals WHERE status = 'pending' AND requested_by != ? "
+            "ORDER BY id ASC",
+            (user_id,),
+        ).fetchall()
+    elif role == "manager":
+        rows = conn.execute(
+            "SELECT * FROM approvals WHERE status = 'pending' AND requested_by != ? "
+            "AND (approver_id IS NULL OR approver_id = ?) ORDER BY id ASC",
+            (user_id, user_id),
+        ).fetchall()
+    else:
+        return []
+    return [dict(row) for row in rows]
