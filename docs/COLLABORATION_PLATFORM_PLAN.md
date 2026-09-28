@@ -277,21 +277,37 @@ Phase A의 협업 워크스페이스(4-1)가 이미 열려 있는 화면이므�
 
 ### Phase C — 비동기 실행 + 일시정지/재개: "HOTL" 문제 해결 (가장 큰 구조 변경)
 
-**정정(사용자 요청, 2026-09-28, "HAIR AI Agent Framework로 CrewAI,
-LangGraph 등 다양하게 분석해 최적을 제안해줘" — 프레임워크 비교 리서치
-결과)**: 아래 §당시 "CrewAI의 `human_input=True`는 블로킹이라 못 쓰니
-HAIR 자체 체크포인트를 새로 설계한다"는 판단은 **`Crew` 레벨의 옛
-기능만 맞는 얘기였다**. CrewAI에는 별도 레이어인 **Flows**
-(`@start`/`@listen`/`@router` 이벤트 기반 오케스트레이션)가 있고, 여기
-`@persist`(재시작 간 상태 자동 영속화)와 `@human_feedback`(실행을
-멈추고 상태를 유지한 채 사람 입력을 기다리며, 콘솔 `input()` 대신
-Slack/이메일/웹훅/API로 응답받을 수 있는 `provider` 지정 가능)가 이미
-있다 — HAIR가 새로 설계하려던 체크포인트를 CrewAI 안에서 그대로 해결할
-수 있을 가능성이 크다. **단, 이 리서치는 WebFetch가 막힌 환경에서 검색
-스니펫 기반으로 진행돼 `@human_feedback`의 정확한 API/데코레이터
-문법은 1차 검증이 안 됐다** — 실제 설계 전에 설치된 `crewai` 패키지
-소스나 공식 Flows 문서를 이 프로젝트가 항상 해온 방식대로 직접 읽어
-재확인해야 한다.
+**정정 1(사용자 요청, 2026-09-28, "HAIR AI Agent Framework로 CrewAI,
+LangGraph 등 다양하게 분석해 최적을 제안해줘" — 프레임워크 비교
+리서치)**: "CrewAI의 `human_input=True`는 블로킹이라 못 쓰니 HAIR 자체
+체크포인트를 새로 설계한다"는 원래 판단은 `Crew` 레벨의 옛 기능만 맞는
+얘기다. CrewAI에는 별도 레이어인 **Flows**(`@start`/`@listen`/`@router`
+이벤트 기반 오케스트레이션)가 있고 `@persist`(재시작 간 상태 자동
+영속화)가 있다 — 단 이때는 `@human_feedback`이라는 데코레이터가
+있다고 잘못 파악했다(검색 요약 기반 리서치의 부정확한 주장).
+
+**정정 2(직접 실측, 2026-09-28)** — conda 환경 `HAIR`에 실제로
+`pip install -e ".[dev,llm,crewai,mcp]"`(crewai 1.6.1)를 설치하고 소스를
+직접 읽어 확인했다:
+- **`@human_feedback`은 존재하지 않는다** — `crewai/flow/__init__.py`가
+  실제로 공개하는 API는 `Flow, start, listen, router, and_, or_,
+  persist`뿐이다. 정정 1의 주장은 틀렸다.
+- `Task.human_input=True`(`crewai/agents/crew_agent_executor.py`의
+  `_ask_human_input`)는 지금도 하드코딩된 콘솔 `input()`이고 provider를
+  주입할 지점이 없다 — 원래(정정 이전) 판단이 맞았다.
+- `crewai.types.hitl.HITLResumeInfo`/`CrewInputsWithHITL`라는 타입이
+  있지만 패키지 전체에서 **어디서도 실제로 소비되지 않는다**(정의만
+  있고 연결 안 된 스캐폴딩 — 신뢰하지 않는다).
+- **실제로 쓸 수 있는 진짜 발견**: `crewai.hooks.
+  register_before_tool_call_hook(hook)` — 모든 도구 호출 직전에 실행되는
+  전역 훅으로, `hook`이 `False`를 반환하면 그 도구 호출 자체를 막을 수
+  있고 `tool_input`도 직접 수정할 수 있다(`crewai/hooks/tool_hooks.py`).
+  내장 편의 메서드 `context.request_human_input()`은 여전히 콘솔
+  `input()`을 쓰지만, **이 훅 안에 HAIR 자체 대기 로직(예: DB의
+  `waiting_for_human` 플래그를 폴링하거나 `threading.Event`로
+  블로킹)을 넣으면 도구 호출 하나 단위로 진짜 승인 게이트를 만들 수
+  있다** — 단 Agent 실행 자체가 HTTP 요청 스레드가 아니라 **백그라운드
+  스레드**에서 돌아야 이 훅의 블로킹이 웹서버 워커를 막지 않는다.
 
 **프레임워크 자체를 바꾸는 것(LangGraph/AutoGen/OpenAI Agents SDK/
 Google ADK로 전환)은 기각한다**:
@@ -308,16 +324,24 @@ Google ADK로 전환)은 기각한다**:
   승인, 1급 HITL 그래프 프리미티브)이 있지만 전면 재작성이 필요해
   HAIR의 기존 투자를 버릴 만한 이유가 안 된다.
 
-**설계 방향(재확정 전까지 임시)**: CrewAI Flows로 대체 확인되면 그걸
-쓰고, 확인 안 되면 아래 원래 계획대로 자체 체크포인트를 구현한다 —
-둘 중 어느 쪽이든 사용자에게 보이는 결과(일시정지→사람 응답→재개)는
-동일하다.
+**설계 방향(확정, 실측 근거)**: CrewAI가 제공하는 것만으로는 부족하므로
+(`@human_feedback` 없음, `human_input`은 콘솔 전용) **두 세분화 단계를
+HAIR가 직접 조합해서 구현한다** — 둘 다 CrewAI를 바꾸지 않고 훅/실행
+구조만 HAIR 쪽에 추가하는 것이라 마이그레이션이 아니다.
 
-- (원래 계획, Flows 검증 실패 시 폴백) "Crew 전체를 한 번에 `kickoff()`"를
-  **Task 단위로 쪼개 순차 실행**하는 방식으로 바꾼다 — Task 하나 끝날
-  때마다 상태를 커밋하고(`job_items`에 `waiting_for_human` 상태 추가,
-  현재 상태 + 다음 Task 입력을 저장할 체크포인트 컬럼 추가), 사람이
-  계속 진행/수정 후 진행을 API로 트리거해야 다음 Task가 실행되게 한다.
+1. **도구 호출 단위(세밀)**: `crewai.hooks.register_before_tool_call_hook()`
+   에 HAIR 자체 훅을 등록한다 — 훅 안에서 `context.request_human_input()`
+   (콘솔 `input()`)을 쓰는 대신, DB의 `waiting_for_human` 플래그를
+   폴링하거나 `threading.Event`로 블로킹해 HAIR의 승인 API 호출을
+   기다린다. 이 블로킹이 웹서버 워커를 막지 않으려면 **Agent 실행
+   자체가 HTTP 요청 스레드가 아니라 백그라운드 스레드에서 돌아야
+   한다**(아래 항목).
+2. **Task 단위(굵음, 원래 계획)**: "Crew 전체를 한 번에 `kickoff()`"를
+   **Task 단위로 쪼개 순차 실행**하는 방식으로 바꾼다 — Task 하나 끝날
+   때마다 상태를 커밋하고(`job_items`에 `waiting_for_human` 상태 추가,
+   현재 상태 + 다음 Task 입력을 저장할 체크포인트 컬럼 추가), 사람이
+   계속 진행/수정 후 진행을 API로 트리거해야 다음 Task가 실행되게 한다.
+
 - 백그라운드 워커 필요(현재 없음, `docs/LIMITS.md` §3이 이미 "단일
   프로세스·순차 요청 전제"라고 인정한 부분) — FastAPI
   `BackgroundTasks`로 시작하고, 필요하면 별도 워커 프로세스로 분리.
@@ -356,13 +380,13 @@ Phase A/B는 기존 스키마에 테이블을 더하고 기존 승인 파이프�
 이 문서는 기획안이며 아직 구현하지 않았다. 진행하려면:
 
 1. Phase A부터 시작할지, 세 Phase를 한 번에 설계할지 결정.
-2. **프레임워크 자체 전환은 기각(2026-09-28 리서치로 결정)** — CrewAI
-   유지, LangGraph/AutoGen/OpenAI Agents SDK/Google ADK로 전환 안 함
-   (근거: 위 Phase C 정정 참고). 남은 결정은 "CrewAI Flows
-   (`@persist`+`@human_feedback`)로 해결되는지, 아니면 HAIR 자체
-   체크포인트를 만들어야 하는지"뿐 — **이건 설치된 `crewai` 패키지
-   소스/공식 Flows 문서를 직접 읽어 확인해야 하는 실측 작업**이지 별도
-   ADR 토론이 필요한 사안이 아니다.
+2. ~~프레임워크 자체 전환 여부, CrewAI Flows로 해결되는지 검증~~ —
+   **완료(2026-09-28, conda 환경 `HAIR`에 crewai 1.6.1 설치 후 소스
+   직접 확인)**. 프레임워크 전환은 기각(CrewAI 유지). `@human_feedback`
+   데코레이터는 존재하지 않음(리서치 오류로 판명) — 대신
+   `crewai.hooks.register_before_tool_call_hook()`(도구 호출 단위 차단
+   가능)을 실제로 발견해 Phase C 설계에 반영함. 자세한 내용은 위 Phase C
+   "정정 2(직접 실측)" 참고.
 3. 4-3에서 오픈 이슈로 남긴 "Agent의 skill_tags→Tool 자동 부착을
    Skill Pool 경유로 계속 둘지, Tool Pool 직접 매칭으로 분리할지"도
    별도 ADR 검토 대상 — Phase A 구현 착수 전에 최소한 방향만 정해두는
