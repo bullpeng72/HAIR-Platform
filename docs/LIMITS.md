@@ -1021,6 +1021,53 @@ shell`)이 스펙 코드(`"F8 "` 등)가 화면에 그대로 노출되면 안 �
 `node --check`로 JS 문법 재검증, `ruff`/`black` 클린, 데모 서버 재기동
 후 `curl`로 실제 페이지에 새 안내 문구가 서빙되는 것까지 확인했다.
 
+## 22. Phase 1 구현 — 협업 워크스페이스(결과물 엔티티 + 내 업무 + Skill/
+    Tool 역할 재정의) — 사용자 요청(2026-09-28, "Phase 1부터 시작해줘")
+
+`docs/PHASE1_DELIVERABLE_SPEC.md`를 그대로 구현했다: 신규 테이블
+`deliverables`/`deliverable_comments`, 신규 모듈 `deliverables.py`,
+`app.py`에 `GET /api/my-work` 등 7개 엔드포인트, `webui.py`에 "내 업무"
+탭 + 협업 워크스페이스(결과물 타임라인 + 댓글 + "LLM으로 도와줘" +
+"AI 에이전트 실행"). 골든셋 GC127–137(11건) 추가, 전체 140건 통과.
+
+**실측으로 발견한 진짜 선행 버그(이번 작업 전부터 있었던 것)**:
+`human_pool.user_id`는 F8 `performance.review_for_member()`("팀원용 —
+본인과 연결된 Human Pool 레코드만")가 이미 참조하고 있었는데, **그
+컬럼을 실제로 채우는 API가 지금까지 전혀 없었다** — `POST /api/
+human-pool`도, 기존 `PATCH /api/human-pool/{id}`(`HumanPoolUpdate`)도
+`user_id` 필드가 없었다. 즉 어떤 Human Pool 레코드도 로그인 계정과
+연결될 방법이 없어서, F8의 "내 성과점수 조회"는 v4에서 구현된 이래
+지금까지 어떤 팀원에게도 실제로 동작한 적이 없었을 것이다(누구든
+호출하면 항상 빈 배열). `HumanPoolUpdate`에 `user_id` 필드를 추가하고
+"사람 인력 관리" 탭에 "계정 연결" UI를 넣어서 메웠다 — Phase 1의 "내
+업무" 기능뿐 아니라 F8도 이번에 덤으로 처음 실제 동작하게 됐다.
+
+**설계 시 조정한 것**: 스펙 초안은 §2-6(Agent 실행)에
+`crew_runtime.run_crew()`(여러 Agent를 Crew로 묶는 함수)를 쓰라고
+적었으나, "이 task에 배정된 Agent 하나만 실행"하는 용도엔 이미 있는
+단일 Agent 온디맨드 실행 경로 `agent_runtime.execute_agent()`가 더
+적합해 그걸로 바꿔 구현했다(Agent별 저장된 provider/model, RAG 증강을
+그대로 재사용). `llm.system_prompt_for_role()`("당신은... AI
+에이전트입니다")도 사람의 LLM 보조 맥락과 안 맞아
+`system_prompt_for_human_assist()`를 새로 추가했다.
+
+**RBAC 설계 확정**(`HAIR_MASTER_PLAN.md` §8 결정사항 1번 해소): 팀원은
+LLM 보조/Agent 실행을 직접 트리거할 수 있지만 provider/model은 선택할
+수 없다(비용 통제) — 매니저/관리자만 가능. "작성"(deliverable/댓글)은
+그 task의 참가자 본인만 가능하고 관리자/매니저도 대리 작성은 못 하지만,
+"실행"(execute-agent)은 감독자 대리를 허용한다(저자성이 안 흐려지므로).
+
+**실측 검증**: 로컬 데모 서버(포트 8123)에서 브리프→할일→사람 등록→
+계정 연결→배정 요청→승인→"내 업무" 조회→결과물 제출→댓글 작성→
+확정 Agent 배정이 없을 때의 409까지 실제 HTTP 요청으로 확인했다.
+`assist`/`execute-agent`의 실제 LLM 호출 성공 경로는 비용 문제로
+라이브 서버에선 실행하지 않고, GC133/GC135의 mock 기반 검증(호출
+인자 자체를 확인)으로 대신했다.
+
+**Phase 1 스코프 밖(의도적으로 안 한 것)**: deliverable 승인/반려
+(Phase 2), Agent 자동 평가(Phase 3), 실행 중 일시정지(Phase 4) — 모두
+`docs/PHASE1_DELIVERABLE_SPEC.md` §7 참고.
+
 ## 요약
 
 | 항목 | 상태 |
@@ -1052,3 +1099,4 @@ shell`)이 스펙 코드(`"F8 "` 등)가 화면에 그대로 노출되면 안 �
 | 데이터 삭제/초기화 기능(도구/스킬/사람/에이전트/brief/task) | **구현 완료**(GC116-124) — FK 순서 버그·테스트 self-approval 버그 실측으로 발견·수정, confirmed 배정 안전장치, 활동 기록은 NF10 트리거로 삭제 불가라 범위 제외(§19) |
 | Agent-Evaluator/하니스 방법론 절차 스킬 18개를 Skill Pool에 기본 노출 | **구현 완료**(GC125-126) — 17개는 `augmentation_mode='none'`(HITL 절차라 안전한 도구화 불가), `recommend-fix-workflow` 1개는 실제 `recommend_fix` stdio MCP 도구로 승격해 실측 연결까지 확인. 기존 GC108/GC114 시드 개수 단언을 실제 동작에 맞게 완화(§20) |
 | 각 메뉴 화면 사용자/운영자용 상세 설명 보강 | **구현 완료** — 14개 탭 전부 백엔드 로직을 재확인해 안내 문구 추가/보강, 스펙 코드 노출 금지 회귀(GC60)를 실측으로 발견·수정(§21) |
+| Phase 1: 협업 워크스페이스(결과물 엔티티+내 업무+Skill/Tool 재정의) | **구현 완료**(GC127-137) — `human_pool.user_id`를 채울 API가 지금까지 전혀 없어 F8도 실제로는 한 번도 동작 안 했을 실측 선행 버그 발견·수정. execute-agent는 스펙의 `run_crew()` 대신 `agent_runtime.execute_agent()`로 구현(§22) |

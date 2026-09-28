@@ -41,6 +41,7 @@ from hair_platform import (
     crew_runtime,
     data_admin,
     db,
+    deliverables,
     fairness,
     jobs,
     performance,
@@ -62,10 +63,14 @@ from hair_platform.models import (
     AgentModelConfig,
     ApprovalDecision,
     AssignmentRequest,
+    AssistRequest,
     BriefSubmission,
     ConsentRequest,
     CostUpdateRequest,
     CrewRunRequest,
+    DeliverableCommentCreate,
+    DeliverableCreate,
+    ExecuteAgentRequest,
     GenerateRequest,
     HumanPoolCreate,
     HumanPoolUpdate,
@@ -302,6 +307,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "availability": row["availability"],
                 "cost_estimate": row["cost_estimate"],
                 "manager_id": row["manager_id"],
+                "user_id": row["user_id"],
                 "performance_consent": bool(row["performance_consent"]),
                 "performance_score": row["performance_score"],
             }
@@ -331,6 +337,15 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             updates["availability"] = payload.availability
         if payload.cost_estimate is not None:
             updates["cost_estimate"] = payload.cost_estimate
+        if payload.user_id is not None:
+            target_user = conn.execute(
+                "SELECT id FROM users WHERE id = ?", (payload.user_id,)
+            ).fetchone()
+            if target_user is None:
+                raise HTTPException(
+                    status_code=404, detail="연결할 사용자를 찾을 수 없습니다"
+                )
+            updates["user_id"] = payload.user_id
         if not updates:
             raise HTTPException(status_code=400, detail="수정할 필드가 없습니다")
 
@@ -538,6 +553,188 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         return assignments.create_assignment_request(
             conn, task_id, payload.resource_type, payload.resource_id, user["id"]
         )
+
+    # ---------- 협업 워크스페이스(사용자 요청, 2026-09-28) ----------
+    # `docs/PHASE1_DELIVERABLE_SPEC.md` 참고. RBAC 원칙: 관리자/매니저는
+    # 감독 목적으로 조회는 전부 가능하지만, 작성(deliverable/댓글)은 그
+    # task의 사람 당사자/Agent 요청자 본인만 — 대리 작성 금지.
+
+    @app.get("/api/my-work")
+    def get_my_work(
+        limit: int = 50,
+        offset: int = 0,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """§2-1 — 확정된 배정 중 내가 당사자이거나(사람) 요청자인(Agent) task."""
+        return deliverables.list_my_work(conn, user["id"], limit, offset)
+
+    @app.get("/api/tasks/{task_id}/deliverables")
+    def list_task_deliverables(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """§2-2 — 협업 워크스페이스 타임라인(시간순)."""
+        task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return deliverables.list_deliverables(conn, task_id)
+
+    @app.post("/api/tasks/{task_id}/deliverables", status_code=201)
+    def create_task_deliverable(
+        task_id: int,
+        payload: DeliverableCreate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """§2-3 — 사람 결과물 작성. 대리 작성 금지(참가자 본인만)."""
+        try:
+            deliverable_id = deliverables.create_deliverable(
+                conn, task_id, user["id"], payload.content
+            )
+        except ValueError as exc:
+            if str(exc) == "task_not_found":
+                raise HTTPException(
+                    status_code=404, detail="할 일을 찾을 수 없습니다"
+                ) from None
+            raise HTTPException(
+                status_code=400, detail="내용을 입력해야 합니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+        return {"id": deliverable_id}
+
+    @app.get("/api/deliverables/{deliverable_id}/comments")
+    def get_deliverable_comments(
+        deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """§2-4."""
+        d = conn.execute(
+            "SELECT task_id FROM deliverables WHERE id = ?", (deliverable_id,)
+        ).fetchone()
+        if d is None:
+            raise HTTPException(status_code=404, detail="결과물을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, d["task_id"], user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return deliverables.list_comments(conn, deliverable_id)
+
+    @app.post("/api/deliverables/{deliverable_id}/comments", status_code=201)
+    def create_deliverable_comment(
+        deliverable_id: int,
+        payload: DeliverableCommentCreate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """§2-4."""
+        try:
+            comment_id = deliverables.create_comment(
+                conn, deliverable_id, user["id"], payload.content
+            )
+        except ValueError as exc:
+            if str(exc) == "deliverable_not_found":
+                raise HTTPException(
+                    status_code=404, detail="결과물을 찾을 수 없습니다"
+                ) from None
+            raise HTTPException(
+                status_code=400, detail="내용을 입력해야 합니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+        return {"id": comment_id}
+
+    @app.post("/api/tasks/{task_id}/assist")
+    def assist_task(
+        task_id: int,
+        payload: AssistRequest,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """§2-5 — "LLM으로 도와줘". 실제 LLM API를 호출하므로 비용이
+        발생한다. 결과는 저장하지 않는다 — 검토 후 별도로 제출해야 한다.
+        팀원/뷰어는 provider/model을 선택할 수 없다(§3 RBAC 결정, 비용
+        통제)."""
+        if user["role"] not in ("admin", "manager") and (
+            payload.provider or payload.model
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="팀원은 provider/model을 직접 선택할 수 없습니다",
+            )
+        try:
+            draft = deliverables.assist(
+                conn,
+                task_id,
+                user["id"],
+                payload.draft_context,
+                payload.provider,
+                payload.model,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+        return {"draft": draft}
+
+    @app.post("/api/tasks/{task_id}/execute-agent", status_code=201)
+    def trigger_agent_execution(
+        task_id: int,
+        payload: ExecuteAgentRequest,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """§2-6 — task에 배정된 Agent를 실행한다(동기 호출, 비용 발생).
+        요청자 본인 또는 매니저/관리자(감독 대리 실행 허용 — §2-3의
+        "작성"과 달리 "지금 실행시켜라"는 대리해도 저자성이 안 흐려짐)."""
+        if user["role"] not in ("admin", "manager") and (
+            payload.provider or payload.model
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="팀원은 provider/model을 직접 선택할 수 없습니다",
+            )
+        try:
+            deliverable_id = deliverables.execute_agent_for_task(
+                conn,
+                task_id,
+                user["id"],
+                payload.provider,
+                payload.model,
+                allow_supervisor_override=user["role"] in ("admin", "manager"),
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+        except LookupError:
+            raise HTTPException(
+                status_code=409,
+                detail="이 업무에 확정된 AI 에이전트 배정이 없습니다",
+            ) from None
+        return {"id": deliverable_id}
 
     @app.post("/api/briefs/{brief_id}/generate", status_code=201)
     def generate_agents(

@@ -5,7 +5,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 129
+**상태**: Phase 0–6 완료 + Gate A–G 배선 완료(F1–F14 전부 구현, `pytest` 140
 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
@@ -70,7 +70,13 @@ mock 없이 실제 서브프로세스 연결·호출까지 실측 확인했다(`
 물어본 것을 계기로, **14개 탭 전부의 안내 문구를 실제 백엔드 로직 기준으로
 상세히 보강했다** — 이 과정에서 스펙 코드 노출 금지 골든셋(GC60, 코드
 재점검 R5)이 새로 쓴 문구의 회귀를 실제로 잡아내 수정했다(`docs/LIMITS.md`
-§21).
+§21). 이어서 사용자 요청("Phase 1부터 시작해줘")에 따라 **협업
+워크스페이스(사람-AI 결과물 전달) Phase 1을 실제로 구현했다** —
+신규 `deliverables`/`deliverable_comments` 테이블, "내 업무" 탭 +
+결과물 타임라인/댓글/"LLM으로 도와줘"/AI 에이전트 실행. 실측 중
+`human_pool.user_id`를 채우는 API가 지금까지 전혀 없어 F8("내 성과점수
+조회")도 실제로는 한 번도 동작한 적이 없었을 선행 버그를 발견·수정했다
+(`docs/LIMITS.md` §22).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -86,7 +92,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 129건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 140건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -157,7 +163,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(52개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(59개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -178,6 +184,7 @@ src/hair_platform/
   graphquery.py      # 관계분석 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의, NF9 경계
   pool_registry.py   # Skill Pool·Tool Pool(ADR 결정 12) — 스킬→도구 매핑 데이터화, CrewAI Tool 조립
   data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호)
+  deliverables.py    # 협업 워크스페이스 Phase 1 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 실행
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
   ADR.md             # 설계 결정 11건
@@ -188,7 +195,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 아직 미구현
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 129건
+tests/unit/                            # 골든셋 140건
 ```
 
 ## 로드맵

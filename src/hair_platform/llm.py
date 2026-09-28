@@ -126,3 +126,17 @@ def system_prompt_for_role(role_name: str, skills: list[str]) -> str:
         f"보유 역량: {skill_text}. 이 역할의 관점에서 실무에 바로 쓸 수 있는 "
         "구체적이고 실질적인 산출물을 작성하세요. 불필요한 설명 없이 산출물 자체에 집중하세요."
     )
+
+
+def system_prompt_for_human_assist(role_name: str, skills: list[str]) -> str:
+    """협업 워크스페이스 "LLM으로 도와줘"(사용자 요청, 2026-09-28) 전용 —
+    `system_prompt_for_role()`과 달리 LLM이 Agent 역할을 연기하는 게 아니라
+    그 역할을 맡은 **사람**의 초안 작성을 돕는다는 걸 명시한다(그대로
+    재사용하면 "당신은 AI 에이전트입니다"라는 문장이 사람의 업무 보조
+    맥락과 안 맞는다)."""
+    skill_text = ", ".join(skills) if skills else "특별히 명시된 스킬 없음"
+    return (
+        f"당신은 '{role_name}' 역할을 맡은 사람의 업무를 돕는 보조자입니다. "
+        f"관련 역량: {skill_text}. 사람이 검토·수정할 초안을 작성하세요 — "
+        "최종 결정과 책임은 사람에게 있습니다. 불필요한 설명 없이 산출물 자체에 집중하세요."
+    )

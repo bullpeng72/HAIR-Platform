@@ -168,6 +168,31 @@ CREATE TABLE IF NOT EXISTS agent_tool_links (
     PRIMARY KEY (agent_id, tool_pool_id)
 );
 
+CREATE TABLE IF NOT EXISTS deliverables (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    author_type TEXT NOT NULL CHECK (author_type IN ('human', 'agent')),
+    author_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'pending_review', 'approved', 'rejected', 'revised')),
+    revises_id INTEGER REFERENCES deliverables(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS deliverable_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deliverable_id INTEGER NOT NULL REFERENCES deliverables(id),
+    author_type TEXT NOT NULL CHECK (author_type IN ('human', 'agent')),
+    author_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_deliverables_task_id ON deliverables(task_id);
+CREATE INDEX IF NOT EXISTS idx_deliverable_comments_deliverable_id
+    ON deliverable_comments(deliverable_id);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id INTEGER NOT NULL REFERENCES users(id),

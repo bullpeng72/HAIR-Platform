@@ -1,5 +1,10 @@
 # Phase 1 구현 스펙 — 결과물 엔티티 + 내 업무 진입 흐름 + Skill/Tool 역할 재정의
 
+**상태: 구현 완료(2026-09-28, 사용자 요청 "Phase 1부터 시작해줘")** —
+`deliverables.py`(신규), `app.py` 7개 엔드포인트, `webui.py` "내 업무" 탭 +
+협업 워크스페이스, 골든셋 GC127–137(11건) 전부 통과. 실측 중 발견한
+2가지 실제 이슈는 §8에 정리했다(구현 시점에 스펙과 달라진 것).
+
 사용자 요청(2026-09-28, "구현에 들어가기에 충분한 기획과 설계가 갖춰져
 있는지 확인해줘" → 갭 지적 후 "바로 작성해줘"). `docs/
 COLLABORATION_PLATFORM_PLAN.md` 4-1/4-2/4-3(= `docs/HAIR_MASTER_PLAN.md`
@@ -298,3 +303,37 @@ def _skill_grounded_system_prompt(conn, role_name, required_skills):
   착수를 막지 않는다).
 - Agent의 skill_tags→Tool 자동 부착 마이그레이션(별도 ADR 필요, §협업
   플랜 4-3) — Phase 1은 기존 메커니즘을 그대로 둔 채 진행한다.
+
+## 8. 구현 중 실측으로 발견한 것 (스펙과 달라진 지점)
+
+1. **§2-6(execute-agent) 구현 함수 변경**: 스펙 초안엔
+   `crew_runtime.run_crew()`라고 적었으나, 그건 여러 Agent를 CrewAI
+   Crew로 묶어 협업시키는 함수라 "이 task에 배정된 Agent 하나를
+   실행"하는 용도와 안 맞았다 — 실제로는 이미 있는 단일 Agent
+   온디맨드 실행 경로 `agent_runtime.execute_agent()`(Agent별 저장된
+   provider/model, RAG 증강을 그대로 재사용)로 구현했다. 코드 리뷰
+   없이 스펙만 보고 구현했다면 불필요하게 무거운 Crew 경로를 썼을
+   것이다.
+2. **`system_prompt_for_role()` 그대로 재사용 불가**: 기존 함수는
+   "당신은... AI 에이전트입니다"로 시작해 LLM이 Agent 역할을 연기하게
+   만드는데, §2-5(사람의 LLM 보조)는 LLM이 사람을 돕는 것이지 역할을
+   연기하는 게 아니다 — `system_prompt_for_human_assist()`를 별도로
+   추가했다(§4의 코드 스케치에 이미 반영돼 있었음).
+3. **실측으로 발견한 진짜 선행 버그**(스펙 작성 시점엔 몰랐음):
+   `human_pool.user_id`는 F8 `performance.review_for_member()`가 이미
+   참조하고 있었는데, **그 컬럼을 실제로 채우는 API가 이 작업 전까지
+   전혀 없었다**(생성 시점엔 항상 NULL, 수정 엔드포인트에도 필드가
+   없었음). 이게 없으면 이 Phase 1의 "사람 당사자(assignee)" 케이스가
+   구조적으로 단 하나도 동작할 수 없어서(연결할 방법 자체가 없으므로),
+   `HumanPoolUpdate`에 `user_id` 필드를 추가하고 "사람 인력 관리" 탭에
+   "계정 연결" UI를 새로 넣어서 메웠다 — F8도 이번에 덤으로 처음
+   동작하게 됐다(과거엔 항상 빈 배열을 반환했을 것이다).
+4. **실측 검증**: 로컬 데모 서버(포트 8123)에서 브리프→할일→사람
+   등록→계정 연결→배정 요청→승인→"내 업무" 조회→결과물 제출→댓글
+   작성→(확정 Agent 배정이 없어) execute-agent 409까지 실제 HTTP
+   요청으로 확인했다. `assist`/`execute-agent`의 실제 LLM 호출 성공
+   경로는 비용 문제로 라이브 서버에선 실행하지 않았고, GC133/GC135의
+   mock 기반 검증으로 대신했다(호출 인자 자체를 검증하므로 라우팅
+   로직은 충분히 커버된다).
+
+골든셋 전체(127건 기존 + GC127–137, 총 140건) 통과, ruff/black 클린.

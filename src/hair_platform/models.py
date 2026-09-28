@@ -55,12 +55,20 @@ class HumanPoolCreate(BaseModel):
 class HumanPoolUpdate(BaseModel):
     """코드 재점검(R3)에서 발견 — Agent Pool엔 onboard/deprecate 라이프사이클이
     있는데 Human Pool엔 생성 후 수정할 방법이 전혀 없던 비대칭을 없앤다.
-    전부 optional — 보낸 필드만 갱신한다."""
+    전부 optional — 보낸 필드만 갱신한다.
+
+    `user_id`는 협업 워크스페이스 구현(사용자 요청, 2026-09-28) 중 발견한
+    진짜 갭을 메운다 — `human_pool.user_id`(F8 `review_for_member()`가 이미
+    참조하던 컬럼)를 실제로 채울 API가 지금까지 전혀 없었다(항상 NULL).
+    이 필드가 없으면 어떤 Human Pool 레코드도 로그인 계정과 연결될 수 없어
+    F8의 "내 성과점수 조회"도, 이번 협업 워크스페이스의 "내 업무"도 사람
+    쪽 결과를 절대 낼 수 없었다."""
 
     role: str | None = None
     skill_tags: list[str] | None = None
     availability: str | None = None
     cost_estimate: float | None = None
+    user_id: int | None = None
 
 
 class ApprovalDecision(BaseModel):
@@ -98,6 +106,35 @@ class AssignmentRequest(BaseModel):
 
     resource_type: Literal["human", "agent"]
     resource_id: int
+
+
+class DeliverableCreate(BaseModel):
+    """협업 워크스페이스(사용자 요청, 2026-09-28) — 사람이 작성한 결과물을
+    올린다. `docs/PHASE1_DELIVERABLE_SPEC.md` §2-3."""
+
+    content: str
+
+
+class DeliverableCommentCreate(BaseModel):
+    """협업 워크스페이스 — deliverable에 대한 댓글. §2-4."""
+
+    content: str
+
+
+class AssistRequest(BaseModel):
+    """협업 워크스페이스 "LLM으로 도와줘" — `provider`/`model`은 매니저/관리자만
+    채울 수 있다(팀원이 채우면 app.py가 400으로 거부, §3 RBAC 결정)."""
+
+    draft_context: str | None = None
+    provider: LlmProvider | None = None
+    model: str | None = None
+
+
+class ExecuteAgentRequest(BaseModel):
+    """협업 워크스페이스 — task에 배정된 Agent를 실행한다. §2-6."""
+
+    provider: LlmProvider | None = None
+    model: str | None = None
 
 
 class GenerateRequest(BaseModel):

@@ -46,6 +46,8 @@ INDEX_HTML = """<!DOCTYPE html>
   .badge-adminonly { font-size: 0.65rem; background: #a15c00; color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
   main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
   section.card { background: #fff; border: 1px solid #e2e4e8; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+  .deliverable-card { background: #f9fafb; border: 1px solid #e2e4e8; border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 0.6rem; }
+  .deliverable-card + .deliverable-card { margin-top: 0; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #eee; vertical-align: top; }
   th { background: #f0f1f4; }
@@ -167,6 +169,7 @@ const LABELS = {
   submitted: "제출됨", reviewed: "검토됨",
   available: "가능", unavailable: "불가", offboarded: "오프보딩됨",
   active: "활성", pending_onboarding: "온보딩 대기", deprecated: "비활성화됨",
+  draft: "초안", pending_review: "리뷰 대기", revised: "수정됨",
 };
 function label(v) { return LABELS[v] || v; }
 
@@ -207,6 +210,7 @@ let ME = null;
    내비게이션을 둘로 나눠 보여준다. adminOnly: true는 그중에서도 ADMIN
    role만 되는 항목(매니저도 접근 가능한 관리자 도구와 구분 표시). */
 const TABS = [
+  { id: "mywork", label: "내 업무", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderMyWork },
   { id: "briefs", label: "업무 요청", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBriefs },
   { id: "approvals", label: "결재", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderApprovals },
   { id: "search", label: "인력 검색", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
@@ -313,6 +317,145 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
   await api("POST", "/logout");
   await boot();
 });
+
+/* ---------- 내 업무(협업 워크스페이스, 사용자 요청 2026-09-28) ---------- */
+
+async function renderMyWork(content) {
+  const rows = await api("GET", "/api/my-work");
+  content.innerHTML =
+    '<section class="card"><h2>내 업무</h2>' +
+    '<p class="muted">확정된 배정 중 내가 직접 할 일(사람 배정 당사자)이거나 내가 AI에게 맡긴 일(Agent 배정 요청자)만 보입니다. "열기"를 누르면 그 업무의 협업 워크스페이스(결과물 타임라인)가 아래에 펼쳐집니다.</p>' +
+    table(["할 일 ID", "역할", "유형", "관계", "결과물 수", "최근 결과물", "동작"], rows.map(r => [
+      r.task_id, esc(r.role_name), esc(label(r.resource_type)),
+      r.my_relationship === "assignee" ? "내가 할 일" : "내가 맡긴 일",
+      r.deliverable_count,
+      r.latest_deliverable_at ? esc(r.latest_deliverable_at) : "-",
+      '<button class="small" data-open-workspace="' + r.task_id + '">열기</button>',
+    ])) +
+    '<div id="mywork-detail"></div></section>';
+
+  content.querySelectorAll("[data-open-workspace]").forEach(btn => {
+    btn.onclick = () => renderCollabWorkspace(Number(btn.dataset.openWorkspace));
+  });
+}
+
+async function renderCollabWorkspace(taskId) {
+  const detail = document.getElementById("mywork-detail");
+  detail.innerHTML = '<p class="muted">불러오는 중…</p>';
+  const isSupervisor = ["admin", "manager"].includes(ME.role);
+  let items;
+  try {
+    items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
+  } catch (e) {
+    detail.innerHTML = "";
+    showMsg("global-msg", e.message, "error");
+    return;
+  }
+
+  const timeline = items.length
+    ? items.map(d =>
+        '<div class="deliverable-card">' +
+        '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + '</div>' +
+        '<div>' + esc(d.content).replace(/\\n/g, "<br>") + '</div>' +
+        '<div id="comments-' + d.id + '"></div>' +
+        '<form class="inline" data-comment-form="' + d.id + '">' +
+        '<input placeholder="댓글" id="comment-input-' + d.id + '" style="flex:1">' +
+        '<button class="small" type="submit">댓글</button></form>' +
+        '</div>'
+      ).join("")
+    : '<p class="muted">아직 결과물이 없습니다.</p>';
+
+  const modelFields = isSupervisor
+    ? '<select id="ws-provider"><option value="">provider 자동 판별</option>' +
+      '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
+      '<option value="ollama">Ollama(로컬)</option></select>' +
+      '<input id="ws-model" placeholder="모델명(비우면 기본값)">'
+    : '<span class="muted">provider/model은 매니저·관리자만 선택할 수 있습니다(기본값 사용).</span>';
+
+  detail.innerHTML =
+    '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
+    '<div id="workspace-timeline">' + timeline + '</div>' +
+    '<form class="inline" id="ws-submit-form">' +
+    '<textarea id="ws-content" rows="3" placeholder="결과물 내용을 입력하세요" style="flex:1;min-width:240px"></textarea>' +
+    modelFields +
+    '<button class="small" type="button" id="ws-assist-btn">LLM으로 도와줘(비용 발생)</button>' +
+    '<button class="primary" type="submit">결과물 제출</button>' +
+    '</form>' +
+    '<button class="small" id="ws-execute-agent-btn">이 업무의 AI 에이전트 실행(비용 발생)</button>' +
+    '<div id="ws-result"></div>';
+
+  items.forEach(d => loadDeliverableComments(d.id));
+
+  document.getElementById("ws-submit-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const contentVal = document.getElementById("ws-content").value.trim();
+    if (!contentVal) { showMsg("global-msg", "내용을 입력해야 합니다.", "error"); return; }
+    try {
+      await api("POST", "/api/tasks/" + taskId + "/deliverables", { content: contentVal });
+      showMsg("global-msg", "결과물을 제출했습니다.", "ok");
+      renderCollabWorkspace(taskId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  const assistBtn = document.getElementById("ws-assist-btn");
+  assistBtn.onclick = async () => {
+    const draftContext = document.getElementById("ws-content").value.trim() || null;
+    const payload = { draft_context: draftContext };
+    if (isSupervisor) {
+      const provider = document.getElementById("ws-provider").value;
+      const model = document.getElementById("ws-model").value;
+      if (provider) payload.provider = provider;
+      if (model) payload.model = model;
+    }
+    try {
+      const result = await withBusy(assistBtn, "생성 중…(실제 API 호출)", () => api("POST", "/api/tasks/" + taskId + "/assist", payload));
+      document.getElementById("ws-content").value = result.draft;
+      showMsg("global-msg", "LLM 초안을 받았습니다 — 검토·수정 후 제출하세요.", "ok");
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  };
+
+  const executeBtn = document.getElementById("ws-execute-agent-btn");
+  executeBtn.onclick = async () => {
+    if (!window.confirm("이 업무에 배정된 AI 에이전트를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
+    const payload = {};
+    if (isSupervisor) {
+      const provider = document.getElementById("ws-provider").value;
+      const model = document.getElementById("ws-model").value;
+      if (provider) payload.provider = provider;
+      if (model) payload.model = model;
+    }
+    try {
+      await withBusy(executeBtn, "실행 중…", () => api("POST", "/api/tasks/" + taskId + "/execute-agent", payload));
+      showMsg("global-msg", "AI 에이전트 실행이 완료됐습니다.", "ok");
+      renderCollabWorkspace(taskId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  };
+}
+
+async function loadDeliverableComments(deliverableId) {
+  const box = document.getElementById("comments-" + deliverableId);
+  if (!box) return;
+  try {
+    const comments = await api("GET", "/api/deliverables/" + deliverableId + "/comments");
+    box.innerHTML = comments.map(c => '<div class="muted">↳ ' + esc(c.content) + '</div>').join("");
+  } catch (e) {
+    // 참가자가 아니면 403 — 조용히 무시(타임라인 자체는 이미 조회 권한 확인됨).
+  }
+  const form = document.querySelector('[data-comment-form="' + deliverableId + '"]');
+  if (form) {
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById("comment-input-" + deliverableId);
+      const val = input.value.trim();
+      if (!val) return;
+      try {
+        await api("POST", "/api/deliverables/" + deliverableId + "/comments", { content: val });
+        input.value = "";
+        loadDeliverableComments(deliverableId);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  }
+}
 
 /* ---------- 업무 요청/할 일 ---------- */
 
@@ -600,18 +743,21 @@ async function renderHumanPool(content) {
     '<button class="primary" type="submit">등록</button></form>' +
     '<p class="muted">"비용"은 인력 매칭 점수의 25%(또는 성과점수가 없으면 40%)를 차지합니다 — 낮을수록 유리합니다. 아직 성과 데이터가 없으니 초기엔 "가능" 상태여야 매칭 후보로 잡히고(가용성이 매칭 점수의 40~60%), 스킬은 할 일의 필요 스킬과 겹칠수록 유리합니다.</p>' +
     '</section><section class="card"><h2>사람 인력 목록</h2>' +
-    '<p class="muted">"동의"는 성과 리뷰 사전 동의(NF9)입니다 — 동의 없이는 성과점수를 절대 입력·노출하지 않고, 동의를 철회하면 기존 점수도 즉시 지워집니다. "오프보딩"은 가용성을 offboarded로 바꿔 매칭 후보에서 빠지게 하는데, 이 화면에서 다시 되돌리는 버튼은 없습니다(사실상 편도) — 실수로 눌렀다면 관리자가 DB를 직접 고쳐야 합니다. "삭제"(관리자 전용)는 오프보딩과 별개로 레코드 자체를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 삭제가 막힙니다.</p>' +
-    table(["ID", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "동작"], people.map(p => {
+    '<p class="muted">"동의"는 성과 리뷰 사전 동의(NF9)입니다 — 동의 없이는 성과점수를 절대 입력·노출하지 않고, 동의를 철회하면 기존 점수도 즉시 지워집니다. "오프보딩"은 가용성을 offboarded로 바꿔 매칭 후보에서 빠지게 하는데, 이 화면에서 다시 되돌리는 버튼은 없습니다(사실상 편도) — 실수로 눌렀다면 관리자가 DB를 직접 고쳐야 합니다. "삭제"(관리자 전용)는 오프보딩과 별개로 레코드 자체를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 삭제가 막힙니다. "계정 연결"은 이 사람을 로그인 계정과 이어줍니다(사용자 관리 탭에서 만든 사용자의 ID) — 연결해야만 그 사람이 "내 업무" 탭에서 자기 업무를 볼 수 있습니다(연결 안 하면 구조적으로 절대 안 보입니다).</p>' +
+    table(["ID", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "연결된 계정 ID", "동작"], people.map(p => {
       const middleActions = p.availability === "offboarded" ? "" :
         '<button class="small" data-toggle-consent="' + p.id + '" data-consent="' + (p.performance_consent ? "0" : "1") + '">' +
           (p.performance_consent ? "동의 철회" : "동의") + "</button>" +
         '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="score-' + p.id + '">' +
         '<button class="small" data-set-score="' + p.id + '">점수입력</button></span>' +
+        '<span class="pair"><input type="number" min="1" step="1" placeholder="사용자 ID" id="linkuser-' + p.id + '">' +
+        '<button class="small" data-link-user="' + p.id + '">계정 연결</button></span>' +
         '<button class="small danger" data-offboard="' + p.id + '">오프보딩</button>';
       const deleteAction = isAdmin ? '<button class="small danger" data-delete-human="' + p.id + '">삭제</button>' : "";
       return [p.id, esc(p.name), esc(p.role), esc(p.skill_tags.join(", ")), esc(label(p.availability)), p.cost_estimate,
         p.performance_consent ? "동의함" : "미동의",
         p.performance_score === null ? "-" : p.performance_score,
+        p.user_id === null ? "-" : p.user_id,
         '<div class="actions">' + middleActions + deleteAction + "</div>"];
     })) + "</section>";
 
@@ -642,6 +788,20 @@ async function renderHumanPool(content) {
       try {
         await api("POST", "/api/human-pool/" + btn.dataset.setScore + "/performance", { score: Number(input.value) });
         showMsg("global-msg", "점수를 입력했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-link-user]").forEach(btn => {
+    btn.onclick = async () => {
+      const input = document.getElementById("linkuser-" + btn.dataset.linkUser);
+      const userId = Number(input.value);
+      if (!Number.isInteger(userId) || userId < 1) {
+        showMsg("global-msg", "사용자 ID는 1 이상의 정수여야 합니다.", "error"); return;
+      }
+      try {
+        await api("PATCH", "/api/human-pool/" + btn.dataset.linkUser, { user_id: userId });
+        showMsg("global-msg", "계정을 연결했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
