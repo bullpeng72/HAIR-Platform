@@ -1760,6 +1760,47 @@ task_id)`를 추가해(`deliverable_count`/`latest_deliverable_at`/
 두 엔드포인트에 필드만 추가 — 응답 형태가 배열/딕셔너리인 것은
 그대로).
 
+## 36. §34/§35 라이브 실행 재검증 — 사용자 요청(2026-09-29, "시나리오를
+    진행하며... bug 및 개선이 필요한 부분을... 수정해줘", 재요청)
+
+§33의 라이브 실행 리뷰 **이후에** 추가된 §34(사람 deliverable 제출)·
+§35(업무 결과물 확인 기능)는 그때까지 pytest(mock)와 `node --check`
+로만 검증돼 있었다 — 이번엔 그 둘을 실제로 떠 있는 서버에 `curl`로
+실제 HTTP 요청을 쏘며 기존 시나리오 데모 데이터(§33이 만든 것 그대로,
+재부트스트랩 안 함) 위에서 끝까지 확인했다:
+
+- `park_member`로 실제 로그인 → 시나리오 2의 마케팅 보고서 draft(id 3)를
+  실제로 `POST /api/deliverables/3/submit` → 200, `latest_status`가
+  `draft`→`pending_review`로 실시간 반영됨 확인.
+- `admin`으로 실제 결재함(`GET /api/approvals?scope=inbox`) 조회 →
+  방금 생긴 건이 실제로 뜸 → 실제로 `POST /api/approvals/5/decide`
+  승인 → `deliverable.status='approved'`.
+- 승인 직후 `park_member`의 `GET /api/my-work`와 `GET
+  /api/briefs/2/tasks` 양쪽에서 `has_final_result`가 실제로
+  `false`→`true`로 바뀜을 확인(§35가 약속한 동작 그대로).
+- 400/403/409 경계 3종(Agent 산출물 제출 시도, 대리 제출 시도, 재제출
+  시도)도 전부 실제 HTTP로 재확인 — pytest가 mock으로 예측한 것과
+  **완전히 일치**, 실제 RBAC 의존성 경로에서의 차이 없음.
+- 시나리오 1(task 1, human draft + agent approved 2건 혼재)의
+  `GET /api/tasks/1/deliverables` 실제 응답으로 `webui.py`의
+  `finalResultCard` 클라이언트 로직(가장 최신 `status='approved'`
+  항목을 `created_at` 문자열 비교로 선택)을 직접 대조 — 모든
+  deliverables가 스키마의 `DEFAULT (datetime('now'))`만 쓰고 다른
+  포맷으로 넣는 경로가 없어(`grep`으로 INSERT 문 2곳 전부 확인)
+  문자열 `>` 비교가 항상 시간순과 일치함을 확인. 브리프 1의 두
+  Task(백엔드 개발=2건 혼재, QA=0건)로 집계 함수가 Task별로 올바르게
+  분리되는 것도 확인.
+- 실제 서버가 방금 내려준 페이지를 새로 `curl`로 받아 `node --check`
+  통과 + `data-submit-deliverable`/`final-result-card`/새 테이블
+  열("상태"·"최종 결과물") 전부 실제 응답에 존재 확인.
+
+**결과**: 새 코드 버그 없음 — §34/§35 둘 다 mock 테스트가 예측한
+그대로 실제 서버에서 동작했다(버그를 찾아야 리뷰가 성공한 것은 아니다,
+§33과 같은 원칙). 코드 변경 없음, 골든셋 183건 그대로, 새 GC 번호
+없음. `.env`의 실제 API 키를 쓰는 LLM/임베딩 호출은 이번 검증 대상
+(제출/승인/집계는 순수 DB 연산)과 무관해 한 번도 트리거하지 않았다 —
+§25의 실수를 반복하지 않았다.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |
