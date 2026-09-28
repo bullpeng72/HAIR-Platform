@@ -6,7 +6,8 @@ simple_llm 호출... skill을 사용할 수 있도록").
 
 `docs/PHASE1_DELIVERABLE_SPEC.md`의 GC127-137(Phase 1)에 더해, Phase 2
 (산출물 승인 게이트, 사용자 요청 2026-09-28 "다음 단계 진행해줘")의
-GC138-142도 이 파일에 담는다.
+GC138-142, Phase 3(Agent 평가 인라인 연결, 사용자 요청 2026-09-28
+"Phase 3 진행해줘")의 GC143-145도 이 파일에 담는다.
 
 **실측으로 발견한 진짜 선행 버그**: `human_pool.user_id`(F8
 `review_for_member()`가 이미 참조하던 컬럼)를 채울 API가 이 작업 전까지
@@ -438,3 +439,57 @@ def test_gc142_human_draft_deliverable_never_has_approval_id(client_and_conn):
     row = next(d for d in resp.json() if d["author_type"] == "human")
     assert row["status"] == "draft"
     assert row["approval_id"] is None
+
+
+# ---------- Phase 3 — Agent 평가 인라인 연결(사용자 요청, 2026-09-28, "Phase 3 진행해줘") ----------
+
+
+def test_gc143_execute_agent_records_gate_scores_on_deliverable(client_and_conn):
+    """Agent 산출물이 생기면 그 자리에서 Gate A-G가 측정돼 `evaluation`으로
+    함께 노출돼야 한다 — 사람이 쓴 deliverable은 애초에 평가 대상이 아니라
+    항상 evaluation=None이다."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    _deliverable_id, row = _execute_agent_and_get_deliverable(client, task_id)
+    assert row["evaluation"] is not None
+    gate_scores = row["evaluation"]["gate_scores"]
+    assert set(gate_scores.keys()) == {"A", "B", "C", "D", "E", "F", "G"}
+    for gate in gate_scores.values():
+        assert set(gate.keys()) >= {"score", "status", "passed"}
+    assert row["evaluation"]["tcr"] is not None
+
+
+def test_gc144_human_deliverable_has_no_evaluation(client_and_conn):
+    client, conn = client_and_conn
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
+
+    _login(client, "member1", "memberpass")
+    resp = client.post(
+        f"/api/tasks/{task_id}/deliverables", json={"content": "사람이 쓴 초안"}
+    )
+    assert resp.status_code == 201
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    row = next(d for d in resp.json() if d["author_type"] == "human")
+    assert row["evaluation"] is None
+
+
+def test_gc145_aggregate_agent_score_averages_across_evaluations(client_and_conn):
+    """`agent_pool.performance_score`(관리자 수동)와 별도로, 자동 측정치는
+    그 Agent가 만든 모든 deliverable의 평가를 평균 낸다 — 평가 이력이
+    없으면 None(수동 값만 있다는 뜻)."""
+    from hair_platform import agent_evaluation
+
+    client, conn = client_and_conn
+    _brief_id, task_id, agent_id = _setup_agent_requester_task(client)
+
+    assert agent_evaluation.aggregate_agent_score(conn, agent_id) is None
+
+    _execute_agent_and_get_deliverable(client, task_id)
+    _execute_agent_and_get_deliverable(client, task_id)
+
+    agg = agent_evaluation.aggregate_agent_score(conn, agent_id)
+    assert agg is not None
+    assert agg["sample_count"] == 2
+    assert set(agg["gate_averages"].keys()) == {"A", "B", "C", "D", "E", "F", "G"}

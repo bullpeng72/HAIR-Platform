@@ -8,8 +8,10 @@ HITL/HOTL로 AI Agent 업무 감독 등이 가능해야해" → "팀이 승인�
 
 `docs/PHASE1_DELIVERABLE_SPEC.md`의 Phase 1 범위(결과물 엔티티 + 내 업무
 진입 흐름 + Skill/Tool 역할 재정의)에 더해, Phase 2(산출물 승인 게이트,
-사용자 요청 2026-09-28 "다음 단계 진행해줘")도 이 모듈에서 구현한다 —
-Agent 평가(Phase 3)·비동기 실행(Phase 4)만 범위 밖이다.
+사용자 요청 2026-09-28 "다음 단계 진행해줘")·Phase 3(Agent 평가 인라인
+연결, 사용자 요청 2026-09-28 "Phase 3 진행해줘", 실제 측정 로직은
+`agent_evaluation.py`에 분리)도 이 모듈에서 구현한다 — 비동기 실행
+(Phase 4)만 범위 밖이다.
 
 **author_id 규칙**: `author_type='human'`이면 `author_id`는
 `human_pool.id`가 아니라 **`users.id`**다(실제로 글을 쓴 로그인 계정 —
@@ -36,7 +38,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from hair_platform import agent_runtime, approvals, audit, llm
+from hair_platform import agent_evaluation, agent_runtime, approvals, audit, llm
 
 
 def _confirmed_assignments_for_task(
@@ -121,7 +123,11 @@ def list_deliverables(conn: sqlite3.Connection, task_id: int) -> list[dict]:
     Phase 2: `pending_review`인 deliverable엔 지금 결정 가능한(`status=
     'pending'`) 결재 건의 id를 `approval_id`로 함께 내려준다 — 웹 UI가
     "결재" 탭으로 안 보내고 워크스페이스 안에서 바로 승인/반려하려면
-    이 id가 필요하다. 다른 상태는 항상 `approval_id=None`."""
+    이 id가 필요하다. 다른 상태는 항상 `approval_id=None`.
+
+    Phase 3: `author_type='agent'`인 deliverable엔 `evaluation`(Gate A-G
+    점수 + TCR, 없으면 None)도 같이 내려준다 — 결재자가 승인/반려 전에
+    측정치를 볼 수 있어야 한다(`docs/HAIR_MASTER_PLAN.md` §5)."""
     task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
@@ -141,6 +147,11 @@ def list_deliverables(conn: sqlite3.Connection, task_id: int) -> list[dict]:
             ).fetchone()
             if approval is not None:
                 item["approval_id"] = approval["id"]
+        item["evaluation"] = (
+            agent_evaluation.latest_evaluation(conn, row["id"])
+            if row["author_type"] == "agent"
+            else None
+        )
         result.append(item)
     return result
 
@@ -343,17 +354,27 @@ def execute_agent_for_task(
         prompt_parts.append(f"참고할 사람 작성 자료:\n{latest_human['content']}")
     prompt = "\n\n".join(prompt_parts)
 
-    output = agent_runtime.execute_agent(
-        conn, agent_id, actor_id, prompt, provider, model
+    # Phase 3 — 실제 LLM 호출을 agent_evaluation.run_and_score()로 감싸 Gate
+    # A-G를 그 자리에서 측정한다(docs/HAIR_MASTER_PLAN.md §5). 호출이
+    # 실패하면 여기서 예외가 그대로 전파되고, deliverable은 아직 INSERT되지
+    # 않은 상태다 — 기존 실패 동작(아무 것도 안 남는다)과 동일하게 유지한다.
+    eval_result = agent_evaluation.run_and_score(
+        task["role_name"],
+        lambda: agent_runtime.execute_agent(
+            conn, agent_id, actor_id, prompt, provider, model
+        ),
     )
 
     cur = conn.execute(
         "INSERT INTO deliverables (task_id, author_type, author_id, content, status) "
         "VALUES (?, 'agent', ?, ?, 'pending_review')",
-        (task_id, agent_id, output),
+        (task_id, agent_id, eval_result["output"]),
     )
     deliverable_id = cur.lastrowid
     assert deliverable_id is not None
+    agent_evaluation.record_evaluation(
+        conn, deliverable_id, eval_result["gate_scores"], eval_result["tcr"]
+    )
     approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
     audit.record(
         conn,
@@ -361,7 +382,13 @@ def execute_agent_for_task(
         "deliverable_created",
         "deliverables",
         deliverable_id,
-        after={"task_id": task_id, "author_type": "agent", "agent_id": agent_id},
+        after={
+            "task_id": task_id,
+            "author_type": "agent",
+            "agent_id": agent_id,
+            "gate_scores": eval_result["gate_scores"],
+            "tcr": eval_result["tcr"],
+        },
     )
     conn.commit()
     return deliverable_id

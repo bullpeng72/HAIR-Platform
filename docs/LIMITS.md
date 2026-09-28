@@ -1109,6 +1109,67 @@ my-work`, `/api/approvals?scope=inbox`) 회귀 없음을 확인했다 — 실제
 LLM 호출이 필요한 승인 생성 자체는 비용 문제로 라이브 서버에서 실행하지
 않고 mock 기반 골든셋으로 검증했다(Phase 1과 같은 판단).
 
+## 24. Phase 3 구현 — Agent 평가 인라인 연결(Gate A-G) — 사용자 요청
+    (2026-09-28, "Phase 3 진행해줘")
+
+`docs/HAIR_MASTER_PLAN.md` §5를 구현했다: `eval_wiring.py`는 SPEC.md §12
+시절 만든 **수동 실행 probe 스크립트**(`python -m hair_platform.eval_wiring`
+로 직접 돌려야 함)였던 반면, 이번 Phase 3는 `deliverables.
+execute_agent_for_task()` 안에서 **매 Agent 실행마다 자동으로** Gate A-G를
+측정하는 실제 프로덕션 배선이다 — 새 모듈 `agent_evaluation.py`.
+
+**실측으로 확인하고 반영한 것(agent-evaluator 1.1.1 설치 소스 직접 실행,
+`docs/HAIR_MASTER_PLAN.md`에는 없던 세부사항)**:
+- `@agent_eval`로 감싼 함수를 호출하면 반환값은 `(response, metadata)`
+  튜플의 `response`만 돌아온다 — 그래서 실제 `agent_runtime.execute_agent()`
+  호출을 감싼 클로저를 `@agent_eval`로 감싸도 호출자는 평소처럼 결과
+  문자열을 그대로 받는다. `execute_agent_for_task()`가 이 원리로
+  재구성됐다.
+- `PerformanceMonitor`는 호출된 모든 task를 누적 집계하므로, "이번 한 번의
+  실행"만 채점하려면 **호출마다 새 인스턴스를 만들어야 한다**(모듈 전역
+  싱글턴 — `eval_wiring.py`의 패턴 — 을 그대로 쓰면 이전 실행들과 점수가
+  섞인다). `output_dir`는 `auto_save=False` 기본값 때문에 실제로 쓰이지
+  않는다 — 파일로 안 남기고 새 테이블 `agent_evaluations`에 바로 적재한다.
+- TCR(완료율)은 `report.accuracy_metrics["tcr"]["tcr"]`(0-100 실수)에서
+  나온다 — `agent-evaluator` CLI가 채점에 실제로 쓰는 값과 같은 경로임을
+  `cli/gate.py` 소스로 확인했다.
+- `task_type="deliverable"`은 canonical 값이 아니다(SDK가 "unrecognised
+  task_type" 경고를 내며 그래도 받아준다) — 실행해보고 발견해
+  `"document_creation"`(canonical 목록에 있음)으로 바꿨다.
+- 실제 LLM 호출은 결정론적 스텁(eval_wiring.py, 5s/10s SLA)과 달리 수
+  초~수십 초 걸린다 — SLA를 `p95_ms=30000/p99_ms=60000`으로 넉넉히
+  잡았다. `eval_wiring.py`의 값을 그대로 재사용했다면 정상 호출도 전부
+  Gate D 위반으로 잡혔을 것이다.
+
+**설계 결정**:
+- `agent_evaluations`는 append-only(`id, deliverable_id, gate_scores(JSON),
+  tcr, evaluated_at`) — deliverable 하나가 여러 번 평가될 수 있는 구조를
+  열어둔다(지금은 execute-agent 1회 = 평가 1회지만, 향후 재평가/재채점
+  경로가 생겨도 스키마 변경 없이 수용 가능).
+- **실패 시 아무 것도 안 남는 불변식 유지**: 원래 코드는 `agent_runtime.
+  execute_agent()`가 성공한 뒤에만 deliverable을 INSERT했다. Phase 3
+  배선을 처음 짤 때 "평가에 deliverable_id가 필요하니 먼저 INSERT하고
+  나중에 채운다"는 순서로 짰다가, LLM 호출 실패 시 빈 내용의 deliverable
+  행이 커밋 전 상태로 남는 문제를 구현 중 자체 검토로 발견했다 — 순서를
+  되돌려 `run_and_score()`(DB 미접촉, 순수 계산)와 `record_evaluation()`
+  (deliverable INSERT 이후 호출)로 분리해 기존 불변식을 그대로 지켰다.
+- `agent_pool.performance_score`(관리자 수동, F8)는 건드리지 않는다 —
+  자동 측정치는 `aggregate_agent_score()`로 별도 조회한다(§5-2 "완전
+  자동 대체 아님, 구분해서 보여준다").
+- Gate B(행동 무결성)·D(성능 계약)·E(보안 경계)는 도구 호출이 없는 단발
+  LLM 호출 특성상 `not_measured`(점수 null)로 나올 수 있다 — 이건 버그가
+  아니라 측정할 신호가 없다는 정직한 표시다(`eval_wiring.py`의 Gate C/F
+  제외 선례와 같은 정신). Gate G(설명가능성)는 현재 프롬프트가 "판단
+  근거를 명시하라"고 요구하지 않아 낮게 나올 가능성이 높다 — 이번
+  스코프는 "평가 인프라 연결"이지 "Agent 응답 품질 개선"이 아니라서
+  프롬프트는 의도적으로 건드리지 않았다(향후 개선 여지로 남겨둠).
+
+**검증**: 골든셋 GC143–145(3건) 추가, 전체 148건 통과. ruff check/format
+클린. `list_deliverables()`가 Agent 산출물엔 `evaluation`(Gate 점수+TCR),
+사람 산출물엔 `evaluation=None`을 내려주는 것을 GC143/GC144로 확인했다.
+실제 LLM 호출은 기존 관례대로 `hair_platform.llm.call_llm`을 mock해
+비용 없이 검증했다(Gate 채점 로직 자체는 mock 응답 텍스트로 실제 실행됨).
+
 ## 요약
 
 | 항목 | 상태 |
@@ -1142,3 +1203,4 @@ LLM 호출이 필요한 승인 생성 자체는 비용 문제로 라이브 서�
 | 각 메뉴 화면 사용자/운영자용 상세 설명 보강 | **구현 완료** — 14개 탭 전부 백엔드 로직을 재확인해 안내 문구 추가/보강, 스펙 코드 노출 금지 회귀(GC60)를 실측으로 발견·수정(§21) |
 | Phase 1: 협업 워크스페이스(결과물 엔티티+내 업무+Skill/Tool 재정의) | **구현 완료**(GC127-137) — `human_pool.user_id`를 채울 API가 지금까지 전혀 없어 F8도 실제로는 한 번도 동작 안 했을 실측 선행 버그 발견·수정. execute-agent는 스펙의 `run_crew()` 대신 `agent_runtime.execute_agent()`로 구현(§22) |
 | Phase 2: 산출물 승인 게이트(HITL) | **구현 완료**(GC138-142) — 새 승인 로직 없이 F7 다단계 결재라인+ADR 3-A 자기승인 방지를 `subject_type='deliverable'`로 그대로 재사용. "수정 후 재제출" 연결 기준은 아직 미정이라 의도적으로 스코프 밖(§23) |
+| Phase 3: Agent 평가 인라인 연결(Gate A-G) | **구현 완료**(GC143-145) — `eval_wiring.py`(수동 probe)와 별도로 매 execute-agent 실행마다 자동 채점하는 `agent_evaluation.py` 신설. `agent_pool.performance_score`(수동)와 분리된 `agent_evaluations` 테이블(append-only). Gate B/D/E는 도구 호출 없는 단발 LLM 호출 특성상 not_measured 가능, Gate G는 현재 프롬프트가 판단 근거를 요구하지 않아 낮게 나올 수 있음 — 정직하게 문서화(§24) |

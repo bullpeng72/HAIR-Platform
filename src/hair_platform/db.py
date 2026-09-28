@@ -193,6 +193,17 @@ CREATE INDEX IF NOT EXISTS idx_deliverables_task_id ON deliverables(task_id);
 CREATE INDEX IF NOT EXISTS idx_deliverable_comments_deliverable_id
     ON deliverable_comments(deliverable_id);
 
+CREATE TABLE IF NOT EXISTS agent_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deliverable_id INTEGER NOT NULL REFERENCES deliverables(id),
+    gate_scores TEXT NOT NULL,
+    tcr REAL,
+    evaluated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_evaluations_deliverable_id
+    ON agent_evaluations(deliverable_id);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id INTEGER NOT NULL REFERENCES users(id),
