@@ -10,8 +10,31 @@ HITL/HOTL로 AI Agent 업무 감독 등이 가능해야해" → "팀이 승인�
 진입 흐름 + Skill/Tool 역할 재정의)에 더해, Phase 2(산출물 승인 게이트,
 사용자 요청 2026-09-28 "다음 단계 진행해줘")·Phase 3(Agent 평가 인라인
 연결, 사용자 요청 2026-09-28 "Phase 3 진행해줘", 실제 측정 로직은
-`agent_evaluation.py`에 분리)도 이 모듈에서 구현한다 — 비동기 실행
-(Phase 4)만 범위 밖이다.
+`agent_evaluation.py`에 분리)·Phase 4(execute-agent 비동기화, 사용자
+요청 2026-09-28 "Phase 4 진행해줘")도 이 모듈에서 구현한다.
+
+**Phase 4 설계**: `execute_agent_for_task()`(동기, 응답까지 LLM 호출을
+기다림) 하나였던 것을 `start_agent_execution()`(검증+프롬프트 구성만
+동기, `agent_execution_jobs`에 `status='running'` 행을 만들고 즉시
+반환)과 `run_agent_execution_job()`(실제 LLM 호출+평가+deliverable
+생성, `app.py`가 FastAPI `BackgroundTasks`로 응답 전송 후 실행)으로
+쪼갰다. 원래 설계(`docs/COLLABORATION_PLATFORM_PLAN.md` Phase C)는
+`crew_runtime.run_crew()`(다중 Task Crew)를 대상으로 CrewAI
+`register_before_tool_call_hook()` 기반 도구 호출 단위 일시정지까지
+그렸지만, 실제로 협업 워크스페이스가 쓰는 경로는 단일 LLM 호출인
+`agent_runtime.execute_agent()`라 "실행 중간에 멈출 지점"이 없다 — 그래서
+사용자 결정(2026-09-28)에 따라 스코프를 "비동기 실행+상태 폴링"으로
+좁혔다. 도구 호출 단위 일시정지는 `crew_runtime.run_crew()`용으로 남겨둔
+별도 항목이다(`docs/LIMITS.md` §25, `docs/COLLABORATION_PLATFORM_PLAN.md`
+Phase C).
+
+**`deliverables.status`에 'generating' 상태를 추가하지 않은 이유**:
+SQLite는 기존 테이블의 CHECK 제약을 `ALTER TABLE`로 바꿀 수 없다(테이블
+재생성만 가능) — 이미 배포된 DB 파일(`hair.db`)의 `deliverables.status`
+CHECK을 안전하게 넓힐 방법이 없어, 진행 중 상태는 완전히 새 테이블
+`agent_execution_jobs`(`CREATE TABLE IF NOT EXISTS`라 기존 DB에도 안전하게
+추가됨)로 분리했다. 완료되면 정상적으로 `deliverables`에 `'pending_review'`
+행이 생긴다 — 기존 스키마·API 계약은 그대로다.
 
 **author_id 규칙**: `author_type='human'`이면 `author_id`는
 `human_pool.id`가 아니라 **`users.id`**다(실제로 글을 쓴 로그인 계정 —
@@ -305,23 +328,28 @@ def assist(
     return llm.call_llm(resolved_provider, resolved_model, system, prompt)
 
 
-def execute_agent_for_task(
+def start_agent_execution(
     conn: sqlite3.Connection,
     task_id: int,
     actor_id: int,
-    provider: str | None,
-    model: str | None,
     allow_supervisor_override: bool = False,
-) -> int:
-    """`POST /api/tasks/{task_id}/execute-agent`(§2-6) — 이 task의 confirmed
-    agent 배정을 찾아 실행한다. requester 본인이거나(`allow_supervisor_
-    override=False`) 매니저/관리자(`True`, `app.py`가 role로 판단)면 통과.
-    가장 최근 사람 작성 deliverable을 Task 입력에 포함시킨다(§1 "출력
-    처리" — 이게 "결과물 전달" 갭을 실제로 메우는 지점).
+) -> dict:
+    """`POST /api/tasks/{task_id}/execute-agent`(§2-6, Phase 4로 비동기화) —
+    이 task의 confirmed agent 배정을 찾아 검증·프롬프트 구성까지만
+    동기로 마치고 `agent_execution_jobs`에 `status='running'` 행을 만든
+    뒤 즉시 반환한다. 실제 LLM 호출은 `run_agent_execution_job()`이
+    `app.py`의 `BackgroundTasks`로 응답 전송 후 처리한다 — 요청자 본인
+    이거나(`allow_supervisor_override=False`) 매니저/관리자(`True`)면
+    통과. 가장 최근 사람 작성 deliverable을 Task 입력에 포함시킨다(§1
+    "출력 처리" — "결과물 전달" 갭을 메우는 지점).
 
-    Phase 2: 결과 deliverable마다 결재 체인을 새로 만든다(`requested_by`
-    =이 함수를 호출한 `actor_id` — 감독자 대리 실행이었다면 그 감독자가
-    자기 트리거의 승인자가 될 수 없다, ADR 3-A와 같은 원리)."""
+    provider/model은 여기서 다루지 않는다 — `app.py`가 요청에서 받은
+    값을 검증 없이 그대로 들고 있다가 `run_agent_execution_job()`에
+    직접 넘긴다(이 함수를 거칠 이유가 없는 순수 통과값).
+
+    반환값의 `agent_id`/`role_name`/`prompt`는 DB에 다시 저장하지 않고
+    `app.py`가 그대로 `run_agent_execution_job()`에 넘긴다 — 새 컬럼을
+    안 늘리려는 선택."""
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
@@ -354,41 +382,108 @@ def execute_agent_for_task(
         prompt_parts.append(f"참고할 사람 작성 자료:\n{latest_human['content']}")
     prompt = "\n\n".join(prompt_parts)
 
-    # Phase 3 — 실제 LLM 호출을 agent_evaluation.run_and_score()로 감싸 Gate
-    # A-G를 그 자리에서 측정한다(docs/HAIR_MASTER_PLAN.md §5). 호출이
-    # 실패하면 여기서 예외가 그대로 전파되고, deliverable은 아직 INSERT되지
-    # 않은 상태다 — 기존 실패 동작(아무 것도 안 남는다)과 동일하게 유지한다.
-    eval_result = agent_evaluation.run_and_score(
-        task["role_name"],
-        lambda: agent_runtime.execute_agent(
-            conn, agent_id, actor_id, prompt, provider, model
-        ),
-    )
-
     cur = conn.execute(
-        "INSERT INTO deliverables (task_id, author_type, author_id, content, status) "
-        "VALUES (?, 'agent', ?, ?, 'pending_review')",
-        (task_id, agent_id, eval_result["output"]),
+        "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
+        "VALUES (?, ?, 'running')",
+        (task_id, actor_id),
     )
-    deliverable_id = cur.lastrowid
-    assert deliverable_id is not None
-    agent_evaluation.record_evaluation(
-        conn, deliverable_id, eval_result["gate_scores"], eval_result["tcr"]
-    )
-    approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
+    job_id = cur.lastrowid
+    assert job_id is not None
     audit.record(
         conn,
         actor_id,
-        "deliverable_created",
-        "deliverables",
-        deliverable_id,
-        after={
-            "task_id": task_id,
-            "author_type": "agent",
-            "agent_id": agent_id,
-            "gate_scores": eval_result["gate_scores"],
-            "tcr": eval_result["tcr"],
-        },
+        "agent_execution_started",
+        "agent_execution_jobs",
+        job_id,
+        after={"task_id": task_id, "agent_id": agent_id},
     )
     conn.commit()
-    return deliverable_id
+    return {
+        "job_id": job_id,
+        "agent_id": agent_id,
+        "role_name": task["role_name"],
+        "prompt": prompt,
+    }
+
+
+def run_agent_execution_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    task_id: int,
+    agent_id: int,
+    actor_id: int,
+    role_name: str,
+    prompt: str,
+    provider: str | None,
+    model: str | None,
+) -> None:
+    """`start_agent_execution()`이 반환한 job을 실제로 실행한다 —
+    `app.py`가 `BackgroundTasks.add_task()`로 등록해 HTTP 응답을 보낸
+    *뒤에* 실행되므로, 여기서 예외를 밖으로 던져도 받아줄 호출자가 없다
+    (starlette가 조용히 로그만 남기고 삼킨다). 그래서 이 함수는 실패까지
+    포함해 모든 결과를 `agent_execution_jobs` 행에 직접 기록한다 — Phase
+    2/3의 동기 경로가 "예외를 그대로 전파해 아무 것도 안 남긴다"였던
+    것과 달리, 비동기 경로는 실패도 사람이 UI에서 볼 수 있게 저장하는
+    쪽이 맞다(HOTL — 실행이 죽었는지조차 모르면 감독이 안 된다)."""
+    try:
+        # Phase 3 — 실제 LLM 호출을 agent_evaluation.run_and_score()로
+        # 감싸 Gate A-G를 그 자리에서 측정한다(docs/HAIR_MASTER_PLAN.md
+        # §5).
+        eval_result = agent_evaluation.run_and_score(
+            role_name,
+            lambda: agent_runtime.execute_agent(
+                conn, agent_id, actor_id, prompt, provider, model
+            ),
+        )
+
+        cur = conn.execute(
+            "INSERT INTO deliverables (task_id, author_type, author_id, content, status) "
+            "VALUES (?, 'agent', ?, ?, 'pending_review')",
+            (task_id, agent_id, eval_result["output"]),
+        )
+        deliverable_id = cur.lastrowid
+        assert deliverable_id is not None
+        agent_evaluation.record_evaluation(
+            conn, deliverable_id, eval_result["gate_scores"], eval_result["tcr"]
+        )
+        approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
+        conn.execute(
+            "UPDATE agent_execution_jobs SET status = 'succeeded', deliverable_id = ?, "
+            "finished_at = datetime('now') WHERE id = ?",
+            (deliverable_id, job_id),
+        )
+        audit.record(
+            conn,
+            actor_id,
+            "deliverable_created",
+            "deliverables",
+            deliverable_id,
+            after={
+                "task_id": task_id,
+                "author_type": "agent",
+                "agent_id": agent_id,
+                "gate_scores": eval_result["gate_scores"],
+                "tcr": eval_result["tcr"],
+            },
+        )
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계, 위 docstring 참고
+        conn.rollback()
+        conn.execute(
+            "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "
+            "finished_at = datetime('now') WHERE id = ?",
+            (str(exc), job_id),
+        )
+        conn.commit()
+
+
+def list_execution_jobs(conn: sqlite3.Connection, task_id: int) -> list[dict]:
+    """`GET /api/tasks/{task_id}/agent-execution-jobs` — Web UI가 폴링해
+    "생성 중…"/실패 상태를 타임라인에 얹는다. 최신순(가장 최근 실행이
+    맨 위)."""
+    rows = conn.execute(
+        "SELECT * FROM agent_execution_jobs WHERE task_id = ? "
+        "ORDER BY created_at DESC, id DESC",
+        (task_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]

@@ -284,6 +284,20 @@ Phase A의 협업 워크스페이스(4-1)가 이미 열려 있는 화면이므�
 
 ### Phase C — 비동기 실행 + 일시정지/재개: "HOTL" 문제 해결 (가장 큰 구조 변경)
 
+**상태: 부분 구현(2026-09-28, "Phase 4 진행해줘")** — 아래 "설계
+방향(확정)"의 두 세분화 단계 중 **1번(도구 호출 단위, `crew_runtime.
+run_crew()` 대상)은 구현하지 않았다.** 협업 워크스페이스(Phase A/B가
+실제로 완성한 것)가 쓰는 경로는 `agent_runtime.execute_agent()`(단일
+LLM 호출)뿐이라 도구 호출 단위 일시정지가 적용될 지점이 없었기
+때문이다. 대신 그 경로를 **비동기화**(HTTP 요청이 LLM 응답을 기다리지
+않고, 검증만 동기로 마친 뒤 즉시 202를 반환하고 실제 실행은
+`BackgroundTasks`로 처리 — `agent_execution_jobs` 테이블로 진행 상태
+추적)했다. 이건 아래 "2번(Task 단위)"과도 정확히 같진 않다 — Task가
+여러 개로 쪼개져 순차 실행되는 게 아니라 "단일 실행을 비동기로 돌린다"
+쪽에 더 가깝다. 아래 원래 설계(도구 호출 단위 훅, Task 단위 체크포인트)
+는 `crew_runtime.run_crew()`를 실제로 건드릴 때를 위해 그대로 남겨둔다
+— 상세는 `docs/LIMITS.md` §25, `docs/HAIR_MASTER_PLAN.md` §7 참고.
+
 **정정 1(사용자 요청, 2026-09-28, "HAIR AI Agent Framework로 CrewAI,
 LangGraph 등 다양하게 분석해 최적을 제안해줘" — 프레임워크 비교
 리서치)**: "CrewAI의 `human_input=True`는 블로킹이라 못 쓰니 HAIR 자체

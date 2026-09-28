@@ -29,7 +29,7 @@ import sqlite3
 from functools import partial
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -695,15 +695,19 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             ) from None
         return {"draft": draft}
 
-    @app.post("/api/tasks/{task_id}/execute-agent", status_code=201)
+    @app.post("/api/tasks/{task_id}/execute-agent", status_code=202)
     def trigger_agent_execution(
         task_id: int,
         payload: ExecuteAgentRequest,
+        background_tasks: BackgroundTasks,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """§2-6 — task에 배정된 Agent를 실행한다(동기 호출, 비용 발생).
-        요청자 본인 또는 매니저/관리자(감독 대리 실행 허용 — §2-3의
-        "작성"과 달리 "지금 실행시켜라"는 대리해도 저자성이 안 흐려짐)."""
+        """§2-6(Phase 4로 비동기화) — task에 배정된 Agent 실행을 큐에
+        올린다. 검증만 동기로 마치고 202로 즉시 응답하며, 실제 LLM 호출
+        (비용 발생)은 응답 전송 후 백그라운드에서 진행된다 — Web UI는
+        `GET .../agent-execution-jobs`로 폴링해 완료를 확인한다. 요청자
+        본인 또는 매니저/관리자(감독 대리 실행 허용 — §2-3의 "작성"과
+        달리 "지금 실행시켜라"는 대리해도 저자성이 안 흐려짐)."""
         if user["role"] not in ("admin", "manager") and (
             payload.provider or payload.model
         ):
@@ -712,12 +716,10 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 detail="팀원은 provider/model을 직접 선택할 수 없습니다",
             )
         try:
-            deliverable_id = deliverables.execute_agent_for_task(
+            job = deliverables.start_agent_execution(
                 conn,
                 task_id,
                 user["id"],
-                payload.provider,
-                payload.model,
                 allow_supervisor_override=user["role"] in ("admin", "manager"),
             )
         except ValueError:
@@ -734,7 +736,39 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 status_code=409,
                 detail="이 업무에 확정된 AI 에이전트 배정이 없습니다",
             ) from None
-        return {"id": deliverable_id}
+        background_tasks.add_task(
+            deliverables.run_agent_execution_job,
+            conn,
+            job["job_id"],
+            task_id,
+            job["agent_id"],
+            user["id"],
+            job["role_name"],
+            job["prompt"],
+            payload.provider,
+            payload.model,
+        )
+        return {"job_id": job["job_id"], "status": "running"}
+
+    @app.get("/api/tasks/{task_id}/agent-execution-jobs")
+    def list_task_agent_execution_jobs(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """Phase 4 — Web UI가 폴링해 "생성 중…"/실패 상태를 협업
+        워크스페이스 타임라인에 얹는다. 접근 권한은 결과물 타임라인
+        조회(§2-2)와 동일하다."""
+        task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return deliverables.list_execution_jobs(conn, task_id)
 
     @app.post("/api/briefs/{brief_id}/generate", status_code=201)
     def generate_agents(

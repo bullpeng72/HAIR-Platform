@@ -339,36 +339,64 @@ async function renderMyWork(content) {
   });
 }
 
+/* Phase 4 — execute-agent는 202+job_id만 즉시 돌려준다(사용자 요청,
+   2026-09-28, "Phase 4 진행해줘"). 실제 완료는 여기서 폴링으로 확인한다
+   (실시간 WebSocket은 COLLABORATION_PLATFORM_PLAN.md §6에서 1차 범위 밖으로
+   명시). */
+async function pollExecutionJob(taskId, jobId, intervalMs, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 120000);
+  while (Date.now() < deadline) {
+    const jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
+    const job = jobs.find(j => j.id === jobId);
+    if (job && job.status !== "running") return job;
+    await new Promise(r => setTimeout(r, intervalMs || 1500));
+  }
+  throw new Error("실행 완료 확인 시간이 초과됐습니다 — 잠시 후 새로고침해 주세요.");
+}
+
 async function renderCollabWorkspace(taskId) {
   const detail = document.getElementById("mywork-detail");
+  detail.dataset.taskId = String(taskId);
   detail.innerHTML = '<p class="muted">불러오는 중…</p>';
   const isSupervisor = ["admin", "manager"].includes(ME.role);
-  let items;
+  let items, jobs;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
+    jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
   } catch (e) {
     detail.innerHTML = "";
     showMsg("global-msg", e.message, "error");
     return;
   }
 
-  const timeline = items.length
-    ? items.map(d => {
-        const decideActions = (isSupervisor && d.approval_id)
-          ? '<div class="actions"><button class="small" data-decide-deliverable="' + d.approval_id + '" data-approve="1">승인</button>' +
-            '<button class="small danger" data-decide-deliverable="' + d.approval_id + '" data-approve="0">반려</button></div>'
-          : (d.approval_id ? '<p class="muted">결재 대기 중 — "결재" 탭 또는 담당 매니저/관리자가 처리합니다.</p>' : '');
-        return '<div class="deliverable-card">' +
-        '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + '</div>' +
-        '<div>' + esc(d.content).replace(/\\n/g, "<br>") + '</div>' +
-        decideActions +
-        '<div id="comments-' + d.id + '"></div>' +
-        '<form class="inline" data-comment-form="' + d.id + '">' +
-        '<input placeholder="댓글" id="comment-input-' + d.id + '" style="flex:1">' +
-        '<button class="small" type="submit">댓글</button></form>' +
-        '</div>';
-      }).join("")
-    : '<p class="muted">아직 결과물이 없습니다.</p>';
+  // 최신 job이 아직 안 끝났거나(생성 중) 실패했으면, 아직 timeline에
+  // 안 나오는 그 실행을 별도 카드로 보여준다(성공하면 곧 deliverable로
+  // 나타나므로 여기서 다시 보여줄 필요 없음).
+  const latestJob = jobs[0];
+  const jobCard = (latestJob && latestJob.status === "running")
+    ? '<div class="deliverable-card"><div class="muted">AI 에이전트 · 생성 중…</div></div>'
+    : (latestJob && latestJob.status === "failed"
+      ? '<div class="deliverable-card"><div class="muted">AI 에이전트 · 실행 실패(' + esc(latestJob.finished_at) + ')</div>' +
+        '<div>' + esc(latestJob.error || "알 수 없는 오류") + '</div></div>'
+      : '');
+
+  const deliverableCards = items.map(d => {
+    const decideActions = (isSupervisor && d.approval_id)
+      ? '<div class="actions"><button class="small" data-decide-deliverable="' + d.approval_id + '" data-approve="1">승인</button>' +
+        '<button class="small danger" data-decide-deliverable="' + d.approval_id + '" data-approve="0">반려</button></div>'
+      : (d.approval_id ? '<p class="muted">결재 대기 중 — "결재" 탭 또는 담당 매니저/관리자가 처리합니다.</p>' : '');
+    return '<div class="deliverable-card">' +
+    '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + '</div>' +
+    '<div>' + esc(d.content).replace(/\\n/g, "<br>") + '</div>' +
+    decideActions +
+    '<div id="comments-' + d.id + '"></div>' +
+    '<form class="inline" data-comment-form="' + d.id + '">' +
+    '<input placeholder="댓글" id="comment-input-' + d.id + '" style="flex:1">' +
+    '<button class="small" type="submit">댓글</button></form>' +
+    '</div>';
+  }).join("") + jobCard;
+
+  const timeline = deliverableCards || '<p class="muted">아직 결과물이 없습니다.</p>';
 
   const modelFields = isSupervisor
     ? '<select id="ws-provider"><option value="">provider 자동 판별</option>' +
@@ -376,6 +404,14 @@ async function renderCollabWorkspace(taskId) {
       '<option value="ollama">Ollama(로컬)</option></select>' +
       '<input id="ws-model" placeholder="모델명(비우면 기본값)">'
     : '<span class="muted">provider/model은 매니저·관리자만 선택할 수 있습니다(기본값 사용).</span>';
+
+  // Phase 4 — 이미 생성 중인 job이 있으면 실행 버튼을 막는다(중복
+  // 트리거로 같은 task에 2개의 Agent 실행이 동시에 도는 것을 방지 —
+  // "실행 중임을 알려주는 UI" 관례를 여기도 적용).
+  const hasRunningJob = !!(latestJob && latestJob.status === "running");
+  const executeBtnHtml = hasRunningJob
+    ? '<button class="small" id="ws-execute-agent-btn" disabled>생성 중…</button>'
+    : '<button class="small" id="ws-execute-agent-btn">이 업무의 AI 에이전트 실행(비용 발생)</button>';
 
   detail.innerHTML =
     '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
@@ -386,7 +422,7 @@ async function renderCollabWorkspace(taskId) {
     '<button class="small" type="button" id="ws-assist-btn">LLM으로 도와줘(비용 발생)</button>' +
     '<button class="primary" type="submit">결과물 제출</button>' +
     '</form>' +
-    '<button class="small" id="ws-execute-agent-btn">이 업무의 AI 에이전트 실행(비용 발생)</button>' +
+    executeBtnHtml +
     '<div id="ws-result"></div>';
 
   items.forEach(d => loadDeliverableComments(d.id));
@@ -442,11 +478,40 @@ async function renderCollabWorkspace(taskId) {
       if (model) payload.model = model;
     }
     try {
-      await withBusy(executeBtn, "실행 중…", () => api("POST", "/api/tasks/" + taskId + "/execute-agent", payload));
-      showMsg("global-msg", "AI 에이전트 실행이 완료됐습니다.", "ok");
+      const queued = await api("POST", "/api/tasks/" + taskId + "/execute-agent", payload);
+      // 202 응답 직후 즉시 새로고침해 "생성 중…" 카드를 먼저 보여준다
+      // (Phase 4 — 응답이 빨리 오는 게 이 비동기화의 핵심이라, 여기서
+      // 폴링이 끝날 때까지 버튼을 막아두면 의미가 없다).
       renderCollabWorkspace(taskId);
+      const job = await pollExecutionJob(taskId, queued.job_id);
+      if (job.status === "succeeded") {
+        showMsg("global-msg", "AI 에이전트 실행이 완료됐습니다.", "ok");
+      } else {
+        showMsg("global-msg", "AI 에이전트 실행이 실패했습니다: " + job.error, "error");
+      }
+      if (isViewingWorkspace(taskId)) renderCollabWorkspace(taskId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   };
+
+  // 페이지를 새로고침했거나 다른 탭에 갔다 왔을 때도, 이미 돌고 있던
+  // job이 있으면 자동으로 이어서 폴링해 끝나는 대로 갱신한다 — 버튼을
+  // 눌러야만 완료를 알 수 있는 건 아니다.
+  if (hasRunningJob) {
+    pollExecutionJob(taskId, latestJob.id).then(job => {
+      if (!isViewingWorkspace(taskId)) return;
+      if (job.status === "failed") {
+        showMsg("global-msg", "AI 에이전트 실행이 실패했습니다: " + job.error, "error");
+      }
+      renderCollabWorkspace(taskId);
+    }).catch(() => {});
+  }
+}
+
+// 백그라운드 폴링이 끝났을 때, 사용자가 그사이 다른 업무/탭으로
+// 이동했다면 지금 화면을 덮어쓰지 않기 위한 가드(Phase 4).
+function isViewingWorkspace(taskId) {
+  const detail = document.getElementById("mywork-detail");
+  return !!detail && detail.dataset.taskId === String(taskId);
 }
 
 async function loadDeliverableComments(deliverableId) {

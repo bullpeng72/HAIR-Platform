@@ -217,6 +217,12 @@ GC143-145). 설계(§5-2)와 다르게 조정한 것:
   (LLM 호출 자체가 이미 동기라 평가 몇 백 ms 추가는 상대적으로 작다는
   판단). Phase 4가 구현되면 그때 같이 백그라운드로 옮기는 게 자연스럽다.
 
+  **후속(2026-09-28, Phase 4 구현 완료)**: 실제로 그렇게 됐다 —
+  `agent_evaluation.run_and_score()` 호출이 `deliverables.
+  run_agent_execution_job()` 안에 있고, 이 함수 자체가 FastAPI
+  `BackgroundTasks`로 실행되므로 Gate A-G 평가는 이제 자동으로
+  백그라운드에서 돈다. 별도 작업 없이 Phase 4의 부수 효과로 해결됐다.
+
 ## 6. 기업용 UI/UX 기획
 
 현재 UI(단일 페이지 vanilla JS, 탭 14개, "내 업무"/"관리자 도구" 2구역,
@@ -242,13 +248,28 @@ GC143-145). 설계(§5-2)와 다르게 조정한 것:
 | 1 | 결과물 엔티티 + 내 업무 진입 흐름 + Skill/Tool 역할 재정의 (구 Phase A) — **구현 완료**(`docs/PHASE1_DELIVERABLE_SPEC.md`, `docs/LIMITS.md` §22) | 중 | 없음 |
 | 2 | 산출물 승인 게이트 (구 Phase B) — **구현 완료**(`docs/LIMITS.md` §23) | 중 | Phase 1 |
 | 3 | Agent 평가 인프라 인라인 연결(신규, §5) — **구현 완료**(`docs/LIMITS.md` §24) | 중-상 | Phase 1(평가 대상인 deliverable 필요) |
-| 4 | 비동기 실행 + 일시정지/재개 (구 Phase C) | 상(구조 변경) | Phase 1 |
+| 4 | 실행 비동기화 (구 Phase C, 스코프 축소) — **구현 완료**(`docs/LIMITS.md` §25) | 중(스코프 축소로 하향) | Phase 1 |
 | 5 | **기업용 UI/UX 고도화(신규, §6)** | 중(반응형 포함 시 상) | Phase 1–3 완료 후가 효율적(대시보드가 보여줄 데이터가 그때 갖춰짐) |
 
 Phase 3(평가)을 Phase 4(비동기)보다 먼저 두는 이유: 평가는 기존 동기
 구조에서도(약간의 지연을 감수하면) 바로 붙일 수 있어 리스크가 낮고,
 "AI Agent를 신뢰할 수 있는가"라는 HAIR의 핵심 가치를 가장 빨리
 증명하는 항목이기 때문이다.
+
+**Phase 4 구현 결과 — 스코프 축소(2026-09-28, "Phase 4 진행해줘")**:
+원래 이 표의 "상(구조 변경)"이라는 난이도 평가는 `crew_runtime.
+run_crew()`(다중 Task CrewAI Crew) 대상의 도구 호출 단위 일시정지까지
+포함한 것이었다. 하지만 실제로 완성된 협업 워크스페이스는 단일 LLM
+호출(`agent_runtime.execute_agent()`) 경로만 쓰고, 여기엔 "일시정지"가
+적용될 지점 자체가 없다는 게 Phase 1-3 구현 과정에서 이미 드러나 있었다.
+AskUserQuestion으로 사용자에게 두 갈래(워크스페이스 비동기화 vs Crew
+실행 정지/재개)를 제시해 저위험 쪽으로 스코프를 확정하고 구현했다 —
+`execute-agent`가 이제 FastAPI `BackgroundTasks`로 비동기 실행되고
+`agent_execution_jobs` 테이블로 진행 상태를 추적한다. 원래 설계의
+"CrewAI 도구 호출 단위 일시정지"(`register_before_tool_call_hook()`
+기반, `crew_runtime.run_crew()` 대상)는 구현하지 않았다 — 이는 여전히
+미해결 항목이며, 필요해지면 별도 세션에서 독립적인 설계(원래 계획대로
+ADR 선행)로 다뤄야 한다.
 
 ## 8. 이 문서의 경계와 다음 액션
 

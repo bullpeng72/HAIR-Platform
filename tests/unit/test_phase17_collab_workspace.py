@@ -7,7 +7,17 @@ simple_llm 호출... skill을 사용할 수 있도록").
 `docs/PHASE1_DELIVERABLE_SPEC.md`의 GC127-137(Phase 1)에 더해, Phase 2
 (산출물 승인 게이트, 사용자 요청 2026-09-28 "다음 단계 진행해줘")의
 GC138-142, Phase 3(Agent 평가 인라인 연결, 사용자 요청 2026-09-28
-"Phase 3 진행해줘")의 GC143-145도 이 파일에 담는다.
+"Phase 3 진행해줘")의 GC143-145, Phase 4(execute-agent 비동기화, 사용자
+요청 2026-09-28 "Phase 4 진행해줘")의 GC146-148도 이 파일에 담는다.
+
+**Phase 4 테스트 관례**: `TestClient`는 FastAPI `BackgroundTasks`를 응답
+반환 *전에* 동기로 실행한다는 것을 별도 probe 스크립트로 실측 확인했다
+(`docs/LIMITS.md` §25) — 그래서 `client.post(".../execute-agent")`가
+돌아온 시점에 이미 job이 끝나 있고, 곧바로 `GET .../agent-execution-jobs`
+로 최종 상태를 조회할 수 있다. 실제 배포 환경(uvicorn)에서는 HTTP
+응답이 먼저 나가고 그 뒤에 백그라운드 작업이 실행되므로, 이 테스트들이
+확인하는 건 "로직이 맞다"이지 "실제로 응답이 빨리 온다"가 아니다 —
+후자는 라이브 서버 실측으로 별도 확인했다.
 
 **실측으로 발견한 진짜 선행 버그**: `human_pool.user_id`(F8
 `review_for_member()`가 이미 참조하던 컬럼)를 채울 API가 이 작업 전까지
@@ -262,7 +272,11 @@ def test_gc135_execute_agent_includes_latest_human_deliverable(client_and_conn):
         "hair_platform.llm.call_llm", return_value="Agent가 만든 산출물"
     ) as mock_call:
         resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
-    assert resp.status_code == 201, resp.text
+    # Phase 4 — 비동기화돼 202/job_id를 즉시 반환한다. TestClient는
+    # BackgroundTasks를 응답 반환 전에 동기로 실행하므로(실측 확인) 이
+    # 시점엔 이미 생성까지 끝나 있다.
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "running"
 
     prompt_arg = mock_call.call_args.args[3]
     assert "요구사항 메모" in prompt_arg
@@ -335,11 +349,20 @@ def test_gc137_deliverable_comments_use_parent_task_participant_check(
 def _execute_agent_and_get_deliverable(
     client, task_id, requester=("manager1", "managerpass")
 ):
+    """Phase 4 — execute-agent는 202+job_id만 즉시 돌려준다. TestClient는
+    BackgroundTasks를 응답 반환 전에 동기로 실행하므로(실측 확인,
+    docs/LIMITS.md §25) 이 시점엔 이미 job이 끝나 있다 — job을 조회해
+    deliverable_id를 얻는다."""
     _login(client, *requester)
     with patch("hair_platform.llm.call_llm", return_value="Agent 산출물"):
         resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
-    assert resp.status_code == 201, resp.text
-    deliverable_id = resp.json()["id"]
+    assert resp.status_code == 202, resp.text
+    job_id = resp.json()["job_id"]
+    resp = client.get(f"/api/tasks/{task_id}/agent-execution-jobs")
+    assert resp.status_code == 200
+    job = next(j for j in resp.json() if j["id"] == job_id)
+    assert job["status"] == "succeeded", job
+    deliverable_id = job["deliverable_id"]
     resp = client.get(f"/api/tasks/{task_id}/deliverables")
     assert resp.status_code == 200
     row = next(d for d in resp.json() if d["id"] == deliverable_id)
@@ -493,3 +516,85 @@ def test_gc145_aggregate_agent_score_averages_across_evaluations(client_and_conn
     assert agg is not None
     assert agg["sample_count"] == 2
     assert set(agg["gate_averages"].keys()) == {"A", "B", "C", "D", "E", "F", "G"}
+
+
+# ---------- Phase 4 — execute-agent 비동기화(사용자 요청, 2026-09-28, "Phase 4 진행해줘") ----------
+
+
+def test_gc146_execute_agent_returns_202_then_job_succeeds(client_and_conn):
+    """202로 즉시 응답하고, job을 폴링하면 완료 후 deliverable_id가 채워진
+    'succeeded' 상태를 볼 수 있어야 한다."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    _login(client, "manager1", "managerpass")
+    with patch("hair_platform.llm.call_llm", return_value="비동기 산출물"):
+        resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
+    assert resp.status_code == 202, resp.text
+    job_id = resp.json()["job_id"]
+    assert resp.json()["status"] == "running"
+
+    resp = client.get(f"/api/tasks/{task_id}/agent-execution-jobs")
+    assert resp.status_code == 200
+    job = next(j for j in resp.json() if j["id"] == job_id)
+    assert job["status"] == "succeeded"
+    assert job["error"] is None
+    assert job["deliverable_id"] is not None
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    row = next(d for d in resp.json() if d["id"] == job["deliverable_id"])
+    assert row["content"] == "비동기 산출물"
+    assert row["status"] == "pending_review"
+
+
+def test_gc147_failed_execution_records_error_and_leaves_no_deliverable(
+    client_and_conn,
+):
+    """LLM 호출이 실패하면 job이 'failed'+에러 메시지로 남아야 하고,
+    deliverable도 결재 체인도 생기지 않아야 한다(성공 시 부분 상태가
+    남지 않는다는 기존 불변식이 비동기 경로에서도 지켜져야 함)."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    _login(client, "manager1", "managerpass")
+    with patch("hair_platform.llm.call_llm", side_effect=RuntimeError("모의 API 장애")):
+        resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
+    assert resp.status_code == 202, resp.text
+    job_id = resp.json()["job_id"]
+
+    resp = client.get(f"/api/tasks/{task_id}/agent-execution-jobs")
+    job = next(j for j in resp.json() if j["id"] == job_id)
+    assert job["status"] == "failed"
+    assert "모의 API 장애" in job["error"]
+    assert job["deliverable_id"] is None
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    assert [d for d in resp.json() if d["author_type"] == "agent"] == []
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM approvals WHERE subject_type = 'deliverable'"
+        ).fetchone()["c"]
+        == 0
+    )
+
+
+def test_gc148_execution_jobs_endpoint_respects_participant_rbac(client_and_conn):
+    """결과물 타임라인 조회와 같은 권한 규칙 — 참가자/매니저/관리자만
+    job 목록을 볼 수 있고, 무관한 사용자는 403."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/users",
+        json={"username": "outsider3", "password": "outsiderpass", "role": "member"},
+    )
+    assert resp.status_code == 201
+    _login(client, "outsider3", "outsiderpass")
+    resp = client.get(f"/api/tasks/{task_id}/agent-execution-jobs")
+    assert resp.status_code == 403
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get(f"/api/tasks/{task_id}/agent-execution-jobs")
+    assert resp.status_code == 200
+    assert resp.json() == []

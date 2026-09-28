@@ -1170,7 +1170,93 @@ execute_agent_for_task()` 안에서 **매 Agent 실행마다 자동으로** Gate
 실제 LLM 호출은 기존 관례대로 `hair_platform.llm.call_llm`을 mock해
 비용 없이 검증했다(Gate 채점 로직 자체는 mock 응답 텍스트로 실제 실행됨).
 
-## 요약
+## 25. Phase 4 구현 — execute-agent 비동기화 — 사용자 요청
+    (2026-09-28, "Phase 4 진행해줘")
+
+**스코프 결정(사용자 확인, AskUserQuestion)**: 원래 Phase C 설계
+(`docs/COLLABORATION_PLATFORM_PLAN.md`)는 `crew_runtime.run_crew()`(다중
+Task CrewAI Crew)를 대상으로 `register_before_tool_call_hook()` 기반
+도구 호출 단위 일시정지까지 그렸다. 하지만 Phase 1-3이 실제로 완성한
+협업 워크스페이스는 단일 LLM 호출인 `agent_runtime.execute_agent()`만
+쓴다 — 여기엔 "실행 중간에 멈출 지점" 자체가 없다. 두 가지 선택지
+("워크스페이스 비동기화" vs "Crew 실행 정지/재개")를 사용자에게 제시해
+전자(저위험)로 확정했다 — 후자는 여전히 별도 세션/ADR이 필요한 미해결
+항목으로 남는다.
+
+**구현**: `deliverables.execute_agent_for_task()`(동기, 응답까지 LLM
+호출을 기다림) 하나였던 것을 둘로 쪼갰다:
+- `start_agent_execution()` — 참가자/배정 검증과 프롬프트 구성만 동기로
+  마치고, 신규 테이블 `agent_execution_jobs`에 `status='running'` 행을
+  만들고 즉시 반환한다.
+- `run_agent_execution_job()` — 실제 LLM 호출+Gate A-G 평가+deliverable
+  생성을 수행한다. `app.py`가 FastAPI `BackgroundTasks.add_task()`로
+  등록해 HTTP 202 응답을 보낸 **뒤에** 실행한다.
+
+`POST /api/tasks/{id}/execute-agent`는 `201+{"id": deliverable_id}`
+대신 `202+{"job_id", "status": "running"}`을 반환하도록 계약이
+바뀌었다(API 파괴적 변경 — 이 엔드포인트의 유일한 소비자가 이 저장소
+자신의 Web UI/테스트라 하위호환 우회 없이 바로 반영했다). 신규
+`GET /api/tasks/{id}/agent-execution-jobs`로 Web UI가 상태를 폴링한다.
+
+**실측으로 확인한 것**:
+- **`TestClient`는 `BackgroundTasks`를 응답 반환 *전에* 동기로
+  실행한다**(별도 probe 스크립트로 실측 확인) — 그래서 골든셋 테스트는
+  `client.post(...)` 직후 바로 job이 끝나 있다고 가정할 수 있다. 이건
+  실제 uvicorn 배포에서의 동작(응답이 먼저 나가고 백그라운드 작업이
+  나중에 실행됨)과 다르다 — 테스트가 확인하는 건 "로직이 맞다"이지
+  "응답이 실제로 빠르다"가 아니라는 걸 테스트 파일 docstring에 명시했다.
+- **SQLite는 기존 테이블의 CHECK 제약을 `ALTER TABLE`로 바꿀 수 없다**
+  (테이블 재생성만 가능, 공식 문서로 확인) — `deliverables.status`에
+  `'generating'` 값을 추가하는 대신, 완전히 새 테이블
+  `agent_execution_jobs`(`CREATE TABLE IF NOT EXISTS`라 기존 DB 파일에도
+  안전하게 추가됨)로 진행 상태를 분리했다. 기존 `deliverables` 스키마·
+  API 계약은 전혀 안 바뀐다 — 완료되면 평소처럼 `'pending_review'` 행이
+  생긴다.
+- `conn.get_connection()`이 이미 `check_same_thread=False`로 만들어져
+  있어(FastAPI가 sync 핸들러를 스레드풀에서 돌리기 때문에 이미 여러
+  스레드가 같은 커넥션을 공유하고 있었다) 백그라운드 작업이 같은
+  커넥션을 쓰는 게 새로운 위험을 추가하진 않는다 — 다만 SQLite 자체의
+  단일 writer 제약(WAL 모드에서도)은 여전히 남아있는 한계다.
+
+**설계 결정**:
+- 실패 처리를 동기 경로와 다르게 했다 — Phase 2/3의 동기 경로는
+  예외를 그대로 전파해 "아무 것도 안 남긴다"였지만, `run_agent_
+  execution_job()`은 백그라운드에서 실행돼 예외를 받아줄 호출자가
+  없다. 그래서 모든 예외를 잡아 `agent_execution_jobs.status='failed'`+
+  `error`에 기록한다 — 실행이 죽었는지조차 모르면 HOTL 감독이 안 된다는
+  판단.
+- 중복 트리거 방지: 같은 task에 이미 `running` job이 있으면 Web UI가
+  "AI 에이전트 실행" 버튼을 비활성화한다(백엔드에는 이를 막는 제약이
+  없다 — DB 레벨 잠금까지는 이번 스코프에서 뺐다. 동시에 여러 job이
+  생겨도 각자 독립적인 deliverable을 만들 뿐 데이터 정합성이 깨지진
+  않는다).
+- 페이지를 새로고침해도 진행 중인 job을 자동으로 이어서 폴링한다
+  (`hasRunningJob`이면 즉시 `pollExecutionJob()` 시작) — 사용자가 버튼을
+  다시 눌러야만 완료를 알 수 있는 구조를 피했다.
+- 도구 호출 단위 일시정지(`register_before_tool_call_hook()` 기반)는
+  이번 스코프에서 뺐다 — 적용 대상인 `crew_runtime.run_crew()` 자체가
+  협업 워크스페이스와 별개 기능("Crew 실행" 탭)이라, 필요해지면 별도
+  세션에서 독립적으로 설계해야 한다(`docs/COLLABORATION_PLATFORM_PLAN.md`
+  Phase C가 이미 "별도 설계 문서(ADR)가 먼저 필요하다"고 명시).
+
+**검증**: 골든셋 GC146–148(3건) 추가 — 202 응답+job 성공 조회(GC146),
+LLM 실패 시 job이 실패로 남고 deliverable/결재 체인이 전혀 안 생기는지
+(GC147), job 목록 조회의 RBAC(GC148). 기존 GC135/136/138-145는 새
+계약(202+job_id)에 맞게 갱신(개수 변화 없음), 총 151건. `node --check`로
+수정한 임베디드 JS 문법 확인. ruff check/format 클린.
+
+**실제 API 호출 사고(2026-09-28, 라이브 서버 실측 중 발생)**: 비동기
+응답 지연을 확인하려고 실제 uvicorn 서버를 띄우면서 `ANTHROPIC_API_KEY`/
+`OPENAI_API_KEY`를 셸에서 `env -u`로 지웠는데도, `create_app()`이 호출
+하는 `load_dotenv()`가 프로젝트 루트의 `.env` 파일(이전 세션에서 남은
+실제 키)을 그대로 읽어들여 **실제 OpenAI API를 호출했다**(비용 발생,
+task_id=1 기준 약 12초 소요). `env -u`는 셸 환경변수만 지울 뿐 `.env`
+파일 자체를 막지 않는다는 걸 실측으로 발견 — 의도한 게 아니라 검증
+과정의 실수였다. 결과 자체는 유용한 증거였다(백그라운드 job이 실제
+LLM 호출→평가→deliverable→결재 체인 생성까지 전부 정상 작동함을
+end-to-end로 확인) — 하지만 향후 이 종류의 검증을 할 땐 `.env` 파일을
+임시로 옮기거나(`mv .env /tmp/`) 별도 빈 작업 디렉터리에서 서버를
+띄워야 한다.
 
 | 항목 | 상태 |
 |---|---|
@@ -1204,3 +1290,4 @@ execute_agent_for_task()` 안에서 **매 Agent 실행마다 자동으로** Gate
 | Phase 1: 협업 워크스페이스(결과물 엔티티+내 업무+Skill/Tool 재정의) | **구현 완료**(GC127-137) — `human_pool.user_id`를 채울 API가 지금까지 전혀 없어 F8도 실제로는 한 번도 동작 안 했을 실측 선행 버그 발견·수정. execute-agent는 스펙의 `run_crew()` 대신 `agent_runtime.execute_agent()`로 구현(§22) |
 | Phase 2: 산출물 승인 게이트(HITL) | **구현 완료**(GC138-142) — 새 승인 로직 없이 F7 다단계 결재라인+ADR 3-A 자기승인 방지를 `subject_type='deliverable'`로 그대로 재사용. "수정 후 재제출" 연결 기준은 아직 미정이라 의도적으로 스코프 밖(§23) |
 | Phase 3: Agent 평가 인라인 연결(Gate A-G) | **구현 완료**(GC143-145) — `eval_wiring.py`(수동 probe)와 별도로 매 execute-agent 실행마다 자동 채점하는 `agent_evaluation.py` 신설. `agent_pool.performance_score`(수동)와 분리된 `agent_evaluations` 테이블(append-only). Gate B/D/E는 도구 호출 없는 단발 LLM 호출 특성상 not_measured 가능, Gate G는 현재 프롬프트가 판단 근거를 요구하지 않아 낮게 나올 수 있음 — 정직하게 문서화(§24) |
+| Phase 4: execute-agent 비동기화 | **구현 완료**(GC146-148) — 사용자가 두 스코프(워크스페이스 비동기화 vs CrewAI Crew 정지/재개) 중 저위험 쪽을 선택. `start_agent_execution()`+`run_agent_execution_job()`으로 분리, `agent_execution_jobs` 신규 테이블(SQLite CHECK 제약은 ALTER 불가라 `deliverables.status` 확장 대신 새 테이블 선택). API 계약 파괴적 변경(201→202+job_id). `TestClient`가 `BackgroundTasks`를 응답 전에 동기 실행한다는 것을 실측 확인. 도구 호출 단위 일시정지(`crew_runtime.run_crew()` 대상)는 별도 세션/ADR 필요 항목으로 명시적으로 남김(§25) |

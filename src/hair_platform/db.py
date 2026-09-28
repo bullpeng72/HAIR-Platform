@@ -204,6 +204,21 @@ CREATE TABLE IF NOT EXISTS agent_evaluations (
 CREATE INDEX IF NOT EXISTS idx_agent_evaluations_deliverable_id
     ON agent_evaluations(deliverable_id);
 
+CREATE TABLE IF NOT EXISTS agent_execution_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    requested_by INTEGER NOT NULL REFERENCES users(id),
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'succeeded', 'failed')),
+    deliverable_id INTEGER REFERENCES deliverables(id),
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_execution_jobs_task_id
+    ON agent_execution_jobs(task_id);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id INTEGER NOT NULL REFERENCES users(id),
