@@ -277,13 +277,47 @@ Phase A의 협업 워크스페이스(4-1)가 이미 열려 있는 화면이므�
 
 ### Phase C — 비동기 실행 + 일시정지/재개: "HOTL" 문제 해결 (가장 큰 구조 변경)
 
-- 현재의 "Crew 전체를 한 번에 `kickoff()`"를 **Task 단위로 쪼개 순차
-  실행**하는 방식으로 바꾼다 — Task 하나 끝날 때마다 상태를 커밋하고
-  (`job_items`에 `waiting_for_human` 상태 추가, 현재 상태 + 다음 Task
-  입력을 저장할 체크포인트 컬럼 추가), 사람이 계속 진행/수정 후 진행을
-  API로 트리거해야 다음 Task가 실행되게 한다 — CrewAI 자체의
-  `human_input=True`(블로킹 `input()`)는 여전히 안 쓰고, HAIR 자체
-  체크포인트로 LangGraph의 interrupt/resume 아이디어만 차용한다.
+**정정(사용자 요청, 2026-09-28, "HAIR AI Agent Framework로 CrewAI,
+LangGraph 등 다양하게 분석해 최적을 제안해줘" — 프레임워크 비교 리서치
+결과)**: 아래 §당시 "CrewAI의 `human_input=True`는 블로킹이라 못 쓰니
+HAIR 자체 체크포인트를 새로 설계한다"는 판단은 **`Crew` 레벨의 옛
+기능만 맞는 얘기였다**. CrewAI에는 별도 레이어인 **Flows**
+(`@start`/`@listen`/`@router` 이벤트 기반 오케스트레이션)가 있고, 여기
+`@persist`(재시작 간 상태 자동 영속화)와 `@human_feedback`(실행을
+멈추고 상태를 유지한 채 사람 입력을 기다리며, 콘솔 `input()` 대신
+Slack/이메일/웹훅/API로 응답받을 수 있는 `provider` 지정 가능)가 이미
+있다 — HAIR가 새로 설계하려던 체크포인트를 CrewAI 안에서 그대로 해결할
+수 있을 가능성이 크다. **단, 이 리서치는 WebFetch가 막힌 환경에서 검색
+스니펫 기반으로 진행돼 `@human_feedback`의 정확한 API/데코레이터
+문법은 1차 검증이 안 됐다** — 실제 설계 전에 설치된 `crewai` 패키지
+소스나 공식 Flows 문서를 이 프로젝트가 항상 해온 방식대로 직접 읽어
+재확인해야 한다.
+
+**프레임워크 자체를 바꾸는 것(LangGraph/AutoGen/OpenAI Agents SDK/
+Google ADK로 전환)은 기각한다**:
+- LangGraph의 `interrupt()`+체크포인터가 가장 정교하지만, "역할 기반
+  Crew 모델은 그래프 노드로 1:1 이식되지 않고, 어느 시점부터는
+  그린필드 재작성보다 마이그레이션이 더 비싸진다"는 게 리서치에서
+  확인됐다 — HAIR는 이미 `crew_runtime.py`(Agent/Task/Crew 생성,
+  Process.sequential/hierarchical, delegation 캡처, MCPServerAdapter,
+  native VectorDB/GraphDB Tool)에 깊게 투자돼 있고 129개 테스트가 이를
+  검증한다.
+- AutoGen은 2025-10-02부로 Microsoft가 유지보수 모드로 전환한
+  프레임워크라 후보에서 제외한다(AG2는 별도 커뮤니티 포크).
+- OpenAI Agents SDK/Google ADK는 매력적인 개별 기능(`ToolApprovalItem`
+  승인, 1급 HITL 그래프 프리미티브)이 있지만 전면 재작성이 필요해
+  HAIR의 기존 투자를 버릴 만한 이유가 안 된다.
+
+**설계 방향(재확정 전까지 임시)**: CrewAI Flows로 대체 확인되면 그걸
+쓰고, 확인 안 되면 아래 원래 계획대로 자체 체크포인트를 구현한다 —
+둘 중 어느 쪽이든 사용자에게 보이는 결과(일시정지→사람 응답→재개)는
+동일하다.
+
+- (원래 계획, Flows 검증 실패 시 폴백) "Crew 전체를 한 번에 `kickoff()`"를
+  **Task 단위로 쪼개 순차 실행**하는 방식으로 바꾼다 — Task 하나 끝날
+  때마다 상태를 커밋하고(`job_items`에 `waiting_for_human` 상태 추가,
+  현재 상태 + 다음 Task 입력을 저장할 체크포인트 컬럼 추가), 사람이
+  계속 진행/수정 후 진행을 API로 트리거해야 다음 Task가 실행되게 한다.
 - 백그라운드 워커 필요(현재 없음, `docs/LIMITS.md` §3이 이미 "단일
   프로세스·순차 요청 전제"라고 인정한 부분) — FastAPI
   `BackgroundTasks`로 시작하고, 필요하면 별도 워커 프로세스로 분리.
@@ -322,9 +356,13 @@ Phase A/B는 기존 스키마에 테이블을 더하고 기존 승인 파이프�
 이 문서는 기획안이며 아직 구현하지 않았다. 진행하려면:
 
 1. Phase A부터 시작할지, 세 Phase를 한 번에 설계할지 결정.
-2. Phase C의 "Task 단위 쪼개 실행" 방식이 CrewAI의 설계 철학(Crew가
-   전체를 관장)과 다소 어긋나므로, CrewAI를 계속 쓸지 자체 오케스트레이션
-   레이어로 일부 전환할지 별도 ADR 검토가 필요.
+2. **프레임워크 자체 전환은 기각(2026-09-28 리서치로 결정)** — CrewAI
+   유지, LangGraph/AutoGen/OpenAI Agents SDK/Google ADK로 전환 안 함
+   (근거: 위 Phase C 정정 참고). 남은 결정은 "CrewAI Flows
+   (`@persist`+`@human_feedback`)로 해결되는지, 아니면 HAIR 자체
+   체크포인트를 만들어야 하는지"뿐 — **이건 설치된 `crewai` 패키지
+   소스/공식 Flows 문서를 직접 읽어 확인해야 하는 실측 작업**이지 별도
+   ADR 토론이 필요한 사안이 아니다.
 3. 4-3에서 오픈 이슈로 남긴 "Agent의 skill_tags→Tool 자동 부착을
    Skill Pool 경유로 계속 둘지, Tool Pool 직접 매칭으로 분리할지"도
    별도 ADR 검토 대상 — Phase A 구현 착수 전에 최소한 방향만 정해두는

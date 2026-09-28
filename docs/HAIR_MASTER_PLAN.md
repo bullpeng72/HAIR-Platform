@@ -239,5 +239,15 @@ Phase 3(평가)을 Phase 4(비동기)보다 먼저 두는 이유: 평가는 기�
   3. `agent_evaluations` 자동 점수와 관리자 수동 점수를 성과 리뷰
      화면에서 어떻게 병기할지(§5-2) — UI 시안 필요.
   4. 반응형/모바일 지원 범위(§6) — 1차 로드맵에 넣을지, 이후로 미룰지.
-  5. 이 마스터 플랜 전체를 팀 리뷰용으로 공유할 계획이면 Artifact(웹
-     페이지)로 발행 가능 — 요청하면 바로 만든다.
+  5. ~~이 마스터 플랜 전체를 팀 리뷰용으로 공유할 계획이면 Artifact(웹
+     페이지)로 발행 가능~~ — 완료(2026-09-28). 이 문서와
+     `COLLABORATION_PLATFORM_PLAN.md`를 합쳐 Artifact로 발행함.
+  6. **Phase 4(비동기/HOTL)의 실행 프레임워크 — 리서치로 방향 확정
+     (2026-09-28)**: CrewAI를 유지하고 LangGraph/AutoGen 등으로 전환하지
+     않는다(AutoGen은 2025-10-02부로 Microsoft 유지보수 모드 전환,
+     LangGraph는 CrewAI의 role 기반 모델과 1:1 이식이 안 돼 마이그레이션
+     비용이 큼). CrewAI Flows(`@persist`+`@human_feedback`)가 필요한
+     체크포인트 기능을 이미 제공할 가능성이 높다 — 단 이 리서치는
+     WebFetch가 막힌 환경의 검색 요약 기반이라, 실제 설계 전에 설치된
+     `crewai` 패키지 소스/공식 Flows 문서로 재확인이 필요하다(자세한
+     내용: `COLLABORATION_PLATFORM_PLAN.md` Phase C).
