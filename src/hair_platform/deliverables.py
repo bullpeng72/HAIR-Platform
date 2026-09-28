@@ -366,6 +366,20 @@ def start_agent_execution(
         raise LookupError("no_confirmed_agent_assignment")
     agent_id = agent_assignment["resource_id"]
 
+    # 실측으로 발견한 갭(2026-09-28, 리뷰 2회차) — 이 함수는 원래 같은
+    # task에 이미 'running' job이 있어도 확인 없이 새 job을 또 만들었다.
+    # Web UI는 버튼을 비활성화해 막지만(§25), 빠른 연속 클릭이나 여러
+    # 탭/직접 API 호출은 이 검증을 우회한다 — 그러면 같은 트리거로 두
+    # 번의 실제 LLM 호출(비용 이중 지출)과 두 개의 독립된 deliverable+
+    # 결재 체인이 생긴다. Web UI 가드에만 기대지 않고 서버 쪽에서도
+    # 막는다.
+    already_running = conn.execute(
+        "SELECT id FROM agent_execution_jobs WHERE task_id = ? AND status = 'running'",
+        (task_id,),
+    ).fetchone()
+    if already_running is not None:
+        raise LookupError("agent_already_running")
+
     latest_human = conn.execute(
         "SELECT content FROM deliverables WHERE task_id = ? AND author_type = 'human' "
         "ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -472,9 +486,26 @@ def run_agent_execution_job(
         conn.execute(
             "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "
             "finished_at = datetime('now') WHERE id = ?",
-            (str(exc), job_id),
+            (_friendly_execution_error(exc), job_id),
         )
         conn.commit()
+
+
+# 실측으로 발견한 갭(리뷰 2회차) — start_agent_execution()이 확인한
+# 시점엔 확정 배정·활성 Agent였어도, 실제 백그라운드 실행 전에
+# 관리자가 Agent를 삭제/오프보딩하면 agent_runtime.execute_agent()가
+# 내부 코드(예: "agent_not_active")를 그대로 던진다. 그게 여과 없이
+# Web UI에 노출되던 걸 사람이 읽을 수 있는 문구로 바꿔준다. 목록에
+# 없는 예외(실제 LLM API 오류 등)는 원문 그대로 보여준다 — 그쪽은
+# 이미 사람이 읽을 수 있는 메시지이기 때문이다.
+_FRIENDLY_ERROR_MESSAGES = {
+    "agent_not_found": "Agent를 찾을 수 없습니다(삭제됐을 수 있습니다)",
+    "agent_not_active": "Agent가 더 이상 활성 상태가 아닙니다(오프보딩됐을 수 있습니다)",
+}
+
+
+def _friendly_execution_error(exc: Exception) -> str:
+    return _FRIENDLY_ERROR_MESSAGES.get(str(exc), str(exc))
 
 
 def list_execution_jobs(conn: sqlite3.Connection, task_id: int) -> list[dict]:

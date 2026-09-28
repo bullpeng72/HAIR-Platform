@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 156 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 158 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -108,7 +108,14 @@ resource_type을 구분하지 않아 먼저 확정된 쪽이 조용히 supersede
 으로 남아 실행 버튼이 복구 불가능하게 막히던 문제. 추가로 Phase 3의
 `aggregate_agent_score()`가 실제로는 어떤 화면에도 연결 안 돼 있던 걸
 발견해 "AI 에이전트" 탭에 "자동평가(Gate/TCR)" 열로 노출했다
-(`docs/LIMITS.md` §26).
+(`docs/LIMITS.md` §26). 사용자가 같은 요청을 다시 보내 **2회차 리뷰도
+진행했다** — `start_agent_execution()`이 같은 task에 이미 실행 중인
+job이 있어도 확인 없이 새 job을 또 만들어(Web UI 버튼 비활성화만으로는
+빠른 연속 클릭·여러 탭·직접 API 호출을 못 막음) 실제 LLM 호출이
+이중으로 나갈 수 있던 문제에 서버 쪽 409 가드를 추가했고, 트리거 이후
+Agent가 삭제/오프보딩되면 `agent_not_active` 같은 내부 코드 문자열이
+그대로 Web UI에 노출되던 것을 한국어 문구로 번역했다(`docs/LIMITS.md`
+§27).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -124,7 +131,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 156건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 158건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -228,7 +235,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 156건
+tests/unit/                            # 골든셋 158건
 ```
 
 ## 로드맵

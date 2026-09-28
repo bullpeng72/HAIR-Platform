@@ -738,7 +738,12 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 status_code=403,
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
             ) from None
-        except LookupError:
+        except LookupError as exc:
+            if str(exc) == "agent_already_running":
+                raise HTTPException(
+                    status_code=409,
+                    detail="이미 실행 중인 작업이 있습니다 — 완료를 기다려 주세요",
+                ) from None
             raise HTTPException(
                 status_code=409,
                 detail="이 업무에 확정된 AI 에이전트 배정이 없습니다",

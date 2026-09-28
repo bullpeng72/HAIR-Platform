@@ -790,3 +790,79 @@ def test_gc152_agent_pool_endpoint_exposes_auto_evaluation(client_and_conn):
         "F",
         "G",
     }
+
+
+def test_gc154_execute_agent_rejects_duplicate_trigger_while_running(client_and_conn):
+    """실측으로 발견한 갭(리뷰 2회차) — `start_agent_execution()`은 같은
+    task에 이미 'running' job이 있어도 확인 없이 새 job을 또 만들었다.
+    Web UI 버튼 비활성화는 클라이언트 쪽 가드일 뿐이라 빠른 연속
+    클릭·다른 탭·직접 API 호출로는 우회된다 — 같은 트리거로 실제 LLM
+    호출이 두 번 나가는(비용 이중 지출) 걸 서버 쪽에서도 막아야 한다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    # 다른 요청이 이미 실행 중인 상황을 흉내낸다(TestClient는
+    # BackgroundTasks를 동기 실행해 정상 경로로는 이 상태를 관찰할 수
+    # 없으므로 직접 만든다).
+    conn.execute(
+        "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
+        "VALUES (?, 1, 'running')",
+        (task_id,),
+    )
+    conn.commit()
+
+    _login(client, "manager1", "managerpass")
+    resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
+    assert resp.status_code == 409, resp.text
+    assert "실행 중" in resp.json()["detail"]
+
+    # 여전히 job이 하나뿐이어야 한다(두 번째가 실제로 안 생겼는지).
+    jobs = conn.execute(
+        "SELECT COUNT(*) AS c FROM agent_execution_jobs WHERE task_id = ?", (task_id,)
+    ).fetchone()
+    assert jobs["c"] == 1
+
+
+def test_gc155_failed_job_shows_friendly_message_for_known_errors(client_and_conn):
+    """실측으로 발견한 갭(리뷰 2회차) — Agent가 트리거 시점 이후, 실제
+    실행 전에 오프보딩되면 `agent_runtime.execute_agent()`가 내부 코드
+    문자열("agent_not_active")을 그대로 던진다. 그게 그대로 Web UI에
+    노출되지 않고 사람이 읽을 수 있는 문구로 바뀌어야 한다."""
+    from hair_platform import deliverables
+
+    client, conn = client_and_conn
+    _brief_id, task_id, agent_id = _setup_agent_requester_task(client)
+
+    _login(client, "manager1", "managerpass")
+    manager1_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'manager1'"
+    ).fetchone()["id"]
+    job = deliverables.start_agent_execution(
+        conn, task_id, manager1_id, allow_supervisor_override=True
+    )
+
+    # 트리거 이후, 실제 실행 전에 오프보딩됐다고 가정.
+    conn.execute(
+        "UPDATE agent_pool SET status = 'deprecated' WHERE id = ?", (agent_id,)
+    )
+    conn.commit()
+
+    deliverables.run_agent_execution_job(
+        conn,
+        job["job_id"],
+        task_id,
+        job["agent_id"],
+        manager1_id,
+        job["role_name"],
+        job["prompt"],
+        None,
+        None,
+    )
+
+    row = conn.execute(
+        "SELECT status, error FROM agent_execution_jobs WHERE id = ?", (job["job_id"],)
+    ).fetchone()
+    assert row["status"] == "failed"
+    assert (
+        row["error"] == "Agent가 더 이상 활성 상태가 아닙니다(오프보딩됐을 수 있습니다)"
+    )

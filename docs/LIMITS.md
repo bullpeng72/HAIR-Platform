@@ -1321,6 +1321,38 @@ aggregate_agent_score()`(§5-2 "자동값과 수동값을 구분해서 보여준
 ruff check/format 클린. 전체 골든셋 156건 통과(기존 151 + 이번 리뷰에서
 5건 추가).
 
+## 27. Phase 1-4 리뷰 2회차 — 사용자가 같은 요청을 다시 보냄(2026-09-28,
+    "Phase1~4까지 누락되거나, 오류, 개선이 필요한 부분이 있는지 분석하고
+    개선해줘")
+
+첫 리뷰(§26)가 끝난 뒤 사용자가 동일한 문구로 다시 요청해, 이전에
+못 본 부분을 더 찾으려고 한 번 더 감사했다. 역시 추측이 아니라 실패하는
+테스트를 먼저 만들어 재현했다.
+
+**1) `start_agent_execution()`의 중복 트리거 무방비**: 같은 task에 이미
+`status='running'`인 job이 있어도 확인 없이 새 job을 또 만들었다. Web
+UI는 버튼을 비활성화해 막지만(§25) 이건 클라이언트 쪽 가드일 뿐이라
+빠른 연속 클릭, 여러 브라우저 탭, 직접 API 호출로는 그대로 우회된다 —
+같은 트리거로 실제 LLM 호출이 두 번(비용 이중 지출) 나가고 독립된
+deliverable+결재 체인이 두 개 생긴다. `agent_execution_jobs`에
+`status='running'`인 행이 있는지 확인해 있으면 `LookupError(
+"agent_already_running")`을 던지도록 추가했다(`app.py`가 `str(exc)`로
+구분해 "이 업무에 확정된 AI 에이전트 배정이 없습니다"와 다른 409
+메시지를 준다). 골든셋 GC154로 검증.
+
+**2) 실패 사유가 내부 코드 문자열 그대로 노출됨**: 트리거 시점 이후,
+`run_agent_execution_job()`이 실제로 실행되기 전에 관리자가 그 Agent를
+삭제하거나 오프보딩하면 `agent_runtime.execute_agent()`가 `"agent_not_
+found"`/`"agent_not_active"` 같은 내부 코드를 그대로 예외 메시지로
+던진다 — 이게 그대로 `agent_execution_jobs.error`에 저장돼 Web UI의
+실패 카드에 영어 코드 그대로 노출됐다. `_friendly_execution_error()`로
+알려진 두 코드만 사람이 읽을 수 있는 한국어 문구로 번역하고, 목록에
+없는 예외(실제 LLM API 오류 등, 이미 사람이 읽을 수 있는 메시지)는
+원문 그대로 둔다. 골든셋 GC155로 검증.
+
+**검증**: 골든셋 GC154-155(2건) 추가. `ruff check/format` 클린. 전체
+골든셋 158건 통과.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |
@@ -1355,3 +1387,4 @@ ruff check/format 클린. 전체 골든셋 156건 통과(기존 151 + 이번 리
 | Phase 3: Agent 평가 인라인 연결(Gate A-G) | **구현 완료**(GC143-145) — `eval_wiring.py`(수동 probe)와 별도로 매 execute-agent 실행마다 자동 채점하는 `agent_evaluation.py` 신설. `agent_pool.performance_score`(수동)와 분리된 `agent_evaluations` 테이블(append-only). Gate B/D/E는 도구 호출 없는 단발 LLM 호출 특성상 not_measured 가능, Gate G는 현재 프롬프트가 판단 근거를 요구하지 않아 낮게 나올 수 있음 — 정직하게 문서화(§24) |
 | Phase 4: execute-agent 비동기화 | **구현 완료**(GC146-148) — 사용자가 두 스코프(워크스페이스 비동기화 vs CrewAI Crew 정지/재개) 중 저위험 쪽을 선택. `start_agent_execution()`+`run_agent_execution_job()`으로 분리, `agent_execution_jobs` 신규 테이블(SQLite CHECK 제약은 ALTER 불가라 `deliverables.status` 확장 대신 새 테이블 선택). API 계약 파괴적 변경(201→202+job_id). `TestClient`가 `BackgroundTasks`를 응답 전에 동기 실행한다는 것을 실측 확인. 도구 호출 단위 일시정지(`crew_runtime.run_crew()` 대상)는 별도 세션/ADR 필요 항목으로 명시적으로 남김(§25) |
 | Phase 1-4 리뷰: 크로스-Phase 버그 3건 + 죽은 코드 1건 | **전부 발견 → 전부 수정 완료**(GC149-153) — (1) 사람+Agent를 같은 task에 함께 confirmed하면 F5/F6 시절 재배치 로직이 resource_type을 안 가려 먼저 확정된 쪽이 조용히 superseded되던 버그(협업의 기본 전제 자체가 깨져 있었음), (2) `data_admin.py`가 Phase 1-4의 새 테이블을 몰라 deliverable이 남은 task 삭제 시 FK 위반 500 에러, (3) 서버 재시작 시 'running' job이 영원히 멈춰 보이던 문제(`reap_orphaned_execution_jobs()` 신설). 추가로 Phase 3의 `aggregate_agent_score()`가 어떤 API/화면에도 연결 안 돼 있던 죽은 코드를 발견해 `GET /api/agent-pool`+Web UI에 연결(§26) |
+| Phase 1-4 리뷰 2회차: 중복 실행 트리거 + 불친절한 에러 메시지 | **전부 발견 → 전부 수정 완료**(GC154-155) — (1) `start_agent_execution()`이 같은 task에 이미 'running' job이 있어도 확인 없이 새 job을 또 만들어, 빠른 연속 클릭·여러 탭·직접 API 호출로 같은 트리거에 실제 LLM 호출이 두 번(비용 이중 지출) 나갈 수 있었음 — 서버 쪽에도 409 가드 추가. (2) 트리거 이후·실행 전 Agent가 삭제/오프보딩되면 `agent_not_active` 같은 내부 코드 문자열이 그대로 Web UI에 노출되던 것을 사람이 읽을 수 있는 문구로 번역(§27) |
