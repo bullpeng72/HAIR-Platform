@@ -99,6 +99,35 @@ def task_participant_relationship(
     return None
 
 
+def task_completion_summary(conn: sqlite3.Connection, task_id: int) -> dict:
+    """업무 하나의 결과물 진행 상태를 한 줄로 요약한다 — 사용자 요청
+    (2026-09-29, "각 업무의 결과물을 어떻게 확인하는지... 분석하고
+    부족한 기능을 개선해줘")에서 드러난 갭을 메운다: 지금까지 "내 업무"
+    목록·브리프의 할 일 목록 둘 다 deliverable_count/최근 시각만 보여줄
+    뿐 "지금 상태가 뭔지"·"최종 결과물(승인됨)이 나왔는지"는 업무마다
+    협업 워크스페이스를 직접 열어 전체 타임라인을 끝까지 스캔해야만
+    알 수 있었다. `list_my_work()`·브리프 할 일 목록(`app.py`) 양쪽에서
+    재사용한다(같은 집계 로직을 두 번 만들지 않는다)."""
+    count_row = conn.execute(
+        "SELECT COUNT(*) AS c FROM deliverables WHERE task_id = ?", (task_id,)
+    ).fetchone()
+    latest_row = conn.execute(
+        "SELECT status, created_at FROM deliverables WHERE task_id = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    approved_row = conn.execute(
+        "SELECT 1 FROM deliverables WHERE task_id = ? AND status = 'approved' LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return {
+        "deliverable_count": count_row["c"],
+        "latest_deliverable_at": latest_row["created_at"] if latest_row else None,
+        "latest_status": latest_row["status"] if latest_row else None,
+        "has_final_result": approved_row is not None,
+    }
+
+
 def list_my_work(
     conn: sqlite3.Connection, user_id: int, limit: int = 50, offset: int = 0
 ) -> list[dict]:
@@ -126,11 +155,7 @@ def list_my_work(
 
     result = []
     for row in rows:
-        agg = conn.execute(
-            "SELECT COUNT(*) AS c, MAX(created_at) AS latest FROM deliverables "
-            "WHERE task_id = ?",
-            (row["task_id"],),
-        ).fetchone()
+        summary = task_completion_summary(conn, row["task_id"])
         result.append(
             {
                 "task_id": row["task_id"],
@@ -140,8 +165,7 @@ def list_my_work(
                 "resource_id": row["resource_id"],
                 "assignment_id": row["assignment_id"],
                 "my_relationship": row["rel"],
-                "deliverable_count": agg["c"],
-                "latest_deliverable_at": agg["latest"],
+                **summary,
             }
         )
     return result

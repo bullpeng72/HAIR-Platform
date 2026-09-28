@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 179 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 183 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -169,7 +169,15 @@ Gate 평균·대기 승인 건수·비용 추이(새 계측 없이 기존 감사
 추가했다** — `submit_deliverable()`(신규)이 Agent 산출물과 같은 결재
 체인을 재사용해 사람도 명시적으로 "검토 요청"을 누르면 승인/반려
 대상이 되게 했다(`POST /api/deliverables/{id}/submit`, 웹 UI 버튼
-포함, GC172-176, `docs/LIMITS.md` §34).
+포함, GC172-176, `docs/LIMITS.md` §34). 이어서 사용자 요청("각 업무의
+결과물을 어떻게 확인하는지... 분석하고 부족한 기능을 개선해줘")에
+따라 **업무 결과물 확인 기능을 개선했다** — "내 업무"·브리프 할 일
+목록 둘 다 결과물 개수·시각만 보여줄 뿐 상태(초안/반려/승인)나 최종
+결과물 존재 여부를 전혀 알려주지 않아 업무마다 워크스페이스를 직접
+열어 타임라인을 끝까지 스캔해야 했던 갭을, 공용 함수
+`task_completion_summary()`로 메웠다. 협업 워크스페이스에도 승인된
+최종 결과물을 "중간 과정" 타임라인과 분리해 상단에 고정 노출한다
+(GC177-180, `docs/LIMITS.md` §35).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -185,7 +193,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 179건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 183건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -291,7 +299,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 179건
+tests/unit/                            # 골든셋 183건
 ```
 
 ## 로드맵

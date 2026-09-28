@@ -458,7 +458,14 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         brief_id: int, user: sqlite3.Row = Depends(get_current_user)
     ):
         """Web UI가 F6(매칭/배분) 화면에서 브리프별 Task 목록을 골라야 한다 —
-        지금까지는 분해 응답의 id를 기억해야만 했다."""
+        지금까지는 분해 응답의 id를 기억해야만 했다.
+
+        사용자 요청(2026-09-29, "각 업무의 결과물을 어떻게 확인하는지...
+        분석하고 부족한 기능을 개선해줘")에 따라 `deliverables.
+        task_completion_summary()`(`내 업무` 목록과 공용)를 붙여, 이
+        화면만 보고도 어떤 할 일이 최종 결과물(승인됨)까지 나왔는지
+        알 수 있게 했다 — 이전엔 할 일마다 워크스페이스를 직접 열어야
+        했다."""
         rows = conn.execute(
             "SELECT * FROM tasks WHERE brief_id = ? ORDER BY id", (brief_id,)
         ).fetchall()
@@ -468,6 +475,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "role_name": row["role_name"],
                 "required_skills": json.loads(row["required_skills"]),
                 "headcount": row["headcount"],
+                **deliverables.task_completion_summary(conn, row["id"]),
             }
             for row in rows
         ]

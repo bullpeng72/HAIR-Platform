@@ -589,6 +589,102 @@ def test_gc176_cannot_resubmit_already_submitted_deliverable(client_and_conn):
     assert resp.status_code == 409
 
 
+# ---------- 업무 결과물 확인 개선 — 사용자 요청(2026-09-29, "각 업무의
+# 결과물을 어떻게 확인하는지... 분석하고 부족한 기능을 개선해줘") ----------
+
+
+def test_gc177_my_work_reports_no_status_before_any_deliverable(client_and_conn):
+    """결과물이 하나도 없는 task는 latest_status=None,
+    has_final_result=False여야 한다(아직 시작 전과 "다 됐는데 확인
+    안 함"을 구분할 수 있어야 함)."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
+
+    _login(client, "member1", "memberpass")
+    resp = client.get("/api/my-work")
+    row = next(r for r in resp.json() if r["task_id"] == task_id)
+    assert row["latest_status"] is None
+    assert row["has_final_result"] is False
+
+
+def test_gc178_my_work_reflects_approved_final_result(client_and_conn):
+    """제출→승인까지 마치면 "내 업무" 목록만 보고도(워크스페이스를 열지
+    않고도) 최종 결과물이 나왔다는 걸 알 수 있어야 한다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
+
+    _login(client, "member1", "memberpass")
+    resp = client.post(
+        f"/api/tasks/{task_id}/deliverables", json={"content": "사람이 쓴 초안"}
+    )
+    deliverable_id = resp.json()["id"]
+    client.post(f"/api/deliverables/{deliverable_id}/submit")
+
+    tasks_resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    approval_id = next(
+        d for d in tasks_resp.json() if d["id"] == deliverable_id
+    )["approval_id"]
+
+    _login(client, "admin1", "adminpass")
+    client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
+
+    _login(client, "member1", "memberpass")
+    resp = client.get("/api/my-work")
+    row = next(r for r in resp.json() if r["task_id"] == task_id)
+    assert row["latest_status"] == "approved"
+    assert row["has_final_result"] is True
+
+
+def test_gc179_rejected_deliverable_is_not_reported_as_final_result(client_and_conn):
+    """반려된 결과물은 "최종 결과물"로 잡히면 안 된다 — 아직 다시
+    작업해야 하는 상태다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
+
+    _login(client, "member1", "memberpass")
+    resp = client.post(
+        f"/api/tasks/{task_id}/deliverables", json={"content": "사람이 쓴 초안"}
+    )
+    deliverable_id = resp.json()["id"]
+    client.post(f"/api/deliverables/{deliverable_id}/submit")
+
+    tasks_resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    approval_id = next(
+        d for d in tasks_resp.json() if d["id"] == deliverable_id
+    )["approval_id"]
+
+    _login(client, "admin1", "adminpass")
+    client.post(f"/api/approvals/{approval_id}/decide", json={"approve": False})
+
+    _login(client, "member1", "memberpass")
+    resp = client.get("/api/my-work")
+    row = next(r for r in resp.json() if r["task_id"] == task_id)
+    assert row["latest_status"] == "rejected"
+    assert row["has_final_result"] is False
+
+
+def test_gc180_brief_task_list_exposes_completion_summary(client_and_conn):
+    """브리프의 할 일 목록에서도(워크스페이스를 열지 않고도) 결과물
+    진행 상태·최종 결과물 여부를 확인할 수 있어야 한다."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get(f"/api/briefs/{_brief_id}/tasks")
+    assert resp.status_code == 200, resp.text
+    row = next(t for t in resp.json() if t["id"] == task_id)
+    assert row["deliverable_count"] == 0
+    assert row["latest_status"] is None
+    assert row["has_final_result"] is False
+
+    _execute_agent_and_get_deliverable(client, task_id)
+    resp = client.get(f"/api/briefs/{_brief_id}/tasks")
+    row = next(t for t in resp.json() if t["id"] == task_id)
+    assert row["deliverable_count"] == 1
+    assert row["latest_status"] == "pending_review"
+    assert row["has_final_result"] is False
+
+
 # ---------- Phase 3 — Agent 평가 인라인 연결(사용자 요청, 2026-09-28, "Phase 3 진행해줘") ----------
 
 

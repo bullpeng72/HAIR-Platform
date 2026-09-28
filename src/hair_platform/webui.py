@@ -53,6 +53,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .gate-badge { display: inline-block; padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.85em; }
   .gate-badge.gate-ok { background: #dcfce7; color: #166534; }
   .gate-badge.gate-warn { background: #fef3c7; color: #92400e; }
+  .final-result-card { background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
   .dashboard-grid { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
   .dashboard-grid .card { flex: 1; min-width: 200px; margin-bottom: 0; }
   .dashboard-grid .stat-row { display: flex; justify-content: space-between; padding: 0.15rem 0; border-bottom: 1px solid #eee; }
@@ -413,9 +414,16 @@ async function renderMyWork(content) {
   content.innerHTML =
     '<section class="card"><h2>내 업무</h2>' +
     '<p class="muted">확정된 배정 중 내가 직접 할 일(사람 배정 당사자)이거나 내가 AI에게 맡긴 일(Agent 배정 요청자)만 보입니다. "열기"를 누르면 그 업무의 협업 워크스페이스(결과물 타임라인)가 아래에 펼쳐집니다.</p>' +
-    table(["할 일 ID", "역할", "유형", "관계", "결과물 수", "최근 결과물", "동작"], rows.map(r => [
+    // 사용자 요청(2026-09-29, "각 업무의 결과물을 어떻게 확인하는지...
+    // 분석하고 부족한 기능을 개선해줘") — 이전엔 "결과물 수"·"최근
+    // 결과물" 시각만 있어 지금 상태가 뭔지, 최종 결과물(승인)이 나왔는지
+    // 업무를 직접 열어보기 전엔 알 수 없었다. "상태"·"최종 결과물"
+    // 열을 추가한다.
+    table(["할 일 ID", "역할", "유형", "관계", "상태", "최종 결과물", "결과물 수", "최근 갱신", "동작"], rows.map(r => [
       r.task_id, esc(r.role_name), esc(label(r.resource_type)),
       r.my_relationship === "assignee" ? "내가 할 일" : "내가 맡긴 일",
+      r.latest_status ? esc(label(r.latest_status)) : '<span class="muted">아직 없음</span>',
+      r.has_final_result ? '<span class="gate-badge gate-ok">✓ 승인됨</span>' : '<span class="muted">-</span>',
       r.deliverable_count,
       r.latest_deliverable_at ? esc(r.latest_deliverable_at) : "-",
       '<button class="small" data-open-workspace="' + r.task_id + '">열기</button>',
@@ -518,6 +526,25 @@ async function renderCollabWorkspace(taskId) {
 
   const timeline = deliverableCards || '<p class="muted">아직 결과물이 없습니다.</p>';
 
+  // 사용자 요청(2026-09-29, "각 업무의 결과물을 어떻게 확인하는지...
+  // 분석하고 부족한 기능을 개선해줘") — 전체 타임라인(중간 과정 포함)과
+  // "지금 업무에 실제로 쓸 수 있는 최종 결과물"을 구분해 보여준다.
+  // 이전엔 승인된 결과물도 다른 초안/반려 건과 뒤섞인 채팅형 목록 안에
+  // 묻혀 있어, 여러 차례 주고받은 뒤엔 어느 게 "확정본"인지 스크롤해서
+  // 직접 판단해야 했다. 승인된 deliverable 중 가장 최신 것을 상단에
+  // 고정 노출한다(같은 task에 여러 건이 승인된 드문 경우, 최신 것을
+  // "현재" 최종본으로 간주 — revises_id 기반 버전 체계는 스코프 밖).
+  const approvedItems = items.filter(d => d.status === "approved");
+  const finalResult = approvedItems.length
+    ? approvedItems.reduce((a, b) => (a.created_at > b.created_at ? a : b))
+    : null;
+  const finalResultCard = finalResult
+    ? '<div class="final-result-card">' +
+      '<div class="muted">✓ 최종 결과물(승인됨) · ' + esc(label(finalResult.author_type)) + ' · ' + esc(finalResult.created_at) + '</div>' +
+      '<div>' + esc(finalResult.content).replace(/\\n/g, "<br>") + '</div>' +
+      '</div>'
+    : '<p class="muted">아직 승인된 최종 결과물이 없습니다 — 아래는 진행 중인 이력입니다.</p>';
+
   const modelFields = isSupervisor
     ? '<select id="ws-provider"><option value="">provider 자동 판별</option>' +
       '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
@@ -535,6 +562,8 @@ async function renderCollabWorkspace(taskId) {
 
   detail.innerHTML =
     '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
+    finalResultCard +
+    '<h4 class="muted">진행 이력(중간 과정 포함)</h4>' +
     '<div id="workspace-timeline">' + timeline + '</div>' +
     '<form class="inline" id="ws-submit-form">' +
     '<textarea id="ws-content" rows="3" placeholder="결과물 내용을 입력하세요" style="flex:1;min-width:240px"></textarea>' +
@@ -783,11 +812,17 @@ async function renderTaskList(briefId) {
   const isAdmin = ME.role === "admin";
   const tasks = await api("GET", "/api/briefs/" + briefId + "/tasks");
   detail.innerHTML = "<h3>업무 요청 #" + esc(briefId) + " — 할 일 목록</h3>" +
-    table(["할 일 ID", "역할", "필요 스킬", "인원", "동작"], tasks.map(t => [
+    // 사용자 요청(2026-09-29, "각 업무의 결과물을 어떻게 확인하는지...
+    // 분석하고 부족한 기능을 개선해줘") — 이전엔 이 화면에서 할 일의
+    // 결과물 진행 상태를 전혀 알 수 없어(id/역할/스킬/인원뿐), 확인하려면
+    // "내 업무"에서 찾거나 배정·워크스페이스를 따로 추적해야 했다.
+    table(["할 일 ID", "역할", "필요 스킬", "인원", "상태", "최종 결과물", "동작"], tasks.map(t => [
       t.id, esc(t.role_name), esc(t.required_skills.join(", ")), t.headcount,
+      t.latest_status ? esc(label(t.latest_status)) : '<span class="muted">아직 없음</span>',
+      t.has_final_result ? '<span class="gate-badge gate-ok">✓ 승인됨</span>' : '<span class="muted">-</span>',
       isAdmin ? '<button class="small danger" data-delete-task="' + t.id + '">삭제</button>' : "",
     ])) +
-    '<p class="muted">할 일 ID는 "인력 매칭/배정", "AI 에이전트 생성" 탭에서 사용합니다.</p>';
+    '<p class="muted">할 일 ID는 "인력 매칭/배정", "AI 에이전트 생성" 탭에서 사용합니다. 결과물 상세는 "내 업무" 탭에서 워크스페이스를 열어 확인하세요.</p>';
   detail.querySelectorAll("[data-delete-task]").forEach(btn => {
     btn.onclick = async () => {
       if (!window.confirm("이 할 일과 그 배정·결과물(산출물 평가 이력 포함)을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
