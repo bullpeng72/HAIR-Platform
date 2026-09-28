@@ -1068,6 +1068,47 @@ LLM 보조/Agent 실행을 직접 트리거할 수 있지만 provider/model은 �
 (Phase 2), Agent 자동 평가(Phase 3), 실행 중 일시정지(Phase 4) — 모두
 `docs/PHASE1_DELIVERABLE_SPEC.md` §7 참고.
 
+## 23. Phase 2 구현 — 산출물 승인 게이트(HITL) — 사용자 요청(2026-09-28,
+    "다음 단계 진행해줘")
+
+`docs/COLLABORATION_PLATFORM_PLAN.md` Phase B를 구현했다: Agent가 만든
+deliverable(`status='pending_review'`)이 생기는 즉시
+`approvals.create_approval_chain()`으로 결재 체인을 만든다
+(`requested_by`=execute-agent를 트리거한 사람, `subject_type=
+'deliverable'`) — **새 승인 로직을 만들지 않고 F7 다단계 결재라인·ADR
+3-A 자기승인 방지를 그대로 재사용**했다. `app.py`의 `decide_approval()`
+(원래 `subject_type=='assignment'`만 특수 처리하던 지점)에
+`subject_type=='deliverable'` 분기를 추가해 `deliverables.
+resolve_deliverable_decision()`을 호출하도록 확장했다.
+
+**설계 결정**:
+- 사람이 작성한 deliverable(`'draft'`)은 승인 대상이 아니다 — Agent
+  산출물만 게이트를 탄다.
+- 결재 체인의 `requested_by`는 execute-agent를 **호출한 사람**(`actor_id`)
+  이다 — 감독자 대리 실행이었다면 그 감독자가 자기 트리거의 승인자가
+  될 수 없다(자기 트리거 = 자기 요청이라는 원칙, ADR 3-A와 동일 정신).
+- `GET /api/tasks/{id}/deliverables`가 `pending_review`인 항목에 한해
+  지금 결정 가능한 결재 id를 `approval_id`로 함께 내려준다 — Phase 1
+  설계 그대로 "결재 탭으로 안 보내고 워크스페이스 안에서 바로
+  승인/반려"가 되도록 Web UI에 인라인 승인/반려 버튼을 추가했다(관리자/
+  매니저에게만 노출 — `decide_approval` 자체가 그 role만 허용하므로
+  팀원에게 버튼을 보여줘 봐야 403만 난다).
+- **"수정 후 재제출"(`revises_id`)은 Phase 2 스코프에서도 뺐다** —
+  반려된 산출물에 새 실행 결과를 어떤 기준으로 연결할지(가장 최근
+  반려건? 명시적 선택?)가 아직 안 정해져서, 임의로 정하면 나중에
+  바꾸기 어려운 결정을 지금 섣불리 내리는 게 된다. 지금은 반려돼도
+  같은 task에서 execute-agent를 다시 실행하면 완전히 새로운
+  deliverable+결재 체인이 생길 뿐 — 이전 반려 기록과의 명시적 연결은
+  없다(감사로그로 이력 추적은 가능).
+
+**검증**: 골든셋 GC138–142(5건) 추가, 전체 145건 통과. `POST /api/
+approvals/{id}/decide` 응답에 `deliverable` 키를 추가했다(기존
+`assignment` 키와 나란히, 하위호환 — 기존 소비자는 새 키를 무시하면
+그만). ruff/black 클린, 데모 서버 재기동 후 기존 엔드포인트(`/api/
+my-work`, `/api/approvals?scope=inbox`) 회귀 없음을 확인했다 — 실제
+LLM 호출이 필요한 승인 생성 자체는 비용 문제로 라이브 서버에서 실행하지
+않고 mock 기반 골든셋으로 검증했다(Phase 1과 같은 판단).
+
 ## 요약
 
 | 항목 | 상태 |
@@ -1100,3 +1141,4 @@ LLM 보조/Agent 실행을 직접 트리거할 수 있지만 provider/model은 �
 | Agent-Evaluator/하니스 방법론 절차 스킬 18개를 Skill Pool에 기본 노출 | **구현 완료**(GC125-126) — 17개는 `augmentation_mode='none'`(HITL 절차라 안전한 도구화 불가), `recommend-fix-workflow` 1개는 실제 `recommend_fix` stdio MCP 도구로 승격해 실측 연결까지 확인. 기존 GC108/GC114 시드 개수 단언을 실제 동작에 맞게 완화(§20) |
 | 각 메뉴 화면 사용자/운영자용 상세 설명 보강 | **구현 완료** — 14개 탭 전부 백엔드 로직을 재확인해 안내 문구 추가/보강, 스펙 코드 노출 금지 회귀(GC60)를 실측으로 발견·수정(§21) |
 | Phase 1: 협업 워크스페이스(결과물 엔티티+내 업무+Skill/Tool 재정의) | **구현 완료**(GC127-137) — `human_pool.user_id`를 채울 API가 지금까지 전혀 없어 F8도 실제로는 한 번도 동작 안 했을 실측 선행 버그 발견·수정. execute-agent는 스펙의 `run_crew()` 대신 `agent_runtime.execute_agent()`로 구현(§22) |
+| Phase 2: 산출물 승인 게이트(HITL) | **구현 완료**(GC138-142) — 새 승인 로직 없이 F7 다단계 결재라인+ADR 3-A 자기승인 방지를 `subject_type='deliverable'`로 그대로 재사용. "수정 후 재제출" 연결 기준은 아직 미정이라 의도적으로 스코프 밖(§23) |

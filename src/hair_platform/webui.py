@@ -161,7 +161,7 @@ async function withBusy(btn, busyLabel, fn) {
 
 const LABELS = {
   human: "사람", agent: "AI 에이전트",
-  brief: "업무 요청", assignment: "배정", human_pool: "사람 인력", agent_pool: "AI 에이전트",
+  brief: "업무 요청", assignment: "배정", deliverable: "결과물", human_pool: "사람 인력", agent_pool: "AI 에이전트",
   job: "생성 작업", job_item: "생성 항목", approval: "결재", user: "사용자",
   pending: "대기중", waiting: "대기(이전 단계)", approved: "승인됨", rejected: "반려됨", skipped: "건너뜀",
   requested: "요청됨", confirmed: "확정됨", superseded: "대체됨",
@@ -353,16 +353,21 @@ async function renderCollabWorkspace(taskId) {
   }
 
   const timeline = items.length
-    ? items.map(d =>
-        '<div class="deliverable-card">' +
+    ? items.map(d => {
+        const decideActions = (isSupervisor && d.approval_id)
+          ? '<div class="actions"><button class="small" data-decide-deliverable="' + d.approval_id + '" data-approve="1">승인</button>' +
+            '<button class="small danger" data-decide-deliverable="' + d.approval_id + '" data-approve="0">반려</button></div>'
+          : (d.approval_id ? '<p class="muted">결재 대기 중 — "결재" 탭 또는 담당 매니저/관리자가 처리합니다.</p>' : '');
+        return '<div class="deliverable-card">' +
         '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + '</div>' +
         '<div>' + esc(d.content).replace(/\\n/g, "<br>") + '</div>' +
+        decideActions +
         '<div id="comments-' + d.id + '"></div>' +
         '<form class="inline" data-comment-form="' + d.id + '">' +
         '<input placeholder="댓글" id="comment-input-' + d.id + '" style="flex:1">' +
         '<button class="small" type="submit">댓글</button></form>' +
-        '</div>'
-      ).join("")
+        '</div>';
+      }).join("")
     : '<p class="muted">아직 결과물이 없습니다.</p>';
 
   const modelFields = isSupervisor
@@ -385,6 +390,18 @@ async function renderCollabWorkspace(taskId) {
     '<div id="ws-result"></div>';
 
   items.forEach(d => loadDeliverableComments(d.id));
+
+  detail.querySelectorAll("[data-decide-deliverable]").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        await api("POST", "/api/approvals/" + btn.dataset.decideDeliverable + "/decide", {
+          approve: btn.dataset.approve === "1",
+        });
+        showMsg("global-msg", "처리했습니다.", "ok");
+        renderCollabWorkspace(taskId);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
 
   document.getElementById("ws-submit-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();

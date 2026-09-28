@@ -216,7 +216,7 @@ Agent 산출물을 만들어내기 시작하면, 이 갭을 더는 미룰 수 �
 | Phase | 내용 | 난이도 | 의존성 |
 |---|---|---|---|
 | 1 | 결과물 엔티티 + 내 업무 진입 흐름 + Skill/Tool 역할 재정의 (구 Phase A) — **구현 완료**(`docs/PHASE1_DELIVERABLE_SPEC.md`, `docs/LIMITS.md` §22) | 중 | 없음 |
-| 2 | 산출물 승인 게이트 (구 Phase B) | 중 | Phase 1 |
+| 2 | 산출물 승인 게이트 (구 Phase B) — **구현 완료**(`docs/LIMITS.md` §23) | 중 | Phase 1 |
 | 3 | **Agent 평가 인프라 인라인 연결(신규, §5)** | 중-상 | Phase 1(평가 대상인 deliverable 필요) |
 | 4 | 비동기 실행 + 일시정지/재개 (구 Phase C) | 상(구조 변경) | Phase 1 |
 | 5 | **기업용 UI/UX 고도화(신규, §6)** | 중(반응형 포함 시 상) | Phase 1–3 완료 후가 효율적(대시보드가 보여줄 데이터가 그때 갖춰짐) |

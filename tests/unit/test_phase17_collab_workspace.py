@@ -4,7 +4,9 @@
 사람-에이전트협업 프로세스로 펼쳐지고" → "사람이 하는 업무의 경우...
 simple_llm 호출... skill을 사용할 수 있도록").
 
-`docs/PHASE1_DELIVERABLE_SPEC.md`의 GC127-137을 그대로 구현한다.
+`docs/PHASE1_DELIVERABLE_SPEC.md`의 GC127-137(Phase 1)에 더해, Phase 2
+(산출물 승인 게이트, 사용자 요청 2026-09-28 "다음 단계 진행해줘")의
+GC138-142도 이 파일에 담는다.
 
 **실측으로 발견한 진짜 선행 버그**: `human_pool.user_id`(F8
 `review_for_member()`가 이미 참조하던 컬럼)를 채울 API가 이 작업 전까지
@@ -324,3 +326,115 @@ def test_gc137_deliverable_comments_use_parent_task_participant_check(
         f"/api/deliverables/{deliverable_id}/comments", json={"content": "몰래"}
     )
     assert resp.status_code == 403
+
+
+# ---------- Phase 2 — 산출물 승인 게이트(사용자 요청, 2026-09-28, "다음 단계 진행해줘") ----------
+
+
+def _execute_agent_and_get_deliverable(
+    client, task_id, requester=("manager1", "managerpass")
+):
+    _login(client, *requester)
+    with patch("hair_platform.llm.call_llm", return_value="Agent 산출물"):
+        resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
+    assert resp.status_code == 201, resp.text
+    deliverable_id = resp.json()["id"]
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    assert resp.status_code == 200
+    row = next(d for d in resp.json() if d["id"] == deliverable_id)
+    return deliverable_id, row
+
+
+def test_gc138_execute_agent_creates_approval_chain_for_deliverable(client_and_conn):
+    """Agent 산출물이 생기면 자동으로 결재 체인이 만들어지고, 그 결재 id가
+    결과물 목록의 approval_id로 노출돼야 워크스페이스에서 바로 처리할 수
+    있다."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    _deliverable_id, row = _execute_agent_and_get_deliverable(client, task_id)
+    assert row["status"] == "pending_review"
+    assert row["approval_id"] is not None
+
+    resp = client.get("/api/approvals", params={"scope": "mine"})
+    assert resp.status_code == 200
+    matches = [a for a in resp.json() if a["id"] == row["approval_id"]]
+    assert len(matches) == 1
+    assert matches[0]["subject_type"] == "deliverable"
+
+
+def test_gc139_self_approval_blocked_then_admin_approves(client_and_conn):
+    """manager1이 execute-agent를 트리거했으므로(requested_by=manager1)
+    본인은 그 산출물을 승인할 수 없다(ADR 3-A 재사용) — 다른 승인자(admin1)
+    는 승인할 수 있고, 승인되면 deliverable.status='approved'로 바뀌며
+    approval_id는 다시 null이 된다."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+    deliverable_id, row = _execute_agent_and_get_deliverable(client, task_id)
+    approval_id = row["approval_id"]
+
+    _login(client, "manager1", "managerpass")
+    resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
+    assert resp.status_code == 403
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deliverable"] == {
+        "deliverable_id": deliverable_id,
+        "status": "approved",
+    }
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    row = next(d for d in resp.json() if d["id"] == deliverable_id)
+    assert row["status"] == "approved"
+    assert row["approval_id"] is None
+
+
+def test_gc140_reject_sets_deliverable_status_rejected(client_and_conn):
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+    deliverable_id, row = _execute_agent_and_get_deliverable(client, task_id)
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        f"/api/approvals/{row['approval_id']}/decide", json={"approve": False}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deliverable"]["status"] == "rejected"
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    row = next(d for d in resp.json() if d["id"] == deliverable_id)
+    assert row["status"] == "rejected"
+    assert row["approval_id"] is None
+
+
+def test_gc141_deliverable_approval_appears_in_admin_inbox(client_and_conn):
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+    _deliverable_id, row = _execute_agent_and_get_deliverable(client, task_id)
+
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/approvals", params={"scope": "inbox"})
+    assert resp.status_code == 200
+    matches = [a for a in resp.json() if a["id"] == row["approval_id"]]
+    assert len(matches) == 1
+    assert matches[0]["subject_type"] == "deliverable"
+
+
+def test_gc142_human_draft_deliverable_never_has_approval_id(client_and_conn):
+    """사람이 작성한 deliverable은 애초에 승인 게이트 대상이 아니다 —
+    approval_id가 항상 null이어야 한다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
+
+    _login(client, "member1", "memberpass")
+    resp = client.post(
+        f"/api/tasks/{task_id}/deliverables", json={"content": "사람이 쓴 초안"}
+    )
+    assert resp.status_code == 201
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    row = next(d for d in resp.json() if d["author_type"] == "human")
+    assert row["status"] == "draft"
+    assert row["approval_id"] is None

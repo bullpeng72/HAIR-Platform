@@ -1476,6 +1476,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 (new_status, user["id"], approval_id),
             )
             assignment_result = None
+            deliverable_result = None
             next_step_pending = False
             if payload.approve:
                 next_step_pending = approvals_mod.activate_next_step(
@@ -1486,6 +1487,13 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                     assignment_result = assignments.resolve_assignment_decision(
                         conn, subject_id, True, user["id"]
                     )
+                elif not next_step_pending and subject_type == "deliverable":
+                    # Phase 2 — 체인의 마지막 단계 통과 시에만 산출물을 확정한다
+                    # (assignment와 같은 원리, docs/PHASE1_DELIVERABLE_SPEC.md
+                    # 후속 — deliverables.py docstring "Phase 2 설계" 참고).
+                    deliverable_result = deliverables.resolve_deliverable_decision(
+                        conn, subject_id, True
+                    )
             else:
                 approvals_mod.skip_remaining_steps(
                     conn, subject_type, subject_id, approval["step"]
@@ -1493,6 +1501,10 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 if subject_type == "assignment":
                     assignment_result = assignments.resolve_assignment_decision(
                         conn, subject_id, False, user["id"]
+                    )
+                elif subject_type == "deliverable":
+                    deliverable_result = deliverables.resolve_deliverable_decision(
+                        conn, subject_id, False
                     )
             audit.record(
                 conn,
@@ -1512,6 +1524,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             "status": new_status,
             "next_step_pending": next_step_pending,
             "assignment": assignment_result,
+            "deliverable": deliverable_result,
         }
 
     @app.get("/", response_class=HTMLResponse)

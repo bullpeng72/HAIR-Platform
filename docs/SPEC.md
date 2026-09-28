@@ -140,6 +140,7 @@
 | Agent-Evaluator/하니스 방법론 절차 스킬을 Skill Pool에 기본 노출(사용자 요청, GitHub Skills 링크 검토 후 "도구/스킬 Pool에 기본 노출해줘" + "CrewAI AI Agent가 개발 단계에 필요한 기능일지 확인하고, 필요한 경우 AI Agent가 호출할 수 있도록 변형해줘") | `agent-evaluator[sdk]` 기본 배포(Skills/) 15개 + 이 워크북 자체 발굴 3개, 총 18개 절차 스킬을 `db._seed_default_pools()`에서 `skill_pool`에 추가 시드. 17개는 HITL 판단 절차라 `augmentation_mode='none'`(skill_tag 노출만)로 두고, `recommend-fix-workflow` 1개는 실제 존재하는 `agent_evaluator.integrations.recommend_fix_mcp`(읽기 전용 stdio MCP 서버)를 `tool_pool`에 등록해 `augmentation_mode='tool'`로 승격 — mock 없이 실제 서브프로세스 연결·호출까지 실측 확인. 기존 GC108/GC114의 "정확히 N개" 단언을 부분집합 검사로 완화(`docs/LIMITS.md` §20) | 2건(GC125–126) |
 | 각 메뉴 화면 사용자/운영자용 상세 설명 보강(사용자 요청, "AI 에이전트 생성 메뉴의 stub, simple_llm, crewAI 옵션에 따른 에이전트 생성을 구분해서 설명해줘" → "각 메뉴별로 위 분석 내용처럼... 친절하게 상세히 설명되도록 개선해줘") | 14개 탭 전부 백엔드 로직(스코어링 가중치·다단계 결재·NF9 동의 게이팅·비용/공정성 계산식·append-only·augmentation_mode 의미 등)을 재확인해 `<p class="muted">` 안내 문구를 추가/보강. 실측 중 골든셋 GC60(스펙 코드 노출 금지, 코드 재점검 R5)이 "F8 성과 리뷰" 문구를 실제로 잡아내 회귀를 발견·수정(`docs/LIMITS.md` §21) | 신규 golden case 없음(기존 GC60이 회귀를 잡음), 전체 129건 유지 |
 | Phase 1: 협업 워크스페이스(사용자 요청, "Phase 1부터 시작해줘" — `docs/PHASE1_DELIVERABLE_SPEC.md` 구현) | 신규 `deliverables`/`deliverable_comments` 테이블, `deliverables.py` 모듈, `GET /api/my-work` 등 7개 엔드포인트, "내 업무" 탭+협업 워크스페이스(결과물 타임라인+댓글+LLM 보조+Agent 실행). 실측 중 `human_pool.user_id`를 채우는 API가 전혀 없어 F8도 실제로는 동작한 적이 없었을 선행 버그를 발견·수정(`HumanPoolUpdate.user_id` 추가). execute-agent는 스펙의 `crew_runtime.run_crew()` 대신 단일 Agent 온디맨드 실행 경로 `agent_runtime.execute_agent()`로 구현(`docs/LIMITS.md` §22) | 11건(GC127–137) |
+| Phase 2: 산출물 승인 게이트(사용자 요청, "다음 단계 진행해줘") | Agent 산출물(`status='pending_review'`) 생성 즉시 `approvals.create_approval_chain(subject_type='deliverable')`로 결재 체인 자동 생성 — 새 승인 로직 없이 F7 다단계 결재라인·ADR 3-A 자기승인 방지를 그대로 재사용. `decide_approval()`에 `deliverable` 분기 추가, 응답에 `deliverable` 키 추가(하위호환). Web UI 워크스페이스에 인라인 승인/반려 버튼. "수정 후 재제출" 연결은 기준 미정이라 의도적으로 스코프 밖(`docs/LIMITS.md` §23) | 5건(GC138–142) |
 
 ## 10. 설계 결정
 
@@ -163,7 +164,7 @@
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동+CrewAI 개념 활용도 감사+Skill/Tool Pool 구현+데이터 삭제/초기화 기능+Agent-Evaluator 절차 스킬 기본 노출+협업 워크스페이스 Phase 1, 총 140건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동+CrewAI 개념 활용도 감사+Skill/Tool Pool 구현+데이터 삭제/초기화 기능+Agent-Evaluator 절차 스킬 기본 노출+협업 워크스페이스 Phase 1/Phase 2, 총 145건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
 - [x] F11 — 인증된 Web UI 셸에서 F1–F14 전부 조작 가능(`webui.py`, 단일 페이지 바닐라 JS, R4에서 뒤늦게 구현 — `docs/LIMITS.md` §10 참고. 실제 브라우저 수동 조작은 미검증, TestClient 전체 플로우 통합 테스트로 대체)
 - [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 저장 버그 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공(TCR 100% PASS, Gate A/G 미달 확인) — `improve verify`로 confirmed까지 완주하는 반복은 여전히 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동

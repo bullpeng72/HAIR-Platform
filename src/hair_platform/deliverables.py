@@ -7,10 +7,9 @@ HITL/HOTL로 AI Agent 업무 감독 등이 가능해야해" → "팀이 승인�
 포함하고... skill을 사용할 수 있도록").
 
 `docs/PHASE1_DELIVERABLE_SPEC.md`의 Phase 1 범위(결과물 엔티티 + 내 업무
-진입 흐름 + Skill/Tool 역할 재정의)만 구현한다 — 산출물 승인(Phase 2)·Agent
-평가(Phase 3)·비동기 실행(Phase 4)은 범위 밖이다. `deliverables.status`는
-Phase 2가 쓸 전체 lifecycle을 CHECK 제약에 미리 넣어뒀지만, 여기서는
-'draft'(사람)/'pending_review'(agent)로 채우기만 하고 행동에는 안 쓴다.
+진입 흐름 + Skill/Tool 역할 재정의)에 더해, Phase 2(산출물 승인 게이트,
+사용자 요청 2026-09-28 "다음 단계 진행해줘")도 이 모듈에서 구현한다 —
+Agent 평가(Phase 3)·비동기 실행(Phase 4)만 범위 밖이다.
 
 **author_id 규칙**: `author_type='human'`이면 `author_id`는
 `human_pool.id`가 아니라 **`users.id`**다(실제로 글을 쓴 로그인 계정 —
@@ -21,6 +20,15 @@ Phase 2가 쓸 전체 lifecycle을 CHECK 제약에 미리 넣어뒀지만, 여�
 함수라 "이 task에 배정된 Agent 하나를 실행"하는 이번 용도와 안 맞는다 —
 이미 있는 단일 Agent 온디맨드 실행 경로 `agent_runtime.execute_agent()`
 (Agent별 저장된 provider/model, RAG 증강을 그대로 재사용)로 구현한다.
+
+**Phase 2 설계**: Agent가 만든 deliverable(`status='pending_review'`)이
+생기는 즉시 `approvals.create_approval_chain()`으로 결재 체인을 만든다
+(`requested_by`=execute-agent를 트리거한 사람, `subject_type=
+'deliverable'`) — F7의 다단계 결재라인·ADR 3-A 자기승인 방지를 그대로
+재사용한다(새 승인 로직을 따로 만들지 않는다). 사람이 작성한
+deliverable(`'draft'`)은 승인 대상이 아니다 — Agent 산출물만 게이트를
+탄다. "수정 후 재제출"(`revises_id`)은 Phase 2 스코프 밖으로 남긴다
+(`docs/LIMITS.md` 참고).
 """
 
 from __future__ import annotations
@@ -28,7 +36,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from hair_platform import agent_runtime, audit, llm
+from hair_platform import agent_runtime, approvals, audit, llm
 
 
 def _confirmed_assignments_for_task(
@@ -108,7 +116,12 @@ def list_my_work(
 
 
 def list_deliverables(conn: sqlite3.Connection, task_id: int) -> list[dict]:
-    """`GET /api/tasks/{task_id}/deliverables`(§2-2) — 타임라인 순서(시간순)."""
+    """`GET /api/tasks/{task_id}/deliverables`(§2-2) — 타임라인 순서(시간순).
+
+    Phase 2: `pending_review`인 deliverable엔 지금 결정 가능한(`status=
+    'pending'`) 결재 건의 id를 `approval_id`로 함께 내려준다 — 웹 UI가
+    "결재" 탭으로 안 보내고 워크스페이스 안에서 바로 승인/반려하려면
+    이 id가 필요하다. 다른 상태는 항상 `approval_id=None`."""
     task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
@@ -116,7 +129,39 @@ def list_deliverables(conn: sqlite3.Connection, task_id: int) -> list[dict]:
         "SELECT * FROM deliverables WHERE task_id = ? ORDER BY created_at ASC, id ASC",
         (task_id,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["approval_id"] = None
+        if row["status"] == "pending_review":
+            approval = conn.execute(
+                "SELECT id FROM approvals WHERE subject_type = 'deliverable' "
+                "AND subject_id = ? AND status = 'pending'",
+                (row["id"],),
+            ).fetchone()
+            if approval is not None:
+                item["approval_id"] = approval["id"]
+        result.append(item)
+    return result
+
+
+def resolve_deliverable_decision(
+    conn: sqlite3.Connection, deliverable_id: int, approve: bool
+) -> dict:
+    """Phase 2 — 산출물 승인/반려 결과를 `deliverables`에 반영한다(커밋은
+    호출자 책임 — `app.py`의 `decide_approval()`이 `approvals` 갱신과 함께
+    한 트랜잭션으로 커밋한다, `assignments.resolve_assignment_decision()`
+    과 같은 관례)."""
+    row = conn.execute(
+        "SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("deliverable_not_found")
+    new_status = "approved" if approve else "rejected"
+    conn.execute(
+        "UPDATE deliverables SET status = ? WHERE id = ?", (new_status, deliverable_id)
+    )
+    return {"deliverable_id": deliverable_id, "status": new_status}
 
 
 def create_deliverable(
@@ -261,7 +306,11 @@ def execute_agent_for_task(
     agent 배정을 찾아 실행한다. requester 본인이거나(`allow_supervisor_
     override=False`) 매니저/관리자(`True`, `app.py`가 role로 판단)면 통과.
     가장 최근 사람 작성 deliverable을 Task 입력에 포함시킨다(§1 "출력
-    처리" — 이게 "결과물 전달" 갭을 실제로 메우는 지점)."""
+    처리" — 이게 "결과물 전달" 갭을 실제로 메우는 지점).
+
+    Phase 2: 결과 deliverable마다 결재 체인을 새로 만든다(`requested_by`
+    =이 함수를 호출한 `actor_id` — 감독자 대리 실행이었다면 그 감독자가
+    자기 트리거의 승인자가 될 수 없다, ADR 3-A와 같은 원리)."""
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
@@ -305,6 +354,7 @@ def execute_agent_for_task(
     )
     deliverable_id = cur.lastrowid
     assert deliverable_id is not None
+    approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
     audit.record(
         conn,
         actor_id,
