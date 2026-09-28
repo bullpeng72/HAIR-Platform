@@ -483,10 +483,25 @@ def run_agent_execution_job(
         conn.commit()
     except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계, 위 docstring 참고
         conn.rollback()
+        friendly_error = _friendly_execution_error(exc)
         conn.execute(
             "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "
             "finished_at = datetime('now') WHERE id = ?",
-            (_friendly_execution_error(exc), job_id),
+            (friendly_error, job_id),
+        )
+        # 실측으로 발견한 갭(리뷰 3회차) — F13("모든 쓰기 액션... 조회")
+        # 관례상 `decide_approval()`은 approved/rejected 둘 다 감사로그에
+        # 남기는데(`f"approval_{new_status}"`), 이 실패 경로만 감사로그가
+        # 없었다 — HOTL 감독자가 "이 Agent 실행이 왜/언제 실패했는지"를
+        # F13 화면에서 못 보고 있었다. 성공 경로(`deliverable_created`)와
+        # 대칭으로 남긴다.
+        audit.record(
+            conn,
+            actor_id,
+            "agent_execution_failed",
+            "agent_execution_jobs",
+            job_id,
+            after={"task_id": task_id, "agent_id": agent_id, "error": friendly_error},
         )
         conn.commit()
 

@@ -1353,6 +1353,29 @@ found"`/`"agent_not_active"` 같은 내부 코드를 그대로 예외 메시지�
 **검증**: 골든셋 GC154-155(2건) 추가. `ruff check/format` 클린. 전체
 골든셋 158건 통과.
 
+## 28. Phase 1-4 리뷰 3회차 — 사용자가 같은 요청을 세 번째로 보냄
+    (2026-09-28, "Phase1~4까지 누락되거나, 오류, 개선이 필요한 부분이
+    있는지 분석하고 개선해줘")
+
+**F13 감사로그 비대칭 발견**: `decide_approval()`은 승인/반려 둘 다
+감사로그에 남긴다(`f"approval_{new_status}"`, 성공/실패 모두 기록하는
+게 이 프로젝트의 F13 관례임을 여기서 재확인). 하지만 `run_agent_
+execution_job()`의 성공 경로는 `deliverable_created`를 기록하면서
+실패 경로는 아무 것도 안 남겼다 — HOTL 감독자가 "이 Agent 실행이
+왜/언제 실패했는지"를 F13(감사로그) 화면에서 아예 볼 방법이 없었다
+(job 목록 API로는 볼 수 있지만, 감사로그는 "모든 쓰기 액션"을 한곳에서
+훑어보는 화면이라는 원래 취지에 어긋난다). `agent_execution_failed`
+액션을 실패 경로에도 기록하도록 대칭을 맞췄다. 골든셋 GC156으로 검증.
+
+**부수적으로 발견한 라벨 누락**: Web UI의 감사로그 화면(`label()`)이
+`subject_type='agent_execution_jobs'`에 대한 매핑이 아예 없어서
+(Phase 4가 도입한 `agent_execution_started` 액션부터 이미 이랬다) 감사로그
+표에 영어 원문(`agent_execution_jobs`)이 그대로 노출되고 있었다 —
+`LABELS`에 `"AI 실행 작업"`을 추가했다.
+
+**검증**: 골든셋 GC156(1건) 추가. `node --check`로 웹 UI 문법 확인.
+ruff check/format 클린. 전체 골든셋 159건 통과.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |
@@ -1388,3 +1411,4 @@ found"`/`"agent_not_active"` 같은 내부 코드를 그대로 예외 메시지�
 | Phase 4: execute-agent 비동기화 | **구현 완료**(GC146-148) — 사용자가 두 스코프(워크스페이스 비동기화 vs CrewAI Crew 정지/재개) 중 저위험 쪽을 선택. `start_agent_execution()`+`run_agent_execution_job()`으로 분리, `agent_execution_jobs` 신규 테이블(SQLite CHECK 제약은 ALTER 불가라 `deliverables.status` 확장 대신 새 테이블 선택). API 계약 파괴적 변경(201→202+job_id). `TestClient`가 `BackgroundTasks`를 응답 전에 동기 실행한다는 것을 실측 확인. 도구 호출 단위 일시정지(`crew_runtime.run_crew()` 대상)는 별도 세션/ADR 필요 항목으로 명시적으로 남김(§25) |
 | Phase 1-4 리뷰: 크로스-Phase 버그 3건 + 죽은 코드 1건 | **전부 발견 → 전부 수정 완료**(GC149-153) — (1) 사람+Agent를 같은 task에 함께 confirmed하면 F5/F6 시절 재배치 로직이 resource_type을 안 가려 먼저 확정된 쪽이 조용히 superseded되던 버그(협업의 기본 전제 자체가 깨져 있었음), (2) `data_admin.py`가 Phase 1-4의 새 테이블을 몰라 deliverable이 남은 task 삭제 시 FK 위반 500 에러, (3) 서버 재시작 시 'running' job이 영원히 멈춰 보이던 문제(`reap_orphaned_execution_jobs()` 신설). 추가로 Phase 3의 `aggregate_agent_score()`가 어떤 API/화면에도 연결 안 돼 있던 죽은 코드를 발견해 `GET /api/agent-pool`+Web UI에 연결(§26) |
 | Phase 1-4 리뷰 2회차: 중복 실행 트리거 + 불친절한 에러 메시지 | **전부 발견 → 전부 수정 완료**(GC154-155) — (1) `start_agent_execution()`이 같은 task에 이미 'running' job이 있어도 확인 없이 새 job을 또 만들어, 빠른 연속 클릭·여러 탭·직접 API 호출로 같은 트리거에 실제 LLM 호출이 두 번(비용 이중 지출) 나갈 수 있었음 — 서버 쪽에도 409 가드 추가. (2) 트리거 이후·실행 전 Agent가 삭제/오프보딩되면 `agent_not_active` 같은 내부 코드 문자열이 그대로 Web UI에 노출되던 것을 사람이 읽을 수 있는 문구로 번역(§27) |
+| Phase 1-4 리뷰 3회차: 감사로그 비대칭 + 라벨 누락 | **전부 발견 → 전부 수정 완료**(GC156) — Agent 실행 성공은 감사로그에 남는데 실패는 안 남아 F13 관례(승인/반려 둘 다 기록)와 어긋나 있었음 — `agent_execution_failed` 액션 추가. 부수적으로 `agent_execution_jobs` subject_type의 Web UI 라벨이 아예 없어 감사로그 표에 영어 원문이 노출되던 것도 수정(§28) |

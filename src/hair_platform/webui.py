@@ -162,6 +162,7 @@ async function withBusy(btn, busyLabel, fn) {
 const LABELS = {
   human: "사람", agent: "AI 에이전트",
   brief: "업무 요청", assignment: "배정", deliverable: "결과물", human_pool: "사람 인력", agent_pool: "AI 에이전트",
+  agent_execution_jobs: "AI 실행 작업",
   job: "생성 작업", job_item: "생성 항목", approval: "결재", user: "사용자",
   pending: "대기중", waiting: "대기(이전 단계)", approved: "승인됨", rejected: "반려됨", skipped: "건너뜀",
   requested: "요청됨", confirmed: "확정됨", superseded: "대체됨",

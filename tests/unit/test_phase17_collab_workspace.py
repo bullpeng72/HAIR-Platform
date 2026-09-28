@@ -866,3 +866,27 @@ def test_gc155_failed_job_shows_friendly_message_for_known_errors(client_and_con
     assert (
         row["error"] == "Agent가 더 이상 활성 상태가 아닙니다(오프보딩됐을 수 있습니다)"
     )
+
+
+def test_gc156_failed_execution_is_recorded_in_audit_log(client_and_conn):
+    """실측으로 발견한 갭(리뷰 3회차) — F13 관례상 `decide_approval()`은
+    승인/반려 둘 다 감사로그에 남기는데(`f"approval_{new_status}"`),
+    Agent 실행 실패는 성공(`deliverable_created`)과 달리 감사로그가
+    전혀 없었다 — HOTL 감독자가 "이 Agent 실행이 왜/언제 실패했는지"를
+    F13(감사로그) 화면에서 볼 방법이 없었다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    _login(client, "manager1", "managerpass")
+    with patch("hair_platform.llm.call_llm", side_effect=RuntimeError("모의 API 장애")):
+        resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
+    assert resp.status_code == 202, resp.text
+    job_id = resp.json()["job_id"]
+
+    row = conn.execute(
+        "SELECT action, subject_type, subject_id FROM audit_log "
+        "WHERE action = 'agent_execution_failed' AND subject_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert row is not None
+    assert row["subject_type"] == "agent_execution_jobs"
