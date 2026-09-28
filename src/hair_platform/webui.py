@@ -318,6 +318,7 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
 
 async function renderBriefs(content) {
   const canWrite = ["admin", "manager", "member"].includes(ME.role);
+  const isAdmin = ME.role === "admin";
   const briefs = await api("GET", "/api/briefs");
   let html = "<section class=\\"card\\"><h2>업무 요청 등록</h2>";
   if (canWrite) {
@@ -326,14 +327,15 @@ async function renderBriefs(content) {
       '<button class="primary" type="submit">제출</button></form>';
   }
   html += "</section><section class=\\"card\\"><h2>업무 요청 목록</h2>";
-  html += table(["ID", "내용", "상태", "제안된 역할", "동작"], briefs.map(b => [
-    b.id,
-    esc(b.raw_text),
-    esc(label(b.status)),
-    esc(b.stub_roles.join(", ")),
-    canWrite ? '<div class="actions"><button class="small" data-decompose="' + b.id + '">할 일로 나누기</button>' +
-      '<button class="small" data-viewtasks="' + b.id + '">할 일 보기</button></div>' : "",
-  ]));
+  html += table(["ID", "내용", "상태", "제안된 역할", "동작"], briefs.map(b => {
+    let actions = '<button class="small" data-decompose="' + b.id + '">할 일로 나누기</button>' +
+      '<button class="small" data-viewtasks="' + b.id + '">할 일 보기</button>';
+    if (isAdmin) {
+      actions += '<button class="small danger" data-delete-brief="' + b.id + '">삭제</button>';
+    }
+    return [b.id, esc(b.raw_text), esc(label(b.status)), esc(b.stub_roles.join(", ")),
+      canWrite ? '<div class="actions">' + actions + "</div>" : ""];
+  }));
   html += '<div id="brief-detail"></div></section>';
   content.innerHTML = html;
 
@@ -356,6 +358,16 @@ async function renderBriefs(content) {
   });
   content.querySelectorAll("[data-viewtasks]").forEach(btn => {
     btn.onclick = () => renderTaskList(btn.dataset.viewtasks);
+  });
+  content.querySelectorAll("[data-delete-brief]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 업무 요청과 그 아래 할 일·배정을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/briefs/" + btn.dataset.deleteBrief);
+        showMsg("global-msg", "업무 요청을 삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
   });
 }
 
@@ -396,12 +408,24 @@ function renderDecomposeForm(briefId, stubRoles) {
 
 async function renderTaskList(briefId) {
   const detail = document.getElementById("brief-detail");
+  const isAdmin = ME.role === "admin";
   const tasks = await api("GET", "/api/briefs/" + briefId + "/tasks");
   detail.innerHTML = "<h3>업무 요청 #" + esc(briefId) + " — 할 일 목록</h3>" +
-    table(["할 일 ID", "역할", "필요 스킬", "인원"], tasks.map(t => [
+    table(["할 일 ID", "역할", "필요 스킬", "인원", "동작"], tasks.map(t => [
       t.id, esc(t.role_name), esc(t.required_skills.join(", ")), t.headcount,
+      isAdmin ? '<button class="small danger" data-delete-task="' + t.id + '">삭제</button>' : "",
     ])) +
     '<p class="muted">할 일 ID는 "인력 매칭/배정", "AI 에이전트 생성" 탭에서 사용합니다.</p>';
+  detail.querySelectorAll("[data-delete-task]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 할 일과 그 배정을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/briefs/" + briefId + "/tasks/" + btn.dataset.deleteTask);
+        showMsg("global-msg", "할 일을 삭제했습니다.", "ok");
+        renderTaskList(briefId);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
 }
 
 /* ---------- 인력 매칭·배정 ---------- */
@@ -556,6 +580,7 @@ function renderJobResult(result) {
 
 async function renderHumanPool(content) {
   const people = await api("GET", "/api/human-pool");
+  const isAdmin = ME.role === "admin";
   content.innerHTML =
     '<section class="card"><h2>사람 인력 등록</h2>' +
     '<form class="inline" id="hp-form">' +
@@ -565,19 +590,20 @@ async function renderHumanPool(content) {
     '<input id="hp-cost" type="number" step="0.01" placeholder="비용" value="0">' +
     '<button class="primary" type="submit">등록</button></form>' +
     '</section><section class="card"><h2>사람 인력 목록</h2>' +
-    table(["ID", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "동작"], people.map(p => [
-      p.id, esc(p.name), esc(p.role), esc(p.skill_tags.join(", ")), esc(label(p.availability)), p.cost_estimate,
-      p.performance_consent ? "동의함" : "미동의",
-      p.performance_score === null ? "-" : p.performance_score,
-      p.availability === "offboarded" ? "<span class=\\"muted\\">오프보딩됨</span>" :
-        '<div class="actions">' +
+    '<p class="muted">"오프보딩"은 상태만 바꾸고(가용성만 변경), "삭제"는 레코드 자체를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 삭제가 막힙니다.</p>' +
+    table(["ID", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "동작"], people.map(p => {
+      const middleActions = p.availability === "offboarded" ? "" :
         '<button class="small" data-toggle-consent="' + p.id + '" data-consent="' + (p.performance_consent ? "0" : "1") + '">' +
           (p.performance_consent ? "동의 철회" : "동의") + "</button>" +
         '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="score-' + p.id + '">' +
         '<button class="small" data-set-score="' + p.id + '">점수입력</button></span>' +
-        '<button class="small danger" data-offboard="' + p.id + '">오프보딩</button>' +
-        "</div>",
-    ])) + "</section>";
+        '<button class="small danger" data-offboard="' + p.id + '">오프보딩</button>';
+      const deleteAction = isAdmin ? '<button class="small danger" data-delete-human="' + p.id + '">삭제</button>' : "";
+      return [p.id, esc(p.name), esc(p.role), esc(p.skill_tags.join(", ")), esc(label(p.availability)), p.cost_estimate,
+        p.performance_consent ? "동의함" : "미동의",
+        p.performance_score === null ? "-" : p.performance_score,
+        '<div class="actions">' + middleActions + deleteAction + "</div>"];
+    })) + "</section>";
 
   document.getElementById("hp-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -619,6 +645,16 @@ async function renderHumanPool(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  content.querySelectorAll("[data-delete-human]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 사람 인력 레코드를 완전히 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/human-pool/" + btn.dataset.deleteHuman);
+        showMsg("global-msg", "삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
 }
 
 /* ---------- AI 에이전트 ---------- */
@@ -634,6 +670,7 @@ async function renderAgentPool(content) {
       if (isAdmin) {
         if (a.status === "pending_onboarding") actions += '<button class="small" data-onboard="' + a.id + '">온보딩 승인</button>';
         if (a.status === "active") actions += '<button class="small danger" data-deprecate="' + a.id + '">오프보딩</button>';
+        actions += '<button class="small danger" data-delete-agent="' + a.id + '">삭제</button>';
         actions +=
           '<span class="pair"><input type="number" step="0.01" placeholder="비용" id="cost-' + a.id + '">' +
           '<button class="small" data-set-cost="' + a.id + '">비용입력</button></span>' +
@@ -672,6 +709,16 @@ async function renderAgentPool(content) {
   });
   content.querySelectorAll("[data-deprecate]").forEach(btn => {
     btn.onclick = async () => { try { await api("POST", "/api/agent-pool/" + btn.dataset.deprecate + "/deprecate"); refresh(); } catch (e) { showMsg("global-msg", e.message, "error"); } };
+  });
+  content.querySelectorAll("[data-delete-agent]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 AI 에이전트 레코드를 완전히 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/agent-pool/" + btn.dataset.deleteAgent);
+        showMsg("global-msg", "삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
   });
   content.querySelectorAll("[data-set-cost]").forEach(btn => {
     btn.onclick = async () => {
@@ -760,11 +807,13 @@ async function renderPoolRegistry(content) {
     api("GET", "/api/tool-pool"),
     api("GET", "/api/skill-pool"),
   ]);
+  const isAdmin = ME.role === "admin";
   content.innerHTML =
     '<section class="card"><h2>Tool Pool — 재사용 가능한 도구</h2>' +
     '<p class="muted">MCP 서버나 native 도구(VectorDB/GraphDB)를 이름으로 등록해 여러 Agent가 재사용합니다. native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"}만 지원합니다. MCP는 {"url":...,"transport":...} 또는 {"command":...,"args":[...]} 형태입니다.</p>' +
-    table(["ID", "이름", "종류", "설명", "활성"], tools.map(t => [
+    table(["ID", "이름", "종류", "설명", "활성", "동작"], tools.map(t => [
       t.id, esc(t.name), esc(t.kind), esc(t.description), t.is_active ? "활성" : "비활성",
+      isAdmin ? '<div class="actions"><button class="small danger" data-delete-tool="' + t.id + '">삭제</button></div>' : "",
     ])) +
     '<form class="inline" id="tool-form">' +
     '<input id="tp-name" placeholder="이름" required>' +
@@ -775,8 +824,9 @@ async function renderPoolRegistry(content) {
     "</section>" +
     '<section class="card"><h2>Skill Pool — skill_tags 정식 등록</h2>' +
     '<p class="muted">augmentation_mode="tool"인 스킬은 default_tool_pool_ids가 가리키는 도구를 이 스킬을 가진 모든 Agent에 자동으로 붙입니다(run_crew/crewai_agent_generator 실행마다 다시 계산).</p>' +
-    table(["ID", "이름", "설명", "기본 도구 ID", "모드"], skills.map(s => [
+    table(["ID", "이름", "설명", "기본 도구 ID", "모드", "동작"], skills.map(s => [
       s.id, esc(s.name), esc(s.description), esc(s.default_tool_pool_ids.join(", ") || "-"), esc(s.augmentation_mode),
+      isAdmin ? '<div class="actions"><button class="small danger" data-delete-skill="' + s.id + '">삭제</button></div>' : "",
     ])) +
     '<form class="inline" id="skill-form">' +
     '<input id="sp-name" placeholder="스킬명(skill_tags와 일치)" required>' +
@@ -823,6 +873,27 @@ async function renderPoolRegistry(content) {
       showMsg("global-msg", "스킬을 등록했습니다.", "ok");
       refresh();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  content.querySelectorAll("[data-delete-tool]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 도구를 완전히 지웁니다(연결된 Agent 연결도 함께 지워집니다, 되돌릴 수 없음). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/tool-pool/" + btn.dataset.deleteTool);
+        showMsg("global-msg", "삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-delete-skill]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 스킬을 완전히 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/skill-pool/" + btn.dataset.deleteSkill);
+        showMsg("global-msg", "삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
   });
 }
 

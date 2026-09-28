@@ -39,6 +39,7 @@ from hair_platform import (
     audit,
     cost,
     crew_runtime,
+    data_admin,
     db,
     fairness,
     jobs,
@@ -243,6 +244,26 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             for row in rows
         ]
 
+    @app.delete("/api/briefs/{brief_id}")
+    def delete_brief_endpoint(
+        brief_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        """사용자 요청(2026-09-28, "각 메뉴에서 데이터 삭제나, 초기화 기능
+        추가") — brief와 그 아래 tasks·jobs·assignments를 전부 지운다.
+        `confirmed` 배정이 있으면 막는다(먼저 F6/F7에서 정리)."""
+        try:
+            data_admin.delete_brief(conn, user["id"], brief_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="업무 요청을 찾을 수 없습니다"
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="확정된(confirmed) 배정이 있어 삭제할 수 없습니다 — 먼저 정리하세요",
+            ) from exc
+        return {"id": brief_id, "deleted": True}
+
     @app.post("/api/human-pool", status_code=201)
     def create_human_pool_entry(
         payload: HumanPoolCreate,
@@ -358,6 +379,26 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         conn.commit()
         return {"id": human_id, "availability": "offboarded"}
 
+    @app.delete("/api/human-pool/{human_id}")
+    def delete_human_endpoint(
+        human_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        """사용자 요청(2026-09-28) — 사람 인력 레코드를 완전히 지운다
+        (오프보딩은 상태만 바꿀 뿐 지우지는 않는다 — 이건 그 위의 진짜
+        삭제). `confirmed` 배정이 있으면 막는다."""
+        try:
+            data_admin.delete_human(conn, user["id"], human_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="사람을 찾을 수 없습니다"
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="확정된(confirmed) 배정이 있어 삭제할 수 없습니다 — 먼저 정리하세요",
+            ) from exc
+        return {"id": human_id, "deleted": True}
+
     @app.post("/api/briefs/{brief_id}/tasks", status_code=201)
     def decompose_brief_into_tasks(
         brief_id: int,
@@ -406,6 +447,30 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             }
             for row in rows
         ]
+
+    @app.delete("/api/briefs/{brief_id}/tasks/{task_id}")
+    def delete_task_endpoint(
+        brief_id: int,
+        task_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """사용자 요청(2026-09-28) — 할 일(task) 하나를 그 아래
+        assignments·job_items까지 지운다. `confirmed` 배정이 있으면
+        막는다. `brief_id`는 URL 일관성(중첩 리소스)을 위해 받지만 실제
+        조회·삭제는 `task_id`만으로 한다."""
+        del brief_id
+        try:
+            data_admin.delete_task(conn, user["id"], task_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="확정된(confirmed) 배정이 있어 삭제할 수 없습니다 — 먼저 정리하세요",
+            ) from exc
+        return {"id": task_id, "deleted": True}
 
     @app.get("/api/pool/search")
     def search_pool(
@@ -691,6 +756,21 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             ) from exc
         return {"id": tool_id, "is_active": payload.is_active}
 
+    @app.delete("/api/tool-pool/{tool_id}")
+    def delete_tool_pool_entry(
+        tool_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """사용자 요청(2026-09-28) — Tool Pool 항목을 완전히 지운다(비활성화가
+        아니라 진짜 삭제). 참조하던 `agent_tool_links`도 같이 지운다."""
+        try:
+            pool_registry.delete_tool(conn, user["id"], tool_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="도구를 찾을 수 없습니다"
+            ) from exc
+        return {"id": tool_id, "deleted": True}
+
     @app.get("/api/skill-pool")
     def list_skill_pool(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
@@ -721,6 +801,22 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 status_code=409, detail=f"이미 있는 이름입니다: {payload.name}"
             ) from exc
         return {"id": skill_id}
+
+    @app.delete("/api/skill-pool/{skill_id}")
+    def delete_skill_pool_entry(
+        skill_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """사용자 요청(2026-09-28) — Skill Pool 항목을 완전히 지운다.
+        같은 skill_tags를 가진 Agent/사람은 그대로 남고, 다음 실행부터
+        이 스킬 기반 자동 도구 연결만 사라진다."""
+        try:
+            pool_registry.delete_skill(conn, user["id"], skill_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="스킬을 찾을 수 없습니다"
+            ) from exc
+        return {"id": skill_id, "deleted": True}
 
     @app.post("/api/agent-pool/{agent_id}/tools/{tool_pool_id}", status_code=201)
     def link_agent_tool_endpoint(
@@ -828,6 +924,26 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         )
         conn.commit()
         return {"id": agent_id, "status": "deprecated"}
+
+    @app.delete("/api/agent-pool/{agent_id}")
+    def delete_agent_endpoint(
+        agent_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        """사용자 요청(2026-09-28) — AI 에이전트 레코드를 그 아래 지식
+        색인·도구 연결까지 전부 지운다(오프보딩은 상태만 바꿀 뿐 지우지는
+        않는다 — 이건 진짜 삭제). `confirmed` 배정이 있으면 막는다."""
+        try:
+            data_admin.delete_agent(conn, user["id"], agent_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="Agent를 찾을 수 없습니다"
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="확정된(confirmed) 배정이 있어 삭제할 수 없습니다 — 먼저 정리하세요",
+            ) from exc
+        return {"id": agent_id, "deleted": True}
 
     @app.get("/api/audit-log")
     def get_audit_log(

@@ -136,6 +136,7 @@
 | E2E 시나리오 실행(사용자 요청, "개발업무 인간-AI Agent 협업 팀 구성... End-to-End로 진행하며 개선해줘") | 신규 SaaS 대시보드 프로젝트 팀 구성을 F1→F14까지 실제로 끝까지 진행, UX 문제 3건 발견·수정(`docs/LIMITS.md` §16) | 실측 검증(프런트엔드 텍스트 수정, golden case 대상 아님) |
 | CrewAI 개념 활용도 감사(사용자 요청, "전체적으로 CrewAI 기능/개념을 제대로 활용하도록 구현되어 있는지 확인해줘") | RAG 증강이 개별 실행에만 있고 Crew 협업에는 없던 실사용 갭 발견·수정, `human_input`/`token_usage`/`allow_delegation`/`planning` 4건 실측 판단(`docs/LIMITS.md` §17) | 1건(GC106, 이후 아래 항목에서 Tool 방식으로 갱신) |
 | Skill Pool·Tool Pool + VectorDB/GraphDB의 CrewAI Tool 전환(사용자 요청, "Skills, MCP Tool 등을 Pool로 구성... 개선점을 찾아줘" + "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘" + "tool_pool·skill_pool 테이블도 실제로 구현해줘") | 실제 데모 DB 확인 결과 VectorDB/GraphDB Agent가 실사용 중엔 하나도 없었음을 먼저 확인. VectorDB/GraphDB를 정적 프롬프트 주입 대신 `crewai.tools.tool` 기반 진짜 CrewAI Tool로 전환(`run_crew()`+`crewai_agent_generator()` 양쪽 연결, `GeneratorFn` 계약에 `conn` 추가)한 데 이어, `tool_pool`/`skill_pool`/`agent_tool_links` 3개 신규 테이블+`pool_registry.py`+CRUD API+Web UI까지 실제 구현해 하드코딩된 스킬→도구 매핑을 데이터로 완전 대체(ADR 결정 12, `docs/LIMITS.md` §18) | 10건(GC106 갱신+GC107–115 신규) |
+| 데이터 삭제/초기화 기능(사용자 요청, "각 메뉴에서 데이터 삭제나, 초기화 기능 추가") | 사용자가 명시적으로 선택한 범위(도구/스킬 Pool+사람/AI 에이전트 Pool+brief/task, 활동 기록은 NF10 트리거로 애초에 불가해 제외)에 대해 `data_admin.py`(brief/task/human/agent)+`pool_registry.py`(tool/skill) 연쇄 삭제 로직과 6개 ADMIN 전용 DELETE 엔드포인트, Web UI 삭제 버튼까지 구현. FK 순서 버그(`sqlite3.IntegrityError`)와 테스트 self-approval 세션 버그를 실측으로 발견·수정, `confirmed` 배정 보호 안전장치 설계(`docs/LIMITS.md` §19) | 9건(GC116–124) |
 
 ## 10. 설계 결정
 
@@ -153,12 +154,13 @@
 - **Web UI 내비게이션 = "내 업무"/"관리자 도구" 2구역 분리**(사용자 요청, ADR 결정 9): 접근 제어 규칙은 새로 만들지 않고 기존 RBAC 매트릭스(결정 3)를 그대로 근거로 삼는다 — 탭의 `roles`에 팀원/뷰어가 하나라도 있으면 "내 업무", 없으면 "관리자 도구"로 분류한다. 사용자 관리(계정 생성·상사 지정)만 ADMIN 전용이라 "관리자 전용" 배지로 추가 표시한다.
 - **AI Agent 생성 3단계(stub/simple_llm/crewai) + 실제 CrewAI 협업 + VectorDB/GraphDB Agent — 구현 완료**(사용자 요청, ADR 결정 10·11, `crew_runtime.py`·`vectorstore.py`·`graphquery.py`): `GenerateRequest.framework`로 생성 방식을 고르고, `POST /api/crew/run`으로 여러 Agent를 실제 CrewAI Crew로 묶어 `allow_delegation`+`Task.context`로 협업시킨다. 표준 Agent 세트에 지식검색(VectorDB, OpenAI 임베딩+SQLite 코사인 유사도)·관계분석(GraphDB, 기존 관계형 데이터를 그래프로 취급) Agent를 추가했다 — 관계분석 Agent는 성과 데이터(NF9)를 소스 레벨에서 절대 조회하지 않는다. MCP 도구 연결은 `run_crew()`에 실제로 구현했다(`MCPServerAdapter`, `docs/LIMITS.md` §15) — 접속 가능한 실제 MCP 서버가 없어 종단간 검증만 오픈 이슈로 남는다.
 - **Skill Pool·Tool Pool + VectorDB/GraphDB의 CrewAI Tool화 — 구현 완료**(사용자 요청, ADR 결정 12): `tool_pool`(도구 재사용 레지스트리)·`skill_pool`(스킬 정식 엔티티화)·`agent_tool_links`(N:M) 3개 신규 테이블, `pool_registry.py`(CRUD+`resolve_pool_tools()`), CRUD API, Web UI("도구/스킬 Pool" 탭)까지 전부 구현했다. VectorDB/GraphDB는 `vectorstore.as_crewai_tool()`/`graphquery.as_crewai_tool()`이 `crewai.tools.tool`로 만든 진짜 Tool을 `run_crew()`(이미 온보딩된 Agent)와 `crewai_agent_generator()`(F4로 새로 생성되는 Agent) 양쪽에 붙여 Agent가 호출 여부를 스스로 판단하게 한다(`GeneratorFn` 계약에 `conn` 추가). `agent_runtime.VECTORDB_SKILL_TAGS`/`GRAPHDB_SKILL_TAGS` 하드코딩은 더 이상 참조되지 않는다 — 매 기동 시 `db._seed_default_pools()`가 같은 매핑을 데이터로 자동 시드한다. 상세: `docs/LIMITS.md` §18.
+- **데이터 삭제/초기화 — 구현 완료**(사용자 요청): 도구/스킬 Pool·사람/AI 에이전트 Pool·brief/task에 대한 하드 삭제를 `data_admin.py`/`pool_registry.py`+6개 ADMIN 전용 DELETE 엔드포인트로 구현했다. `PRAGMA foreign_keys=ON` 하에서 FK 순서를 지킨 완전한 연쇄 삭제, `confirmed` 배정 보호 안전장치, 삭제해도 `audit_log`에는 기록을 남기는 설계다. 활동 기록(감사로그) 자체는 NF10 append-only 트리거가 UPDATE/DELETE를 막아 삭제 범위에서 제외했다. 상세: `docs/LIMITS.md` §19.
 
 이 결정들은 `docs/ADR.md`(Phase 2, `adr_review` 대기)에서 공식적으로 재확인·기록된다 — 여기서의 확정은 저장소 부트스트랩을 진행하기 위한 실무적 가결정이며, `adr_review` 승인이 최종 확정이다.
 
 ## 11. 완료 정의 (Definition of Done)
 
-- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동+CrewAI 개념 활용도 감사+Skill/Tool Pool 구현, 총 118건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
+- [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동+CrewAI 개념 활용도 감사+Skill/Tool Pool 구현+데이터 삭제/초기화 기능, 총 127건 — Gate A–G 실행 전까지는 pytest 골든셋 기준)
 - [x] F11 — 인증된 Web UI 셸에서 F1–F14 전부 조작 가능(`webui.py`, 단일 페이지 바닐라 JS, R4에서 뒤늦게 구현 — `docs/LIMITS.md` §10 참고. 실제 브라우저 수동 조작은 미검증, TestClient 전체 플로우 통합 테스트로 대체)
 - [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 저장 버그 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공(TCR 100% PASS, Gate A/G 미달 확인) — `improve verify`로 confirmed까지 완주하는 반복은 여전히 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동

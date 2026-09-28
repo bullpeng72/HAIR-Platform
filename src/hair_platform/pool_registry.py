@@ -140,6 +140,30 @@ def set_tool_active(
     conn.commit()
 
 
+def delete_tool(conn: sqlite3.Connection, actor_id: int, tool_id: int) -> None:
+    """Tool Pool 항목을 완전히 지운다(사용자 요청, 2026-09-28, "각 메뉴에서
+    데이터 삭제나, 초기화 기능 추가"). `agent_tool_links`가 이 도구를
+    참조하면(FK) 같이 지운다 — `skill_pool.default_tool_pool_ids`는 JSON
+    문자열이라 FK가 안 걸려 있는데, `resolve_pool_tools()`가 이미
+    `WHERE id = ? AND is_active = 1`로 존재 확인을 하므로 지워진 도구를
+    가리키는 오래된 참조는 조용히 무시된다(에러 안 남)."""
+    row = conn.execute("SELECT * FROM tool_pool WHERE id = ?", (tool_id,)).fetchone()
+    if row is None:
+        raise ValueError("tool_not_found")
+    conn.execute("DELETE FROM agent_tool_links WHERE tool_pool_id = ?", (tool_id,))
+    conn.execute("DELETE FROM tool_pool WHERE id = ?", (tool_id,))
+    audit.record(
+        conn,
+        actor_id,
+        "tool_pool_deleted",
+        "tool_pool",
+        tool_id,
+        before={"name": row["name"], "kind": row["kind"]},
+        after=None,
+    )
+    conn.commit()
+
+
 def create_skill(
     conn: sqlite3.Connection,
     actor_id: int,
@@ -187,6 +211,28 @@ def list_skills(conn: sqlite3.Connection) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def delete_skill(conn: sqlite3.Connection, actor_id: int, skill_id: int) -> None:
+    """Skill Pool 항목을 완전히 지운다(사용자 요청, 2026-09-28). 이
+    이름과 같은 `skill_tags`를 가진 Agent/사람은 그대로 남고, 다음
+    `run_crew()`/`crewai_agent_generator()` 실행부터 이 스킬 기반 자동
+    도구 연결만 더 이상 적용되지 않는다(스킬 이름 자체를 지우는 게
+    아니라 Skill Pool 레코드만 지우기 때문)."""
+    row = conn.execute("SELECT * FROM skill_pool WHERE id = ?", (skill_id,)).fetchone()
+    if row is None:
+        raise ValueError("skill_not_found")
+    conn.execute("DELETE FROM skill_pool WHERE id = ?", (skill_id,))
+    audit.record(
+        conn,
+        actor_id,
+        "skill_pool_deleted",
+        "skill_pool",
+        skill_id,
+        before={"name": row["name"]},
+        after=None,
+    )
+    conn.commit()
 
 
 def link_agent_tool(

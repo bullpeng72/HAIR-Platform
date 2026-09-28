@@ -810,6 +810,77 @@ _skill_based_tools()`가 이제 `pool_registry.resolve_pool_tools()`에
   "필요하면 계약을 정직하게 바꾼다" 원칙과 일치, 사용하지 않는 `conn`은
   `default_stub_generator`/`llm_agent_generator`에서 그냥 무시한다).
 
+## 19. 데이터 삭제/초기화 기능 — 사용자 요청(2026-09-28, "각 메뉴에서 데이터
+    삭제나, 초기화 기능 추가")
+
+사용자에게 범위를 먼저 물었다(파괴적·되돌릴 수 없는 작업이라 그냥 진행하지
+않고 `AskUserQuestion`으로 확인) — 사용자는 세 가지 추가 범위를 전부
+선택했다: **도구/스킬 Pool + 사람/AI 에이전트 Pool + 업무 요청/할 일
+(brief/task)**. **활동 기록(감사로그)은 처음부터 선택지에서 제외했다** —
+NF10(append-only)에 따라 `db.py`의 DB 트리거가 `audit_log`에 대한
+UPDATE/DELETE 자체를 막고 있어 삭제 API를 만들어도 트리거가 막는다.
+
+**구현**(`data_admin.py` 신규 + `pool_registry.py`에 2개 함수 추가 +
+`app.py`에 6개 DELETE 엔드포인트, 전부 ADMIN 전용):
+
+- `DELETE /api/tool-pool/{id}`, `/api/skill-pool/{id}` — Tool/Skill Pool
+  항목 삭제. Tool은 `agent_tool_links`가 참조하면(FK) 그 연결까지 같이
+  지운다.
+- `DELETE /api/human-pool/{id}`, `/api/agent-pool/{id}` — 사람/AI 에이전트
+  레코드 삭제. Agent는 `knowledge_chunks`·`agent_tool_links`까지 연쇄
+  삭제한다.
+- `DELETE /api/briefs/{id}`, `/api/briefs/{brief_id}/tasks/{task_id}` —
+  업무 요청/할 일 삭제. brief 삭제는 그 아래 tasks·jobs·job_items·
+  assignments·assignment_history·(subject로 참조하는) approvals까지
+  전부 연쇄 삭제한다.
+
+**안전장치(공통)**: `status='confirmed'`인 배정이 걸려 있는 대상은 삭제를
+막는다(`PermissionError("confirmed_assignment_exists")` → HTTP 409) —
+이미 승인돼 조직도에 실제로 반영된 배정이 조용히 깨지는 것을 막기 위한
+설계다. `'requested'`(승인 전)·`'superseded'`(이미 지나간 이력)는 막지
+않는다. 실제 행은 지워도 `audit.record(...)`로 "누가 언제 무엇을
+지웠는지"는 감사로그에 남긴다.
+
+**실제로 발견·수정한 버그(TDD로 실측하다 발견, 코드 리뷰만으로는 못
+찾음)**:
+
+1. **FK 순서 버그** — `PRAGMA foreign_keys=ON`이 걸려 있는 상태에서,
+   assignment를 subject로 하는 approvals를 assignments보다 먼저 지우려
+   했더니 `assignments.approval_id`가 그 approval을 여전히 참조하고 있어
+   `sqlite3.IntegrityError: FOREIGN KEY constraint failed`가 실제로
+   났다(`test_gc116`/`test_gc118`로 재현). assignments를 먼저 지워
+   참조를 끊은 뒤 approvals를 지우도록 순서를 바꿔 수정했다.
+2. **테스트 자체의 버그** — 골든셋 테스트 헬퍼(`_confirm_assignment`)가
+   호출 시점의 로그인 세션에 의존했는데, 직전에 admin 전용 API를 호출한
+   뒤라 admin 세션인 채로 배정을 "요청"해버려서, 같은 admin이 승인까지
+   하려다 **ADR 결정 3-A(본인이 요청한 건은 스스로 승인 불가)**에
+   막혀 403이 났다(의도된 정상 동작이 테스트 버그를 드러낸 사례). 헬퍼
+   맨 앞에 명시적으로 요청자 계정으로 재로그인하도록 고쳤다.
+
+**알려진 트레이드오프(정직하게 기록)**:
+
+- brief/task를 하드 삭제하면 그 아래 `assignment_history`도 완전히
+  같이 지워진다 — NF11("이력 보존")의 취지와는 반대 방향이다. 이번
+  범위는 사용자가 명시적으로 "삭제/초기화"를 요청한 것이므로 의도된
+  동작이지만, 삭제된 brief/task의 배정 이력은 `audit_log`의 "무엇을
+  지웠는지" 스냅샷(before/after) 이상으로는 복원할 수 없다.
+- `approvals.subject_id`는 폴리모픽 컬럼(brief/assignment 구분은
+  `subject_type`)이라 formal FK가 없다 — brief/assignment 삭제 시
+  `subject_type`+`subject_id`로 직접 지우는 것은 위생 처리일 뿐,
+  SQLite가 강제하는 것은 아니다.
+- `assignments.resource_id`(human_pool.id 또는 agent_pool.id)에도
+  formal FK가 없다 — `confirmed` 배정이 없는 human/agent를 지우면
+  `requested`/`superseded` 배정에 고아 참조가 남을 수 있다(수용 가능한
+  위험으로 판단 — 조직도에 실제로 반영된 `confirmed` 배정만 안전장치로
+  막는다).
+- 삭제 API 6개 전부 ADMIN 전용으로 정했다(기존 소프트 상태변경 API보다
+  엄격 — 예: 사람 오프보딩은 ADMIN+MANAGER, 에이전트 온보딩/오프보딩은
+  ADMIN 전용인데, 하드 삭제는 되돌릴 수 없어 한 단계 더 엄격하게
+  잡았다) — 별도 검토 없이 내가 내린 판단이라 오픈 이슈로 남긴다.
+
+골든셋 GC116–GC124(`tests/unit/test_phase15_data_deletion.py`, 9건)로
+FK 연쇄 삭제·안전장치·RBAC·에러 매핑을 전부 검증했다. 총 127건 통과.
+
 ## 요약
 
 | 항목 | 상태 |
@@ -838,3 +909,4 @@ _skill_based_tools()`가 이제 `pool_registry.resolve_pool_tools()`에
 | E2E 시나리오(사람+AI 혼합 팀 구성) 전 과정 실행 | **F1–F14 핵심 흐름 실측 확인, UX 문제 3건 발견·수정**(브리프 placeholder, 제안 역할 클릭 채우기, 매칭 실패 안내 문구) |
 | CrewAI 개념 활용도 감사 — RAG 증강이 Crew 협업에서 누락됨 | **실사용 갭 발견 → 수정 완료**(당시 GC106), human_input/token_usage/delegation/planning 4건 실측 판단(§17) — 이후 §18에서 정적 주입 자체를 Tool 방식으로 대체하며 GC106 내용도 갱신됨 |
 | Skill Pool·Tool Pool + VectorDB/GraphDB의 CrewAI Tool 전환 | **구현 완료**(GC106-115) — 3개 신규 테이블·`pool_registry.py`·CRUD API·Web UI까지 실제 구현, 하드코딩된 스킬→도구 매핑을 데이터로 완전 대체(§18) |
+| 데이터 삭제/초기화 기능(도구/스킬/사람/에이전트/brief/task) | **구현 완료**(GC116-124) — FK 순서 버그·테스트 self-approval 버그 실측으로 발견·수정, confirmed 배정 안전장치, 활동 기록은 NF10 트리거로 삭제 불가라 범위 제외(§19) |
