@@ -140,18 +140,67 @@ AI가 협업하는 플랫폼을 기획해줘".
 
 ### Phase A — 결과물(Deliverable) 엔티티: "결과물 전달" 문제 해결
 
+사용자 추가 요청(2026-09-28): "팀이 승인되고 특정 HAIR로 해결할 업무가
+확정되면 해당 업무가 내 업무 메뉴에서 확인되고, 해당 업무의 경우
+사람-에이전트 협업 프로세스로 펼쳐지고 입출력을 처리할 수 있도록" —
+이 요청은 Phase A를 "테이블 설계"에서 그치지 않고 **진입 흐름(배정 확정
+→ 내 업무 노출 → 협업 워크스페이스로 펼침)까지 구체화**하라는 것이므로,
+아래 4-1을 Phase A의 핵심 산출물로 명시한다.
+
+#### 4-1. 진입 흐름 — "배정 확정" → "내 업무" 노출 → 협업 워크스페이스
+
+1. **트리거**: F7 결재가 승인돼 `assignments.status = 'confirmed'`가 되는
+   순간(이미 존재하는 이벤트, 새로 만들 필요 없음).
+2. **노출(신규)**: 지금 "내 업무" 그룹(업무 요청/결재/인력 검색/조직도/
+   성과 리뷰)에는 "내가 실제로 처리해야 할 확정 업무 목록"이 **없다** —
+   이 갭을 메우는 신규 탭 `myWork`("내 할당 업무")을 "내 업무" 그룹에
+   추가한다. 신규 엔드포인트 `GET /api/my-work`가 다음 두 경우를 모두
+   반환한다:
+   - 내가 **확정된 human 배정의 당사자**인 task(`assignments.resource_type
+     = 'human' AND human_pool.user_id = 나`) — "내가 직접 할 일".
+   - 내가 **확정된 agent 배정의 요청자**인 task(`assignments.resource_type
+     = 'agent' AND assignments.requested_by = 나`) — "내가 AI에게 맡긴
+     일"(감독 대상). 관리자/매니저가 Agent에게 업무를 맡겼다면 그
+     Agent가 하는 일을 계속 들여다볼 진입점이 필요하기 때문에 이
+     경우도 포함한다.
+   - member/manager/admin은 위 조건에 걸리는 자기 업무를 보고, viewer는
+     기존 RBAC 관례대로 조회만 가능하게 한다(신규 승인/쓰기 권한 추가
+     아님).
+3. **펼침(신규, "사람-에이전트 협업 워크스페이스")**: `myWork` 목록에서
+   행 하나를 클릭하면, 그 task 전용 화면이 펼쳐진다 — 이게 바로 4-2의
+   결과물 타임라인이다. **사람 배정 task든 Agent 배정 task든 같은 화면
+   컴포넌트를 쓴다**(사람이 산출물을 올리는 쪽이냐 Agent 실행을 트리거/
+   리뷰하는 쪽이냐만 다름) — GitHub Copilot의 "이슈 하나 = PR 스레드
+   하나"와 같은 원칙: task 하나 = 협업 워크스페이스 하나.
+
+#### 4-2. 결과물(Deliverable) 엔티티 — "입출력 처리"의 실제 구현
+
 - 신규 테이블 `deliverables`: `id, task_id, author_type(human|agent),
   author_id, content, kind(draft|final), created_at`.
 - 신규 테이블 `deliverable_comments`(공유 스레드/피드 모델 차용): 같은
   `task_id` 위에서 사람과 Agent가 번갈아 post를 남기는 타임라인.
-- `crewai_agent_generator()`/`run_crew()`가 Task description을 조립할 때,
-  그 task에 이미 있는 사람 작성 deliverable을 **자동으로 프롬프트
-  컨텍스트에 포함**시킨다(현재는 이 연결이 전혀 없음, `crew_runtime.py`
-  수정 필요).
-- Web UI: "업무 요청" 상세 화면에 "결과물 타임라인" 탭 추가(할 일마다
-  사람/Agent 산출물이 시간순으로 보임).
+- **입력 처리**: 협업 워크스페이스에서 사람이 텍스트/산출물을 올리면
+  `deliverables`에 `author_type='human'`으로 저장되고, 그 화면에 있는
+  "이 내용으로 Agent 실행" 버튼이 `crewai_agent_generator()`/`run_crew()`
+  를 **이 task로 스코프해서** 트리거한다.
+- **출력 처리**: `crewai_agent_generator()`/`run_crew()`가 Task
+  description을 조립할 때, 그 task에 이미 있는 사람 작성 deliverable을
+  **자동으로 프롬프트 컨텍스트에 포함**시키고(현재는 이 연결이 전혀
+  없음, `crew_runtime.py` 수정 필요), 실행 결과는 다시
+  `author_type='agent'`인 deliverable로 같은 타임라인에 쌓인다 — 사람이
+  새로고침 없이 "AI가 방금 뭘 냈는지"를 그 자리에서 본다.
+- Web UI: "내 업무 → myWork" 탭에서 펼친 화면이 곧 "결과물 타임라인"
+  이다(할 일마다 사람/Agent 산출물이 시간순으로 보임) — 별도 화면을 두
+  곳에 중복 구현하지 않는다.
 
 ### Phase B — 산출물 단위 승인 게이트: "HITL" 문제 해결 (Phase A 의존)
+
+Phase A의 협업 워크스페이스(4-1)가 이미 열려 있는 화면이므로, 승인/반려/
+수정 버튼은 **별도 화면(결재 탭)으로 보내지 않고 그 워크스페이스 안에서
+바로 처리**한다 — 다만 감사 추적을 위해 `approvals` 레코드는 그대로
+생성하고, "결재" 탭의 "내가 처리할 건" 목록에도 함께 뜨게 해서(F7과
+동일한 큐를 재사용) 워크스페이스를 안 열어본 사람도 결재 탭에서 놓치지
+않게 한다.
 
 - `approvals.subject_type`에 `"deliverable"` 추가(현재 `app.py:1223`이
   하드코딩으로 막고 있는 지점을 확장).
