@@ -192,7 +192,7 @@
 - Audit Log의 SQLite 쓰기 부하 확장성(실사용 규모 부하테스트 필요)
 - 초기 타깃 업종/조직 규모, 배포 모델(온프레미스 vs SaaS) 확정
 - 팀원의 셀프서비스 요구(예: 본인이 직접 배정 요청)가 실사용에서 크면 RBAC 권한 매트릭스(ADR 결정 3) 완화 재검토
-- `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선은 완료 — 실제 Gate 측정 실행(사용자 직접)은 남음(`docs/LIMITS.md` §1)
+- ~~`agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선은 완료 — 실제 Gate 측정 실행(사용자 직접)은 남음~~(`docs/LIMITS.md` §1) — **Phase 3에서 해결(2026-09-28)**: 협업 워크스페이스의 실제 실행 경로(`deliverables.execute_agent_for_task()`)에 Gate A-G 측정이 인라인으로 상시 연결돼, 매 Agent 실행마다 사람이 수동으로 돌릴 필요 없이 자동으로 채점된다(`agent_evaluation.py`, `docs/LIMITS.md` §24). `eval_wiring.py`는 이제 별개의 수동 실행 probe 스크립트로만 남아 있다.
 - Docker 설치 환경에서 샌드박스 실제 격리(리소스 쿼터·네트워크 차단) 동작 검증(`docs/LIMITS.md` §2)
 - 멀티프로세스/멀티워커 배포 시 NF7 idempotency의 진짜 경쟁 상태(race condition) 방지 — 현재는 단일 커넥션·순차 요청 전제(`docs/LIMITS.md` §3)
 - Docker 런타임 설치를 배포 필수 요건으로 문서화(README·설치 가이드, ADR 결정 8)

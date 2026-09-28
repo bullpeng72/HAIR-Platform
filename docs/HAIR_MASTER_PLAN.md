@@ -27,18 +27,21 @@ Skill, RAG 등) 및 도구(MCP, CrewAI Tool) 그라운딩 및 프로세스 관�
 | 3. 후보 매칭 | 완전일치→가중치 스코어링(가용40·적합35·비용25) | 매니저/관리자 | F6, 기존 구현 |
 | 4. 배정 요청→결재 | 상사 체인 다단계 승인, 자기승인 방지 | 요청자→상사 체인 | F6/F7, 기존 구현 |
 | 5. 배정 확정→노출 | `assignments.status='confirmed'` → "내 업무" 신규 노출 | 시스템 | **신규**(협업 플랜 4-1) |
-| 6. 협업 실행 | 사람 입력→(선택)Skill 그라운딩 LLM 보조→Agent 실행(Tool 그라운딩)→산출물 교환 | 팀원(작업자)+Agent | **신규**(협업 플랜 4-2/4-3) |
-| 7. Agent 산출물 평가 | Gate A–G 자동 채점, 신뢰도 기록 | 시스템 | **신규**(본 문서 §5) |
-| 8. 산출물 승인(HITL) | 승인/반려/수정, 자기승인 방지 재사용 | 감독자(요청자 상사 또는 지정 리뷰어) | **신규**(협업 플랜 Phase B) |
-| 9. 실행 중 개입(HOTL) | 진행 중 일시정지/재지시(옵션) | 감독자 | **신규**(협업 플랜 Phase C) |
-| 10. 성과 리뷰 | 동의기반(NF9) 점수 + 자동 Gate 점수 병행 | 관리자/매니저 | F8 확장(본 문서 §5) |
+| 6. 협업 실행 | 사람 입력→(선택)Skill 그라운딩 LLM 보조→Agent 실행(지식 그라운딩)→산출물 교환 | 팀원(작업자)+Agent | **구현 완료**(Phase 1) |
+| 7. Agent 산출물 평가 | Gate A–G 자동 채점, 신뢰도 기록 | 시스템 | **구현 완료**(Phase 3) |
+| 8. 산출물 승인(HITL) | 승인/반려, 자기승인 방지 재사용 | 감독자(요청자 상사 또는 지정 리뷰어) | **구현 완료**(Phase 2) |
+| 9. 실행 대기 확인(HOTL, 축소) | 실행 중 일시정지/재지시는 미구현 — 비동기 실행+완료/실패 상태 폴링만 | 감독자 | **부분 구현**(Phase 4, 스코프 축소) |
+| 10. 성과 리뷰 | 동의기반(NF9) 수동 점수 — 자동 Gate 점수는 이 화면이 아니라 "AI 에이전트 관리" 탭에 별도 노출 | 관리자/매니저 | F8 그대로, 자동값은 다른 화면(§8 결정 3번 참고) |
 | 11. 비용/공정성 집계 | 확정 배정 기준 비용·반려율 격차 | 관리자/매니저 | F10/NF4, 기존 구현 |
 | 12. 감사 기록 | 전 단계 append-only 기록 | 시스템 | F13/NF10, 기존 구현 확장 |
 
 **핵심 관찰**: 1~4·10~12는 이미 튼튼하게 구현돼 있다(이 워크북 세션의
-누적 작업). 5~9가 이번에 새로 설계하는 "업무 내용 자체"의 협업 축이고,
-그 축이 10(성과 리뷰)에 실제 데이터를 처음으로 공급하게 된다(현재
-`performance_score`는 관리자 수동 입력뿐 — §5에서 자동화 경로 추가).
+누적 작업). 5~9가 이번에 새로 설계했던 "업무 내용 자체"의 협업 축이고,
+전부 구현이 끝났다(Phase 1-4) — 다만 9(HOTL)는 원래 계획한 "진행 중
+개입"이 아니라 "비동기 완료 확인"으로 스코프가 줄었고, 10(성과 리뷰)에
+자동 Gate 점수를 공급하는 경로는 계획한 화면이 아니라 다른 화면에
+붙었다(§8 결정사항 3번 미해결로 남음). 두 갭 다 2026-09-28 "기획/설계
+내용... 분석하고 개선해줘" 리뷰에서 실측으로 발견해 이 표를 정정했다.
 
 ## 2. 사용자·관리자 역할 명확화
 
@@ -48,7 +51,7 @@ Skill, RAG 등) 및 도구(MCP, CrewAI Tool) 그라운딩 및 프로세스 관�
 
 | 역할 | 조직/카탈로그 관리 | 배정·결재 | 협업 실행(신규) | 평가·정책(신규) |
 |---|---|---|---|---|
-| **관리자(Admin)** | 사용자 생성·상사 지정, Tool/Skill Pool 등록·삭제, Agent 온보딩/오프보딩, 전 리소스 하드 삭제 | 전체 결재 처리 가능 | 모든 워크스페이스 조회·개입 가능 | Gate 임계값·자동승인 정책 설정(신규), 평가 대시보드 열람 |
+| **관리자(Admin)** | 사용자 생성·상사 지정, Tool/Skill Pool 등록·삭제, Agent 온보딩/오프보딩, 전 리소스 하드 삭제 | 전체 결재 처리 가능 | 모든 워크스페이스 조회·개입 가능 | 매니저 대시보드 열람(구현 완료, Phase 5) — "Gate 임계값·자동승인 정책 설정"은 **미구현**(`agent_evaluation.DEFAULT_GATE_THRESHOLD=0.7`이 코드에 고정값으로 박혀 있고 화면에서 바꿀 방법이 없다) |
 | **매니저(Manager)** | 사람/Agent Pool 등록(삭제 제외) | 업무 요청·배정 요청·자기 라인 결재 | **자신이 요청한 Agent 업무의 감독자**(HOTL 수행), 팀원 업무 리뷰 | 팀 단위 평가 대시보드 열람, 팀원 산출물 승인 |
 | **팀원(Member)** | 없음 | 업무 요청 제출, 자기 배정 결재 요청 | **"내 업무"에서 배정된 작업 직접 수행**(사람 입력 작성, Skill 활용 LLM 보조 호출, Agent 실행 트리거, Agent 산출물 1차 확인) | 자기 성과점수 조회(동의 시) |
 | **뷰어(Viewer)** | 없음 | 조회만 | 워크스페이스 읽기 전용 | 조회만 |
@@ -123,21 +126,39 @@ Skill, RAG 등) 및 도구(MCP, CrewAI Tool) 그라운딩 및 프로세스 관�
                       │         · (선택) VectorDB 임베딩 검색
                       │         · llm.call_llm() 1회 호출
                       │    └─ deliverable(author=human) 저장
-                      ├─ Agent 실행 트리거 (task로 스코프)
+                      ├─ Agent 실행 트리거 (task로 스코프, 비동기 — Phase 4)
                       │    · deliverable(human) 을 Task context에 포함
-                      │    · Tool Pool 그라운딩 (resolve_pool_tools)
-                      │    · crew_runtime.run_crew() / execute_agent()
+                      │    · 지식 그라운딩(augment_with_retrieval, 정적 프롬프트
+                      │      주입 — skill_tags로 VectorDB/GraphDB 판별)
+                      │    · agent_runtime.execute_agent() (단일 LLM 호출,
+                      │      BackgroundTasks로 응답 후 실행)
                       │    └─ deliverable(author=agent) 저장
-                      │         └─ Gate A–G 자동 평가 (agent_evaluations, 신규)
-                      │              └─ agent_pool.performance_score 갱신(자동값)
-                      └─ 승인 게이트 (approvals.subject_type='deliverable', 신규)
+                      │         └─ Gate A–G 자동 평가 (agent_evaluations, Phase 3)
+                      │              └─ aggregate_agent_score()로 별도 조회만
+                      │                 가능(agent_pool.performance_score 자체는
+                      │                 안 건드림 — 관리자 수동값 유지, §5-4)
+                      └─ 승인 게이트 (approvals.subject_type='deliverable', Phase 2)
                            ├─ 승인 → deliverable.status='approved' (최종 산출물)
-                           ├─ 반려 → 'rejected' (사람이 재작성)
-                           └─ 수정 → 새 deliverable(author=human, revises=이전 id)
+                           └─ 반려 → 'rejected' (재제출 연결 기준 미정, 스코프 밖)
   └─ 전 단계 → audit_log (append-only, 신규 이벤트 타입 추가)
-  └─ 성과 리뷰 (performance-review): 수동 점수 + agent_evaluations 자동 점수 병행 표시
+  └─ 성과 리뷰(performance-review): 수동 점수만 — agent_evaluations 자동 점수
+     병기는 아직 이 화면에 없다("AI 에이전트 관리" 탭에 별도로만 노출됨,
+     §8 결정사항 3번 여전히 미해결)
   └─ 비용/공정성 리포트: 기존 confirmed 배정 집계 로직 그대로(변화 없음)
 ```
+
+**실측으로 발견한 정정(2026-09-28, "기획/설계 내용 중... 분석하고
+개선해줘" 리뷰)**: 위 다이어그램은 원래 "Tool Pool 그라운딩
+(resolve_pool_tools)"·"crew_runtime.run_crew() / execute_agent()"·
+"agent_pool.performance_score 갱신(자동값)"이라고 적혀 있었다 — 전부
+Phase 1/3 실제 구현과 달랐다. `agent_runtime.execute_agent()`는
+`resolve_pool_tools()`를 호출하지 않고(그건 `run_crew()`/
+`crewai_agent_generator()` 전용 CrewAI Tool 조립 경로), Task로
+스코프된 협업 워크스페이스 실행은 `run_crew()`를 아예 쓰지 않으며,
+Phase 3는 `performance_score`를 의도적으로 안 건드리기로 설계했다
+(§5-4). "수동 점수+자동 점수 병행 표시"도 실제로는 F8
+성과 리뷰 화면이 아니라 "AI 에이전트 관리" 탭에 붙었다 — 정확한 위치로
+갱신했다.
 
 **데이터 흐름에서 지켜야 할 원칙**(기존 NF 원칙과 충돌하지 않게):
 - NF9(성과 데이터 사전 동의) — 자동 Gate 점수도 사람 리소스에는 동의
@@ -284,14 +305,30 @@ ADR 선행)로 다뤄야 한다.
 - 아직 기획 문서다 — 코드 변경 없음. `COLLABORATION_PLATFORM_PLAN.md`와
   함께 검토해야 전체 그림이 보인다.
 - 결정이 필요한 것들:
-  1. RBAC 재정의(§2) — "팀원이 자기 업무에서 직접 Agent 실행" 허용
+  1. ~~RBAC 재정의(§2) — "팀원이 자기 업무에서 직접 Agent 실행" 허용
      범위를 얼마나 넓힐지(예: 팀원이 임의 provider/model을 골라 비용을
-     발생시킬 수 있게 할지, 관리자가 사전 승인한 기본값만 쓰게 할지).
+     발생시킬 수 있게 할지, 관리자가 사전 승인한 기본값만 쓰게 할지).~~
+     — **완료(2026-09-28, Phase 1 구현)**. 팀원은 assist/execute-agent를
+     직접 트리거할 수 있지만 provider/model은 선택할 수 없다(관리자가
+     저장해둔 Agent별 기본값만 사용, 비용 통제) — Admin/매니저만
+     provider/model을 직접 고를 수 있다. 상세:
+     `docs/PHASE1_DELIVERABLE_SPEC.md` §3.
   2. Skill Pool 지식 본문 필드 추가(§3-1) 여부와 형식(긴 텍스트 vs
-     외부 문서 링크).
+     외부 문서 링크) — **여전히 미해결**. Phase 1-5 어느 단계에서도
+     `skill_pool`에 `content`/`content_ref` 필드를 추가하지 않았다 —
+     지금도 `name`+`description`(짧은 요약)뿐이다.
   3. `agent_evaluations` 자동 점수와 관리자 수동 점수를 성과 리뷰
-     화면에서 어떻게 병기할지(§5-2) — UI 시안 필요.
-  4. 반응형/모바일 지원 범위(§6) — 1차 로드맵에 넣을지, 이후로 미룰지.
+     화면에서 어떻게 병기할지(§5-2) — **부분 해결, 위치가 계획과
+     다름**. `aggregate_agent_score()`(자동 평균)는 구현됐지만
+     `GET /api/performance-review`(F8, 이 항목이 원래 가리킨 화면)가
+     아니라 `GET /api/agent-pool`("AI 에이전트 관리" 탭)에 "자동평가
+     (Gate/TCR)" 열로 노출됐다(`docs/LIMITS.md` §26). 성과 리뷰
+     화면 자체에 병기할지는 여전히 UI 시안이 필요한 미해결 항목이다.
+  4. ~~반응형/모바일 지원 범위(§6) — 1차 로드맵에 넣을지, 이후로
+     미룰지.~~ — **완료(2026-09-28, Phase 5)**. "내 업무/알림 확인용"
+     으로 범위를 좁혀 1차 로드맵에 포함했다(`@media max-width:640px`,
+     표 중심의 관리자 화면은 제외) — 다크모드는 별도로 계속 스코프 밖.
+     상세: `docs/LIMITS.md` §29.
   5. ~~이 마스터 플랜 전체를 팀 리뷰용으로 공유할 계획이면 Artifact(웹
      페이지)로 발행 가능~~ — 완료(2026-09-28). 이 문서와
      `COLLABORATION_PLATFORM_PLAN.md`를 합쳐 Artifact로 발행함.
