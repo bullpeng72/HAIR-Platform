@@ -478,10 +478,18 @@ async function renderCollabWorkspace(taskId) {
       ? '<div class="actions"><button class="small" data-decide-deliverable="' + d.approval_id + '" data-approve="1">승인</button>' +
         '<button class="small danger" data-decide-deliverable="' + d.approval_id + '" data-approve="0">반려</button></div>'
       : (d.approval_id ? '<p class="muted">결재 대기 중 — "결재" 탭 또는 담당 매니저/관리자가 처리합니다.</p>' : '');
+    // 실측으로 발견한 갭(사용자 요청, 2026-09-28, "UI/UX 내용 중... 분석
+    // 하고 개선해줘") — measured.length가 0일 때 passed===measured.length
+    // (0===0)가 참이 돼 "Gate 0/0 통과"를 녹색(gate-ok)으로 보여줬다.
+    // "아무것도 측정 안 됨"이 "전부 통과"처럼 보이는 오해의 소지가 있는
+    // 표시라, 측정된 Gate가 하나도 없으면 별도 문구로 구분한다.
     const gateBadge = d.evaluation
       ? (() => {
           const gates = Object.values(d.evaluation.gate_scores);
           const measured = gates.filter(g => !g.not_measured);
+          if (measured.length === 0) {
+            return '<span class="gate-badge gate-warn">Gate 측정 없음</span>';
+          }
           const passed = measured.filter(g => g.passed).length;
           const cls = passed === measured.length ? "gate-ok" : "gate-warn";
           return '<span class="gate-badge ' + cls + '">Gate ' + passed + "/" + measured.length +
@@ -618,7 +626,16 @@ function isViewingWorkspace(taskId) {
   return !!detail && detail.dataset.taskId === String(taskId);
 }
 
-async function loadDeliverableComments(deliverableId) {
+/* 실측으로 발견한 심각한 버그(사용자 요청, 2026-09-28, "UI/UX 내용
+   중... 분석하고 개선해줘") — 원래 이 함수 하나가 "댓글 목록 갱신"과
+   "폼에 submit 리스너 붙이기"를 같이 했다. 그런데 submit 성공 콜백
+   *안에서* 같은 함수를 다시 불러 목록을 갱신했는데, 그 재호출이 같은
+   <form> DOM 노드에 리스너를 addEventListener로 "또" 붙였다(노드 자체는
+   안 바뀌므로 이전 리스너가 안 사라짐) — 댓글을 한 번 달 때마다
+   리스너가 1→2→4→8개로 누적돼, 다음 댓글부터는 같은 POST가 리스너
+   개수만큼 중복 발사되는 지수적 중복 제출 버그였다. "목록 갱신"과
+   "리스너를 한 번만 붙이기"를 분리해서 고쳤다. */
+async function refreshComments(deliverableId) {
   const box = document.getElementById("comments-" + deliverableId);
   if (!box) return;
   try {
@@ -627,6 +644,10 @@ async function loadDeliverableComments(deliverableId) {
   } catch (e) {
     // 참가자가 아니면 403 — 조용히 무시(타임라인 자체는 이미 조회 권한 확인됨).
   }
+}
+
+async function loadDeliverableComments(deliverableId) {
+  await refreshComments(deliverableId);
   const form = document.querySelector('[data-comment-form="' + deliverableId + '"]');
   if (form) {
     form.addEventListener("submit", async (ev) => {
@@ -637,7 +658,7 @@ async function loadDeliverableComments(deliverableId) {
       try {
         await api("POST", "/api/deliverables/" + deliverableId + "/comments", { content: val });
         input.value = "";
-        loadDeliverableComments(deliverableId);
+        await refreshComments(deliverableId);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     });
   }
@@ -1078,7 +1099,18 @@ async function renderAgentPool(content) {
     btn.onclick = async () => { try { await api("POST", "/api/agent-pool/" + btn.dataset.onboard + "/onboard"); refresh(); } catch (e) { showMsg("global-msg", e.message, "error"); } };
   });
   content.querySelectorAll("[data-deprecate]").forEach(btn => {
-    btn.onclick = async () => { try { await api("POST", "/api/agent-pool/" + btn.dataset.deprecate + "/deprecate"); refresh(); } catch (e) { showMsg("global-msg", e.message, "error"); } };
+    // 실측으로 발견한 갭(사용자 요청, 2026-09-28, "UI/UX 내용 중... 분석
+    // 하고 개선해줘") — 이 버튼만 확인 창이 없었다. 사람 쪽 "오프보딩"
+    // (data-offboard)과 앱 안의 모든 삭제 버튼은 confirm을 거치는데,
+    // 이 화면 안내문 자체가 "되돌릴 버튼이 없다"고 명시하는 되돌리기
+    // 어려운 동작인데도 한 번의 클릭만으로 실행됐다.
+    btn.onclick = async () => {
+      if (!window.confirm("이 Agent를 오프보딩합니다(active→deprecated, 이 화면엔 되돌리는 버튼이 없습니다). 계속할까요?")) return;
+      try {
+        await api("POST", "/api/agent-pool/" + btn.dataset.deprecate + "/deprecate");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
   });
   content.querySelectorAll("[data-delete-agent]").forEach(btn => {
     btn.onclick = async () => {
@@ -1422,7 +1454,7 @@ async function renderOrgChart(content) {
 async function renderPerformance(content) {
   const rows = await api("GET", "/api/performance-review");
   content.innerHTML = '<section class="card"><h2>성과 리뷰</h2>' +
-    '<p class="muted">사람의 "성과점수"는 사전 동의(NF9)가 있어야만 값이 채워집니다 — "사람 인력 관리" 탭에서 동의를 받은 사람만 점수를 입력할 수 있고, 동의를 철회하면 그 순간 점수가 지워집니다. AI 에이전트는 동의 개념이 없어 항상 입력·조회 가능합니다. 두 타입 모두 점수는 아직 자동 채점(Gate A–G) 연동 전이라 관리자가 직접 입력한 값이고, "확정 배정 수"만 실제 데이터(confirmed 배정 건수)입니다.</p>' +
+    '<p class="muted">사람의 "성과점수"는 사전 동의(NF9)가 있어야만 값이 채워집니다 — "사람 인력 관리" 탭에서 동의를 받은 사람만 점수를 입력할 수 있고, 동의를 철회하면 그 순간 점수가 지워집니다. AI 에이전트는 동의 개념이 없어 항상 입력·조회 가능합니다. 이 화면의 점수는 둘 다 관리자가 직접 입력한 수동값입니다 — Agent의 실제 Gate A-G 자동 채점 결과는 이 화면이 아니라 "AI 에이전트 관리" 탭의 "자동평가(Gate/TCR)" 열에서 따로 봅니다(둘을 아직 한 화면에 병기하진 않습니다). "확정 배정 수"만 실제 데이터(confirmed 배정 건수)입니다.</p>' +
     table(["타입", "ID", "이름", "역할", "동의", "성과점수", "확정 배정 수"], rows.map(r => [
       esc(label(r.type)), r.id, esc(r.name || "-"), esc(r.role),
       r.performance_consent === null ? "-" : (r.performance_consent ? "동의함" : "미동의"),
