@@ -57,12 +57,23 @@ def team_average_gate_scores(conn: sqlite3.Connection) -> dict:
 
 def cost_trend(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
     """`agent_cost_updated`/`human_pool_updated` 감사로그에서
-    cost_estimate가 실제로 바뀐 이력만 뽑아 최신순으로 낸다."""
+    cost_estimate가 실제로 바뀐 이력만 뽑아 최신순으로 낸다.
+
+    **실측으로 발견한 버그(2026-09-28, "Phase1~5까지... 분석하고
+    개선해줘" 리뷰 중)**: 원래는 SQL에서 먼저 `LIMIT`을 건 뒤 Python에서
+    `cost_estimate` 유무를 걸렀다 — `human_pool_updated`는 비용 말고도
+    role/availability/user_id 변경에도 찍히므로, 비용과 무관한 변경이
+    최근에 몰리면(예: 가용성을 여러 번 토글) 그 `LIMIT`이 전부 무관한
+    행으로 소진돼 더 오래된 진짜 비용 변경 이력이 응답에서 통째로
+    사라졌다(`test_probe_cost_trend_limit_applied_before_relevance_
+    filter`로 재현). `action IN (...)`만 걸고 전부 가져온 뒤 Python에서
+    `cost_estimate` 유무로 거르고, 그 *다음*에 `limit`을 자른다 — 이
+    저장소가 전제하는 소규모 팀 감사로그 규모에서는 전체 스캔 비용이
+    허용 가능하다."""
     rows = conn.execute(
         "SELECT created_at, subject_type, subject_id, after_value FROM audit_log "
         "WHERE action IN ('agent_cost_updated', 'human_pool_updated') "
-        "ORDER BY created_at DESC, id DESC LIMIT ?",
-        (limit,),
+        "ORDER BY created_at DESC, id DESC",
     ).fetchall()
     trend = []
     for row in rows:
@@ -77,6 +88,8 @@ def cost_trend(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
                 "cost_estimate": after["cost_estimate"],
             }
         )
+        if len(trend) >= limit:
+            break
     return trend
 
 

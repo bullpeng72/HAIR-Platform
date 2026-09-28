@@ -95,3 +95,35 @@ def test_gc167_search_limit_is_capped(client_and_conn):
     resp = client.get("/api/pool/search", params={"limit": 5000})
     assert resp.status_code == 200
     assert resp.json()["limit"] == 200
+
+
+def test_gc171_unavailable_filter_excludes_agents(client_and_conn):
+    """실측으로 발견한 갭(리뷰, "Phase1~5까지... 분석하고 개선해줘") —
+    Agent는 항상 `is_available=True`로 고정돼 있는데
+    `availability='unavailable'` 필터가 `human_pool_candidates()` 안에만
+    있어서 Agent는 이 필터를 아예 안 받고 그대로 섞여 나왔다. "불가능한
+    후보만" 찾는 필터인데 항상 가능한 Agent가 나오면 필터가 사실상 안
+    지켜지는 것이다 — Agent는 이 필터에서 통째로 빠져야 한다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[]', 'active')",
+        ("불가필터테스트",),
+    )
+    conn.commit()
+    agent_id = cur.lastrowid
+
+    resp = client.get(
+        "/api/pool/search",
+        params={"role": "불가필터테스트", "availability": "unavailable"},
+    )
+    ids = [c["id"] for c in resp.json()["items"] if c["type"] == "agent"]
+    assert agent_id not in ids
+
+    # "가능만"/필터 없음일 땐 여전히 나와야 한다(회귀 방지).
+    resp = client.get(
+        "/api/pool/search",
+        params={"role": "불가필터테스트", "availability": "available"},
+    )
+    ids = [c["id"] for c in resp.json()["items"] if c["type"] == "agent"]
+    assert agent_id in ids

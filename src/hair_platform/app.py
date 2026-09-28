@@ -522,11 +522,27 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         필드가 없다(조직 구조는 `manager_id` 상사 체인/조직도로만 표현된다).
         존재하지 않는 데이터를 필터로 꾸며내지 않고, 이미 있는 `role`이
         사실상 같은 역할(직군 단위 검색)을 한다는 점을 그대로 문서화한다.
+
+        **실측으로 발견한 버그(리뷰, "Phase1~5까지... 분석하고 개선해줘")**:
+        `availability` 필터가 `human_pool_candidates()` 안에만 있어서,
+        `availability='unavailable'`로 검색해도 Agent(항상 `is_available
+        =True`로 고정)는 이 필터를 아예 안 받아 그대로 결과에 섞여
+        나왔다 — "불가능한 후보만" 찾는 필터가 사실상 안 지켜졌다.
+        Agent는 애초에 "불가" 상태가 없다는 걸 반영해, `availability=
+        'unavailable'`일 땐 Agent 후보 자체를 통째로 뺀다.
         """
         limit = max(1, min(limit, 200))
-        candidates = pool.human_pool_candidates(
-            conn, role=role, skill=skill, availability=availability
-        ) + pool.agent_pool_candidates(conn, role=role, skill=skill)
+        agent_candidates = (
+            []
+            if availability == "unavailable"
+            else pool.agent_pool_candidates(conn, role=role, skill=skill)
+        )
+        candidates = (
+            pool.human_pool_candidates(
+                conn, role=role, skill=skill, availability=availability
+            )
+            + agent_candidates
+        )
         rows = conn.execute("SELECT id, name FROM human_pool").fetchall()
         name_by_id = {row["id"]: row["name"] for row in rows}
         items = [

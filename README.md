@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 172 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 174 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -132,7 +132,15 @@ Gate 평균·대기 승인 건수·비용 추이(새 계측 없이 기존 감사
 자체가 스키마에 없어 넣지 않았다. 협업 워크스페이스는 채팅형 좌우
 타임라인 + Skill 자동완성을 추가하면서, Phase 3부터 API에 있었지만
 어떤 화면에도 렌더링된 적 없던 Gate 평가 배지를 처음 노출했다
-(`docs/LIMITS.md` §29).
+(`docs/LIMITS.md` §29). 이어서 사용자 요청("Phase1~5까지... 분석하고
+개선해줘")에 따라 **막 작성한 Phase 5 코드를 다시 감사해 "조용히 틀린
+결과"를 내는 버그 2건을 발견·수정했다** — (1) 매니저 대시보드의 비용
+추이가 SQL LIMIT을 관련성 필터보다 먼저 적용해, 비용과 무관한 변경
+(예: 가용성 토글)이 최근에 몰리면 더 오래된 진짜 비용 이력이 응답에서
+통째로 사라지던 버그, (2) 검색의 "불가능만" 필터가 Agent엔 안 걸려
+있어(구조적으로 항상 가능 상태) 그 필터로 찾아도 Agent가 그대로 섞여
+나오던 버그. 둘 다 에러 없이 조용히 잘못된 데이터를 보여주는 종류라
+재현 테스트 없이는 발견하기 어려웠다(`docs/LIMITS.md` §30).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -148,7 +156,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 172건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 174건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -254,7 +262,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 172건
+tests/unit/                            # 골든셋 174건
 ```
 
 ## 로드맵

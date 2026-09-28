@@ -87,6 +87,34 @@ def test_gc163_cost_trend_reflects_real_cost_updates(client_and_conn):
     assert trend[0]["subject_id"] == agent_id
 
 
+def test_gc170_cost_trend_survives_unrelated_human_pool_updates(client_and_conn):
+    """실측으로 발견한 갭(리뷰, "Phase1~5까지... 분석하고 개선해줘") —
+    원래는 SQL에서 먼저 LIMIT을 건 뒤 Python에서 cost_estimate 유무를
+    걸렀다. human_pool_updated는 availability 등 비용과 무관한 변경에도
+    찍히므로, 그런 무관한 변경이 최근에 몰리면 그 LIMIT이 전부 소진돼
+    더 오래된 진짜 비용 변경 이력이 응답에서 통째로 사라졌다 — 관련
+    없는 항목 수와 무관하게 실제 비용 이력이 항상 보여야 한다."""
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "리뷰5사람", "role": "테스터", "skill_tags": []},
+    )
+    human_id = resp.json()["id"]
+
+    resp = client.patch(f"/api/human-pool/{human_id}", json={"cost_estimate": 99.0})
+    assert resp.status_code == 200
+
+    for i in range(55):
+        avail = "unavailable" if i % 2 == 0 else "available"
+        resp = client.patch(f"/api/human-pool/{human_id}", json={"availability": avail})
+        assert resp.status_code == 200
+
+    resp = client.get("/api/dashboard")
+    trend = resp.json()["cost_trend"]
+    assert any(t["cost_estimate"] == 99.0 for t in trend)
+
+
 def test_gc164_dashboard_forbidden_for_member(client_and_conn):
     """F10/F13과 같은 RBAC — 팀원은 대시보드를 볼 수 없다."""
     client, _conn = client_and_conn

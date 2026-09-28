@@ -1442,6 +1442,45 @@ Agent 관리 등)은 건드리지 않았다(의도적 스코프 축소, 표 반�
 (GC168-169). `node --check`로 웹 UI 문법 확인. ruff check/format 클린.
 전체 골든셋 172건 통과.
 
+## 30. Phase 1-5 리뷰 — Phase 5 자체 코드에서 발견한 버그 2건 — 사용자
+    요청(2026-09-28, "Phase1~5까지 누락되거나, 오류, 개선이 필요한
+    부분이 있는지 분석하고 개선해줘")
+
+Phase 1-4는 이미 3회 리뷰를 거쳤으므로, 이번엔 막 작성한 Phase 5 코드를
+다시 읽으며 두 건을 실측으로 재현·수정했다.
+
+**1) `dashboard.cost_trend()`의 LIMIT이 관련성 필터보다 먼저 걸림**:
+SQL에서 `action IN ('agent_cost_updated', 'human_pool_updated') ORDER BY
+... LIMIT 50`을 먼저 실행한 뒤, Python에서 `after_value`에
+`cost_estimate`가 있는지로 걸렀다. `human_pool_updated`는 비용 말고도
+`role`/`availability`/`user_id` 변경에도 찍히는 액션이라, 최근에
+비용과 무관한 변경(예: 가용성을 여러 번 토글)이 50건 넘게 쌓이면 그
+LIMIT이 전부 무관한 행으로 소진돼 **더 오래된 진짜 비용 변경 이력이
+응답에서 통째로 사라졌다** — "비용 추이" 화면인데 실제 비용 변경이
+안 보일 수 있는 버그였다. `test_probe_cost_trend_limit_applied_before_
+relevance_filter`로 재현 확인 후, SQL에서는 `action IN (...)`만 걸고
+전부 가져와 Python에서 `cost_estimate` 유무로 거른 *다음* `limit`을
+자르도록 순서를 바꿨다. 골든셋 GC170으로 검증.
+
+**2) 검색 `availability='unavailable'` 필터가 Agent에 안 걸림**:
+`availability` 필터가 `pool.human_pool_candidates()` 안에만 구현돼
+있고 `pool.agent_pool_candidates()`엔 아예 파라미터 자체가 없다(Agent는
+`is_available=True`로 항상 고정) — 그런데 `search_pool()`이 Agent
+쪽엔 이 필터를 아예 안 넘기고 무조건 다 포함시켜서, "불가능한 후보만"
+찾으려고 `availability=unavailable`로 검색해도 **항상 가능한 Agent가
+결과에 그대로 섞여 나왔다**. 재현 테스트로 확인 후, `search_pool()`에서
+`availability == 'unavailable'`일 땐 Agent 후보 자체를 아예 안
+가져오도록 고쳤다(Agent는 애초에 "불가" 상태가 구조적으로 없다는 걸
+그대로 반영). 골든셋 GC171로 검증(회귀 방지로 `availability=available`
+일 땐 여전히 Agent가 나오는 것도 같이 확인).
+
+두 버그 모두 "숫자/필터가 조용히 틀린 결과를 낸다"는 공통점이 있다 —
+에러가 나거나 크래시하지 않고 그냥 화면에 틀린 데이터가 보이는 쪽이라
+실측으로 확인하지 않았으면 못 잡았을 것이다.
+
+**검증**: 골든셋 GC170-171(2건) 추가. ruff check/format 클린. 전체
+골든셋 174건 통과.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |
@@ -1479,3 +1518,4 @@ Agent 관리 등)은 건드리지 않았다(의도적 스코프 축소, 표 반�
 | Phase 1-4 리뷰 2회차: 중복 실행 트리거 + 불친절한 에러 메시지 | **전부 발견 → 전부 수정 완료**(GC154-155) — (1) `start_agent_execution()`이 같은 task에 이미 'running' job이 있어도 확인 없이 새 job을 또 만들어, 빠른 연속 클릭·여러 탭·직접 API 호출로 같은 트리거에 실제 LLM 호출이 두 번(비용 이중 지출) 나갈 수 있었음 — 서버 쪽에도 409 가드 추가. (2) 트리거 이후·실행 전 Agent가 삭제/오프보딩되면 `agent_not_active` 같은 내부 코드 문자열이 그대로 Web UI에 노출되던 것을 사람이 읽을 수 있는 문구로 번역(§27) |
 | Phase 1-4 리뷰 3회차: 감사로그 비대칭 + 라벨 누락 | **전부 발견 → 전부 수정 완료**(GC156) — Agent 실행 성공은 감사로그에 남는데 실패는 안 남아 F13 관례(승인/반려 둘 다 기록)와 어긋나 있었음 — `agent_execution_failed` 액션 추가. 부수적으로 `agent_execution_jobs` subject_type의 Web UI 라벨이 아예 없어 감사로그 표에 영어 원문이 노출되던 것도 수정(§28) |
 | Phase 5: 기업용 UI/UX 고도화(부분, 사용자 선택 4항목+제한적 반응형) | **구현 완료**(GC157-169) — 통합 인박스(`inbox.py`)·매니저 대시보드(`dashboard.py`, 비용 추이는 기존 감사로그 재사용)·검색/필터 스케일(availability 양방향 필터+페이지네이션, "부서"는 데이터 자체가 없어 의도적 제외)·협업 워크스페이스 UX(채팅형 타임라인+Gate 배지+Skill 자동완성)+제한적 반응형(`@media max-width:640px`). 부수적으로 Phase 3부터 있던 `evaluation` 필드가 어떤 화면에도 렌더링된 적 없던 갭과 Skill Pool 조회가 Admin/매니저 전용이라 팀원이 자동완성을 못 받던 RBAC 갭을 발견·수정. 다크모드는 명시적으로 스코프 밖(§29) |
+| Phase 1-5 리뷰: Phase 5 자체 버그 2건("조용히 틀린 결과") | **전부 발견 → 전부 수정 완료**(GC170-171) — (1) `dashboard.cost_trend()`가 SQL LIMIT을 관련성 필터보다 먼저 적용해, 비용과 무관한 human_pool_updated가 몰리면 진짜 비용 이력이 응답에서 사라지던 버그, (2) 검색의 `availability='unavailable'` 필터가 Agent엔 안 걸려 항상 가능한 Agent가 "불가능만" 결과에 섞여 나오던 버그. 둘 다 크래시 없이 조용히 틀린 데이터를 보여주는 종류라 실측 없이는 못 잡았을 것(§30) |
