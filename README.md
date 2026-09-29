@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 184 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 185 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"공용 조회"/"운영 관리" 3구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -188,7 +188,15 @@ ServiceNow) 리서치로 메뉴를 재분류하고 내비게이션을 3구역으
 분리했다. 리서치 과정에서 찾은 RBAC 갭 2건(MCP 도구 등록이 admin
 전용이 아닌 것, Human/Agent Pool 비용·성과 수정 권한 비대칭)은
 `docs/ROLE_TASK_CLASSIFICATION.md`에 남겨두고 이번엔 UI 그룹 재배치만
-반영했다(GC73-77, `docs/LIMITS.md` §37).
+반영했다(GC73-77, `docs/LIMITS.md` §37). 이어서 사용자 요청("admin,
+사용자 계정을 정리해줘")을 실제로 수행하려다 **`human_pool.manager_id`
+를 채울 API가 스키마 도입 이후 한 번도 존재한 적이 없던 갭을
+발견·수정했다** — `GET /api/org-chart`는 이미 이 컬럼으로 사람을
+관리자별로 묶고 있었는데 쓰기 경로가 전혀 없어 전 계정이 "관리자
+없음" 버킷 하나로 뭉뚱그려지고 있었다. `HumanPoolUpdate`에 필드를
+추가해 메운 뒤, 실제로 이 API로 계정 5개+human_pool 2건의 보고
+체계를 정리하고 `GET /api/org-chart` 응답으로 그루핑이 바뀌는 것까지
+확인했다(GC181, `docs/LIMITS.md` §38).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -204,7 +212,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 184건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 185건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -310,7 +318,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 184건
+tests/unit/                            # 골든셋 185건
 ```
 
 ## 로드맵

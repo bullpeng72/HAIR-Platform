@@ -1847,6 +1847,45 @@ RBAC 자체를 바꾸는 별도 결정**이라 이번 스코프에 포함하지 
 재시작 후 실제 응답 `node --check` 통과, "공용 조회"/"운영 관리" 새
 그룹 라벨과 `common-group` CSS 실제 존재 확인.
 
+## 38. `human_pool.manager_id`를 채울 API가 없던 갭 발견·수정 — 사용자
+    요청(2026-09-29, "admin, 사용자 계정을 정리해줘")
+
+**실측으로 발견한 진짜 갭**: 사용자 계정을 정리해달라는 요청을 실제로
+수행하려고 현재 계정·조직 구조를 조회해보니, `users`·`human_pool`
+전체 레코드의 `manager_id`가 하나도 없이 전부 `NULL`이었다. `GET
+/api/org-chart`(`app.py:1461`)는 이미 `human_pool.manager_id`로 사람을
+관리자별로 묶고 있는데(코드 자체는 정확함), 그 값을 채울 API가
+`users.manager_id`용 `PATCH /api/users/{id}/manager`만 있었고
+**`human_pool.manager_id`를 쓰는 API는 스키마 도입 이후 한 번도 존재한
+적이 없었다**(`HumanPoolUpdate` 모델에 필드 자체가 없었음, `grep`으로
+전체 코드베이스에서 `human_pool`+`manager_id` 조합의 쓰기 경로가
+0건임을 확인). 결과: 사람이 아무리 매니저에게 배정돼 일하고 있어도
+조직도 화면에는 전부 "관리자 없음" 버킷 하나로 뭉뚱그려질 수밖에
+없었다 — HAIR의 핵심 가치("사람과 AI를 하나의 조직도 위에") 중 "조직도"
+절반이 사실상 장식이었던 셈이다.
+
+**수정**: `HumanPoolUpdate`(`models.py`)에 `manager_id: int | None`
+필드 추가, `PATCH /api/human-pool/{id}`(`app.py`)에서 `set_user_manager()`
+와 같은 패턴(대상 `manager_id`가 실제 존재하는 사용자인지 검증 후 404)
+으로 처리한다 — 기존 `user_id` 필드 처리 로직을 그대로 옆에 병렬로
+추가했을 뿐 새 검증 로직을 만들지 않았다.
+
+**실제로 계정을 정리했다**(코드 수정 후 이 API로 직접 실행,
+`docs/ROLE_TASK_CLASSIFICATION.md`/`SCENARIOS.md` 데모 데이터 기준):
+`pm_kim`·`pm_lee`(매니저)→`admin`, `qa_kim`·`park_member`(팀원)→
+`pm_kim`, `agent_viewer`(뷰어)→`pm_lee`로 `users.manager_id`를,
+human_pool의 김QA·박마케터 레코드는 `pm_kim`으로 `manager_id`를
+채웠다. `GET /api/org-chart` 실제 응답으로 확인 — 이제 pm_kim 버킷 밑에
+Agent 배정(원래도 정확했음)+김QA+박마케터 3건이 전부 정확히 묶여
+나온다.
+
+**검증**: GC181(`test_phase7_review_fixes.py`, 기존 GC54 human_pool
+갱신 테스트 바로 옆) — manager_id 설정 성공 + 존재하지 않는
+manager_id는 404. 전체 골든셋 185건(184+1). 라우트 수 변경 없음(기존
+엔드포인트에 필드만 추가). 실제 서버로 계정 5개+human_pool 2건의
+manager_id를 직접 설정해 `GET /api/org-chart` 그루핑이 실제로
+바뀌는 것까지 라이브로 확인했다.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |

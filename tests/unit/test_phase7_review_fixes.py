@@ -115,6 +115,35 @@ def test_gc54_human_pool_update_endpoint(client_and_conn):
     resp = client.patch("/api/human-pool/999999", json={"cost_estimate": 1.0})
     assert resp.status_code == 404
 
+
+def test_gc181_human_pool_manager_id_can_be_set(client_and_conn):
+    """사용자 요청(2026-09-29, "admin, 사용자 계정을 정리해줘")으로 실제
+    계정을 정리하려다 발견한 갭 — `GET /api/org-chart`는 이미
+    `human_pool.manager_id`를 읽어 사람을 관리자별로 묶는데, 그 값을
+    채울 API가 `HumanPoolUpdate`에 없어 전 계정이 "관리자 없음" 버킷에
+    뭉뚱그려지고 있었다."""
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "김하니", "role": "백엔드 개발자", "skill_tags": ["python"]},
+    )
+    human_id = resp.json()["id"]
+
+    manager1_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'manager1'"
+    ).fetchone()["id"]
+
+    resp = client.patch(
+        f"/api/human-pool/{human_id}", json={"manager_id": manager1_id}
+    )
+    assert resp.status_code == 200, resp.text
+    row = conn.execute("SELECT * FROM human_pool WHERE id = ?", (human_id,)).fetchone()
+    assert row["manager_id"] == manager1_id
+
+    resp = client.patch(f"/api/human-pool/{human_id}", json={"manager_id": 999999})
+    assert resp.status_code == 404
+
     resp = client.patch(f"/api/human-pool/{human_id}", json={})
     assert resp.status_code == 400
 

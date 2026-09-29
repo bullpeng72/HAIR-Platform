@@ -355,6 +355,15 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                     status_code=404, detail="연결할 사용자를 찾을 수 없습니다"
                 )
             updates["user_id"] = payload.user_id
+        if payload.manager_id is not None:
+            manager = conn.execute(
+                "SELECT id FROM users WHERE id = ?", (payload.manager_id,)
+            ).fetchone()
+            if manager is None:
+                raise HTTPException(
+                    status_code=404, detail="매니저를 찾을 수 없습니다"
+                )
+            updates["manager_id"] = payload.manager_id
         if not updates:
             raise HTTPException(status_code=400, detail="수정할 필드가 없습니다")
 

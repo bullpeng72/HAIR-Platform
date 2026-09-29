@@ -62,13 +62,22 @@ class HumanPoolUpdate(BaseModel):
     참조하던 컬럼)를 실제로 채울 API가 지금까지 전혀 없었다(항상 NULL).
     이 필드가 없으면 어떤 Human Pool 레코드도 로그인 계정과 연결될 수 없어
     F8의 "내 성과점수 조회"도, 이번 협업 워크스페이스의 "내 업무"도 사람
-    쪽 결과를 절대 낼 수 없었다."""
+    쪽 결과를 절대 낼 수 없었다.
+
+    `manager_id`는 사용자 요청(2026-09-29, "admin, 사용자 계정을 정리해줘")
+    으로 계정을 정리하려다 발견한 같은 종류의 갭을 메운다 — `GET
+    /api/org-chart`(`app.py`)는 이미 `human_pool.manager_id`를 읽어 사람을
+    관리자별로 묶는데, 그 값을 채울 API가 `users.manager_id`용
+    `PATCH /api/users/{id}/manager`만 있었고 `human_pool` 쪽엔 전혀
+    없었다(스키마엔 컬럼이 처음부터 있었지만 항상 NULL — 모든 사람이
+    "관리자 없음" 버킷에 뭉뚱그려짐)."""
 
     role: str | None = None
     skill_tags: list[str] | None = None
     availability: str | None = None
     cost_estimate: float | None = None
     user_id: int | None = None
+    manager_id: int | None = None
 
 
 class ApprovalDecision(BaseModel):
