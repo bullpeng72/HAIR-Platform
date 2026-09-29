@@ -270,7 +270,20 @@ let ME = null;
      불러 매니저도 대부분 쓸 수 있다는 걸 라벨만 보고는 알 수 없었다
      (실측: 11개 중 10개가 admin+manager 공용) — 라벨을 "운영 관리"로
      바꿔 그 실제 구성을 반영한다. adminOnly: true는 그 안에서도 진짜
-     ADMIN 전용인 항목(현재 "사용자 관리" 하나)만 배지로 구분 표시한다. */
+     ADMIN 전용인 항목(현재 "사용자 관리" 하나)만 배지로 구분 표시한다.
+
+   사용자 요청(2026-09-29, "내 업무, 공용 조회, 운영 관리 각 카테고리...
+   프로세스 순에 맞춰서, 또는 자주 사용하는 업무가 먼저 위치하도록
+   버튼 배치가 되어 있는지 확인해줘" → "진행해줘")에 따라 "운영 관리"
+   그룹 순서를 조정했다 — 실측 비교 결과 "내 업무"/"공용 조회" 그룹은
+   이미 합리적(인박스가 맨 앞인 건 프로세스 1단계가 아니라 "가장 자주
+   보는 화면 우선"이라는 의도된 배치)이었지만, "운영 관리"는 프로세스
+   맵(https://claude.ai/artifact/8dQVis1XEEEZdcdTsytvpv) 13단계에서
+   "팀 현황 모니터링"으로 하나로 묶은 대시보드·비용·공정성 지표·활동
+   기록 4개가 실제 화면에선 대시보드만 맨 앞에 있고 나머지 3개는
+   8~10번째로 흩어져 있었다. 모니터링 4개를 앞으로 모으고, 그 뒤는
+   프로세스 순서(배정 → Agent/사람 준비 → Pool 표준화 → 계정 관리)를
+   그대로 따른다. */
 const TABS = [
   { id: "inbox", label: "인박스", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderInbox },
   { id: "mywork", label: "내 업무", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderMyWork },
@@ -280,15 +293,15 @@ const TABS = [
   { id: "search", label: "인력 검색", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
   { id: "orgchart", label: "조직도", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
   { id: "dashboard", label: "대시보드", group: "admin", roles: ["admin", "manager"], render: renderDashboard },
+  { id: "cost", label: "비용", group: "admin", roles: ["admin", "manager"], render: renderCost },
+  { id: "fairness", label: "공정성 지표", group: "admin", roles: ["admin", "manager"], render: renderFairness },
+  { id: "audit", label: "활동 기록", group: "admin", roles: ["admin", "manager"], render: renderAudit },
   { id: "match", label: "인력 매칭/배정", group: "admin", roles: ["admin", "manager"], render: renderMatch },
   { id: "jobs", label: "AI 에이전트 생성", group: "admin", roles: ["admin", "manager"], render: renderJobs },
   { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "agentpool", label: "AI 에이전트 관리", group: "admin", roles: ["admin", "manager"], render: renderAgentPool },
   { id: "poolregistry", label: "도구/스킬 Pool", group: "admin", roles: ["admin", "manager"], render: renderPoolRegistry },
   { id: "crew", label: "Crew 실행", group: "admin", roles: ["admin", "manager"], render: renderCrew },
-  { id: "cost", label: "비용", group: "admin", roles: ["admin", "manager"], render: renderCost },
-  { id: "fairness", label: "공정성 지표", group: "admin", roles: ["admin", "manager"], render: renderFairness },
-  { id: "audit", label: "활동 기록", group: "admin", roles: ["admin", "manager"], render: renderAudit },
   { id: "admin", label: "사용자 관리", group: "admin", roles: ["admin"], adminOnly: true, render: renderAdmin },
 ];
 
