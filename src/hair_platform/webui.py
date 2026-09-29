@@ -37,12 +37,16 @@ INDEX_HTML = """<!DOCTYPE html>
   .nav-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; padding: 0.4rem 0.5rem; }
   .nav-group + .nav-group { border-top: 1px dashed #e2e4e8; }
   .nav-group.admin-group { background: #fff7ec; }
+  .nav-group.common-group { background: #eafaf7; }
   .nav-label { font-size: 0.72rem; font-weight: 600; color: #888; margin-right: 0.4rem; min-width: 72px; }
   .nav-group.admin-group .nav-label { color: #a15c00; }
+  .nav-group.common-group .nav-label { color: #0f766e; }
   nav button { background: none; border: 1px solid #ccc; padding: 0.35rem 0.7rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
   nav button.active { background: #14213d; color: #fff; border-color: #14213d; }
   .nav-group.admin-group button { border-color: #f0c98a; }
   .nav-group.admin-group button.active { background: #a15c00; border-color: #a15c00; }
+  .nav-group.common-group button { border-color: #99e2d6; }
+  .nav-group.common-group button.active { background: #0f766e; border-color: #0f766e; }
   .badge-adminonly { font-size: 0.65rem; background: #a15c00; color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
   main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
   section.card { background: #fff; border: 1px solid #e2e4e8; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
@@ -251,19 +255,30 @@ async function skillDatalistHtml() {
 let ME = null;
 
 /* 코드 재점검(2026-09-26) 사용자 요청 — 관리자 기능과 일반 업무 기능을
-   화면상에서도 명확히 구분한다(ADR.md 결정 9). group: "user"는 담당자가
-   자기 업무를 처리하는 화면, group: "admin"은 조직/리소스를 운영·관리하는
-   화면이다 — roles 배열(백엔드 RBAC과 동일)로 실제 접근 제어는 그대로 하되,
-   내비게이션을 둘로 나눠 보여준다. adminOnly: true는 그중에서도 ADMIN
-   role만 되는 항목(매니저도 접근 가능한 관리자 도구와 구분 표시). */
+   화면상에서도 명확히 구분한다(ADR.md 결정 9).
+
+   사용자 요청(2026-09-29, "HAIR 관점에서 외부 사례들을 조사하고... 관리자와
+   사용자 고유 업무와 공통 업무를 구분해줘" → "로그인한 계정 유형에 맞춰
+   메뉴 노출을 개선해줘")에 따라 group을 둘에서 셋으로 늘렸다
+   (`docs/ROLE_TASK_CLASSIFICATION.md` 실측 재분류 그대로 반영):
+   - "user": 담당자가 자기 업무를 처리·요청하는 화면(역할마다 안의 동작은
+     다르지만 탭 자체는 전 역할에 열려 있다).
+   - "common": 역할과 무관한 순수 조회/참조 화면(Viewer 포함 전부 동일하게
+     봄) — 원래 "user" 그룹에 섞여 있어 "내 업무"와 성격이 다른데 구분이
+     안 됐었다.
+   - "admin": 조직/리소스를 운영·관리하는 화면. 예전엔 "관리자 도구"라고만
+     불러 매니저도 대부분 쓸 수 있다는 걸 라벨만 보고는 알 수 없었다
+     (실측: 11개 중 10개가 admin+manager 공용) — 라벨을 "운영 관리"로
+     바꿔 그 실제 구성을 반영한다. adminOnly: true는 그 안에서도 진짜
+     ADMIN 전용인 항목(현재 "사용자 관리" 하나)만 배지로 구분 표시한다. */
 const TABS = [
   { id: "inbox", label: "인박스", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderInbox },
   { id: "mywork", label: "내 업무", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderMyWork },
   { id: "briefs", label: "업무 요청", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBriefs },
   { id: "approvals", label: "결재", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderApprovals },
-  { id: "search", label: "인력 검색", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
-  { id: "orgchart", label: "조직도", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
   { id: "performance", label: "성과 리뷰", group: "user", roles: ["admin", "manager", "member"], render: renderPerformance },
+  { id: "search", label: "인력 검색", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
+  { id: "orgchart", label: "조직도", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
   { id: "dashboard", label: "대시보드", group: "admin", roles: ["admin", "manager"], render: renderDashboard },
   { id: "match", label: "인력 매칭/배정", group: "admin", roles: ["admin", "manager"], render: renderMatch },
   { id: "jobs", label: "AI 에이전트 생성", group: "admin", roles: ["admin", "manager"], render: renderJobs },
@@ -297,6 +312,7 @@ function buildNav() {
   nav.innerHTML = "";
 
   const userTabs = TABS.filter(t => t.group === "user" && t.roles.includes(ME.role));
+  const commonTabs = TABS.filter(t => t.group === "common" && t.roles.includes(ME.role));
   const adminTabs = TABS.filter(t => t.group === "admin" && t.roles.includes(ME.role));
 
   const addGroup = (label, tabs, cls) => {
@@ -324,7 +340,8 @@ function buildNav() {
   };
 
   addGroup("내 업무", userTabs, "");
-  addGroup("관리자 도구", adminTabs, "admin-group");
+  addGroup("공용 조회", commonTabs, "common-group");
+  addGroup("운영 관리", adminTabs, "admin-group");
 }
 
 let currentTab = null;

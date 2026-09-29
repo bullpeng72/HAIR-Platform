@@ -6,8 +6,8 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 183 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
-매트릭스를 근거로 "내 업무"/"관리자 도구" 2구역으로 분리했다(ADR 결정 9).
+(F1–F14 전부 구현, `pytest` 184 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+매트릭스를 근거로 "내 업무"/"공용 조회"/"운영 관리" 3구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
 API를 호출할 수 있고(기본값은 여전히 무료 스텁), `PATCH
@@ -177,7 +177,18 @@ Gate 평균·대기 승인 건수·비용 추이(새 계측 없이 기존 감사
 열어 타임라인을 끝까지 스캔해야 했던 갭을, 공용 함수
 `task_completion_summary()`로 메웠다. 협업 워크스페이스에도 승인된
 최종 결과물을 "중간 과정" 타임라인과 분리해 상단에 고정 노출한다
-(GC177-180, `docs/LIMITS.md` §35).
+(GC177-180, `docs/LIMITS.md` §35). 이어서 사용자 요청("HAIR 관점에서
+외부 사례들을 조사하고... 관리자와 사용자 고유 업무와 공통 업무를
+구분해줘" → "로그인한 계정 유형에 맞춰 메뉴 노출을 개선해줘")에 따라
+**외부 서비스 4곳(GitHub Copilot·Asana·monday.com·LangSmith·
+ServiceNow) 리서치로 메뉴를 재분류하고 내비게이션을 3구역으로
+재구성했다** — "관리자 도구"(11개 중 10개가 실제로 매니저도 접근
+가능한데 라벨이 admin 전용처럼 보여 혼동을 유발)를 "운영 관리"로
+바꾸고, 역할 무관 순수 조회 화면(인력 검색·조직도)을 "공용 조회"로
+분리했다. 리서치 과정에서 찾은 RBAC 갭 2건(MCP 도구 등록이 admin
+전용이 아닌 것, Human/Agent Pool 비용·성과 수정 권한 비대칭)은
+`docs/ROLE_TASK_CLASSIFICATION.md`에 남겨두고 이번엔 UI 그룹 재배치만
+반영했다(GC73-77, `docs/LIMITS.md` §37).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -193,7 +204,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 183건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 184건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -299,7 +310,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 183건
+tests/unit/                            # 골든셋 184건
 ```
 
 ## 로드맵
