@@ -104,12 +104,22 @@ def test_gc54_human_pool_update_endpoint(client_and_conn):
 
     _login(client, "manager1", "managerpass")
     resp = client.patch(
-        f"/api/human-pool/{human_id}",
-        json={"skill_tags": ["python", "fastapi"], "cost_estimate": 150.0},
+        f"/api/human-pool/{human_id}", json={"skill_tags": ["python", "fastapi"]}
     )
     assert resp.status_code == 200
     row = conn.execute("SELECT * FROM human_pool WHERE id = ?", (human_id,)).fetchone()
     assert "fastapi" in row["skill_tags"]
+
+    # 사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 2,
+    # "(b) Human Pool도 admin 전용으로 좁히기") — cost_estimate는 이제
+    # 매니저가 이 일반 PATCH로 못 고친다.
+    resp = client.patch(f"/api/human-pool/{human_id}", json={"cost_estimate": 150.0})
+    assert resp.status_code == 403
+
+    _login(client, "admin1", "adminpass")
+    resp = client.patch(f"/api/human-pool/{human_id}", json={"cost_estimate": 150.0})
+    assert resp.status_code == 200
+    row = conn.execute("SELECT * FROM human_pool WHERE id = ?", (human_id,)).fetchone()
     assert row["cost_estimate"] == 150.0
 
     resp = client.patch("/api/human-pool/999999", json={"cost_estimate": 1.0})

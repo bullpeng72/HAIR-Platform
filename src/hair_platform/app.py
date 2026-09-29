@@ -50,6 +50,7 @@ from hair_platform import (
     performance,
     pool,
     pool_registry,
+    retention,
     webui,
 )
 from hair_platform import approvals as approvals_mod
@@ -123,6 +124,10 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     # (docs/LIMITS.md §3)이므로 기동 시점의 'running'은 전부 이전
     # 프로세스의 잔재로 확정하고 정리한다.
     deliverables.reap_orphaned_execution_jobs(conn)
+    # 사용자 결정(2026-09-29, "assignment_history/audit_log 보관기간 1년") —
+    # 오래 켜진 배포에서 기동 때마다 자연스럽게 정리되도록 여기서도 실행한다
+    # (retention.py 참고, 지울 게 없으면 DB에 손도 대지 않는다).
+    retention.purge_expired(conn)
     app.state.db = conn
 
     @app.post("/login")
@@ -399,6 +404,20 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         if row is None:
             raise HTTPException(status_code=404, detail="사람을 찾을 수 없습니다")
 
+        # 사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 2,
+        # "(b) Human Pool도 admin 전용으로 좁히기") — Agent Pool의
+        # cost_estimate/performance_score는 이미 admin 전용 전용
+        # 엔드포인트로만 수정 가능한데(§2-1), Human Pool은 이 일반
+        # PATCH로 매니저도 자유롭게 고칠 수 있어 비대칭이었다. 다른
+        # 필드(역할·스킬·가용성·상사 지정 등)는 매니저의 정상 인사
+        # 업무라 그대로 두고, cost_estimate만 admin 전용으로 좁힌다.
+        if payload.cost_estimate is not None and user["role"] != Role.ADMIN.value:
+            raise HTTPException(
+                status_code=403,
+                detail="Human Pool 비용(cost_estimate) 수정은 admin 전용입니다"
+                "(docs/ROLE_TASK_CLASSIFICATION.md 갭 2)",
+            )
+
         updates: dict[str, object] = {}
         if payload.role is not None:
             updates["role"] = payload.role
@@ -641,9 +660,16 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     @app.post("/api/tasks/{task_id}/match")
     def match_task(
         task_id: int,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(
+            require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
+        ),
     ):
-        """F6 매칭 미리보기 + F14(점수 breakdown) — 배정 요청(assignments)은 v2 범위."""
+        """F6 매칭 미리보기 + F14(점수 breakdown) — 배정 요청(assignments)은 v2 범위.
+
+        사용자 결정(2026-09-29, "F14 매칭 점수 breakdown을 배정 후보
+        본인에게 공개") — MEMBER도 호출할 수 있게 열되, 다른 후보의
+        breakdown까지 보이면 프라이버시 문제라 자기 자신(human_pool.
+        user_id로 연결된 항목)에 해당하는 한 건만 필터링해 돌려준다."""
         task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if task is None:
             raise HTTPException(status_code=404, detail="Task를 찾을 수 없습니다")
@@ -652,30 +678,63 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         candidates = pool.human_pool_candidates(conn) + pool.agent_pool_candidates(conn)
         result = match_candidates(task["role_name"], required_skills, candidates)
 
+        top = [
+            {
+                "candidate": sc.candidate.model_dump(),
+                "score": sc.score,
+                "breakdown": sc.breakdown,
+                "exact_match": sc.exact_match,
+            }
+            for sc in result.top
+        ]
+        if user["role"] == Role.MEMBER.value:
+            my_human = conn.execute(
+                "SELECT id FROM human_pool WHERE user_id = ?", (user["id"],)
+            ).fetchone()
+            my_human_id = my_human["id"] if my_human else None
+            top = [
+                t
+                for t in top
+                if t["candidate"]["type"] == "human"
+                and t["candidate"]["id"] == my_human_id
+            ]
+
         return {
             "task_id": task_id,
             "generate_new": result.generate_new,
-            "top": [
-                {
-                    "candidate": sc.candidate.model_dump(),
-                    "score": sc.score,
-                    "breakdown": sc.breakdown,
-                    "exact_match": sc.exact_match,
-                }
-                for sc in result.top
-            ],
+            "top": top,
         }
 
     @app.post("/api/tasks/{task_id}/assignments", status_code=201)
     def request_assignment(
         task_id: int,
         payload: AssignmentRequest,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(
+            require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
+        ),
     ):
-        """F6 — 배정 요청. 승인(F7) 전까지는 `requested` 상태로만 남는다(NF3)."""
+        """F6 — 배정 요청. 승인(F7) 전까지는 `requested` 상태로만 남는다(NF3).
+
+        사용자 결정(2026-09-29, "팀원 셀프서비스(본인이 직접 배정 요청)를
+        허용") — MEMBER는 본인의 human_pool 레코드로만 요청할 수 있다
+        (다른 사람·Agent를 대신 요청하는 건 여전히 admin/manager 전용).
+        승인 게이트(F7)와 self-approval 방지(ADR 3-A)는 그대로 적용되므로
+        셀프서비스는 "요청 권한"만 넓힐 뿐 확정 권한은 늘리지 않는다."""
         task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if task is None:
             raise HTTPException(status_code=404, detail="Task를 찾을 수 없습니다")
+        if user["role"] == Role.MEMBER.value:
+            my_human = conn.execute(
+                "SELECT id FROM human_pool WHERE user_id = ?", (user["id"],)
+            ).fetchone()
+            if (
+                payload.resource_type != "human"
+                or my_human is None
+                or payload.resource_id != my_human["id"]
+            ):
+                raise HTTPException(
+                    status_code=403, detail="본인 배정 요청만 가능합니다"
+                )
         return assignments.create_assignment_request(
             conn, task_id, payload.resource_type, payload.resource_id, user["id"]
         )
@@ -1154,6 +1213,20 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         payload: ToolPoolCreate,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
+        # 사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 1,
+        # "(a) MCP 종류만 admin 전용으로 좁히기") — mcp_stdio/mcp_remote는
+        # 등록되는 순간이 아니라 "그 스킬을 가진 Agent가 실행될 때" 조직
+        # 전체 Agent가 실제 외부 프로세스/네트워크에 접속하게 만드는
+        # 조직 차원 정책이라(GitHub Copilot 원칙 1), native(웹서치 도구
+        # 등)와 달리 admin 전용으로 좁힌다. 엔드포인트 전체를 admin
+        # 전용으로 만들지 않고 이 두 kind만 막는 이유는 native 도구
+        # 등록(운영 업무 성격)까지 매니저에게서 뺏을 이유가 없어서다.
+        if payload.kind in ("mcp_stdio", "mcp_remote") and user["role"] != Role.ADMIN.value:
+            raise HTTPException(
+                status_code=403,
+                detail="MCP 도구(mcp_stdio/mcp_remote) 등록은 admin 전용입니다"
+                "(docs/ROLE_TASK_CLASSIFICATION.md 갭 1)",
+            )
         try:
             tool_id = pool_registry.create_tool(
                 conn,
@@ -1453,9 +1526,14 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     def set_human_performance_score(
         human_id: int,
         payload: PerformanceScoreRequest,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
-        """F8 — 성과 점수 입력. 동의 없이는 거부된다(NF9)."""
+        """F8 — 성과 점수 입력. 동의 없이는 거부된다(NF9).
+
+        사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 2,
+        "(b) Human Pool도 admin 전용으로 좁히기") — Agent Pool의
+        `/performance`(admin 전용)와 대칭을 맞췄다. 이전엔 admin+manager
+        공용이었다."""
         try:
             performance.set_human_performance(conn, human_id, payload.score)
         except ValueError as exc:

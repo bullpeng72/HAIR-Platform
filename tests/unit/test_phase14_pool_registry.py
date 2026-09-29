@@ -309,6 +309,29 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     assert resp.status_code == 200
     assert len(resp.json()) == 5  # 시드된 VectorDB/GraphDB/recommend_fix/외부검색/일반웹검색 도구
 
+    # 사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 1,
+    # "(a) MCP 종류만 admin 전용으로 좁히기") — 매니저는 mcp_remote/
+    # mcp_stdio 등록이 이제 403이다. native는 여전히 매니저도 가능.
+    resp = client.post(
+        "/api/tool-pool",
+        json={
+            "name": "사내 검색 MCP",
+            "kind": "mcp_remote",
+            "config": {"url": "http://localhost:9000/mcp"},
+        },
+    )
+    assert resp.status_code == 403
+
+    resp = client.post(
+        "/api/tool-pool", json={"name": "이상한도구", "kind": "native", "config": {}}
+    )
+    assert resp.status_code == 400  # native인데 native_id가 없음(매니저도 native는 가능)
+
+    resp = client.post(
+        "/login", json={"username": "admin1", "password": "adminpass"}
+    )
+    assert resp.status_code == 200
+
     resp = client.post(
         "/api/tool-pool",
         json={
@@ -329,11 +352,6 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
         },
     )
     assert resp.status_code == 409  # 이름 중복
-
-    resp = client.post(
-        "/api/tool-pool", json={"name": "이상한도구", "kind": "native", "config": {}}
-    )
-    assert resp.status_code == 400  # native인데 native_id가 없음
 
     resp = client.patch(
         f"/api/tool-pool/{new_tool_id}/active", json={"is_active": False}

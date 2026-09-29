@@ -291,6 +291,48 @@ def list_agent_tool_ids(conn: sqlite3.Connection, agent_id: int) -> list[int]:
     return [r["tool_pool_id"] for r in rows]
 
 
+def resolve_static_augmentation_targets(
+    conn: sqlite3.Connection,
+    skills: list[str],
+    modes: tuple[str, ...] = ("always",),
+) -> set[str]:
+    """사용자 결정(2026-09-29, "skill_pool.augmentation_mode의 'always'
+    값 실제 구현") — 지금까지 `augmentation_mode='always'`는 CHECK
+    제약에만 존재하고 저장 외에는 아무 효과가 없었다(`resolve_pool_tools()`
+    가 `'tool'`만 읽었다). `augmentation_mode`가 `modes`에 속하는
+    skill_pool 항목 중 `skills`와 이름이 매칭되는 것의 `native_id`
+    집합을 반환한다 — MCP류는 정적 텍스트로 만들 방법이 없으므로
+    `kind='native'`인 tool_pool만 본다(비-native는 조용히 건너뛴다).
+
+    호출부가 다른 의미로 쓴다: `agent_runtime.augment_with_retrieval()`
+    (도구 호출 루프가 없는 단일 실행 경로)은 `modes=("always", "tool")`로
+    불러 — 그 경로는 Agent가 스스로 도구를 호출할 방법이 없으니
+    `'tool'`이든 `'always'`든 정적 주입이 유일한 선택지다.
+    `crew_runtime._static_augmentation()`(CrewAI Agent 루프가 있는 경로)은
+    기본값 `modes=("always",)`만 써 — `'tool'`은 이미 진짜 CrewAI Tool로
+    붙으므로(Agent가 스스로 판단) 정적 주입까지 하면 중복이다."""
+    skill_set = set(skills)
+    placeholders = ",".join("?" for _ in modes)
+    rows = conn.execute(
+        f"SELECT * FROM skill_pool WHERE augmentation_mode IN ({placeholders})",
+        modes,
+    ).fetchall()
+    native_ids: set[str] = set()
+    for row in rows:
+        if row["name"] not in skill_set:
+            continue
+        for tool_id in json.loads(row["default_tool_pool_ids"]):
+            trow = conn.execute(
+                "SELECT * FROM tool_pool WHERE id = ? AND is_active = 1", (tool_id,)
+            ).fetchone()
+            if trow is None or trow["kind"] != "native":
+                continue
+            native_id = json.loads(trow["config"]).get("native_id")
+            if native_id:
+                native_ids.add(native_id)
+    return native_ids
+
+
 def resolve_pool_tools(
     conn: sqlite3.Connection,
     stack: ExitStack,

@@ -2303,6 +2303,85 @@ GC198(`run_crew()` 반환값·감사로그 양쪽에서 Gate A-G 키 7개·TCR �
 GC199(`POST /api/crew/run` API 응답에도 그대로 노출되는지 확인) 추가.
 전체 스위트 203건(기존 201 + 신규 2) 통과.
 
+## 47. 거버넌스 결정 8건 일괄 구현 — 사용자 요청(2026-09-29,
+    "결정이 필요한 내용들을 종합적으로 정리해줘" → 8건 일괄 확인)
+
+§45가 종합 정리해 물은 미결정 사항(`docs/ROLE_TASK_CLASSIFICATION.md`
+갭 1·2 + `docs/SPEC.md` §12 오픈 이슈 6건)에 사용자가 한 번에 답해,
+8건을 전부 이번 라운드에서 구현했다.
+
+**(1) 갭 1 — MCP 도구 등록 admin 전용**: `POST /api/tool-pool`에서
+`kind IN ('mcp_stdio', 'mcp_remote')`이면 admin이 아닌 경우 403 —
+native 도구 등록은 매니저도 여전히 가능하다(엔드포인트 전체를 막지
+않고 이 두 kind만 좁힘).
+
+**(2) 갭 2 — Human Pool 비용/성과 admin 전용**: `PATCH
+/api/human-pool/{id}`의 `cost_estimate` 필드와 `POST /api/human-pool/
+{id}/performance` 전체를 admin 전용으로 좁혀 Agent Pool(이미 admin
+전용)과 대칭을 맞췄다. 기존 골든셋(GC27-29, GC54, GC114)이 매니저로
+이 경로를 호출해 성공을 기대하고 있어 admin으로 바꿔 갱신했다.
+
+**(3) F14 breakdown 본인 공개**: `POST /api/tasks/{id}/match`를
+MEMBER에게도 열되, `human_pool.user_id`로 본인과 연결된 항목이 아니면
+`top`에서 걸러낸다 — 다른 후보의 breakdown을 보게 하는 건 프라이버시
+문제라 "공개"를 "전체 공개"가 아니라 "본인 것만 공개"로 좁혀 해석했다.
+
+**(4) 보관기간 1년**: 새 모듈 `retention.py`의 `purge_expired()`가
+`create_app()` 기동 시 자동 실행된다(`deliverables.
+reap_orphaned_execution_jobs()`와 같은 자리). `assignment_history`는
+평범한 DELETE로 충분하지만, `audit_log`는 NF10 append-only 트리거
+(`audit_log_no_delete`)가 모든 DELETE를 막아서 — 이 함수 **안에서만**
+그 트리거를 `DROP`했다가 `finally`로 반드시 다시 `CREATE`하는 통제된
+경로로만 지운다(다른 코드는 여전히 못 지움). 지울 게 없으면(가장 흔한
+경우) DB에 손도 안 댄다 — 매 기동마다 불필요한 잡음을 남기지 않기
+위해서다.
+
+**(5) 팀원 셀프서비스 배정 요청**: `POST /api/tasks/{id}/assignments`를
+MEMBER에게 열되 `resource_type='human'`이고 `resource_id`가 본인의
+`human_pool.id`일 때만 허용한다 — 다른 사람·Agent를 대신 요청하는 건
+여전히 403이다. 승인 게이트(F7)·self-approval 방지(ADR 3-A)는 그대로
+적용되므로 "요청 권한"만 넓혔을 뿐 확정 권한은 늘지 않았다. 기존
+GC12(멤버가 남의 자원을 요청 — 이젠 role 자체가 아니라 본인 확인
+때문에 여전히 403)는 이름은 유지하고 이유만 정정했다.
+
+**(6) CrewAI 위임 캡처 방어 로직**: `_capture_delegation()`이 정확한
+문자열(`DELEGATION_TOOL_NAMES`) 매칭을 우선하되, "delegate"/"coworker"/
+"co-worker"/"ask question" 키워드가 들어간 도구 이름이면(대소문자
+무관) 위임으로 간주하는 `_looks_like_delegation()` fallback을
+추가했다 — CrewAI 버전업으로 정확한 문구가 바뀌어도 "조용한 미탐"이
+될 가능성을 줄인다. 근본적으로 CrewAI 내부 문자열에 의존한다는 사실
+자체는 남아 있어 리스크가 완전히 사라진 건 아니라고 정직하게
+문서화했다.
+
+**(7) skill_pool.augmentation_mode='always' 실제 구현**: 새 함수
+`pool_registry.resolve_static_augmentation_targets(conn, skills,
+modes)`가 `skill_pool`을 직접 조회해 `modes`에 속하는 항목 중
+`skills`와 매칭되는 native_id 집합을 반환한다. 두 호출부가 다른
+의미로 쓴다 — `agent_runtime.augment_with_retrieval()`(도구 호출
+루프가 없는 단일 실행 경로)은 `modes=("always","tool")`로 불러
+`'tool'`이든 `'always'`든 정적 주입이 유일한 선택지라는 사실을
+반영했고(기본 시드 스킬이 전부 `'tool'`이라 이 변경은 기존 동작을
+바꾸지 않는다 — GC90/91/195 그대로 통과), `crew_runtime.
+_static_augmentation()`(진짜 CrewAI Tool 호출 루프가 있는 경로)은
+`modes=("always",)`만 써 `'tool'`(Agent가 스스로 판단해 호출)과
+`'always'`(Task description에 강제 주입, Tool 미부착)를 실제로
+구분되게 만들었다. `'none'`은 여전히 의도된 대로 아무 효과가 없다.
+
+**(8) VectorDB Ollama 임베딩 지원**: `vectorstore.embed_text()`에
+`provider="ollama"` 분기를 추가했다 — `llm.py`의 `_call_ollama()`와
+같은 `OLLAMA_BASE_URL` 환경변수(`http://localhost:11434` 기본값)+
+httpx 패턴, Ollama의 실제 `POST /api/embeddings` 계약(`{"model",
+"prompt"}` → `{"embedding"}`)을 따른다. Anthropic은 여전히
+미지원(공개 임베딩 API 자체가 없음).
+
+**검증**: `tests/unit/test_phase20_governance_decisions.py` 신설
+(GC200-209, 10건) + 기존 골든셋 중 새 RBAC 경계에 맞춰 갱신한 것
+(GC12 이유 변경, GC27-29/GC54/GC114를 admin 경로로 수정, v1
+파이프라인의 매칭 RBAC 테스트를 "member는 200+빈 목록, viewer는
+403"으로 정정). 전체 스위트 213건(기존 203 + 신규 10) 통과, 리그레션
+1건(v1 파이프라인의 오래된 "member는 매칭 자체가 403" 단언) 발견·
+즉시 수정.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |

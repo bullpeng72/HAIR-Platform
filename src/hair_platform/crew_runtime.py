@@ -48,9 +48,33 @@ import os
 import sqlite3
 from contextlib import ExitStack
 
-from hair_platform import agent_evaluation, audit, llm, pool_registry
+from hair_platform import (
+    agent_evaluation,
+    audit,
+    graphquery,
+    llm,
+    pool_registry,
+    vectorstore,
+    websearch,
+)
 
 DELEGATION_TOOL_NAMES = {"Delegate work to coworker", "Ask question to coworker"}
+
+# 사용자 결정(2026-09-29, "CrewAI 위임 캡처가 CrewAI 내부 문자열에
+# 하드코딩돼 있는 리스크 — 지금 방어 로직을 추가") — 위 정확한 문자열이
+# CrewAI 버전업으로 바뀌면 위임이 실제로 발생해도 `delegations`가 계속
+# 비어 있는 "조용한 실패"가 된다(docs/LIMITS.md §12). 정확한 이름 매칭을
+# 우선하되, 대소문자·표기 변형(예: "co-worker")까지 놓치지 않도록 키워드
+# 기반 완화 매칭을 fallback으로 둔다 — 이 기능의 목적(위임 발생 여부의
+# 정직한 기록) 상 오탐보다 미탐이 훨씬 치명적이라는 판단.
+_DELEGATION_KEYWORDS = ("delegate", "coworker", "co-worker", "ask question")
+
+
+def _looks_like_delegation(tool_name: str) -> bool:
+    if tool_name in DELEGATION_TOOL_NAMES:
+        return True
+    lowered = tool_name.lower()
+    return any(keyword in lowered for keyword in _DELEGATION_KEYWORDS)
 
 # ADR 결정 11 한계 섹션이 "반드시 걸어야 한다"고 명시했던 상한(사용자 요청,
 # 2026-09-27, "crewai 기능 적절히 적용됐는지 분석" 리뷰에서 실제로 미반영 상태를
@@ -91,6 +115,38 @@ def _skill_based_tools(
     옮겼다 — 새 스킬을 추가할 때 코드를 안 고치고 `skill_pool`에 레코드만
     추가하면 된다."""
     return pool_registry.resolve_pool_tools(conn, stack, skills, agent_id=agent_id)
+
+
+def _static_augmentation(conn: sqlite3.Connection, skills: list[str], description: str) -> str:
+    """사용자 결정(2026-09-29, "skill_pool.augmentation_mode의 'always'
+    값 실제 구현") — `'tool'` 모드는 이미 위 `_skill_based_tools()`로 진짜
+    CrewAI Tool을 붙여 Agent가 스스로 호출 여부를 판단하게 한다. `'always'`
+    모드는 그와 달리 **Agent의 판단을 거치지 않고 Task description에
+    검색 결과를 강제로 끼워 넣는다** — `agent_runtime.
+    augment_with_retrieval()`이 도구 호출 루프가 없는 단일 실행 경로에서
+    하던 정적 주입과 같은 성격이지만, 여기서는 `'tool'`과 구분되는
+    별도 옵션으로만 켜진다(기본 시드 스킬은 전부 `'tool'`이라 이 함수는
+    기본 동작을 바꾸지 않는다 — 관리자가 skill_pool에 `augmentation_mode
+    ='always'`인 항목을 만들어야 실제 효과가 생긴다)."""
+    native_ids = pool_registry.resolve_static_augmentation_targets(
+        conn, skills, modes=("always",)
+    )
+    if not native_ids:
+        return description
+    parts = []
+    if "vectordb_search" in native_ids:
+        hits = vectorstore.search(conn, description, top_k=3)
+        if hits:
+            parts.append(
+                "참고할 과거 산출물:\n" + "\n".join(f"- {h['text']}" for h in hits)
+            )
+    if "graphdb_query" in native_ids:
+        parts.append(graphquery.context_for_prompt(conn))
+    if "web_search" in native_ids:
+        parts.append(websearch.context_for_prompt(description))
+    if not parts:
+        return description
+    return "\n\n".join(parts) + f"\n\n요청: {description}"
 
 
 def _crewai_llm(provider: str, model: str):
@@ -145,9 +201,11 @@ def crewai_agent_generator(
             verbose=False,
         )
         task = Task(
-            description=(
+            description=_static_augmentation(
+                conn,
+                required_skills,
                 f"'{role_name}' 역할로서 지금 막 팀에 합류했습니다. 이 역할이 "
-                "프로젝트에서 처음 맡을 만한 구체적인 산출물을 하나 작성하세요."
+                "프로젝트에서 처음 맡을 만한 구체적인 산출물을 하나 작성하세요.",
             ),
             expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
             agent=agent,
@@ -268,15 +326,26 @@ def run_crew(
         # 예전에는 여기서 `agent_runtime.augment_with_retrieval()`로 검색
         # 결과를 Task description에 무조건 끼워 넣었다(정적 주입). 이제는
         # 위에서 vectordb/graphdb 스킬을 가진 Agent에게 진짜 CrewAI Tool을
-        # 붙였으므로, description은 원문 그대로 두고 **Agent가 스스로 도구
-        # 호출 여부를 판단**하게 한다 — 정적 주입과 Tool 호출을 동시에 하면
-        # 검색 결과가 중복으로 들어가거나 Agent 판단이 무의미해진다.
+        # 붙였으므로(augmentation_mode='tool'), description은 원문 그대로
+        # 두고 **Agent가 스스로 도구 호출 여부를 판단**하게 한다 — 정적
+        # 주입과 Tool 호출을 동시에 하면 검색 결과가 중복으로 들어가거나
+        # Agent 판단이 무의미해진다.
+        #
+        # 재정정(2026-09-29, "skill_pool.augmentation_mode의 'always' 값
+        # 실제 구현"): 위 원칙은 `'tool'` 모드에만 적용된다. `'always'`
+        # 모드로 등록된 스킬은 이 원칙의 예외로 두기로 결정했다 — Agent
+        # 판단에 맡기지 않고 강제로 컨텍스트를 주입하는 것 자체가
+        # `'always'`의 존재 이유이므로, `_static_augmentation()`이
+        # `'always'` 매칭분만 여기서 description 앞에 붙인다(기본 시드
+        # 스킬은 전부 `'tool'`이라 이 변경은 기존 동작을 바꾸지 않는다).
         tasks: list[Task] = []
         for i, description in enumerate(task_descriptions):
             context = [tasks[i - 1]] if i > 0 and process == "sequential" else None
             tasks.append(
                 Task(
-                    description=description,
+                    description=_static_augmentation(
+                        conn, json.loads(rows[i]["skill_tags"]), description
+                    ),
                     expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
                     agent=crewai_agents[i],
                     context=context,
@@ -349,7 +418,7 @@ def run_crew(
         delegations: list[dict] = []
 
         def _capture_delegation(source, event) -> None:
-            if event.tool_name in DELEGATION_TOOL_NAMES:
+            if _looks_like_delegation(event.tool_name):
                 delegations.append(
                     {"from_agent_role": event.agent_role, "tool": event.tool_name}
                 )

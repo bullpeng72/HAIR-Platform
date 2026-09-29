@@ -21,15 +21,20 @@ def _make_human(client, name="후보A", role="백엔드 개발자", cost=100.0):
 
 
 def test_gc27_performance_score_rejected_without_consent(client_and_conn):
+    """사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 2,
+    "(b) Human Pool도 admin 전용으로 좁히기")로 이 엔드포인트가 admin
+    전용이 됐다 — 동의 거부를 실제로 테스트하려면 admin으로 호출해야
+    role 403이 아니라 consent 403을 확인할 수 있다."""
     client, _ = client_and_conn
     _login(client, "manager1", "managerpass")
     human_id = _make_human(client)
 
+    _login(client, "admin1", "adminpass")
     resp = client.post(f"/api/human-pool/{human_id}/performance", json={"score": 0.9})
     assert resp.status_code == 403
 
 
-def test_gc28_consent_then_manager_can_record_score(client_and_conn):
+def test_gc28_consent_then_admin_can_record_score(client_and_conn):
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")
     human_id = _make_human(client, "후보B")
@@ -47,7 +52,13 @@ def test_gc28_consent_then_manager_can_record_score(client_and_conn):
     resp = client.post(f"/api/human-pool/{human_id}/consent", json={"consent": True})
     assert resp.status_code == 200
 
+    # 갭 2 정정(2026-09-29) — Human Pool 성과 입력도 Agent Pool과 대칭으로
+    # admin 전용이라 매니저는 이제 403을 받는다.
     _login(client, "manager1", "managerpass")
+    resp = client.post(f"/api/human-pool/{human_id}/performance", json={"score": 0.8})
+    assert resp.status_code == 403
+
+    _login(client, "admin1", "adminpass")
     resp = client.post(f"/api/human-pool/{human_id}/performance", json={"score": 0.8})
     assert resp.status_code == 200
 
@@ -70,7 +81,7 @@ def test_gc29_revoking_consent_immediately_clears_score(client_and_conn):
 
     _login(client, "member1", "memberpass")
     client.post(f"/api/human-pool/{human_id}/consent", json={"consent": True})
-    _login(client, "manager1", "managerpass")
+    _login(client, "admin1", "adminpass")
     client.post(f"/api/human-pool/{human_id}/performance", json={"score": 0.7})
 
     _login(client, "member1", "memberpass")

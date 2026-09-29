@@ -53,6 +53,11 @@ def test_gc11_assignment_request_creates_pending_approval_and_history(client_and
 
 
 def test_gc12_member_cannot_request_assignment(client_and_conn):
+    """사용자 결정(2026-09-29, "팀원 셀프서비스(본인이 직접 배정 요청)를
+    허용")으로 MEMBER 자체는 이 엔드포인트를 더 이상 role 자체로 차단
+    당하지 않는다 — 대신 "본인이 아닌 자원"을 요청하면 여전히 403이다
+    (이름은 유지하되 검증 대상이 role 차단 → 본인 확인으로 바뀌었다).
+    본인 자원 요청이 실제로 성공하는 경로는 GC200이 검증한다."""
     client, _ = client_and_conn
     _login(client, "manager1", "managerpass")
     task_id, resource_id = _make_task_with_candidate(client)

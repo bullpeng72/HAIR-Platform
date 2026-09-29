@@ -103,7 +103,16 @@ def test_gc10_matching_returns_score_breakdown_f14(client_and_conn):
     assert "fit" not in top["breakdown"]
     assert set(top["breakdown"].keys()) == {"availability", "cost"}
 
-    # 팀원은 매칭 실행 권한이 없다(ADR 결정 3)
+    # 사용자 결정(2026-09-29, "F14 매칭 점수 breakdown을 배정 후보 본인에게
+    # 공개")로 MEMBER도 호출은 가능해졌다 — 다만 본인 human_pool 레코드가
+    # 없으니(이 테스트의 "박도전"은 member1과 연결되지 않음) top이 항상
+    # 빈 목록으로 필터링된다. viewer는 여전히 차단된다(ADR 결정 3,
+    # docs/LIMITS.md §47).
     _login(client, "member1", "memberpass")
+    resp = client.post(f"/api/tasks/{task_id}/match")
+    assert resp.status_code == 200
+    assert resp.json()["top"] == []
+
+    _login(client, "viewer1", "viewerpass")
     resp = client.post(f"/api/tasks/{task_id}/match")
     assert resp.status_code == 403

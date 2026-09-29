@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from hair_platform import audit, graphquery, llm, vectorstore, websearch
+from hair_platform import audit, graphquery, llm, pool_registry, vectorstore, websearch
 
 VECTORDB_SKILL_TAGS = {"vectordb", "rag"}
 GRAPHDB_SKILL_TAGS = {"graphdb", "관계질의"}
@@ -56,18 +56,32 @@ def augment_with_retrieval(
     검증할 수가 없는 데이터 흐름 공백이었다. `(augmented_prompt,
     retrieved_context)`로 바꿔 호출자가 근거를 별도로 저장할 수 있게
     한다 — `retrieved_context`는 매칭되는 스킬이 없거나 VectorDB 검색
-    결과가 0건이면 `None`."""
-    skill_set = set(skills)
-    if skill_set & VECTORDB_SKILL_TAGS:
+    결과가 0건이면 `None`.
+
+    **매칭 방식 정정(2026-09-29, "skill_pool.augmentation_mode의 'always'
+    값 실제 구현")**: 이전엔 `VECTORDB_SKILL_TAGS` 등 하드코딩된 집합과의
+    교집합으로 판별했다. 이제 `pool_registry.
+    resolve_static_augmentation_targets()`로 `skill_pool`을 직접 조회한다
+    — `modes=("always", "tool")` 둘 다 정적 주입 대상으로 삼는데, 이
+    경로는 도구 호출 루프가 없어 Agent가 스스로 도구를 호출할 방법이
+    없으므로(`'tool'`이든 `'always'`든 결과는 같다: 정적 주입이 유일한
+    선택지) 굳이 구분하지 않는다. `'tool'` vs `'always'`가 실제로 다르게
+    동작하는 지점은 `crew_runtime.py`(진짜 Tool 호출 루프가 있는 경로) —
+    `'always'`만 Task description에 강제로 끼워 넣고, `'tool'`은 여전히
+    Agent 판단에 맡긴다."""
+    native_ids = pool_registry.resolve_static_augmentation_targets(
+        conn, skills, modes=("always", "tool")
+    )
+    if "vectordb_search" in native_ids:
         hits = vectorstore.search(conn, prompt, top_k=3)
         if hits:
             context = "\n".join(f"- {h['text']}" for h in hits)
             return f"참고할 과거 산출물:\n{context}\n\n요청: {prompt}", context
         return prompt, None
-    if skill_set & GRAPHDB_SKILL_TAGS:
+    if "graphdb_query" in native_ids:
         context = graphquery.context_for_prompt(conn)
         return f"{context}\n\n요청: {prompt}", context
-    if skill_set & WEBSEARCH_SKILL_TAGS:
+    if "web_search" in native_ids:
         context = websearch.context_for_prompt(prompt)
         return f"{context}\n\n요청: {prompt}", context
     return prompt, None

@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 
 DEFAULT_EMBEDDING_MODELS = {
     "openai": "text-embedding-3-small",
+    "ollama": "nomic-embed-text",
 }
 
 
@@ -27,22 +29,37 @@ def embed_text(
 ) -> tuple[str, str, list[float]]:
     """실제 임베딩 API 호출 지점 — 여기서만 비용이 발생한다.
 
-    현재는 OpenAI 임베딩 엔드포인트만 지원한다 — Anthropic은 공개 임베딩
-    API가 없고, Ollama 로컬 임베딩 모델 지원은 오픈 이슈로 이월한다.
+    OpenAI 임베딩 엔드포인트와 Ollama 로컬 임베딩을 지원한다(사용자 결정,
+    2026-09-29, "VectorDB 임베딩 ollama 지원" — `llm.py`의 `_call_ollama()`와
+    같은 `OLLAMA_BASE_URL` 환경변수·httpx 패턴). Anthropic은 여전히
+    지원하지 않는다 — 공개 임베딩 API 자체가 없다.
     """
     provider = provider or "openai"
-    if provider != "openai":
-        raise ValueError(
-            f"임베딩은 현재 openai만 지원합니다(요청: {provider!r}) — "
-            "Anthropic은 공개 임베딩 API가 없고 Ollama 로컬 임베딩은 오픈 이슈입니다."
+    if provider == "openai":
+        model = model or DEFAULT_EMBEDDING_MODELS["openai"]
+
+        import openai  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
+
+        client = openai.OpenAI()
+        resp = client.embeddings.create(model=model, input=text)
+        return provider, model, resp.data[0].embedding
+    if provider == "ollama":
+        model = model or DEFAULT_EMBEDDING_MODELS["ollama"]
+
+        import httpx  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
+
+        base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        resp = httpx.post(
+            f"{base_url}/api/embeddings",
+            json={"model": model, "prompt": text},
+            timeout=120,
         )
-    model = model or DEFAULT_EMBEDDING_MODELS["openai"]
-
-    import openai  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
-
-    client = openai.OpenAI()
-    resp = client.embeddings.create(model=model, input=text)
-    return provider, model, resp.data[0].embedding
+        resp.raise_for_status()
+        return provider, model, resp.json()["embedding"]
+    raise ValueError(
+        f"임베딩은 현재 openai/ollama만 지원합니다(요청: {provider!r}) — "
+        "Anthropic은 공개 임베딩 API가 없습니다."
+    )
 
 
 def index_text(
