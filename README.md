@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 200 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 201 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"공용 조회"/"운영 관리" 3구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -241,7 +241,18 @@ VectorDB(과거 산출물)·GraphDB(조직 관계)는 둘 다 조직 내부 데�
 Tool-calling 두 경로 모두에 연결했다. mock 테스트를 전부 통과한 뒤
 **실제 네트워크로 호출해보니 Wikipedia가 User-Agent 헤더 없이는
 403으로 거부**한다는 걸 발견해 수정했다 — mock으로는 절대 못 잡는
-종류의 버그였다(GC191-196, `docs/LIMITS.md` §43).
+종류의 버그였다(GC191-196, `docs/LIMITS.md` §43). 이어서 사용자
+요청("일반 웹 검색 기능을 Tool로 제공 가능한지 확인해줘" → "진행해줘")
+에 따라 조사해보니 Bing Search API는 2025-08-11 완전 퇴역, Google
+Custom Search는 2027-01-01부로 신규 가입 중단, Brave/Tavily는
+카드·계정+키가 필요해 "계정·키 완전 불필요" 조건을 만족하는 건
+Parallel AI의 공개 MCP 서버뿐이었다 — **`mcp_remote` Tool Pool
+종류(기존 메커니즘 재사용, 새 코드 불필요)로 등록해 이 프로젝트에서
+처음으로 `mcp_remote` 실제 접속까지 라이브 검증했다**(`web_search`/
+`web_fetch` 두 Tool이 열리고, 실제 2026년 뉴스 검색 성공). 단, Agent
+호출 루프가 없는 협업 워크스페이스의 단일 실행 경로에서는 못 쓰고
+"Crew 실행"/"AI 에이전트 생성" 경로에서만 동작한다는 제약을 문서화했다
+(GC197, `docs/LIMITS.md` §44).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -257,7 +268,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 200건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 201건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -363,7 +374,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 200건
+tests/unit/                            # 골든셋 201건
 ```
 
 ## 로드맵

@@ -225,6 +225,67 @@ def test_gc196_init_schema_seeds_websearch_pool(client_and_conn):
     assert [t.name for t in resolved] == ["외부 자료 검색"]
 
 
+class _FakeGeneralWebSearchMCPAdapter:
+    """`crewai_tools.MCPServerAdapter`의 안전한 mock 경계(GC104와 같은
+    정신) — 실제 클래스는 생성 시점에 진짜 네트워크 접속을 시도하므로
+    (`connect_timeout` 기본 30초), 이 클래스 자체를 patch하는 것이
+    유일하게 안전한 검증 방법이다. 실제 접속 자체는 라이브로 이미
+    확인했다(`docs/LIMITS.md` §44 — `web_search`/`web_fetch` 두 Tool이
+    실제로 열리고, 실제 뉴스 검색까지 성공)."""
+
+    def __init__(self, serverparams, *tool_names, connect_timeout=30):
+        self.serverparams = serverparams
+
+    def __enter__(self):
+        from crewai.tools import BaseTool
+
+        class _FakeTool(BaseTool):
+            def _run(self, **kwargs):
+                return "ok"
+
+        return [_FakeTool(name="web_search", description="가짜 일반 웹 검색 도구")]
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_gc197_init_schema_seeds_general_websearch_mcp_pool(client_and_conn):
+    """사용자 요청(2026-09-29, "일반 웹 검색 기능을 Tool로 제공 가능한지
+    확인해줘" → "진행해줘") — Parallel Search(계정·키 불필요 MCP 서버)가
+    `mcp_remote` 종류로 시드되고, "일반웹검색" 스킬을 가진 Agent에 실제로
+    연결되는지 확인한다. 네트워크 접속 자체는 `crewai_tools.
+    MCPServerAdapter`를 mock해 안전하게 검증한다."""
+    from contextlib import ExitStack
+
+    _client, conn = client_and_conn
+
+    tools = pool_registry.list_tools(conn)
+    web_tool = next(
+        (t for t in tools if t["name"] == "일반 웹 검색(Parallel Search)"), None
+    )
+    assert web_tool is not None
+    assert web_tool["kind"] == "mcp_remote"
+    assert web_tool["is_active"] is True
+
+    skills = pool_registry.list_skills(conn)
+    skill_names = {s["name"] for s in skills}
+    assert "일반웹검색" in skill_names
+
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('웹검색 Agent', '[\"일반웹검색\"]', 'active')"
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    with patch("crewai_tools.MCPServerAdapter", _FakeGeneralWebSearchMCPAdapter):
+        with ExitStack() as stack:
+            resolved = pool_registry.resolve_pool_tools(
+                conn, stack, ["일반웹검색"], agent_id=agent_id
+            )
+    assert [t.name for t in resolved] == ["web_search"]
+
+
 def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn):
     client, conn = client_and_conn
     cur = conn.execute(
@@ -246,7 +307,7 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
 
     resp = client.get("/api/tool-pool")
     assert resp.status_code == 200
-    assert len(resp.json()) == 4  # 시드된 VectorDB/GraphDB/recommend_fix/외부검색 도구(Phase 22)
+    assert len(resp.json()) == 5  # 시드된 VectorDB/GraphDB/recommend_fix/외부검색/일반웹검색 도구
 
     resp = client.post(
         "/api/tool-pool",
@@ -282,8 +343,8 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 24
-    )  # 시드된 24개(vectordb/graphdb 4 + agent-eval 절차 스킬 18 + websearch 2, Phase 22)
+        len(resp.json()) == 25
+    )  # 시드된 25개(vectordb/graphdb 4 + agent-eval 절차 스킬 18 + websearch 2 + 일반웹검색 1)
 
     resp = client.post(
         "/api/skill-pool",

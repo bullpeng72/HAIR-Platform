@@ -298,7 +298,14 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
     검색, API 키 불필요) 기반 세 번째 native 도구를 같은 방식으로
     추가했다 — VectorDB(과거 산출물)·GraphDB(조직 관계)는 둘 다 조직
     내부 데이터만 다뤄, "조직 밖 일반 지식"이 필요한 질문엔 답을 못
-    하던 갭을 메운다."""
+    하던 갭을 메운다.
+
+    이어서 사용자 요청(2026-09-29, "일반 웹 검색 기능을 Tool로 제공
+    가능한지 확인해줘" → "진행해줘")으로 Parallel AI의 무료 공개 MCP
+    서버(`mcp_remote`, 계정·키 불필요)도 추가했다 — Wikipedia는 자체
+    백과사전 색인만 다뤄 "최신 뉴스" 같은 진짜 일반 웹 정보는 여전히
+    못 찾았다. recommend_fix(mcp_stdio)와 같은 자리에 두되 종류만
+    `mcp_remote`다."""
     native_tools = [
         (
             "VectorDB 지식검색",
@@ -542,6 +549,71 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
                 "MCP 도구가 실제로 붙어 있어 Agent가 직접 조회를 호출할 수 있다."
             ),
             json.dumps([recommend_fix_tool_row["id"]]),
+        ),
+    )
+
+    # 사용자 요청(2026-09-29, "일반 웹 검색 기능을 Tool로 제공 가능한지
+    # 확인해줘" → "진행해줘") — `websearch.py`(native, Wikipedia)는
+    # 자체 색인 안의 백과사전 내용만 다룬다. "최신 뉴스" 같은 진짜
+    # 일반 웹 검색은 Wikipedia로 안 된다. 리서치 결과 Bing Search API는
+    # 2025-08-11 완전 퇴역했고, Google Custom Search는 2027-01-01부로
+    # 신규 고객을 안 받으며, Brave/Tavily는 카드 등록 또는 계정+키가
+    # 필요해 "가능한 무료" 조건과 안 맞았다. Parallel AI의 공개 MCP
+    # 서버(`https://search.parallel.ai/mcp`)만 계정·키 없이 완전
+    # 무료로 접속 가능해(익명 분당 600건) 이걸 쓴다 — `mcp_remote`
+    # 종류라 `websearch.py`처럼 새 Python 모듈을 쓸 필요 없이 기존
+    # `connect_mcp_tools()` 메커니즘 그대로 재사용한다(recommend_fix와
+    # 같은 자리, `mcp_stdio` 대신 `mcp_remote`라는 것만 다름). 실제로
+    # 접속해 `web_search`/`web_fetch` 두 Tool이 열리는 것과, "2026
+    # 한국 최저임금" 같은 실제 최신 뉴스 검색까지 라이브로 확인했다.
+    #
+    # **다른 native/recommend_fix 도구와의 차이(중요)**: 이건 상업
+    # 회사(Parallel AI)의 무료 티어라 Wikipedia API처럼 안정적인 공공
+    # 인프라가 아니다 — 조건이 바뀌거나 중단될 수 있다. 또한 `mcp_remote`
+    # 이므로 `agent_runtime.augment_with_retrieval()`(정적 프롬프트 주입,
+    # 협업 워크스페이스의 단일 LLM 호출 경로)에서는 못 쓴다 — 그 경로는
+    # Agent 호출 루프 자체가 없어 native 함수 직접 호출만 가능하다(§ADR
+    # 11). "Crew 실행"/"AI 에이전트 생성(crewai)"처럼 실제 CrewAI Agent
+    # 루프가 있는 경로에서만 Agent가 스스로 호출 여부를 판단해 쓸 수
+    # 있다.
+    conn.execute(
+        "INSERT OR IGNORE INTO tool_pool (name, description, kind, config) "
+        "VALUES (?, ?, 'mcp_remote', ?)",
+        (
+            "일반 웹 검색(Parallel Search)",
+            (
+                "Parallel AI의 무료 공개 MCP 서버 — 인터넷 전체를 대상으로 한 "
+                "일반 웹 검색·페이지 조회(API 키/계정 불필요, 익명 접근 분당 "
+                "600건). Wikipedia로 못 찾는 최신 뉴스·일반 웹 정보가 필요할 "
+                "때 쓴다. 상업 회사의 무료 티어라 조건이 바뀌거나 중단될 수 "
+                "있다 — 접속 실패 시 이 스킬을 가진 Agent 실행이 접속 단계에서 "
+                "실패한다(다른 mcp_remote/mcp_stdio 도구와 동일한 위험). "
+                "CrewAI Agent 루프가 있는 경로(Crew 실행/AI 에이전트 생성)에서만 "
+                "쓸 수 있다 — 협업 워크스페이스의 단일 실행 경로에서는 정적 "
+                "주입만 가능해 이 도구를 못 쓴다."
+            ),
+            json.dumps(
+                {"url": "https://search.parallel.ai/mcp", "transport": "streamable-http"}
+            ),
+        ),
+    )
+    websearch_mcp_tool_row = conn.execute(
+        "SELECT id FROM tool_pool WHERE name = ?",
+        ("일반 웹 검색(Parallel Search)",),
+    ).fetchone()
+    conn.execute(
+        "INSERT OR IGNORE INTO skill_pool "
+        "(name, description, default_tool_pool_ids, augmentation_mode) "
+        "VALUES (?, ?, ?, 'tool')",
+        (
+            "일반웹검색",
+            (
+                "Wikipedia에 없는 최신 뉴스·일반 웹 정보가 필요할 때 인터넷 "
+                "전체를 검색한다 — Parallel Search MCP 도구(web_search/"
+                "web_fetch)가 실제로 붙어 있어 Agent가 직접 호출할 수 있다. "
+                "CrewAI Agent 루프가 있는 실행 경로에서만 동작한다."
+            ),
+            json.dumps([websearch_mcp_tool_row["id"]]),
         ),
     )
 

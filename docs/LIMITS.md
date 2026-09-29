@@ -2152,6 +2152,67 @@ Tool Pool 등록 메커니즘을 쓰는 native 도구 추가). 실제 서버(`ha
 `GET /api/skill-pool/names` 응답에 실제로 노출되는 것까지 라이브로
 확인했다.
 
+## 44. 일반 웹 검색(Parallel Search MCP) 도구 추가 — 사용자 요청
+    (2026-09-29, "일반 웹 검색 기능을 Tool로 제공 가능한지 확인해줘" →
+    "진행해줘")
+
+**리서치**: §43의 Wikipedia 도구는 자체 백과사전 색인만 다뤄 "최신
+뉴스" 같은 진짜 일반 웹 정보는 여전히 못 찾는다는 한계가 있었다. 무료
+일반 웹 검색 API를 실측 조사한 결과 — Bing Search API는 2025-08-11
+전체 퇴역(Microsoft 공식), Google Custom Search API는 2027-01-01부로
+신규 고객 가입 자체가 막힘, Brave Search API는 무료 크레딧이 있어도
+가입 시 카드 등록 필수, Tavily는 카드는 없지만 계정+키가 필요하고
+2026-02 Nebius 인수로 가격 정책 불확실 — 이 중 어느 것도 "계정·키
+완전 불필요"라는 Wikipedia API 수준의 조건을 만족하지 못했다. Parallel
+AI의 공개 MCP 서버(`https://search.parallel.ai/mcp`)만 계정·키 없이
+완전 무료로 접속 가능했다(익명 접근 분당 600건).
+
+**구현**: 이 서버는 MCP(Streamable HTTP)로 제공되므로, `websearch.py`
+처럼 새 Python 모듈을 쓸 필요 없이 이미 있는 `mcp_remote` Tool Pool
+종류와 `pool_registry.connect_mcp_tools()` 메커니즘을 그대로 재사용했다
+— `recommend_fix`(mcp_stdio)와 같은 자리에, 종류만 `mcp_remote`로 다르게
+시드했다(`db._seed_default_pools()`). "일반웹검색" 스킬을 가진 Agent에
+자동 연결된다.
+
+**라이브 검증(`mcp_remote`가 이 프로젝트에서 처음 실제로 접속되는
+경로였다 — 지금까지 검증된 MCP는 `mcp_stdio`뿐)**: `pool_registry.
+connect_mcp_tools()`를 직접 호출해 실제로 접속 — `web_search`·
+`web_fetch` 두 Tool이 정상적으로 열렸다. `web_search` Tool을 실제로
+호출해 "2026 한국 최저임금"을 검색한 결과, 연합뉴스의 실제 2026-06-21
+기사(제목·발행일·본문 발췌 포함)가 그대로 반환되는 것까지 확인했다 —
+Wikipedia로는 절대 찾을 수 없는 종류의 최신 정보다.
+
+**중요한 아키텍처 제약(정직하게 문서화)**: 이 도구는 `mcp_remote`라
+`agent_runtime.augment_with_retrieval()`(정적 프롬프트 주입, 협업
+워크스페이스의 단일 LLM 호출 경로)에서는 쓸 수 없다 — 그 경로는 Agent
+호출 루프 자체가 없어 native 함수 직접 호출만 가능하다(ADR 결정 11).
+"Crew 실행"·"AI 에이전트 생성(crewai)"처럼 실제 CrewAI Agent 루프가
+있는 경로에서만 Agent가 스스로 호출 여부를 판단해 쓸 수 있다 —
+Wikipedia 도구(native, 양쪽 경로 다 지원)와의 핵심적인 차이이며, 이
+사실을 tool_pool의 `description`과 skill_pool의 `description`
+양쪽에 명시해뒀다(웹 UI에서 등록만 보고 "왜 협업 워크스페이스에서
+실행이 안 되지"라고 헷갈리지 않도록).
+
+**리스크(정직하게 문서화)**: Parallel AI는 상업 회사의 무료 티어다 —
+Wikipedia처럼 20년 이상 안정적으로 운영된 공공 인프라가 아니라 조건이
+바뀌거나 유료 전환·서비스 중단될 수 있다. 개인정보가 포함된 질의를
+처리하려면 별도 DPA 계약이 필요하다고 명시돼 있어, 사람 이름 등을
+검색어에 넣는 용도로는 주의가 필요하다(향후 이 도구가 실제 업무에
+쓰인다면 검토가 필요한 지점 — 이번 스코프에서는 코드로 강제하지
+않았다).
+
+**검증**: GC197(`test_phase14_pool_registry.py`) — 시드 확인(kind=
+mcp_remote) + `resolve_pool_tools()`가 실제로 `connect_mcp_tools()`를
+거쳐 Tool을 반환하는지, `crewai_tools.MCPServerAdapter` 자체를
+mock해 안전하게 검증(GC104와 같은 mock 경계 — 실제 접속은 위 라이브
+검증으로 이미 확인했으므로 매 테스트 실행마다 실제 네트워크를 타지
+않는다). 기존 GC114/GC125의 하드코딩된 Pool 개수 단언을 다시 한번
+갱신했다(도구 4→5개, 스킬 24→25개) — §43에 이어 이번에도 겪은
+동일한 유지보수 비용. 전체 골든셋 201건(200+1). 라우트 수 변경
+없음(기존 Tool Pool 등록 메커니즘 재사용). 실제 서버(`hair.db`)
+재시작 후 `GET /api/tool-pool`에 5번째 도구로 노출되는 것까지 라이브
+확인했다.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |
