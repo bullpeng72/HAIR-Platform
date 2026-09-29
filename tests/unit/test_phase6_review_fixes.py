@@ -138,3 +138,114 @@ def test_gc50_session_secret_key_configurable_via_env(monkeypatch):
         # 서로 다른 secret_key로 서명된 세션이라 복호화(검증)에 실패해야 한다.
         resp = client_b.get("/api/audit-log")
         assert resp.status_code == 401
+
+
+# ---------- 사용자 관리 화면 보완 — 사용자 요청(2026-09-29, "관리자 전용
+# 메뉴의 사용자 관리 메뉴의 경우 생성과 동작 저장만 가능... 비밀번호
+# 조회/초기화 기능 추가 필요... 사용자 삭제 기능 필요... '동작'의 의미가
+# 불명 -> 상사 지정 등으로 명칭 변경") ----------
+
+
+def test_gc185_admin_can_reset_user_password(client_and_conn):
+    """비밀번호는 bcrypt 해시라 "조회"는 불가능하다 — "초기화"만
+    제공한다. 초기화 뒤엔 옛 비밀번호로 로그인이 안 되고 새 비밀번호로는
+    돼야 한다."""
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/users")
+    member_id = next(u["id"] for u in resp.json() if u["username"] == "member1")
+
+    resp = client.patch(
+        f"/api/users/{member_id}/password", json={"password": "newmemberpass"}
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = client.post(
+        "/login", json={"username": "member1", "password": "memberpass"}
+    )
+    assert resp.status_code == 401
+
+    resp = client.post(
+        "/login", json={"username": "member1", "password": "newmemberpass"}
+    )
+    assert resp.status_code == 200
+
+    _login(client, "manager1", "managerpass")
+    resp = client.patch(f"/api/users/{member_id}/password", json={"password": "x"})
+    assert resp.status_code == 403
+
+    _login(client, "admin1", "adminpass")
+    resp = client.patch("/api/users/999999/password", json={"password": "x"})
+    assert resp.status_code == 404
+
+
+def test_gc186_admin_can_deactivate_and_reactivate_user(client_and_conn):
+    """하드 삭제 대신 비활성화 — users.id는 audit_log/assignments/
+    approvals에서 참조되므로 삭제하면 FK가 깨진다. 비활성화된 계정은
+    로그인이 막히고, 재활성화하면 다시 된다."""
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/users")
+    member_id = next(u["id"] for u in resp.json() if u["username"] == "member1")
+
+    resp = client.patch(f"/api/users/{member_id}/status", json={"is_active": False})
+    assert resp.status_code == 200, resp.text
+
+    resp = client.get("/api/users")
+    row = next(u for u in resp.json() if u["id"] == member_id)
+    assert row["is_active"] is False
+
+    resp = client.post(
+        "/login", json={"username": "member1", "password": "memberpass"}
+    )
+    assert resp.status_code == 401
+
+    _login(client, "admin1", "adminpass")
+    resp = client.patch(f"/api/users/{member_id}/status", json={"is_active": True})
+    assert resp.status_code == 200
+    resp = client.post(
+        "/login", json={"username": "member1", "password": "memberpass"}
+    )
+    assert resp.status_code == 200
+
+    _login(client, "manager1", "managerpass")
+    resp = client.patch(f"/api/users/{member_id}/status", json={"is_active": False})
+    assert resp.status_code == 403
+
+
+def test_gc187_deactivating_invalidates_existing_session_immediately(
+    client_and_conn,
+):
+    """로그인 시점만 막으면 이미 로그인한 세션이 비활성화 이후에도 계속
+    유효해 버린다 — 매 요청마다 다시 확인해 즉시 차단해야 한다(별도
+    TestClient로 member1의 세션 쿠키를 독립적으로 유지해 확인)."""
+    client, _conn = client_and_conn
+    member_client = TestClient(client.app)
+    resp = member_client.post(
+        "/login", json={"username": "member1", "password": "memberpass"}
+    )
+    assert resp.status_code == 200
+    resp = member_client.get("/api/me")
+    assert resp.status_code == 200
+
+    _login(client, "admin1", "adminpass")
+    member_id = next(
+        u["id"] for u in client.get("/api/users").json() if u["username"] == "member1"
+    )
+    client.patch(f"/api/users/{member_id}/status", json={"is_active": False})
+
+    # member1은 로그아웃하지 않았지만(같은 세션 쿠키 그대로), 다음 요청부터
+    # 즉시 401이어야 한다.
+    resp = member_client.get("/api/me")
+    assert resp.status_code == 401
+
+
+def test_gc188_admin_cannot_deactivate_own_account(client_and_conn):
+    """관리자가 실수로 본인 계정을 잠그면 아무도 복구할 수 없으므로
+    막는다(A→B→A 상사 순환 방지와 같은 성격의 안전장치)."""
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    admin_id = client.get("/api/me").json()["id"]
+
+    resp = client.patch(f"/api/users/{admin_id}/status", json={"is_active": False})
+    assert resp.status_code == 400

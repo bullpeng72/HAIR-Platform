@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 188 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 192 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"공용 조회"/"운영 관리" 3구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -207,7 +207,14 @@ UI가 이 구분을 몰라 참가자기만 하면 무조건 실행 버튼을 보
 버튼을 그리기 전에 먼저 확인해 비활성화+이유를 보여준다. 같은 화면의
 UI/UX도 개선했다 — textarea를 독립된 줄로 분리하고 "결과물 작성"과
 "AI 에이전트 실행"을 별도 카드로 나눴다(GC182-184, `docs/LIMITS.md`
-§39).
+§39). 이어서 사용자 요청("사용자 관리 메뉴... (1) 비밀번호 조회/초기화
+(2) 사용자 삭제 (3) '동작'의 의미가 불명")에 따라 **사용자 관리 화면을
+보강했다** — 비밀번호는 bcrypt 해시라 "조회"는 불가능해 "초기화"만
+제공했고, "삭제"는 `users.id`가 감사로그/배정/결재/Human Pool에서 NOT
+NULL로 참조돼 하드 삭제가 FK 위반으로 불가능해 Human/Agent Pool과
+같은 "비활성화" 패턴을 적용했다(비활성화 즉시 로그인 차단 + 기존
+세션도 끊김, 본인 계정은 비활성화 불가). "동작" 열은 "상사 지정"으로
+이름을 바꿨다(GC185-188, `docs/LIMITS.md` §40).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -223,7 +230,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 188건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 192건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -294,7 +301,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(65개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(67개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -329,7 +336,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 188건
+tests/unit/                            # 골든셋 192건
 ```
 
 ## 로드맵

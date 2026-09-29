@@ -266,6 +266,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "agent_pool", "llm_model", "TEXT")
     _ensure_column(conn, "agent_pool", "last_output", "TEXT")
     _ensure_column(conn, "agent_pool", "framework", "TEXT NOT NULL DEFAULT 'stub'")
+    # 사용자 요청(2026-09-29, "사용자 삭제 기능 필요") — users.id는
+    # audit_log/assignments/approvals/human_pool.user_id 등에서 NOT NULL
+    # FK로 참조되므로 하드 삭제는 감사 이력·배정 이력을 깨뜨린다(NF10
+    # append-only 원칙과 정면 충돌). Human/Agent Pool이 이미 쓰는
+    # "오프보딩"(레코드는 남기고 비활성화) 패턴을 계정에도 그대로
+    # 적용한다.
+    _ensure_column(conn, "users", "is_active", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(conn, "agent_pool", "mcp_servers", "TEXT NOT NULL DEFAULT '[]'")
 
 

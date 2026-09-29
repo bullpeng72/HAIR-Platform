@@ -35,6 +35,24 @@ class ManagerUpdate(BaseModel):
     manager_id: int | None = None
 
 
+class UserPasswordReset(BaseModel):
+    """사용자 요청(2026-09-29, "비밀번호 조회/초기화 기능 추가 필요") —
+    비밀번호는 bcrypt 해시라 "조회"는 원리상 불가능하다(평문을 저장하지
+    않음). "초기화"만 제공한다 — 관리자가 새 비밀번호를 지정하면 그
+    사용자에게 별도 채널로 전달하는 방식(ADMIN 전용)."""
+
+    password: str
+
+
+class UserStatusUpdate(BaseModel):
+    """사용자 요청(2026-09-29, "사용자 삭제 기능 필요") — `users.id`는
+    audit_log/assignments/approvals/human_pool.user_id에서 NOT NULL로
+    참조돼 하드 삭제가 불가능하다(NF10 감사 이력 보존과 충돌). Human/
+    Agent Pool의 오프보딩과 같은 "비활성화" 방식을 쓴다(ADMIN 전용)."""
+
+    is_active: bool
+
+
 class BriefSubmission(BaseModel):
     """F1 — 규칙기반 스텁. 실제 Spec Interpreter(LLM) 연동은 이후 버전에서 이뤄진다."""
 

@@ -59,6 +59,7 @@ from hair_platform.auth import (
     authenticate,
     create_user,
     get_current_user,
+    hash_password,
     require_role,
 )
 from hair_platform.models import (
@@ -86,6 +87,8 @@ from hair_platform.models import (
     ToolActiveUpdate,
     ToolPoolCreate,
     UserCreate,
+    UserPasswordReset,
+    UserStatusUpdate,
 )
 
 
@@ -218,14 +221,73 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         conn.commit()
         return {"id": user_id, "manager_id": payload.manager_id}
 
+    @app.patch("/api/users/{user_id}/password")
+    def reset_user_password(
+        user_id: int,
+        payload: UserPasswordReset,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """사용자 요청(2026-09-29, "비밀번호 조회/초기화 기능 추가 필요") —
+        조회는 bcrypt 해시라 원리상 불가능하고, 초기화만 제공한다(ADMIN
+        전용). 감사로그엔 비밀번호 값 자체를 남기지 않는다."""
+        target = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+        if not payload.password:
+            raise HTTPException(status_code=400, detail="비밀번호를 입력해야 합니다")
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(payload.password), user_id),
+        )
+        audit.record(
+            conn, user["id"], "user_password_reset", "user", user_id
+        )
+        conn.commit()
+        return {"id": user_id, "status": "password_reset"}
+
+    @app.patch("/api/users/{user_id}/status")
+    def set_user_status(
+        user_id: int,
+        payload: UserStatusUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """사용자 요청(2026-09-29, "사용자 삭제 기능 필요") — `users.id`는
+        audit_log/assignments/approvals/human_pool.user_id에서 NOT NULL로
+        참조돼 하드 삭제가 FK 위반으로 불가능하다(NF10 감사 이력 보존과
+        정면 충돌). Human/Agent Pool의 오프보딩과 같은 "비활성화" 방식을
+        쓴다 — 비활성화된 계정은 로그인이 막히고(`auth.authenticate()`/
+        `get_current_user()`), 이력은 그대로 남는다."""
+        target = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+        if user_id == user["id"]:
+            raise HTTPException(
+                status_code=400, detail="본인 계정은 비활성화할 수 없습니다"
+            )
+        conn.execute(
+            "UPDATE users SET is_active = ? WHERE id = ?",
+            (int(payload.is_active), user_id),
+        )
+        audit.record(
+            conn,
+            user["id"],
+            "user_status_updated",
+            "user",
+            user_id,
+            before={"is_active": bool(target["is_active"])},
+            after={"is_active": payload.is_active},
+        )
+        conn.commit()
+        return {"id": user_id, "is_active": payload.is_active}
+
     @app.get("/api/users")
     def list_users(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
         """코드 재점검(2026-09-26)에서 발견한 누락 보완 — PATCH .../manager를
         쓰려면 상사로 지정할 user_id를 조회할 방법이 있어야 하는데 없었다."""
         rows = conn.execute(
-            "SELECT id, username, role, manager_id FROM users ORDER BY id"
+            "SELECT id, username, role, manager_id, is_active FROM users ORDER BY id"
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [{**dict(row), "is_active": bool(row["is_active"])} for row in rows]
 
     @app.post("/api/briefs", status_code=201)
     def submit_brief(

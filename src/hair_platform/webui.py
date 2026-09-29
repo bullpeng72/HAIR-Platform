@@ -1649,7 +1649,7 @@ async function renderAdmin(content) {
   const users = await api("GET", "/api/users");
   content.innerHTML =
     '<section class="card"><h2>사용자 생성</h2>' +
-    '<p class="muted">4가지 권한(role)은 화면 접근 범위를 결정합니다 — 관리자: 전 기능, 매니저: "관리자 도구" 대부분에 접근 가능하지만 사용자 생성/상사 지정·각종 삭제·Agent 온보딩 승인/오프보딩처럼 조직 구조에 직접 영향을 주는 기능은 관리자 전용, 팀원: 업무 요청 제출·결재 요청 등 "내 업무" 화면, 뷰어: 조회만. 생성 직후엔 상사가 지정 안 돼 있어(아래에서 지정), 이 사용자가 배정을 요청하면 결재가 단일 단계(승인자 미지정)로 처리됩니다.</p>' +
+    '<p class="muted">4가지 권한(role)은 화면 접근 범위를 결정합니다 — 관리자: 전 기능, 매니저: "운영 관리" 대부분에 접근 가능하지만 사용자 생성/상사 지정·각종 삭제·Agent 온보딩 승인/오프보딩처럼 조직 구조에 직접 영향을 주는 기능은 관리자 전용, 팀원: 업무 요청 제출·결재 요청 등 "내 업무" 화면, 뷰어: 조회만. 생성 직후엔 상사가 지정 안 돼 있어(아래에서 지정), 이 사용자가 배정을 요청하면 결재가 단일 단계(승인자 미지정)로 처리됩니다.</p>' +
     '<form class="inline" id="user-form">' +
     '<input id="u-username" placeholder="아이디" required>' +
     '<input id="u-password" type="password" placeholder="비밀번호" required>' +
@@ -1657,14 +1657,34 @@ async function renderAdmin(content) {
     '<option value="member" selected>팀원</option><option value="viewer">뷰어</option></select>' +
     '<button class="primary" type="submit">생성</button></form>' +
     "</section>" +
-    '<section class="card"><h2>사용자 목록 / 상사 지정</h2>' +
-    '<p class="muted">상사를 지정하면 그 사람이 배정을 요청할 때 결재가 상사 체인을 따라 다단계로 자동 라우팅됩니다("결재" 탭 참고). 본인을 직접 상사로 지정하는 것만 막혀 있고, A→B→A 같은 두 단계 이상의 순환은 막지 않습니다(다단계 체인 계산 시 조용히 그 지점에서 끊고 진행하므로 무한루프는 안 나지만, 의도한 결재선과 다르게 짧게 끝날 수 있습니다).</p>' +
-    table(["ID", "아이디", "권한", "상사", "동작"], users.map(u => [
-      u.id, esc(u.username), esc(u.role), u.manager_id === null ? "-" : u.manager_id,
-      '<div class="actions"><span class="pair"><select id="mgr-' + u.id + '"><option value="">(없음)</option>' +
-        users.filter(m => m.id !== u.id).map(m => '<option value="' + m.id + '"' + (m.id === u.manager_id ? " selected" : "") + ">" + esc(m.username) + "</option>").join("") +
-      '</select><button class="small" data-set-manager="' + u.id + '">저장</button></span></div>',
-    ])) + "</section>";
+    '<section class="card"><h2>사용자 목록</h2>' +
+    // 사용자 요청(2026-09-29, "생성과 상사 지정만 가능... (1) 비밀번호
+    // 조회/초기화 (2) 사용자 삭제 (3) '동작'의 의미 불명") — 비밀번호는
+    // bcrypt 해시라 "조회"는 원리상 불가능하고(평문을 저장하지 않음)
+    // "초기화"만 제공한다. "삭제"는 users.id가 audit_log/assignments/
+    // approvals/human_pool.user_id에서 NOT NULL로 참조돼 하드 삭제가
+    // FK 위반으로 불가능하다(append-only 감사 이력 보존 원칙과 충돌) — Human/Agent
+    // Pool과 같은 "비활성화"(계정은 남기고 로그인만 막음) 방식을 쓴다.
+    // "동작" 열은 실제로 상사 지정 하나뿐이었으므로 그대로 이름을 바꿨다.
+    '<p class="muted">비밀번호는 bcrypt 해시로 저장돼 "조회"는 할 수 없습니다 — "초기화"로 새 비밀번호를 지정한 뒤 별도 채널로 전달하세요. "계정 상태"는 하드 삭제 대신 비활성화 방식입니다(감사 이력·배정 이력이 이 계정을 참조하고 있어 완전히 지우면 그 이력이 깨집니다) — 비활성화된 계정은 즉시 로그인이 막히고 기존 세션도 끊깁니다. 상사를 지정하면 그 사람이 배정을 요청할 때 결재가 상사 체인을 따라 다단계로 자동 라우팅됩니다("결재" 탭 참고). 본인을 직접 상사로 지정하는 것만 막혀 있고, A→B→A 같은 두 단계 이상의 순환은 막지 않습니다.</p>' +
+    table(["ID", "아이디", "권한", "계정 상태", "상사", "상사 지정", "비밀번호 재설정", "계정 상태 변경"], users.map(u => {
+      const isSelf = u.id === ME.id;
+      return [
+        u.id, esc(u.username), esc(u.role),
+        u.is_active ? '<span class="gate-badge gate-ok">활성</span>' : '<span class="gate-badge gate-warn">비활성</span>',
+        u.manager_id === null ? "-" : u.manager_id,
+        '<div class="actions"><span class="pair"><select id="mgr-' + u.id + '"><option value="">(없음)</option>' +
+          users.filter(m => m.id !== u.id).map(m => '<option value="' + m.id + '"' + (m.id === u.manager_id ? " selected" : "") + ">" + esc(m.username) + "</option>").join("") +
+        '</select><button class="small" data-set-manager="' + u.id + '">저장</button></span></div>',
+        '<div class="actions"><span class="pair"><input type="password" id="pw-' + u.id + '" placeholder="새 비밀번호" style="width:120px">' +
+          '<button class="small" data-reset-password="' + u.id + '">초기화</button></span></div>',
+        isSelf
+          ? '<span class="muted">본인 계정</span>'
+          : (u.is_active
+            ? '<button class="small danger" data-set-status="' + u.id + '" data-active="0">비활성화</button>'
+            : '<button class="small" data-set-status="' + u.id + '" data-active="1">재활성화</button>'),
+      ];
+    })) + "</section>";
 
   document.getElementById("user-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -1686,6 +1706,37 @@ async function renderAdmin(content) {
           manager_id: sel.value ? Number(sel.value) : null,
         });
         showMsg("global-msg", "상사를 지정했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-reset-password]").forEach(btn => {
+    btn.onclick = async () => {
+      const input = document.getElementById("pw-" + btn.dataset.resetPassword);
+      const newPassword = input.value;
+      if (!newPassword) { showMsg("global-msg", "새 비밀번호를 입력해야 합니다.", "error"); return; }
+      if (!window.confirm("이 계정의 비밀번호를 초기화합니다. 새 비밀번호를 본인에게 안전하게 전달해야 합니다. 계속할까요?")) return;
+      try {
+        await api("PATCH", "/api/users/" + btn.dataset.resetPassword + "/password", {
+          password: newPassword,
+        });
+        showMsg("global-msg", "비밀번호를 초기화했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-set-status]").forEach(btn => {
+    btn.onclick = async () => {
+      const activate = btn.dataset.active === "1";
+      const msg = activate
+        ? "이 계정을 다시 활성화합니다. 계속할까요?"
+        : "이 계정을 비활성화합니다 — 즉시 로그인이 막히고 기존 세션도 끊깁니다(계정과 이력은 삭제되지 않음). 계속할까요?";
+      if (!window.confirm(msg)) return;
+      try {
+        await api("PATCH", "/api/users/" + btn.dataset.setStatus + "/status", {
+          is_active: activate,
+        });
+        showMsg("global-msg", activate ? "재활성화했습니다." : "비활성화했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
