@@ -166,6 +166,19 @@ VIEWER가 하나라도 포함되면 "내 업무"(담당자가 자기 업무를 �
 화면)로 분류했다. 임의로 새 기준을 만들지 않고 이미 검증된 RBAC 매트릭스를
 그대로 재사용한다(원칙4의 정신과 같은 이유 — 근거 없는 재분류를 피한다).
 
+~~두 구역("내 업무"/"관리자 도구")으로 분리한다~~ — **정정(2026-09-29,
+외부 서비스 4곳 리서치 기반 재분류 + "로그인한 계정 유형에 맞춰 메뉴
+노출을 개선해줘" 요청)**: 세 구역("내 업무"/"공용 조회"/"운영 관리")
+으로 늘렸다 — "인력 검색"·"조직도"는 `roles` 배열은 "내 업무"와 같지만
+(MEMBER·VIEWER 포함) 역할과 무관한 순수 조회 화면이라 담당자 개인
+업무 처리 화면과 성격이 달라 별도 "공용 조회" 그룹으로 뺐다. "관리자
+도구"는 실측해보니 11개 중 10개가 admin+manager 공용이라 라벨이
+실제 구성과 안 맞아 "운영 관리"로 바꿨다(`docs/LIMITS.md` §37,
+`docs/ROLE_TASK_CLASSIFICATION.md`). 분류 기준(§163-167)의 "MEMBER/
+VIEWER 포함 여부"만으로는 "내 업무"와 "공용 조회"를 자동 구분할 수
+없다는 한계가 이때 드러났다 — 그 둘의 경계는 이제 역할이 아니라
+"담당자 개인 업무 처리 vs 순수 참조"라는 별도 기준으로 수동 분류한다.
+
 **대안 검토**: 관리자 화면을 아예 별도 경로(`/admin`)나 별도 페이지로
 분리하는 안도 검토했으나 기각 — 이 프로젝트는 클라이언트 라우터가 없는
 단일 페이지 셸(결정 6)이고, 관리자와 매니저가 같은 브라우저 세션 안에서
@@ -262,6 +275,14 @@ args·env 또는 url·transport·tool_names)로 바꿨다. 상세는
   클래스 자체), `crewai_agent_generator()`(F4 단일 생성)에는 아직 연결
   안 했다(그 시점엔 `agent_pool` row가 없어 MCP 설정을 읽을 곳이 없음 —
   오픈 이슈). `docs/LIMITS.md` §15 참고.
+  ~~접속 가능한 실제 MCP 서버가 이 환경에 없어 종단간 검증은 못 했고~~ —
+  **정정(2026-09-29, "일반 웹 검색 기능을 Tool로 제공 가능한지 확인해줘"
+  요청)**: Parallel AI의 공개 원격 MCP 서버(계정·키 불필요)를 실제로
+  찾아 접속했다 — `pool_registry.connect_mcp_tools()`로 `web_search`/
+  `web_fetch` Tool을 실제로 열고 검색 호출까지 성공했다(`docs/LIMITS.md`
+  §44). 연결 함수 직접 호출로 검증한 것이고 `run_crew()`를 통한 LLM의
+  자율 호출까지 재현한 건 아니다 — `crewai_agent_generator()` 미연결과
+  함께 그 부분은 여전히 오픈 이슈다.
 
 ## 결정 11 — CrewAI Agent 협업(위임·계층 조율)을 심화하고, 기본 Agent
 세트에 VectorDB·GraphDB 기반 Agent를 추가한다(사용자 요청, 2026-09-26 —
@@ -522,9 +543,17 @@ Tool처럼 동작하도록 개선해줘" 요청으로, `skill_pool`·`tool_pool`
   구현해줘" 요청)** — `framework` 파라미터·`crew_runtime.
   crewai_agent_generator()`·실제 crewai 패키지 설치·통합 검증(GC77-78)에
   이어, `run_crew()`에 `_mcp_tools()`(`crewai_tools.MCPServerAdapter`
-  실제 연결, GC103-105)까지 마쳤다. `crewai_agent_generator()`(F4 단일
-  생성)와 접속 가능한 실제 MCP 서버로의 종단간 검증은 오픈 이슈로 남는다
-  (`docs/LIMITS.md` §15).
+  실제 연결, GC103-105)까지 마쳤다.
+  ~~접속 가능한 실제 MCP 서버로의 종단간 검증은 오픈 이슈로 남는다~~ —
+  **정정(2026-09-29, "일반 웹 검색 기능을 Tool로 제공 가능한지 확인해줘"
+  요청)**: Parallel AI의 공개 원격 MCP 서버(계정·키 불필요)로 `mcp_remote`
+  접속 자체는 실제로 검증했다 — `pool_registry.connect_mcp_tools()`를
+  직접 호출해 `web_search`/`web_fetch` 두 Tool이 정상 접속되고, 실제
+  검색 호출까지 성공했다(`docs/LIMITS.md` §44). 다만 이건 연결 함수를
+  직접 호출한 검증이고, `run_crew()`/`crewai_agent_generator()`를 통해
+  실제 LLM이 이 Tool을 스스로 호출하는 것까지 끝까지 재현한 건 아니다
+  — 그 부분과 `crewai_agent_generator()`(F4 단일 생성)의 MCP 미연결은
+  여전히 오픈 이슈다.
 - 결정 11(Agent 협업 심화 + VectorDB/GraphDB Agent)도 **구현 완료
   (2026-09-26)** — `allow_delegation=True`+`Process.hierarchical` 옵션,
   `run_crew()`의 Task.context 체이닝, 실제 CrewAI 이벤트버스 기반 위임
