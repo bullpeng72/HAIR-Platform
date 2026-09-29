@@ -1487,6 +1487,17 @@ async function renderCrew(content) {
 function renderCrewResult(result) {
   const box = document.getElementById("crew-result");
   let html = '<h3>최종 산출물</h3><div class="msg ok">' + esc(result.final_output).replace(/\\n/g, "<br>") + "</div>";
+  // 사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
+  // 연결해줘") — run_crew()가 이제 gate_scores/tcr을 반환한다. 단건
+  // deliverable 카드의 gateBadge와 같은 "측정 없음" 구분 원칙(위 §530
+  // 참고)을 그대로 따른다.
+  const gates = Object.values(result.gate_scores);
+  const measured = gates.filter(g => !g.not_measured);
+  html += "<h3>Gate A-G 채점(이 Crew 실행 전체)</h3>";
+  html += measured.length === 0
+    ? '<p class="muted">Gate 측정 없음</p>'
+    : '<p>' + measured.filter(g => g.passed).length + "/" + measured.length + " 통과" +
+      (result.tcr === null ? "" : " · TCR " + result.tcr.toFixed(0) + "%") + '</p>';
   html += "<h3>Agent별 산출물</h3>" + table(["Agent ID", "역할", "산출물"], result.agents.map(a => [
     a.agent_id, esc(a.role_name),
     a.output === null ? "(없음 — 매니저는 조율만 하고 직접 산출물을 내지 않습니다)"

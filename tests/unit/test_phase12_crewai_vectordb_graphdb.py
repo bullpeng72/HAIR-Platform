@@ -158,6 +158,76 @@ def test_gc80_run_crew_rejects_mismatched_lengths_and_inactive_agents(client_and
         crew_runtime.run_crew(conn, [inactive_id], ["일해줘"], admin_id)
 
 
+def test_gc198_run_crew_scores_gate_a_g_via_framework_crewai_adapter(client_and_conn):
+    """사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
+    연결해줘") — `run_crew()`가 `agent_evaluation.run_and_score_crew()`를
+    거치면서 `framework="crewai"` 어댑터로 `tasks_output`에서
+    agent_interactions를 자동 추출해 Gate A-G를 채점하고, 반환값에
+    `gate_scores`/`tcr`로 노출해야 한다. gc79와 같은 셋업에 채점 검증만
+    더한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)
+
+    with patch(
+        "crewai.Crew.kickoff",
+        return_value=_crew_output("최종 산출물", ["기획서", "분석서"]),
+    ):
+        result = crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["기획서를 작성해줘", "그 기획서를 분석해줘"],
+            admin_id,
+            process="sequential",
+            provider="openai",
+        )
+
+    # kickoff()가 반환하는 CrewOutput 자체는 채점 과정에서 변형되지 않는다
+    # (_split_raw()가 raw_result만 caller에 돌려주는 SDK 동작 — Files
+    # 섹션에서 확인한 계약).
+    assert result["final_output"] == "최종 산출물"
+    gate_scores = result["gate_scores"]
+    assert set(gate_scores.keys()) == {"A", "B", "C", "D", "E", "F", "G"}
+    for gate in gate_scores.values():
+        assert set(gate.keys()) >= {"score", "status", "passed"}
+    # tcr은 not_measured일 수 있어 None도 허용하되, 키 자체는 항상 있어야 함
+    assert "tcr" in result
+
+    row = conn.execute(
+        "SELECT after_value FROM audit_log WHERE action = 'crew_run_completed'"
+    ).fetchone()
+    logged = json.loads(row["after_value"])
+    assert set(logged["gate_scores"].keys()) == {"A", "B", "C", "D", "E", "F", "G"}
+    assert "tcr" in logged
+
+
+def test_gc199_crew_run_endpoint_exposes_gate_scores(client_and_conn):
+    """API 응답(`POST /api/crew/run`)에도 gate_scores/tcr이 그대로
+    전달돼야 한다 — `run_crew_endpoint`가 `run_crew()`의 반환 dict를 그대로
+    돌려주므로 엔드포인트 코드 변경 없이도 통과해야 한다."""
+    client, conn = client_and_conn
+    agent1, agent2 = _make_two_active_agents(conn)
+    _login(client, "manager1", "managerpass")
+
+    with patch(
+        "crewai.Crew.kickoff", return_value=_crew_output("완료", ["산출물1", "산출물2"])
+    ):
+        resp = client.post(
+            "/api/crew/run",
+            json={
+                "agent_ids": [agent1, agent2],
+                "task_descriptions": ["a", "b"],
+                "provider": "openai",
+            },
+        )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert set(body["gate_scores"].keys()) == {"A", "B", "C", "D", "E", "F", "G"}
+    assert "tcr" in body
+
+
 def test_gc81_run_crew_captures_real_delegation_events():
     """CrewAI 이벤트버스에서 실제로 위임 도구 사용 이벤트가 오면 정직하게
     캡처하는지 확인한다(추측이 아니라 실제 이벤트 기반)."""

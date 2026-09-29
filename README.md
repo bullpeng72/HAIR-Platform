@@ -6,7 +6,8 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 201 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 203 passed). Gate A-G는 단일 실행(`execute_agent()`)뿐 아니라
+CrewAI 다중 Agent 협업(`run_crew()`)에도 연결됨(`framework="crewai"` 자동 추출). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"공용 조회"/"운영 관리" 3구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -268,7 +269,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 201건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 203건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -374,7 +375,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 201건
+tests/unit/                            # 골든셋 203건
 ```
 
 ## 로드맵

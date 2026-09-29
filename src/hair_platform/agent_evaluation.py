@@ -110,6 +110,59 @@ def run_and_score(role_name: str, call_fn: Callable[[], str]) -> dict:
     return {"output": output, "gate_scores": gate_scores, "tcr": tcr}
 
 
+def run_and_score_crew(crew_label: str, call_fn: Callable[[], object]) -> dict:
+    """`crew_runtime.run_crew()`의 실제 `crew.kickoff()` 호출(`call_fn`)을
+    감싸 Gate A-G를 측정한다 — 사용자 요청(2026-09-29, "crewAI의 핵심
+    개념과 기능들을 적절하게 반영하였는지 확인해줘"에서 찾은 갭을
+    "Gate A-G를 CrewAI 멀티에이전트 경로에도 연결해줘"로 메움).
+
+    **`run_and_score()`와의 핵심 차이**: 단일 실행 경로는 도구 호출·위임
+    같은 신호가 아예 없어(agent loop 자체가 없음) `EvalMetadata`를 직접
+    손으로 채워야 했다. 이 함수는 `agent_eval(..., framework="crewai")`
+    를 쓴다 — SDK가 `call_fn()`이 반환한 실제 `CrewOutput`(튜플로 안
+    감싸고 그대로 반환하면 된다)의 `tasks_output`을 자동으로
+    `EvalMetadata.agent_interactions`로 변환해준다(`agent_evaluator.
+    framework_adapters._extract_crewai_metadata()`, 실측 확인:
+    `_split_raw()`가 비-튜플 반환값을 `(raw, None)`으로 취급해 프레임워크
+    어댑터가 자동으로 붙는다 — 데코레이터를 통과한 반환값도 원본
+    `CrewOutput` 그대로라 호출자는 지금까지처럼 `.raw`/`.tasks_output`/
+    `.token_usage`를 그대로 쓸 수 있다). 이게 바로 Gate F(멀티에이전트
+    협업: 합의·정보 전파·역할 준수·충돌 해결)가 실제로 측정될 신호를
+    받는 유일한 경로다 — `run_crew()`가 이미 실시간으로 캡처하는 위임
+    이벤트와는 별개로(그건 감사로그용), SDK 쪽 멀티에이전트 채점은
+    `tasks_output`만 보고 자체적으로 판단한다.
+
+    `call_fn`이 예외를 던지면(LLM 호출 실패 등) 그대로 전파한다 —
+    `run_and_score()`와 같은 원칙."""
+    monitor = PerformanceMonitor(
+        output_dir="results/deliverables/", agent_version="auto"
+    )
+
+    @agent_eval(
+        monitor,
+        task_type="document_creation",
+        question_arg="crew_label",
+        framework="crewai",
+        sla=_SLA,
+        explainability=_EXPLAINABILITY,
+        scope=_SCOPE,
+    )
+    def _run(crew_label: str):
+        return call_fn()
+
+    crew_output = _run(crew_label)
+
+    report = monitor.generate_report()
+    harness_groups = (report.extra_metrics or {}).get("harness_groups", {})
+    gate_scores = evaluate_gate_scores(
+        harness_groups, gate_ids=GATE_IDS, default_threshold=DEFAULT_GATE_THRESHOLD
+    )
+    tcr_block = (report.accuracy_metrics or {}).get("tcr") or {}
+    tcr = tcr_block.get("tcr")
+
+    return {"output": crew_output, "gate_scores": gate_scores, "tcr": tcr}
+
+
 def record_evaluation(
     conn: sqlite3.Connection, deliverable_id: int, gate_scores: dict, tcr: float | None
 ) -> None:

@@ -2267,6 +2267,42 @@ CLASSIFICATION.md` 참고).
 201건 그대로, 테스트 실행 불필요(두 파일 모두 어떤 테스트도 데이터로
 읽지 않음, `grep`으로 확인).
 
+## 46. Gate A-G를 CrewAI 멀티에이전트 경로(`run_crew()`)에도 연결 —
+    사용자 요청(2026-09-29, §45 "부수 발견"에서 찾은 갭 "b 진행해줘")
+
+§45가 찾은 갭을 메웠다 — Gate A-G 자동 채점이 `agent_runtime.
+execute_agent()`(단일 실행) 경로에만 연결돼 있고 `run_crew()`(CrewAI
+다중 Agent 협업) 경로엔 전혀 연결 안 돼 있었다. `agent_evaluator` SDK의
+`framework="crewai"` 자동 추출 기능(`_extract_crewai_metadata()` →
+`CrewOutput.tasks_output`에서 `agent_interactions`를 자동으로 뽑아냄)을
+써서, `run_and_score()`처럼 `EvalMetadata`를 수동으로 만들 필요 없이
+연결했다.
+
+**한 것**: `agent_evaluation.py`에 `run_and_score_crew(crew_label,
+call_fn)` 신설 — `@agent_eval(..., framework="crewai")`로 `crew.kickoff`
+호출을 감싼다. `crew_runtime.run_crew()`의 `result = crew.kickoff()`를
+이 함수 호출로 교체했다. SDK 내부가 `_split_raw()`로 호출자에겐 원본
+`CrewOutput`을 그대로 돌려주므로(채점은 `PerformanceMonitor` 쪽 사이드
+이펙트) `run_crew()`의 나머지 후처리 로직(per_agent 조립 등)은 손대지
+않았다.
+
+**저장 위치**: 새 테이블을 만들지 않았다 — `run_crew()`는 애초에
+`deliverables`/`jobs` 로우를 만들지 않아(협업 워크스페이스 개념이 없는
+실행), `agent_evaluations`(`deliverables.id` 전용 FK) 테이블을 재사용할
+방법이 없다. 대신 이미 같은 자리에 있던 "감사로그 참고 기록" 패턴
+(`token_usage`가 지금까지 그렇게 기록돼 왔다)을 그대로 재사용해
+`crew_run_completed` 감사로그의 `after_value`에 `gate_scores`/`tcr`을
+함께 남겼다(원칙4: 새 아키텍처 대신 기존 패턴 재사용). API 응답
+(`POST /api/crew/run`)에도 같은 값을 반환 dict에 추가해 엔드포인트
+코드 변경 없이 그대로 노출된다. Web UI "Crew 실행" 탭에도 단건
+deliverable 카드의 Gate 배지와 같은 "측정 없음" 구분 원칙을 따르는
+표시를 추가했다.
+
+**검증**: `tests/unit/test_phase12_crewai_vectordb_graphdb.py`에
+GC198(`run_crew()` 반환값·감사로그 양쪽에서 Gate A-G 키 7개·TCR 확인)·
+GC199(`POST /api/crew/run` API 응답에도 그대로 노출되는지 확인) 추가.
+전체 스위트 203건(기존 201 + 신규 2) 통과.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |

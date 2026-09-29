@@ -48,7 +48,7 @@ import os
 import sqlite3
 from contextlib import ExitStack
 
-from hair_platform import audit, llm, pool_registry
+from hair_platform import agent_evaluation, audit, llm, pool_registry
 
 DELEGATION_TOOL_NAMES = {"Delegate work to coworker", "Ask question to coworker"}
 
@@ -356,7 +356,18 @@ def run_crew(
 
         with crewai_event_bus.scoped_handlers():
             crewai_event_bus.on(ToolUsageFinishedEvent)(_capture_delegation)
-            result = crew.kickoff()
+            # 사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
+            # 연결해줘") — 지금까지 Gate A-G는 단일 실행 경로(`agent_runtime.
+            # execute_agent()`)에만 연결돼 있었다. `framework="crewai"`를 쓰면
+            # SDK가 `crew.kickoff()`가 낸 CrewOutput.tasks_output에서 자동으로
+            # 멀티에이전트 신호(Gate F: 합의·정보 전파·역할 준수·충돌 해결)를
+            # 뽑아준다 — 반환값은 그대로 CrewOutput이라 아래 로직은 전혀
+            # 안 바뀐다.
+            crew_label = ", ".join(r["role_name"] for r in worker_rows)
+            eval_result = agent_evaluation.run_and_score_crew(
+                crew_label, crew.kickoff
+            )
+            result = eval_result["output"]
 
     per_agent = []
     for row, task_output in zip(worker_rows, result.tasks_output, strict=False):
@@ -399,6 +410,15 @@ def run_crew(
             # 문서화돼 있다 — 자동 비용 갱신은 그 스코프를 벗어나는 더 큰
             # 변경이라 감사로그에 참고 데이터만 남긴다).
             "token_usage": result.token_usage.model_dump(),
+            # 사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
+            # 연결해줘") — Agent 실행 결과의 Gate A-G도 집계값 성격이라
+            # token_usage와 같은 자리(참고 기록)에 남긴다. `agent_evaluations`
+            # 테이블은 `deliverables.id` 전용 FK라(협업 워크스페이스 개념)
+            # `run_crew()`엔 대응하는 deliverable이 없어 재사용하지 않았다 —
+            # 새 테이블을 만드는 대신 이미 있는 "감사로그 참고 기록" 패턴을
+            # 그대로 재사용한다(원칙4).
+            "gate_scores": eval_result["gate_scores"],
+            "tcr": eval_result["tcr"],
         },
     )
     for delegation in delegations:
@@ -426,4 +446,6 @@ def run_crew(
         "process": process,
         "delegations": delegations,
         "agents": per_agent,
+        "gate_scores": eval_result["gate_scores"],
+        "tcr": eval_result["tcr"],
     }
