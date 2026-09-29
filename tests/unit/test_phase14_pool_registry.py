@@ -188,6 +188,43 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     assert [t.name for t in tools] == ["지식 베이스 검색"]
 
 
+def test_gc196_init_schema_seeds_websearch_pool(client_and_conn):
+    """사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
+    API(가능한 무료)를... 추가해줘") — GC108과 같은 방식으로, 외부 자료
+    검색(Wikipedia) native Tool과 "websearch"/"외부검색" skill_pool
+    항목이 스키마 초기화 시 자동으로 채워지고, "websearch" 스킬을 가진
+    Agent에 실제로 그 Tool이 연결되는지 확인한다."""
+    from contextlib import ExitStack
+
+    _client, conn = client_and_conn
+
+    tools = pool_registry.list_tools(conn)
+    tool_names = {t["name"] for t in tools}
+    assert "외부 자료 검색(Wikipedia)" in tool_names
+    web_tool = next(t for t in tools if t["name"] == "외부 자료 검색(Wikipedia)")
+    assert web_tool["kind"] == "native"
+    assert web_tool["is_active"] is True
+
+    skills = pool_registry.list_skills(conn)
+    skill_names = {s["name"] for s in skills}
+    assert {"websearch", "외부검색"} <= skill_names
+    for s in skills:
+        if s["name"] in {"websearch", "외부검색"}:
+            assert s["augmentation_mode"] == "tool"
+
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('외부지식 Agent', '[\"websearch\"]', 'active')"
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+    with ExitStack() as stack:
+        resolved = pool_registry.resolve_pool_tools(
+            conn, stack, ["websearch"], agent_id=agent_id
+        )
+    assert [t.name for t in resolved] == ["외부 자료 검색"]
+
+
 def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn):
     client, conn = client_and_conn
     cur = conn.execute(
@@ -209,7 +246,7 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
 
     resp = client.get("/api/tool-pool")
     assert resp.status_code == 200
-    assert len(resp.json()) == 3  # 시드된 VectorDB/GraphDB/recommend_fix 도구(Phase 16)
+    assert len(resp.json()) == 4  # 시드된 VectorDB/GraphDB/recommend_fix/외부검색 도구(Phase 22)
 
     resp = client.post(
         "/api/tool-pool",
@@ -245,8 +282,8 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 22
-    )  # 시드된 22개(vectordb/graphdb 4 + agent-eval 절차 스킬 18, Phase 16)
+        len(resp.json()) == 24
+    )  # 시드된 24개(vectordb/graphdb 4 + agent-eval 절차 스킬 18 + websearch 2, Phase 22)
 
     resp = client.post(
         "/api/skill-pool",

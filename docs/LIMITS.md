@@ -2093,6 +2093,65 @@ roles/adminOnly만 확인하고 배열 순서에 의존하지 않아 그대로 �
 재시작 후 실제 응답으로 새 순서(`dashboard, cost, fairness, audit,
 match, ...`) 확인, `node --check` 통과.
 
+## 43. 도구/스킬 Pool에 외부 자료 검색(Wikipedia) 도구 추가 — 사용자
+    요청(2026-09-29, "도구/스킬 pool에 외부 자료 검색이 가능한 API(가능한
+    무료)를 도구화해서 사용 가능하도록 만들어 추가해줘")
+
+**설계**: VectorDB(과거 산출물 검색)·GraphDB(조직 관계 조회)는 둘 다
+조직 **내부** 데이터만 다룬다 — "이 정책이 업계 표준과 비교해 어떤지"
+같은 조직 밖 일반 지식이 필요한 질문엔 둘 다 답을 못 한다는 게 실제
+갭이었다(§41 라이브 실행에서 간접적으로 드러난 한계). Wikipedia 공개
+검색 API(`action=query&list=search`)를 새 모듈 `websearch.py`로
+감쌌다 — API 키 등록·과금 없이 바로 쓸 수 있어 "가능한 무료" 조건에
+정확히 맞고, 응답이 안정적인 JSON이라 파싱이 간단하다.
+`vectorstore.py`/`graphquery.py`와 완전히 같은 모양(`search()`/
+`context_for_prompt()`/`as_crewai_tool()`)을 따라 두 실행 경로 모두에
+동일한 패턴으로 연결했다 — 새 아키텍처를 만들지 않았다:
+- `agent_runtime.augment_with_retrieval()`(협업 워크스페이스의 단일
+  LLM 호출 경로, 정적 프롬프트 주입) — `WEBSEARCH_SKILL_TAGS =
+  {"websearch", "외부검색"}` 추가.
+- `pool_registry.NATIVE_TOOL_FACTORIES`(Crew 실행/AI 에이전트 생성의
+  진짜 CrewAI Tool-calling 경로) — `"web_search": websearch.
+  as_crewai_tool` 추가.
+- `db._seed_default_pools()` — native Tool "외부 자료 검색(Wikipedia)"
+  + skill "websearch"/"외부검색"(별칭) 시드, 기존 VectorDB/GraphDB
+  시드와 같은 `INSERT OR IGNORE` 멱등 패턴.
+
+**라이브 검증에서 실제로 발견·수정한 버그**: mock 테스트를 전부 통과시킨
+뒤 실제 네트워크로 `websearch.search()`를 직접 호출해보니 **Wikipedia가
+403으로 거부**했다 — "Please set a user-agent and respect our robot
+policy"(2026년부터 강화된 정책, `https://w.wiki/4wJS`). mock은 내가
+만든 가짜 응답을 그대로 돌려주므로 이 문제를 절대 못 잡는다 — 실제
+API를 호출해야만 드러나는 종류의 버그였다. `httpx.get()` 호출에
+`User-Agent` 헤더를 추가해 수정했고, 수정 후 실제로 "원격 근무"·"리모트
+워크" 두 개 실제 위키백과 문서를 정상적으로 검색해 확인했다.
+
+**비용/실패 처리**: Wikipedia API 자체는 무료·키 불필요라 이 모듈
+호출은 비용이 없다. 다만 실제 네트워크 호출이므로 실패할 수 있어(오프라인/
+타임아웃/API 오류) 예외를 올리지 않고 빈 리스트로 조용히 대체한다 —
+외부 자료 검색 실패가 Agent 실행 전체를 막으면 안 된다는 원칙
+(`vectorstore.search()`/`graphquery.context_for_prompt()`와 다르게
+이 둘은 애초에 실패할 일이 거의 없는 로컬 SQLite 조회라 이 걱정이
+없었지만, 외부 네트워크 호출인 `websearch`는 처음부터 실패를 전제로
+설계해야 했다).
+
+**검증**: 새 순수 단위 테스트 파일 `test_phase22_websearch_tool.py`
+(GC191-194, httpx mock으로 검색 성공/네트워크 실패/HTTP 오류/
+`context_for_prompt` 포맷/`as_crewai_tool` 래핑 확인) + GC195
+(`test_phase12_crewai_vectordb_graphdb.py`, GC90/91과 같은 패턴으로
+`execute_agent()`가 websearch skill Agent 실행 시 실제로 프롬프트를
+증강하는지) + GC196(`test_phase14_pool_registry.py`, GC108과 같은
+패턴으로 시드+`resolve_pool_tools()` 연결 확인). 기존 GC114/GC125의
+하드코딩된 Pool 개수 단언(도구 3개·스킬 22개)이 새 도구/스킬 추가로
+실제로 깨져서 4개/24개로 갱신했다(이 프로젝트가 §20에서 이미 한 번
+겪은 것과 같은 종류의 유지보수 비용 — "정확한 개수"를 매번 단언하는
+테스트는 Pool이 커질 때마다 갱신이 필요하다는 걸 재확인). 전체 골든셋
+200건(194+6). 라우트 수 변경 없음(새 REST 엔드포인트가 아니라 기존
+Tool Pool 등록 메커니즘을 쓰는 native 도구 추가). 실제 서버(`hair.db`)
+재시작으로 새 시드가 안전하게 적용되는 것과, `GET /api/tool-pool`·
+`GET /api/skill-pool/names` 응답에 실제로 노출되는 것까지 라이브로
+확인했다.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |

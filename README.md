@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 194 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 200 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"공용 조회"/"운영 관리" 3구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -230,7 +230,18 @@ Skill을 적극 활용하는 시나리오를 기획해 진행해줘")에 따라 
 있는지 확인해줘")에 따라 발행해둔 프로세스 맵과 실제 내비게이션 순서를
 대조해 "운영 관리" 그룹의 모니터링 화면 4개(대시보드·비용·공정성
 지표·활동 기록)가 흩어져 있던 걸 발견해 한데 모았다(`docs/LIMITS.md`
-§42) — "내 업무"·"공용 조회" 그룹은 이미 합리적이라 그대로 뒀다.
+§42) — "내 업무"·"공용 조회" 그룹은 이미 합리적이라 그대로 뒀다. 이어서
+사용자 요청("도구/스킬 pool에 외부 자료 검색이 가능한 API(가능한
+무료)를 도구화해서... 추가해줘")에 따라 **Wikipedia 공개 검색 API(API
+키 불필요·무료)를 감싼 세 번째 native 도구를 추가했다** —
+VectorDB(과거 산출물)·GraphDB(조직 관계)는 둘 다 조직 내부 데이터만
+다뤄 "조직 밖 일반 지식"엔 답을 못 하던 갭을 메운다.
+`vectorstore.py`/`graphquery.py`와 같은 모양(`search()`/
+`context_for_prompt()`/`as_crewai_tool()`)으로 정적 주입·CrewAI
+Tool-calling 두 경로 모두에 연결했다. mock 테스트를 전부 통과한 뒤
+**실제 네트워크로 호출해보니 Wikipedia가 User-Agent 헤더 없이는
+403으로 거부**한다는 걸 발견해 수정했다 — mock으로는 절대 못 잡는
+종류의 버그였다(GC191-196, `docs/LIMITS.md` §43).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -246,7 +257,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 194건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 200건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -352,7 +363,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 194건
+tests/unit/                            # 골든셋 200건
 ```
 
 ## 로드맵

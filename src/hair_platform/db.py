@@ -291,7 +291,14 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
     skill_tags를 가진 Agent가 갑자기 도구를 못 받게 되므로 반드시 필요하다.
     `name` UNIQUE 제약으로 `INSERT OR IGNORE`가 매 기동마다 안전하게
     멱등이다(이미 있으면 아무 것도 안 함 — 관리자가 이후 수정해도 안
-    덮어씀)."""
+    덮어씀).
+
+    사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
+    API(가능한 무료)를 도구화해서... 추가해줘")로 `websearch.py`(Wikipedia
+    검색, API 키 불필요) 기반 세 번째 native 도구를 같은 방식으로
+    추가했다 — VectorDB(과거 산출물)·GraphDB(조직 관계)는 둘 다 조직
+    내부 데이터만 다뤄, "조직 밖 일반 지식"이 필요한 질문엔 답을 못
+    하던 갭을 메운다."""
     native_tools = [
         (
             "VectorDB 지식검색",
@@ -302,6 +309,12 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
             "GraphDB 관계조회",
             "graphquery.context_for_prompt()를 감싼 네이티브 CrewAI Tool",
             "graphdb_query",
+        ),
+        (
+            "외부 자료 검색(Wikipedia)",
+            "websearch.context_for_prompt()를 감싼 네이티브 CrewAI Tool — "
+            "API 키 불필요, 무료",
+            "web_search",
         ),
     ]
     tool_ids: dict[str, int] = {}
@@ -321,6 +334,8 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
         ("rag", "VectorDB 기반 지식검색 역량(별칭)", "vectordb_search"),
         ("graphdb", "GraphDB 기반 관계분석 역량", "graphdb_query"),
         ("관계질의", "GraphDB 기반 관계분석 역량(별칭)", "graphdb_query"),
+        ("websearch", "외부 자료(Wikipedia) 검색 역량", "web_search"),
+        ("외부검색", "외부 자료(Wikipedia) 검색 역량(별칭)", "web_search"),
     ]
     for name, description, native_id in skills:
         conn.execute(

@@ -70,9 +70,9 @@ def test_gc125_init_schema_seeds_agent_eval_procedural_skills():
     skills = pool_registry.list_skills(conn)
     skill_names = {s["name"] for s in skills}
     assert _EXPECTED_AGENT_EVAL_SKILL_NAMES <= skill_names
-    assert len(skills) == 4 + len(
+    assert len(skills) == 6 + len(
         _EXPECTED_AGENT_EVAL_SKILL_NAMES
-    )  # vectordb/graphdb 4 + 절차 18
+    )  # vectordb/graphdb 4 + websearch 2(Phase 22) + 절차 18
 
     by_name = {s["name"]: s for s in skills}
     for name in _UNTOOLED_AGENT_EVAL_SKILL_NAMES:

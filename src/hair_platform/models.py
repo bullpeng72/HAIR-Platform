@@ -273,9 +273,11 @@ class ToolPoolCreate(BaseModel):
     """ADR 결정 12(사용자 요청, 2026-09-27, "tool_pool·skill_pool 테이블도
     실제로 구현해줘") — 실제 도구(MCP 서버 또는 native `@tool`) 하나를
     이름으로 등록해 여러 Agent가 재사용한다. `kind="native"`면 `config`에
-    `{"native_id": "vectordb_search"|"graphdb_query"}`를 넣는다(현재
-    지원하는 native 도구는 이 둘뿐 — `pool_registry.NATIVE_TOOL_FACTORIES`
-    참고). `kind="mcp_stdio"|"mcp_remote"`면 `config`에 `AgentModelConfig.
+    `{"native_id": "vectordb_search"|"graphdb_query"|"web_search"}`를
+    넣는다(지원하는 native 도구 전체 목록은 `pool_registry.
+    NATIVE_TOOL_FACTORIES` 참고 — `web_search`는 사용자 요청(2026-09-29,
+    "외부 자료 검색... 도구화") 추가, `websearch.py`의 Wikipedia 검색을
+    감싼다, API 키 불필요). `kind="mcp_stdio"|"mcp_remote"`면 `config`에 `AgentModelConfig.
     mcp_servers`와 같은 형태(command/args/env 또는 url/transport)를
     넣는다."""
 

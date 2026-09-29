@@ -28,11 +28,12 @@ import json
 import sqlite3
 from contextlib import ExitStack
 
-from hair_platform import audit, graphquery, vectorstore
+from hair_platform import audit, graphquery, vectorstore, websearch
 
 NATIVE_TOOL_FACTORIES = {
     "vectordb_search": vectorstore.as_crewai_tool,
     "graphdb_query": graphquery.as_crewai_tool,
+    "web_search": websearch.as_crewai_tool,
 }
 
 

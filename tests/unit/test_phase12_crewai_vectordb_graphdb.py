@@ -881,8 +881,45 @@ def test_gc92_execute_agent_does_not_augment_normal_role(client_and_conn):
         agent_runtime.execute_agent(
             conn, agent_id, admin_id, "API 만들어줘", provider="openai"
         )
-
     assert llm_mock.call_args[0][3] == "API 만들어줘"  # 증강 없이 그대로
+
+
+def test_gc195_execute_agent_augments_prompt_for_websearch_role(client_and_conn):
+    """사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
+    API를... 추가해줘") — "websearch"/"외부검색" skill_tags를 가진
+    Agent는 GC90(vectordb)·GC91(graphdb)과 같은 방식으로 실행 전에
+    `websearch.search()` 결과를 프롬프트에 덧붙여야 한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('외부지식 Agent', '[\"websearch\"]', 'active')"
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    with (
+        patch(
+            "hair_platform.websearch.search",
+            return_value=[
+                {"title": "원격근무", "snippet": "원격근무 설명", "url": "https://x"}
+            ],
+        ) as search_mock,
+        patch(
+            "hair_platform.llm.call_llm", return_value="외부 자료 기반 답변"
+        ) as llm_mock,
+    ):
+        output = agent_runtime.execute_agent(
+            conn, agent_id, admin_id, "원격근무 정책이 뭐야?", provider="openai"
+        )
+
+    search_mock.assert_called_once()
+    assert output == "외부 자료 기반 답변"
+    augmented_prompt = llm_mock.call_args[0][3]
+    assert "원격근무 설명" in augmented_prompt
+    assert "원격근무 정책이 뭐야?" in augmented_prompt
 
 
 # ---------- index-knowledge ----------
