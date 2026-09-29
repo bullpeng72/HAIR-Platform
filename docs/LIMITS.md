@@ -1886,6 +1886,55 @@ manager_id는 404. 전체 골든셋 185건(184+1). 라우트 수 변경 없음(�
 manager_id를 직접 설정해 `GET /api/org-chart` 그루핑이 실제로
 바뀌는 것까지 라이브로 확인했다.
 
+## 39. AI 에이전트 실행 버튼이 실행 불가능한 사람에게도 그냥 보이던 문제
+    수정 + 협업 워크스페이스 UI/UX 개선 — 사용자 요청(2026-09-29,
+    스크린샷 보고: "내업무 - 열기 (1) UI/UX를 개선해줘. (2) '이 업무의
+    AI 에이전트 실행'의 경우 '이 업무의 협업 워크스페이스에 접근할
+    권한이 없습니다'라고 나와")
+
+**실측으로 발견한 진짜 원인**: 사용자가 보고한 403은 버그가 아니라
+`start_agent_execution()`(`deliverables.py`)의 원래 설계대로 동작한
+것이었다 — 이 함수는 이 task의 사람 참가자("assignee")인 것만으로는
+부족하고, **Agent 배정을 실제로 요청한 사람("requester")이거나
+매니저/관리자**여야 통과한다(협업 워크스페이스에 사람+Agent가 함께
+배정된 구조에선 "내 업무를 도와줄 Agent를 누가 신청했는지"와 "누가
+그 업무를 직접 하는지"가 다른 사람일 수 있다는 전제). 문제는 **웹
+UI가 이 구분을 전혀 모른 채 참가자기만 하면 무조건 실행 버튼을 그냥
+보여주고 있었다**는 것 — human assignee가 직접 눌러봐야만 403으로
+뒤늦게 알게 되는 구조였다. 실제로 겪은 화면(스크린샷)은 이 상황이
+정확히 재현된 것이다.
+
+**수정**: 판정 로직을 `deliverables.execution_eligibility()`(신규)로
+추출해 `start_agent_execution()`이 그대로 재사용하게 했다(로직이 두
+곳으로 갈라지지 않게) — `{"eligible": bool, "reason": "not_requester"|
+"no_confirmed_agent"|None}`을 반환한다. 새 엔드포인트
+`GET /api/tasks/{task_id}/execution-permission`으로 노출하고, 웹 UI는
+워크스페이스를 열 때 이 값을 미리 조회해 **버튼을 누르기 전에** 비활성화
++ 이유를 문구로 보여준다("이 업무에 AI 에이전트 실행을 요청한 사람
+또는 매니저/관리자만 실행할 수 있습니다" / "이 업무에 확정된 AI
+에이전트 배정이 없습니다").
+
+**UI/UX 개선(요청 1번)**: 같은 화면에서 textarea·provider/model
+선택·"LLM으로 도와줘"·"결과물 제출"이 한 줄(`form.inline` flex-wrap)에
+전부 뒤섞여 있어, 좁은 화면에서 안내 문구가 select 옆에 끼어 어색하게
+줄바꿈되고 있었다(스크린샷에서 확인). textarea를 독립된 줄로 분리하고,
+"결과물 작성"(사람이 직접 쓰거나 LLM 도움을 받는 행동)과 "AI 에이전트
+실행"(그 업무를 통째로 Agent에게 맡기는, 성격이 다른 행동)을 각각
+별도 카드(`section.card`)로 나눠 시각적으로 구분했다.
+
+**검증**: GC182-184(`test_phase17_collab_workspace.py`) — human
+assignee(요청자 아님)는 `eligible=False`·`reason="not_requester"`(실제
+403과 일치), 요청자/감독자는 `eligible=True`, 확정된 Agent 배정 자체가
+없으면 감독자여도 `reason="no_confirmed_agent"`. 실제 데모 계정
+(`pm_kim`이 Agent를 요청한 task 1, `qa_kim`이 human assignee뿐인
+task 2)으로 라이브 curl 검증까지 완료 — `pm_kim`은 `eligible:true`,
+`qa_kim`은 `eligible:false, reason:"not_requester"`(대상 task엔 확정된
+Agent 배정 자체가 없지만, requester 판정이 먼저 걸려 이 이유가 우선
+반환됨 — 어차피 Agent가 배정돼도 qa_kim은 못 누르므로 이 우선순위가
+더 유용한 안내). 전체 골든셋 188건(185+3). 라우트 수 64→65
+(`GET /api/tasks/{task_id}/execution-permission`). 서버 재시작 후
+실제 응답 `node --check` 통과.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |

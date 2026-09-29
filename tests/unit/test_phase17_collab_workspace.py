@@ -1100,3 +1100,89 @@ def test_gc156_failed_execution_is_recorded_in_audit_log(client_and_conn):
     ).fetchone()
     assert row is not None
     assert row["subject_type"] == "agent_execution_jobs"
+
+
+# ---------- AI 에이전트 실행 권한 사전 확인 — 사용자 요청(2026-09-29,
+# 스크린샷으로 보고한 "이 업무의 협업 워크스페이스에 접근할 권한이
+# 없습니다") ----------
+
+
+def _setup_human_assignee_and_agent_requester_task(client, conn):
+    """member1이 사람 당사자(assignee)이고 manager1이 Agent 배정을
+    요청(requester)한 task를 만든다 — GC149와 같은 협업 구조지만, 이번엔
+    "human assignee가 Agent 실행 버튼을 눌러도 되는가"를 확인하는 데
+    쓴다(사람 당사자는 Agent 요청자가 아니므로 실행 권한이 없어야 함)."""
+    brief_id, task_id = _make_brief_and_task(client, "겸용 업무 2")
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "겸용 사람 2", "role": "겸용 업무 2", "skill_tags": []},
+    )
+    human_id = resp.json()["id"]
+    _link_human_to_member1(client, conn, human_id)
+    _confirm_assignment(
+        client, task_id, "human", human_id, requester=("manager1", "managerpass")
+    )
+    cur = conn_from_client(client).execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[]', 'active')",
+        ("겸용 업무 2",),
+    )
+    conn_from_client(client).commit()
+    agent_id = cur.lastrowid
+    _confirm_assignment(
+        client, task_id, "agent", agent_id, requester=("manager1", "managerpass")
+    )
+    return brief_id, task_id, agent_id
+
+
+def test_gc182_human_assignee_not_agent_requester_is_not_execution_eligible(
+    client_and_conn,
+):
+    """실측으로 발견한 갭 — `start_agent_execution()`은 사람 당사자
+    (assignee)가 Agent 요청자(requester)가 아니면 막는데, 웹 UI는 참가자
+    기만 하면 무조건 실행 버튼을 보여주고 있었다. member1(assignee)은
+    새 사전 확인 엔드포인트에서 `eligible=False`·`reason="not_requester"`
+    를 받아야 하고, 실제 실행 시도도 403이어야 한다(둘이 일치해야 함)."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_human_assignee_and_agent_requester_task(
+        client, conn
+    )
+
+    _login(client, "member1", "memberpass")
+    resp = client.get(f"/api/tasks/{task_id}/execution-permission")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"eligible": False, "reason": "not_requester"}
+
+    resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
+    assert resp.status_code == 403
+
+
+def test_gc183_requester_and_supervisor_are_execution_eligible(client_and_conn):
+    """Agent 배정을 요청한 사람(manager1)과 감독자(admin1)는 실제
+    참가자 관계와 무관하게 실행 가능해야 한다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_human_assignee_and_agent_requester_task(
+        client, conn
+    )
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get(f"/api/tasks/{task_id}/execution-permission")
+    assert resp.json() == {"eligible": True, "reason": None}
+
+    _login(client, "admin1", "adminpass")
+    resp = client.get(f"/api/tasks/{task_id}/execution-permission")
+    assert resp.json() == {"eligible": True, "reason": None}
+
+
+def test_gc184_no_confirmed_agent_assignment_is_not_execution_eligible(
+    client_and_conn,
+):
+    """확정된 Agent 배정 자체가 없으면 요청자/감독자여도 실행할 수 없다
+    — 이유가 "not_requester"가 아니라 "no_confirmed_agent"로 구분돼야
+    웹 UI가 정확한 안내 문구를 보여줄 수 있다."""
+    client, _conn = client_and_conn
+    _brief_id, task_id = _make_brief_and_task(client, "미배정 업무")
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get(f"/api/tasks/{task_id}/execution-permission")
+    assert resp.json() == {"eligible": False, "reason": "no_confirmed_agent"}

@@ -402,6 +402,39 @@ def assist(
     return llm.call_llm(resolved_provider, resolved_model, system, prompt)
 
 
+def execution_eligibility(
+    conn: sqlite3.Connection,
+    task_id: int,
+    actor_id: int,
+    allow_supervisor_override: bool,
+) -> dict:
+    """`GET /api/tasks/{task_id}/execution-permission` — "이 업무의 AI
+    에이전트 실행" 버튼을 실제로 눌러도 되는지 **누르기 전에** 판단한다.
+
+    사용자가 스크린샷으로 보고한 갭(2026-09-29): `start_agent_execution()`
+    은 이 task의 사람 참가자("assignee")여도 Agent 배정을 요청한 사람
+    ("requester")이 아니면 막는데(같은 task에 사람+Agent가 함께 배정된
+    협업 구조라 흔히 생기는 조합), 웹 UI는 참가자기만 하면 무조건 실행
+    버튼을 보여주고 있었다 — human assignee가 버튼을 눌러야만 "권한이
+    없습니다" 403으로 뒤늦게 알게 됐다. `start_agent_execution()`이 이
+    함수를 그대로 재사용하도록 리팩터해 판정 로직이 두 곳에서 갈라지지
+    않게 했다."""
+    task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    rel = task_participant_relationship(conn, task_id, actor_id)
+    if rel != "requester" and not allow_supervisor_override:
+        return {"eligible": False, "reason": "not_requester"}
+    agent_assignment = conn.execute(
+        "SELECT id FROM assignments WHERE task_id = ? AND status = 'confirmed' "
+        "AND resource_type = 'agent'",
+        (task_id,),
+    ).fetchone()
+    if agent_assignment is None:
+        return {"eligible": False, "reason": "no_confirmed_agent"}
+    return {"eligible": True, "reason": None}
+
+
 def start_agent_execution(
     conn: sqlite3.Connection,
     task_id: int,
@@ -424,20 +457,18 @@ def start_agent_execution(
     반환값의 `agent_id`/`role_name`/`prompt`는 DB에 다시 저장하지 않고
     `app.py`가 그대로 `run_agent_execution_job()`에 넘긴다 — 새 컬럼을
     안 늘리려는 선택."""
-    task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    if task is None:
-        raise ValueError("task_not_found")
-    rel = task_participant_relationship(conn, task_id, actor_id)
-    if rel != "requester" and not allow_supervisor_override:
+    elig = execution_eligibility(conn, task_id, actor_id, allow_supervisor_override)
+    if elig["reason"] == "not_requester":
         raise PermissionError("not_a_participant")
+    if elig["reason"] == "no_confirmed_agent":
+        raise LookupError("no_confirmed_agent_assignment")
 
+    task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     agent_assignment = conn.execute(
         "SELECT * FROM assignments WHERE task_id = ? AND status = 'confirmed' "
         "AND resource_type = 'agent'",
         (task_id,),
     ).fetchone()
-    if agent_assignment is None:
-        raise LookupError("no_confirmed_agent_assignment")
     agent_id = agent_assignment["resource_id"]
 
     # 실측으로 발견한 갭(2026-09-28, 리뷰 2회차) — 이 함수는 원래 같은

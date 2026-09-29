@@ -472,10 +472,14 @@ async function renderCollabWorkspace(taskId) {
   detail.dataset.taskId = String(taskId);
   detail.innerHTML = '<p class="muted">불러오는 중…</p>';
   const isSupervisor = ["admin", "manager"].includes(ME.role);
-  let items, jobs;
+  let items, jobs, permission;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
     jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
+    // 사용자가 스크린샷으로 보고한 갭(2026-09-29) — 참가자기만 하면
+    // 무조건 실행 버튼을 보여줘, human assignee가 눌러야만 "권한이
+    // 없습니다" 403으로 뒤늦게 알게 됐다. 버튼을 그리기 전에 먼저 확인한다.
+    permission = await api("GET", "/api/tasks/" + taskId + "/execution-permission");
   } catch (e) {
     detail.innerHTML = "";
     showMsg("global-msg", e.message, "error");
@@ -571,24 +575,50 @@ async function renderCollabWorkspace(taskId) {
 
   // Phase 4 — 이미 생성 중인 job이 있으면 실행 버튼을 막는다(중복
   // 트리거로 같은 task에 2개의 Agent 실행이 동시에 도는 것을 방지 —
-  // "실행 중임을 알려주는 UI" 관례를 여기도 적용).
+  // "실행 중임을 알려주는 UI" 관례를 여기도 적용). 사용자가 스크린샷으로
+  // 보고한 갭(2026-09-29) — permission.eligible이 false면(human
+  // assignee지 Agent 요청자가 아니거나, 확정된 Agent 배정 자체가 없음)
+  // 버튼을 비활성화하고 이유를 바로 보여준다 — 눌러봐야만 403으로 알게
+  // 하지 않는다.
+  const EXECUTION_BLOCK_REASONS = {
+    not_requester: "이 업무에 AI 에이전트 실행을 요청한 사람 또는 매니저/관리자만 실행할 수 있습니다.",
+    no_confirmed_agent: "이 업무에 확정된 AI 에이전트 배정이 없습니다.",
+  };
   const hasRunningJob = !!(latestJob && latestJob.status === "running");
-  const executeBtnHtml = hasRunningJob
-    ? '<button class="small" id="ws-execute-agent-btn" disabled>생성 중…</button>'
-    : '<button class="small" id="ws-execute-agent-btn">이 업무의 AI 에이전트 실행(비용 발생)</button>';
+  const executeDisabled = hasRunningJob || !permission.eligible;
+  const executeBtnLabel = hasRunningJob ? "생성 중…" : "이 업무의 AI 에이전트 실행(비용 발생)";
+  const executeBtnHtml =
+    '<button class="small" id="ws-execute-agent-btn"' + (executeDisabled ? " disabled" : "") + '>' +
+    esc(executeBtnLabel) + '</button>' +
+    (!hasRunningJob && !permission.eligible
+      ? '<p class="muted">' + esc(EXECUTION_BLOCK_REASONS[permission.reason] || "실행할 수 없습니다.") + '</p>'
+      : '');
 
+  // 사용자 요청(2026-09-29, "UI/UX를 개선해줘") — 원래 textarea·provider/
+  // model·"LLM으로 도와줘"·"결과물 제출"이 한 줄(.inline flex-wrap)에 전부
+  // 뒤섞여 있어 좁은 화면에서 텍스트가 select 옆에 끼어 줄바꿈이 어색했다.
+  // textarea를 독립된 줄로 분리하고, "결과물 작성"과 "AI 에이전트 실행"을
+  // 서로 다른 카드로 나눠 두 행동의 성격이 다르다는 걸 시각적으로 구분한다.
   detail.innerHTML =
     '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
     finalResultCard +
     '<h4 class="muted">진행 이력(중간 과정 포함)</h4>' +
     '<div id="workspace-timeline">' + timeline + '</div>' +
-    '<form class="inline" id="ws-submit-form">' +
-    '<textarea id="ws-content" rows="3" placeholder="결과물 내용을 입력하세요" style="flex:1;min-width:240px"></textarea>' +
+    '<section class="card">' +
+    '<h4>결과물 작성</h4>' +
+    '<form id="ws-submit-form">' +
+    '<textarea id="ws-content" rows="3" placeholder="결과물 내용을 입력하세요" style="width:100%;box-sizing:border-box"></textarea>' +
+    '<div class="inline" style="margin-top:0.5rem">' +
     modelFields +
     '<button class="small" type="button" id="ws-assist-btn">LLM으로 도와줘(비용 발생)</button>' +
     '<button class="primary" type="submit">결과물 제출</button>' +
+    '</div>' +
     '</form>' +
+    '</section>' +
+    '<section class="card">' +
+    '<h4>AI 에이전트 실행</h4>' +
     executeBtnHtml +
+    '</section>' +
     '<div id="ws-result"></div>';
 
   items.forEach(d => loadDeliverableComments(d.id));

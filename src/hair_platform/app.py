@@ -875,6 +875,22 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             )
         return deliverables.list_execution_jobs(conn, task_id)
 
+    @app.get("/api/tasks/{task_id}/execution-permission")
+    def get_execution_permission(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """사용자가 스크린샷으로 보고한 갭(2026-09-29, "이 업무의 협업
+        워크스페이스에 접근할 권한이 없습니다") 보완 — 웹 UI가 "이 업무의
+        AI 에이전트 실행" 버튼을 실제로 보여주기 전에 먼저 확인한다."""
+        try:
+            return deliverables.execution_eligibility(
+                conn, task_id, user["id"], user["role"] in ("admin", "manager")
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
+            ) from None
+
     @app.post("/api/briefs/{brief_id}/generate", status_code=201)
     def generate_agents(
         brief_id: int,
