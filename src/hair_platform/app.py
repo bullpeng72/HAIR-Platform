@@ -1053,6 +1053,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     ):
         """온보딩된 Agent에게 실제 업무를 맡긴다(사용자 요청, 2026-09-26) —
         호출하면 실제 Anthropic/OpenAI API가 불려 비용이 발생한다."""
+        retrieval_sink: dict = {}
         try:
             output = agent_runtime.execute_agent(
                 conn,
@@ -1061,6 +1062,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 payload.prompt,
                 payload.provider,
                 payload.model,
+                retrieval_sink=retrieval_sink,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -1070,7 +1072,11 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             raise HTTPException(
                 status_code=409, detail="온보딩(active)된 Agent만 실행할 수 있습니다"
             ) from exc
-        return {"id": agent_id, "output": output}
+        return {
+            "id": agent_id,
+            "output": output,
+            "retrieved_context": retrieval_sink.get("retrieved_context"),
+        }
 
     @app.patch("/api/agent-pool/{agent_id}/model")
     def set_agent_model_config(

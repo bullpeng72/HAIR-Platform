@@ -274,6 +274,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 적용한다.
     _ensure_column(conn, "users", "is_active", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(conn, "agent_pool", "mcp_servers", "TEXT NOT NULL DEFAULT '[]'")
+    # 사용자 요청(2026-09-29, "Tool, Skill을 적극 활용하는 시나리오를
+    # 기획해 진행해줘") 라이브 실행에서 발견한 갭 — VectorDB/GraphDB
+    # 그라운딩(ADR 결정 11)이 실제로 프롬프트에 뭘 주입했는지 사후에
+    # 확인할 방법이 어디에도 없었다(결재자가 "이 답변이 실제 근거에
+    # 기반했는지" 검증 불가). 실행 job에 근거를 같이 남긴다.
+    _ensure_column(conn, "agent_execution_jobs", "retrieved_context", "TEXT")
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:

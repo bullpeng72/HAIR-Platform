@@ -533,9 +533,20 @@ async function renderCollabWorkspace(taskId) {
         })()
       : "";
     const side = d.author_type === "agent" ? "chat-agent" : "chat-human";
+    // 사용자 요청(2026-09-29, "Tool, Skill을 적극 활용하는 시나리오를
+    // 기획해 진행해줘") 라이브 실행에서 발견한 갭 — VectorDB/GraphDB
+    // 그라운딩이 실제로 뭘 검색해 답변에 반영했는지 결재자가 확인할
+    // 방법이 없었다. 이 deliverable을 만든 job의 retrieved_context를
+    // 찾아 접을 수 있는 "참고한 근거" 블록으로 보여준다.
+    const sourceJob = jobs.find(j => j.deliverable_id === d.id && j.retrieved_context);
+    const evidenceBlock = sourceJob
+      ? '<details class="muted"><summary>참고한 근거(Tool/Skill 검색 결과)</summary>' +
+        '<div>' + esc(sourceJob.retrieved_context).replace(/\\n/g, "<br>") + '</div></details>'
+      : '';
     return '<div class="deliverable-card ' + side + '">' +
     '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + " " + gateBadge + '</div>' +
     '<div>' + esc(d.content).replace(/\\n/g, "<br>") + '</div>' +
+    evidenceBlock +
     decideActions +
     submitAction +
     '<div id="comments-' + d.id + '"></div>' +

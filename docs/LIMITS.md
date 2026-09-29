@@ -1990,6 +1990,80 @@ CASCADE를 걸면 NF10(append-only 감사) 원칙과 정면 충돌한다(위험 
 계정 전부 `is_active: true`로 시작), admin 본인 비활성화가 실제로
 400으로 막히는 것을 라이브 curl로 확인했다.
 
+## 41. Tool/Skill 적극 활용 시나리오 라이브 실행 — VectorDB 그라운딩 근거
+    노출 갭 발견·수정 — 사용자 요청(2026-09-29, "계정 정보는 그대로
+    유지하고, 업무 정보 삭제 후, 일반업무나 개발업무 시나리오의
+    End-to-End 전 과정을... 실행하며... 개선해줘. (Tool, Skill을
+    적극 활용하는 시나리오를 기획해 진행해줘)")
+
+**준비**: 계정 6개(admin/pm_kim/pm_lee/qa_kim/park_member/agent_viewer,
+동일 비밀번호·조직 구조)는 `POST /api/users`+`PATCH /api/users/{id}/
+manager`로 그대로 재생성하고, `briefs`/`tasks`/`assignments`/
+`deliverables`/`human_pool`/`agent_pool`/`approvals`는 `hair.db`를
+지우고 `bootstrap`으로 재생성하는 방식으로 완전히 비웠다(§37에서 이미
+검증된 안전한 절차 재사용 — raw SQL bulk DELETE 가드레일을 다시
+건드리지 않았다). `tool_pool`(3)·`skill_pool`(22) 인프라 시드는 그대로.
+
+**시나리오 설계 — "신규 입사자 원격근무 정책 문의 대응"**: 지금까지의
+3개 시나리오(§SCENARIOS.md)는 전부 Agent를 썼어도 `skill_tags`가
+`vectordb`/`rag`/`graphdb`에 안 걸려 있어 **한 번도 실제 검색
+그라운딩을 안 거쳤다**(그냥 순수 LLM 호출). 이번엔 Task의
+`required_skills=["rag","인사 정책"]`으로 시작해 그대로 상속받은
+Agent(`skill_tags=["rag","인사 정책"]`)를 만들고, 실행 전에 실제
+사내 규정 텍스트("원격근무는 입사 후 첫 3개월 동안 사용 불가, 이후
+주 3일까지...")를 `POST /api/agent-pool/{id}/index-knowledge`로
+색인했다(실제 OpenAI 임베딩 1회).
+
+**실행 결과 — 그라운딩이 실제로 작동함을 직접 확인**: "입사 1개월차인데
+재택근무 가능한가요?"라는 사람 입력으로 `execute-agent`를 실행(실제
+LLM 1회)하자, Agent가 "입사 후 첫 3개월 동안은 원격근무를 사용할 수
+없습니다... 3개월이 지나신 후 주 3일까지 재택근무가 가능해집니다"라고
+**색인해둔 규정을 정확히 인용해** 답변했다 — 지어낸 게 아니라 실제
+검색 결과를 근거로 답했다는 걸 내용으로 직접 확인. Gate G(설명가능성)
+가 1.0/pass로 나왔는데, §24가 예측했던 "프롬프트가 근거를 요구하지
+않아 Gate G가 낮게 나오는 경향"과 반대되는 결과였다 — 이번엔 실제로
+근거 있는 답변이 나왔기 때문으로 보인다(정성적 관찰, Gate G 채점
+로직 자체를 이번에 재검증하진 않음). 배정·승인(ADR 3-A 자기승인
+차단 포함)·최종 결과물 확인(`has_final_result`)·인박스·대시보드까지
+전 과정을 실제 HTTP로 끝까지 확인했다 — 새로운 코드 버그는 없었다.
+
+**실제로 발견한 갭**: 그라운딩이 실제로 작동하는 걸 답변 *내용*으로는
+확인했지만, **무엇을 검색해 프롬프트에 넣었는지는 시스템 어디에도
+저장되지 않았다** — `agent_pool.last_output`엔 최종 답변만 남고,
+`augment_with_retrieval()`이 만든 증강 프롬프트나 검색 결과 자체는
+호출이 끝나면 사라진다. 결재자가 "이 답변이 실제 회사 규정에 근거한
+건지, LLM이 그냥 그럴듯하게 지어낸 건지"를 사후에 검증할 방법이
+없었다 — Tool/Skill 그라운딩이라는 기능의 핵심 가치(근거 기반 답변)를
+정작 **감사·검토 단계에서 증명할 수 없는** 데이터 흐름 공백.
+
+**수정**: `agent_runtime.augment_with_retrieval()`이 `(augmented_prompt,
+retrieved_context)` 튜플을 반환하도록 확장했다(유일한 호출자가
+`execute_agent()` 하나뿐이라 안전한 변경). `execute_agent()` 자체의
+반환 타입(`str`)은 **그대로 유지**했다 — `agent_evaluation.
+run_and_score()`의 `Callable[[], str]` 계약과 `/api/agent-pool/{id}/
+execute` 두 호출부가 문자열 반환을 전제로 하고 있어, 근거는 반환값이
+아니라 선택적 `retrieval_sink: dict` side-channel로만 전달한다(안
+넘기면 기존 동작과 100% 동일). `agent_execution_jobs`에 `retrieved_context`
+컬럼을 추가해(`_ensure_column` 마이그레이션) job 성공 시 저장하고,
+기존 `GET /api/tasks/{id}/agent-execution-jobs`(이미 `SELECT *`라
+스키마 변경 없이 노출)로 그대로 드러난다. 웹 UI는 협업 워크스페이스의
+Agent 산출물 카드에 "참고한 근거(Tool/Skill 검색 결과)"라는 접을 수
+있는 `<details>` 블록을 추가해, 결재자가 클릭 한 번으로 실제 검색
+결과를 확인할 수 있게 했다.
+
+**검증**: GC189(rag 스킬 Agent 실행 시 retrieved_context가 색인한
+텍스트를 포함해 저장·노출되는지)·GC190(vectordb/graphdb 스킬이 없는
+일반 Agent는 `retrieved_context`가 정확히 `None`인지 — "검색 안 함"과
+"검색했는데 0건"을 구분) 추가. 테스트 작성 중 가짜 임베딩 벡터
+차원(2 vs 3)이 안 맞아 `_cosine_similarity()`의 `zip(strict=True)`가
+예외를 던지는 것도 발견했는데, 이는 **테스트 자체의 버그**였다(실제
+`vectorstore.search()` 코드는 정상 — 실측으로 재확인, 프로덕션 버그
+아님). 전체 골든셋 194건(192+2). 라우트 수 변경 없음(기존 두
+엔드포인트 응답에 필드만 추가 — 이전 job 행은 `retrieved_context=
+NULL`로 자연스럽게 채워짐, 별도 백필 불필요).
+
+`docs/SCENARIOS.md`에 시나리오 4로 추가했다.
+
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |

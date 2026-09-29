@@ -544,6 +544,12 @@ def run_agent_execution_job(
     2/3의 동기 경로가 "예외를 그대로 전파해 아무 것도 안 남긴다"였던
     것과 달리, 비동기 경로는 실패도 사람이 UI에서 볼 수 있게 저장하는
     쪽이 맞다(HOTL — 실행이 죽었는지조차 모르면 감독이 안 된다)."""
+    # 사용자 요청(2026-09-29, "Tool, Skill을 적극 활용하는 시나리오를
+    # 기획해 진행해줘") 라이브 실행에서 발견한 갭 — VectorDB/GraphDB
+    # 그라운딩이 실제로 뭘 검색해 프롬프트에 넣었는지 사후 확인할 방법이
+    # 없었다(결재자가 "실제 근거 기반 답변인지" 검증 불가). side-channel
+    # dict로 받아 job에 같이 남긴다.
+    retrieval_sink: dict = {}
     try:
         # Phase 3 — 실제 LLM 호출을 agent_evaluation.run_and_score()로
         # 감싸 Gate A-G를 그 자리에서 측정한다(docs/HAIR_MASTER_PLAN.md
@@ -551,7 +557,13 @@ def run_agent_execution_job(
         eval_result = agent_evaluation.run_and_score(
             role_name,
             lambda: agent_runtime.execute_agent(
-                conn, agent_id, actor_id, prompt, provider, model
+                conn,
+                agent_id,
+                actor_id,
+                prompt,
+                provider,
+                model,
+                retrieval_sink=retrieval_sink,
             ),
         )
 
@@ -568,8 +580,8 @@ def run_agent_execution_job(
         approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
         conn.execute(
             "UPDATE agent_execution_jobs SET status = 'succeeded', deliverable_id = ?, "
-            "finished_at = datetime('now') WHERE id = ?",
-            (deliverable_id, job_id),
+            "retrieved_context = ?, finished_at = datetime('now') WHERE id = ?",
+            (deliverable_id, retrieval_sink.get("retrieved_context"), job_id),
         )
         audit.record(
             conn,

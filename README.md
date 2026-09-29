@@ -6,7 +6,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
 **상태**: Phase 0–6 완료 + Gate A–G가 실제 프로덕션 경로에 상시 연결됨
-(F1–F14 전부 구현, `pytest` 192 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
+(F1–F14 전부 구현, `pytest` 194 passed). **F11 Web UI 셸을 실제로 구현**했고, 내비게이션은 기존 RBAC
 매트릭스를 근거로 "내 업무"/"공용 조회"/"운영 관리" 3구역으로 분리했다(ADR 결정 9).
 **실제 LLM(Anthropic/OpenAI/Ollama) 연동**(`llm.py`·`agent_runtime.py`) —
 F4 Agent 생성·온디맨드 실행(`POST /api/agent-pool/{id}/execute`)에서 실제
@@ -214,7 +214,18 @@ UI/UX도 개선했다 — textarea를 독립된 줄로 분리하고 "결과물 �
 NULL로 참조돼 하드 삭제가 FK 위반으로 불가능해 Human/Agent Pool과
 같은 "비활성화" 패턴을 적용했다(비활성화 즉시 로그인 차단 + 기존
 세션도 끊김, 본인 계정은 비활성화 불가). "동작" 열은 "상사 지정"으로
-이름을 바꿨다(GC185-188, `docs/LIMITS.md` §40).
+이름을 바꿨다(GC185-188, `docs/LIMITS.md` §40). 이어서 사용자 요청
+("계정 정보는 그대로 유지하고, 업무 정보 삭제 후... 일반업무나
+개발업무 시나리오의 End-to-End를... 실행하며... 개선해줘. Tool,
+Skill을 적극 활용하는 시나리오를 기획해 진행해줘")에 따라 **업무
+데이터만 초기화하고(계정 6개는 동일하게 재생성) VectorDB 그라운딩을
+실제로 쓰는 4번째 시나리오("신규 입사자 원격근무 정책 문의 대응")를
+실행했다** — 사내 규정 텍스트를 실제로 색인하고 Agent가 그 규정을
+정확히 인용해 답변하는 것까지 실측 확인. 이 과정에서 **그라운딩이
+실제로 뭘 검색해 답변에 반영했는지 사후 검증할 방법이 없던 갭**을
+발견해 `agent_execution_jobs.retrieved_context`에 근거를 남기고
+워크스페이스에 "참고한 근거" 접이식 블록으로 노출하도록 고쳤다
+(GC189-190, `docs/LIMITS.md` §41, `docs/SCENARIOS.md` 시나리오 4).
 **실제 OpenAI API로
 SDLC 8역할 에이전트 생성까지 실측
 검증 완료**(`docs/LIMITS.md` §11). 그 전 라운드에서 발견한 11건(R1: 승인
@@ -230,7 +241,7 @@ SDLC 8역할 에이전트 생성까지 실측
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 192건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 194건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -336,7 +347,7 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 192건
+tests/unit/                            # 골든셋 194건
 ```
 
 ## 로드맵

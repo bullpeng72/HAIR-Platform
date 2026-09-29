@@ -26,7 +26,7 @@ GRAPHDB_SKILL_TAGS = {"graphdb", "관계질의"}
 
 def augment_with_retrieval(
     conn: sqlite3.Connection, skills: list[str], prompt: str
-) -> str:
+) -> tuple[str, str | None]:
     """skill_tags로 지식검색(VectorDB)/관계분석(GraphDB) Agent를 판별해
     검색 결과를 프롬프트에 덧붙인다(ADR 결정 11). 해당 없으면 원본 그대로.
 
@@ -40,18 +40,27 @@ def augment_with_retrieval(
     Agent가 호출 여부를 스스로 판단하게 한다(`crew_runtime._skill_based_
     tools()`) — 한때 이 함수를 `run_crew()`에도 그대로 연결했었지만
     (2026-09-27, "CrewAI 개념을 제대로 활용하는지 확인해줘"), 이번 요청으로
-    Tool 방식으로 대체했다."""
+    Tool 방식으로 대체했다.
+
+    **반환값 확장(2026-09-29, Tool/Skill 활용 시나리오 라이브 실행에서
+    발견한 갭)**: 실제로 지식검색 Agent를 끝까지 돌려보니, 무엇이
+    검색·주입됐는지 사후에 확인할 방법이 어디에도 없었다 — 결재자가
+    "이 답변이 실제 회사 규정을 근거로 했는지, 그냥 지어낸 건지"를
+    검증할 수가 없는 데이터 흐름 공백이었다. `(augmented_prompt,
+    retrieved_context)`로 바꿔 호출자가 근거를 별도로 저장할 수 있게
+    한다 — `retrieved_context`는 매칭되는 스킬이 없거나 VectorDB 검색
+    결과가 0건이면 `None`."""
     skill_set = set(skills)
     if skill_set & VECTORDB_SKILL_TAGS:
         hits = vectorstore.search(conn, prompt, top_k=3)
         if hits:
             context = "\n".join(f"- {h['text']}" for h in hits)
-            return f"참고할 과거 산출물:\n{context}\n\n요청: {prompt}"
-        return prompt
+            return f"참고할 과거 산출물:\n{context}\n\n요청: {prompt}", context
+        return prompt, None
     if skill_set & GRAPHDB_SKILL_TAGS:
         context = graphquery.context_for_prompt(conn)
-        return f"{context}\n\n요청: {prompt}"
-    return prompt
+        return f"{context}\n\n요청: {prompt}", context
+    return prompt, None
 
 
 def index_knowledge(
@@ -93,6 +102,8 @@ def execute_agent(
     prompt: str,
     provider: str | None = None,
     model: str | None = None,
+    *,
+    retrieval_sink: dict | None = None,
 ) -> str:
     """온보딩된(status='active') Agent에게 프롬프트를 넘겨 실제로 일을 시킨다.
 
@@ -104,7 +115,14 @@ def execute_agent(
 
     결과는 `agent_pool.last_output`에 누적 없이 최신값으로 저장한다(감사로그에
     이전 값이 남으므로 이력 자체는 audit_log로 추적 가능하다).
-    """
+
+    `retrieval_sink`(2026-09-29, Tool/Skill 활용 시나리오 라이브 실행에서
+    발견한 갭 보완): 반환 타입을 그대로 `str`로 유지해야 한다 — 이 함수는
+    `agent_evaluation.run_and_score()`의 `Callable[[], str]` 계약과
+    `/api/agent-pool/{id}/execute` 두 호출부 모두 문자열 반환을 전제로
+    한다. 그래서 검색 근거는 반환값이 아니라 **선택적 side-channel**로만
+    전달한다 — 호출자가 dict를 넘기면 `retrieved_context` 키에 채워
+    넣는다(넘기지 않으면 기존 동작과 100% 동일)."""
     agent = conn.execute(
         "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
     ).fetchone()
@@ -120,7 +138,9 @@ def execute_agent(
         effective_provider, effective_model
     )
     system = llm.system_prompt_for_role(agent["role_name"], skills)
-    augmented_prompt = augment_with_retrieval(conn, skills, prompt)
+    augmented_prompt, retrieved_context = augment_with_retrieval(conn, skills, prompt)
+    if retrieval_sink is not None:
+        retrieval_sink["retrieved_context"] = retrieved_context
     output = llm.call_llm(resolved_provider, resolved_model, system, augmented_prompt)
 
     conn.execute(

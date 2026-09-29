@@ -39,7 +39,9 @@ task의 confirmed 배정을 전부 supersede했다 — Phase 1 이전엔 "task �
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+from hair_platform import agent_runtime
 
 
 def _login(client, username, password):
@@ -1186,3 +1188,92 @@ def test_gc184_no_confirmed_agent_assignment_is_not_execution_eligible(
     _login(client, "manager1", "managerpass")
     resp = client.get(f"/api/tasks/{task_id}/execution-permission")
     assert resp.json() == {"eligible": False, "reason": "no_confirmed_agent"}
+
+
+# ---------- Tool/Skill 그라운딩 근거 노출 — 사용자 요청(2026-09-29,
+# "Tool, Skill을 적극 활용하는 시나리오를 기획해 진행해줘", 라이브 실행
+# 중 발견한 갭) ----------
+
+
+def _fake_openai_embeddings(vectors: dict[str, list[float]]):
+    """텍스트별 고정 벡터를 돌려주는 가짜 OpenAI 임베딩 클라이언트
+    (test_phase12_crewai_vectordb_graphdb.py와 같은 패턴)."""
+
+    # 실측으로 발견 — 등록 안 된 입력(예: 실제 검색 쿼리 프롬프트)에
+    # 기본값으로 다른 차원의 벡터를 주면 `_cosine_similarity()`의
+    # `zip(a, b, strict=True)`가 차원 불일치로 예외를 던진다. 색인한
+    # 벡터와 같은 차원(2)의 0벡터를 기본값으로 써서 "매칭 안 됨"을
+    # 안전하게 표현한다(코사인 유사도 0, 크래시 없음).
+    def _create(model, input):
+        vec = vectors.get(input, [0.0, 0.0])
+        item = MagicMock()
+        item.embedding = vec
+        resp = MagicMock()
+        resp.data = [item]
+        return resp
+
+    client = MagicMock()
+    client.embeddings.create.side_effect = _create
+    return client
+
+
+def test_gc189_execute_agent_records_and_exposes_retrieved_context(client_and_conn):
+    """실측으로 발견한 갭 — VectorDB 그라운딩(ADR 결정 11)이 실제로 뭘
+    검색해 프롬프트에 넣었는지 실행 후엔 어디서도 확인할 수 없었다.
+    `agent_execution_jobs.retrieved_context`에 남기고 job 조회 응답으로
+    노출해야 한다."""
+    client, conn = client_and_conn
+    brief_id, task_id = _make_brief_and_task(client, "정책 문의 응답", ["rag"])
+    _login(client, "admin1", "adminpass")
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[\"rag\"]', 'active')",
+        ("정책 문의 응답",),
+    )
+    conn.commit()
+    agent_id = cur.lastrowid
+    _confirm_assignment(
+        client, task_id, "agent", agent_id, requester=("manager1", "managerpass")
+    )
+
+    fake_client = _fake_openai_embeddings(
+        {"원격근무는 3개월 수습 기간 중 사용할 수 없다": [1.0, 0.0]}
+    )
+    with patch("openai.OpenAI", return_value=fake_client):
+        agent_runtime.index_knowledge(
+            conn, agent_id, 1, "원격근무는 3개월 수습 기간 중 사용할 수 없다"
+        )
+
+    _login(client, "manager1", "managerpass")
+    with (
+        patch("openai.OpenAI", return_value=fake_client),
+        patch("hair_platform.llm.call_llm", return_value="수습 기간 중이라 불가합니다."),
+    ):
+        resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
+    assert resp.status_code == 202, resp.text
+    job_id = resp.json()["job_id"]
+
+    resp = client.get(f"/api/tasks/{task_id}/agent-execution-jobs")
+    job = next(j for j in resp.json() if j["id"] == job_id)
+    assert job["status"] == "succeeded", job
+    assert job["retrieved_context"] is not None
+    assert "원격근무는 3개월 수습 기간 중 사용할 수 없다" in job["retrieved_context"]
+
+
+def test_gc190_execute_agent_without_matching_skill_leaves_retrieved_context_null(
+    client_and_conn,
+):
+    """vectordb/graphdb 스킬이 없는 일반 Agent는 그라운딩 자체가 없으므로
+    `retrieved_context`가 `None`이어야 한다(무의미한 빈 문자열이 아니라
+    "애초에 검색 안 함"과 "검색했는데 0건"을 구분)."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    _login(client, "manager1", "managerpass")
+    with patch("hair_platform.llm.call_llm", return_value="일반 응답"):
+        resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
+    job_id = resp.json()["job_id"]
+
+    resp = client.get(f"/api/tasks/{task_id}/agent-execution-jobs")
+    job = next(j for j in resp.json() if j["id"] == job_id)
+    assert job["status"] == "succeeded", job
+    assert job["retrieved_context"] is None
