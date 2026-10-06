@@ -3009,3 +3009,82 @@ Agent(또는 팀) 협업 기획안을 `docs/COLLABORATION_PLATFORM_PLAN.md`
 | Phase 1-5 리뷰: Phase 5 자체 버그 2건("조용히 틀린 결과") | **전부 발견 → 전부 수정 완료**(GC170-171) — (1) `dashboard.cost_trend()`가 SQL LIMIT을 관련성 필터보다 먼저 적용해, 비용과 무관한 human_pool_updated가 몰리면 진짜 비용 이력이 응답에서 사라지던 버그, (2) 검색의 `availability='unavailable'` 필터가 Agent엔 안 걸려 항상 가능한 Agent가 "불가능만" 결과에 섞여 나오던 버그. 둘 다 크래시 없이 조용히 틀린 데이터를 보여주는 종류라 실측 없이는 못 잡았을 것(§30) |
 | 기획/설계 문서 리뷰: 실제 구현과 어긋난 서술 6건 | **전부 발견 → 전부 수정 완료**(문서 전용, 코드 변경 없음) — `HAIR_MASTER_PLAN.md` §4 데이터 흐름 다이어그램의 3가지 오류(Tool Pool 그라운딩·run_crew()·performance_score 자동 갱신 — 전부 실제와 다름), §1/§2 표의 과장된 서술(HOTL 일시정지·성과 리뷰 자동 점수 병기·Gate 임계값 설정 — 전부 미구현이거나 다른 화면에 구현됨), §8 결정 목록의 비일관적 완료 표시(1·4번은 실제로 해결됐는데 계속 미해결로 표시), `COLLABORATION_PLATFORM_PLAN.md`·`SPEC.md`의 같은 종류 오픈 이슈 2건, `RETROSPECTIVE.md`엔 소급 수정 대신 안내 문구 추가(스냅샷 문서 원칙 유지)(§31) |
 | UI/UX 리뷰: 화면 사용성 버그 4건 | **전부 발견 → 전부 수정 완료**(golden set 불가, `node --check`+ruff로만 검증) — (1) 댓글 폼 이벤트 리스너 누적 버그(가장 심각 — 댓글 등록마다 리스너가 1→2→4→8개로 배가돼 다음 댓글부터 중복 제출됨, 브라우저 DOM 동작이라 이 프로젝트에 테스트 인프라가 없어 코드 읽기로만 검증), (2) Gate 배지가 측정된 Gate 0개일 때 "0/0 통과"를 초록색으로 표시해 "전부 통과"처럼 오해를 주던 문제, (3) Agent "오프보딩" 버튼만 확인 창이 없던 인시스턴시(이 화면 안내문 자체가 "되돌릴 수 없다"고 명시하는데도), (4) 성과 리뷰 화면이 "Gate A-G 자동 채점 연동 전"이라는 낡은 안내를 보여주던 것(실제로는 Phase 3가 이미 연결했고 다른 화면에 있음). 부수적으로 이 파일 자체의 요약 표 헤더 행이 빠져 있던 것도 같이 복구(§32) |
+
+## 61. 다자간 팀 협업 Phase 1+2 구현 — 사용자 결정(2026-10-06, §60의
+    "다음 액션(사용자 결정 필요)" 3개 질문에 대한 답: "1-2를 묶어
+    한번에 설계, 다중 confirmed 허용의 경우 개별 배정에도, 팀의 F7
+    승인 팀 리더가(팀 리더의 경우 팀을 배정 요청한 사람이 default로
+    지정, 변경 가능)")
+
+§60의 기획안(`docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md`) Phase 1
+(팀 정의 CRUD)과 Phase 2(`resource_type='team'` 배정 + 다중confirmed
+허용)를 사용자 결정대로 한 번에 구현했다. Phase 3(`run_crew()` ↔
+`task_id` 다리)·Phase 4(협업 워크스페이스 N:M 타임라인 UI)는 이번에
+포함하지 않았다 — 기획 문서 §9에 "구현 현황"으로 남은 범위를 그대로
+기록해뒀다.
+
+**핵심 구현**:
+
+- `teams`/`team_members` 신규 테이블(`db.py`) + `teams.py`
+  CRUD(`skill_pool`/`tool_pool`/`model_registry`와 동일한 "등록→
+  재사용" 패턴, 네 번째 적용).
+- `assignments.resource_type='team'` 지원, `team_leader_id`(기본값
+  `requested_by`, `requested` 상태일 때만 변경 가능 —
+  `update_team_leader()`)로 F7 결재 주체를 팀 리더로 라우팅.
+- **`resolve_assignment_decision()`의 "같은 task·같은 resource_type이면
+  자동 supersede" 동작을 완전히 제거** — 이제 기본적으로 다중
+  confirmed가 공존하고, 교체하려면 요청 시점에 `replaces_assignment_id`
+  를 명시해야 한다. 이는 팀뿐 아니라 사람/사람, Agent/Agent 개별
+  배정에도 적용되는 **플랫폼 전역 동작 변경**이다(결정 2를 그대로
+  반영한 결과).
+- `deliverables.task_participant_relationship()`에 `team_leader`/
+  `team_member` 판정 추가 — 이미 "모든 confirmed 배정을 순회"하는
+  구조라 수정 범위가 예상대로 작았다(기획 §3-2에서 미리 예측한 그대로
+  — 실제 코드를 읽어 확인 후 반영).
+- `app.py`에 팀 CRUD·멤버 관리·팀 리더 변경 8개 엔드포인트 신설.
+
+**구현 중 실측으로 발견한 진짜 버그**: `GET /api/tasks/{id}/assignments`
+(§55 "할 일 상세" 패널이 의존하는 엔드포인트)가 `human_pool`/
+`agent_pool`만 JOIN하고 `teams`는 JOIN하지 않아, 팀 배정의
+`resource_name`이 **항상 `null`**로 나오고 있었다 — 즉 이 기능 없이는
+팀을 배정해도 UI가 "팀 #3"처럼도 못 보여주고 그냥 빈 이름을 보여줄
+뻔했다. `LEFT JOIN teams` + `team_leader_id` 컬럼 노출로 수정하고
+`test_gc231`로 회귀를 막았다.
+
+**회귀 대응**: "다중 confirmed 허용"으로 기존 "재배치=자동 supersede"
+전제가 깨져, 그 전제로 작성된 기존 테스트 4건(`test_v2_pipeline.py::
+test_gc17/18`, `test_phase17_collab_workspace.py::test_gc150/217`)이
+깨졌다 — 전부 `replaces_assignment_id`를 명시하도록 수정해 통과시켰다
+(동작이 실제로 바뀐 것이므로 테스트도 새 계약에 맞게 고치는 게 맞다 —
+옛 동작을 몰래 복원하는 임시방편은 쓰지 않았다).
+
+**UI**: "팀 관리" 탭 신설(생성·멤버 추가/제외·활성 토글·삭제).
+"할 일 상세" 패널(§55)을 `.find()`로 confirmed 1건만 집던 방식에서
+confirmed/requested 전부를 나열하는 방식으로 바꾸고, 팀 리더 변경
+입력과 "이 팀에 배정 요청" 폼을 추가했다.
+
+**검증**: 신규 `tests/unit/test_phase22_team_collaboration.py`
+(GC226-234, 9건) + 기존 4건 수정, 전체 골든셋 241건 통과(이전 232건
++9). `.venv/bin/python -m pytest tests/unit -q`를 두 번 독립 실행해
+모두 그린임을 확인했다 — 중간에 한 번 백그라운드 실행이 비정상 종료
+("killed")됐었는데, 동시에 여러 무거운 Bash/Edit 작업을 돌리던 시스템
+부하 때문이었던 것으로 재확인(재실행 시 정상 222초대로 완료, 코드
+자체의 회귀 아님). 실제 데모 서버(`hair.db`)에 팀 생성→멤버 추가→
+배정 요청→F7 결재→확정까지 실측 완료(검증 후 생성한 테스트용 brief/
+task/human_pool 레코드 1건씩이 정리 전 상태로 `hair.db`에 남아있다 —
+이 레포의 DB 직접 수정을 막는 안전장치에 걸려 Bash로 지우지 못했고,
+admin 계정 비밀번호는 알지 못해 API로도 못 지웠다. 사용자가 "업무
+요청"/"사람 인력 관리" 탭에서 직접 지우거나, 그대로 둬도 다른 데이터에
+영향은 없다).
+
+커밋 직전 전체 스위트 재실행에서 `test_gc60_root_page_serves_html_shell`
+(코드 재점검 R5, "F1/F5 같은 스펙 코드가 화면에 그대로 노출" 회귀 방지
+테스트)이 실제로 걸렸다 — "팀 관리" 탭 안내 문구에 내부 스펙 코드
+"F7 결재"를 그대로 썼던 것을 이 테스트가 바로 잡아냈다("팀 배정의
+결재 주체는 팀 리더..."로 평이하게 수정). 이 세션에서 새 UI 문구를
+쓸 때 실제로 기존 회귀 테스트에 걸린 유일한 사례 — 이런 종류의 실수를
+잡아내는 게 그 테스트의 존재 이유 그대로였다.
+
+**의도적으로 남긴 갭(§9에 기록)**: 팀의 Agent 멤버를 실제로 협업
+실행시키는 기능(Phase 3)·"인력 매칭/배정"의 팀 추천(점수 로직)은
+이번에 포함하지 않았다 — 각각 별도 작업으로 남는다.

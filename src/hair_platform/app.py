@@ -830,26 +830,31 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         rows = conn.execute(
             """
             SELECT a.id, a.resource_type, a.resource_id, a.status,
-                   hp.name AS human_name, ap.role_name AS agent_role_name
+                   a.team_leader_id,
+                   hp.name AS human_name, ap.role_name AS agent_role_name,
+                   t.name AS team_name
             FROM assignments a
             LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
             LEFT JOIN agent_pool ap ON ap.id = a.resource_id AND a.resource_type = 'agent'
+            LEFT JOIN teams t ON t.id = a.resource_id AND a.resource_type = 'team'
             WHERE a.task_id = ?
             ORDER BY a.id DESC
             """,
             (task_id,),
         ).fetchall()
+        resource_names = {
+            "human": lambda row: row["human_name"],
+            "agent": lambda row: row["agent_role_name"],
+            "team": lambda row: row["team_name"],
+        }
         return [
             {
                 "id": row["id"],
                 "resource_type": row["resource_type"],
                 "resource_id": row["resource_id"],
-                "resource_name": (
-                    row["human_name"]
-                    if row["resource_type"] == "human"
-                    else row["agent_role_name"]
-                ),
+                "resource_name": resource_names[row["resource_type"]](row),
                 "status": row["status"],
+                "team_leader_id": row["team_leader_id"],
             }
             for row in rows
         ]
@@ -1557,7 +1562,9 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         try:
-            team_id = teams.create_team(conn, user["id"], payload.name, payload.description)
+            team_id = teams.create_team(
+                conn, user["id"], payload.name, payload.description
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": team_id, "name": payload.name}
@@ -1571,7 +1578,9 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         try:
             teams.set_team_active(conn, user["id"], team_id, payload.is_active)
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail="팀을 찾을 수 없습니다") from exc
+            raise HTTPException(
+                status_code=404, detail="팀을 찾을 수 없습니다"
+            ) from exc
         return {"id": team_id, "is_active": payload.is_active}
 
     @app.delete("/api/teams/{team_id}")
@@ -1582,7 +1591,9 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         try:
             teams.delete_team(conn, user["id"], team_id)
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail="팀을 찾을 수 없습니다") from exc
+            raise HTTPException(
+                status_code=404, detail="팀을 찾을 수 없습니다"
+            ) from exc
         return {"id": team_id, "deleted": True}
 
     @app.post("/api/teams/{team_id}/members", status_code=201)

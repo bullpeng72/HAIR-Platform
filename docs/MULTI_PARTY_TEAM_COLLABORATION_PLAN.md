@@ -162,11 +162,89 @@ CrewAI `kickoff()` 도중 실시간으로 사람이 끼어드는 건(L4) 여전�
 - 팀 단위 비용 자동 집계(현재도 `cost.py`는 수동 입력 중심 — 팀이라고
   달라질 이유 없음, §58 패턴과 동일하게 감사로그 재사용으로 충분).
 
-## 8. 다음 액션(사용자 결정 필요)
+## 8. 다음 액션(사용자 결정 필요) — 결정됨(2026-10-06)
 
 1. Phase 1부터 순차 진행할지, 1-2를 묶어 한 번에 설계할지.
+   → **"1-2를 묶어 한 번에 설계"**로 결정.
 2. §3-2의 "다중 confirmed 허용"을 팀 배정에만 열지, 개별 배정(사람
    2명을 한 task에 직접 배정)에도 열지 — 후자는 "팀"이라는 그릇 없이도
    L1을 풀어주지만, 그만큼 `assignments`/결재 의미론이 더 복잡해진다.
+   → **"다중 confirmed 허용의 경우 개별 배정에도"**로 결정 — 팀뿐
+   아니라 사람/사람, Agent/Agent 등 개별 배정도 기본적으로 여러 건이
+   공존한다. "교체"하고 싶을 때만 `replaces_assignment_id`를 명시한다
+   (§9 구현 참고).
 3. 팀의 F7 승인 주체 — "팀 리더"(team_members 중 1명을 지정)로 할지,
    "팀을 배정 요청한 사람"(현재 `requested_by`)으로 그대로 할지.
+   → **"팀의 F7 승인 팀 리더가(팀 리더의 경우 팀을 배정 요청한 사람이
+   default로 지정, 변경 가능)"**로 결정 — `team_leader_id` 컬럼을
+   추가하고 기본값은 요청자, `requested` 상태일 때만 변경 가능.
+
+## 9. 구현 현황(Phase 1+2, 2026-10-06/07 완료)
+
+위 결정에 따라 Phase 1(팀 정의 CRUD)과 Phase 2(`resource_type='team'`
+배정 + 다중 confirmed 허용)를 한 번에 구현했다. Phase 3(`run_crew()`
+↔ `task_id` 다리, §3-3)·Phase 4(협업 워크스페이스 N:M 타임라인 UI,
+§5의 역할 배지·다이어그램 재사용)는 **아직 구현하지 않았다** — 이
+문서가 여전히 유효한 다음 단계 계획이다.
+
+**구현된 것**:
+
+- `teams`/`team_members` 스키마(§3-1 그대로) — `db.py::SCHEMA`.
+- `teams.py` — `skill_pool`/`tool_pool`/`model_registry`와 동일한
+  "등록 → 재사용" CRUD 패턴(`create_team`/`get_team`/`list_teams`/
+  `set_team_active`/`delete_team`/`add_team_member`/
+  `remove_team_member`). `active_agent_member_ids()`는 Phase 3에서
+  쓸 예정으로 미리 추가해둔 헬퍼(아직 호출부 없음).
+- `assignments.create_assignment_request()`/`resolve_assignment_
+  decision()` — `resource_type='team'` 지원, `team_leader_id`(기본값
+  `requested_by`) 기반 F7 결재라인, `replaces_assignment_id`로
+  명시적 교체 의도 표현. **"같은 task·같은 resource_type이면 자동
+  supersede"였던 기존 동작을 완전히 제거**하고 "명시적으로 지목한
+  것만 supersede"로 바꿨다 — 결정 2(§8)에 따라 팀뿐 아니라 개별
+  배정에도 적용.
+- `assignments.update_team_leader()` + `PATCH /api/assignments/
+  {id}/team-leader` — `requested` 상태일 때만 변경 허용(확정 후엔
+  결재라인과 어긋나 금지).
+- `deliverables.task_participant_relationship()`에 `team_leader`/
+  `team_member` 판정 추가 — 기존 "모든 confirmed 배정을 순회" 구조라
+  수정 범위가 작았다(§3-2에서 예측한 대로).
+- `app.py` — `GET/POST /api/teams`, `PATCH .../active`,
+  `DELETE /api/teams/{id}`, `POST/DELETE .../members`,
+  `PATCH /api/assignments/{id}/team-leader` 8개 엔드포인트. RBAC는
+  기존 pool_registry 관례(생성/조회/멤버 관리는 admin+manager, 삭제는
+  admin 전용)를 그대로 따름.
+- `GET /api/tasks/{id}/assignments` — **구현 중 실측으로 발견한 갭**:
+  이 엔드포인트가 `human_pool`/`agent_pool`만 JOIN하고 `teams`는
+  JOIN하지 않아 팀 배정의 `resource_name`이 항상 `null`로 나왔다
+  (§55 "할 일 상세" 패널이 이 엔드포인트에 의존하므로 팀 배정을 그려줄
+  방법이 없었다는 뜻). `LEFT JOIN teams` + `team_leader_id` 컬럼 노출로
+  수정 — `tests/unit/test_phase22_team_collaboration.py::test_gc231`로
+  회귀 확인.
+- **UI**(`webui.py`) — §5 표의 "(신규) 팀 관리" 탭(생성·멤버 추가/제외·
+  활성 토글·삭제)과 "할 일 상세" 패널 갱신: 복수 confirmed/requested
+  배정을 모두 표시(기존엔 `.find()`로 1건만), 팀 리더 변경 입력,
+  "팀에 배정 요청" 폼. "인력 매칭/배정" 탭의 팀 후보 추천(§5 두 번째
+  행, "필요 역할과 팀 멤버 역할 커버리지 비교")은 **아직 구현하지
+  않았다** — 지금은 "할 일 상세"에서 활성 팀 목록 중 고르는 방식만
+  있고, 매칭 점수 로직에 팀을 넣지는 않았다.
+
+**검증**: `tests/unit/test_phase22_team_collaboration.py`(GC226-234,
+9건) + 기존 4건 수정(`test_v2_pipeline.py::test_gc17/18`,
+`test_phase17_collab_workspace.py::test_gc150/217` — "다중 confirmed
+허용"으로 자동 supersede가 없어져 명시적 `replaces_assignment_id`가
+필요해졌다). 전체 스위트 241건 통과. 실제 데모 서버(`hair.db`)에
+팀 생성→멤버 추가→배정 요청→F7 결재→확정까지 실측 완료(`docs/
+LIMITS.md` §61 참고).
+
+**알려진 한계(사용자에게 그대로 노출)**:
+
+- 팀의 Agent 멤버를 실제로 협업 실행시키는 기능(Phase 3)이 없다 —
+  팀을 배정해도 "AI 에이전트 실행" 버튼은 여전히 `agent_id`가 모호하면
+  (confirmed agent가 여럿이면) 그중 먼저 걸리는 하나만 실행한다
+  (`deliverables.start_agent_execution()`, agent_id 미지정 시 기존
+  동작 그대로 — 하위 호환 우선, §Pending). 팀 멤버는 "결과물 작성·
+  댓글"만 할 수 있고, "AI 에이전트 실행"의 `execution_eligibility()`는
+  여전히 `requester`(Agent 배정 요청자) 전용이라 팀 리더/팀원이라는
+  이유만으로는 실행 권한이 생기지 않는다.
+- "인력 매칭/배정"의 자동 추천은 사람/Agent 후보만 대상이다 — 팀은
+  "할 일 상세"에서 수동으로 골라야 한다.

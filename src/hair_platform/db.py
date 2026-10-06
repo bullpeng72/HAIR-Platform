@@ -363,9 +363,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 길이 필요해서 추가했다 — 이 값이 있을 때만 승인 시 그 특정
     # assignment가 superseded된다(`assignments.resolve_assignment_
     # decision()`).
-    _ensure_column(conn, "assignments", "team_leader_id", "INTEGER REFERENCES users(id)")
     _ensure_column(
-        conn, "assignments", "replaces_assignment_id", "INTEGER REFERENCES assignments(id)"
+        conn, "assignments", "team_leader_id", "INTEGER REFERENCES users(id)"
+    )
+    _ensure_column(
+        conn,
+        "assignments",
+        "replaces_assignment_id",
+        "INTEGER REFERENCES assignments(id)",
     )
 
 

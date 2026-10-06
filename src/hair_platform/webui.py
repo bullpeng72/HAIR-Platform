@@ -444,6 +444,7 @@ const TABS = [
   { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "agentpool", label: "AI 에이전트 관리", group: "admin", roles: ["admin", "manager"], render: renderAgentPool },
   { id: "poolregistry", label: "도구/스킬 Pool", group: "admin", roles: ["admin", "manager"], render: renderPoolRegistry },
+  { id: "teams", label: "팀 관리", group: "admin", roles: ["admin", "manager"], render: renderTeams },
   { id: "modelregistry", label: "모델 레지스트리", group: "admin", roles: ["admin", "manager"], render: renderModelRegistry },
   { id: "crew", label: "Crew 실행", group: "admin", roles: ["admin", "manager"], render: renderCrew },
   { id: "admin", label: "사용자 관리", group: "admin", roles: ["admin"], adminOnly: true, render: renderAdmin },
@@ -1090,49 +1091,106 @@ async function renderTaskDetailPanel(task) {
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   container.innerHTML = '<p class="muted">불러오는 중...</p>';
   const assignments = await api("GET", "/api/tasks/" + task.id + "/assignments");
-  const confirmed = assignments.find(a => a.status === "confirmed");
-  const pending = assignments.find(a => a.status === "requested");
-  const history = assignments.filter(a => a !== confirmed && a !== pending);
+  // 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) — "다중
+  // confirmed 허용"으로 바뀌면서 이 패널도 더 이상 .find()로 하나만
+  // 골라 보여줄 수 없다. confirmed/requested 전부를 보여주고, 각 건에
+  // 배정 ID를 노출해 팀 리더 변경·협업 워크스페이스 진입에 쓴다.
+  const confirmedList = assignments.filter(a => a.status === "confirmed");
+  const pendingList = assignments.filter(a => a.status === "requested");
+  const historyList = assignments.filter(a => a.status !== "confirmed" && a.status !== "requested");
 
   const resourceLabel = (a) => esc(label(a.resource_type)) + " " +
-    (a.resource_name ? esc(a.resource_name) : "#" + a.resource_id);
+    (a.resource_name ? esc(a.resource_name) : "#" + a.resource_id) +
+    (a.resource_type === "team" ? ' <span class="muted">(팀 리더: #' + a.team_leader_id + ')</span>' : "");
 
-  let statusHtml;
-  if (confirmed) {
-    statusHtml = '<p><span class="gate-badge gate-ok">확정됨</span> ' + resourceLabel(confirmed) + "에게 배정됨</p>";
-  } else if (pending) {
-    statusHtml = '<p><span class="gate-badge gate-warn">결재 대기</span> ' + resourceLabel(pending) +
-      ' — <button class="small" id="task-detail-goto-approvals">결재 탭에서 처리</button></p>';
-  } else {
-    statusHtml = '<p class="muted">아직 배정 요청이 없습니다.</p>';
-  }
-  const historyHtml = history.length
-    ? '<details class="muted"><summary>이전 배정 이력(' + history.length + '건)</summary>' +
-      table(["타입", "대상", "상태"], history.map(a => [esc(label(a.resource_type)), esc(a.resource_name || ("#" + a.resource_id)), esc(label(a.status))])) +
+  const confirmedHtml = confirmedList.length
+    ? confirmedList.map(a => '<p><span class="gate-badge gate-ok">확정됨</span> ' + resourceLabel(a) + "에게 배정됨</p>").join("")
+    : "";
+  const pendingHtml = pendingList.map(a =>
+    '<p><span class="gate-badge gate-warn">결재 대기</span> ' + resourceLabel(a) +
+    ' — <button class="small" data-goto-approvals="1">결재 탭에서 처리</button>' +
+    (isSupervisor && a.resource_type === "team"
+      ? ' <span class="inline" style="display:inline-flex;gap:0.25rem">' +
+        '<input type="number" min="1" step="1" placeholder="새 팀 리더 user ID" data-team-leader-input="' + a.id + '" style="width:140px">' +
+        '<button class="small" data-change-team-leader="' + a.id + '">팀 리더 변경</button></span>'
+      : "") +
+    "</p>"
+  ).join("");
+  const statusHtml = (confirmedHtml || pendingHtml)
+    ? confirmedHtml + pendingHtml
+    : '<p class="muted">아직 배정 요청이 없습니다.</p>';
+  const historyHtml = historyList.length
+    ? '<details class="muted"><summary>이전 배정 이력(' + historyList.length + '건)</summary>' +
+      table(["타입", "대상", "상태"], historyList.map(a => [esc(label(a.resource_type)), esc(a.resource_name || ("#" + a.resource_id)), esc(label(a.status))])) +
       "</details>"
     : "";
+
+  // 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) — 사람/Agent
+  // 후보 매칭("인력 매칭/배정"과 공유)에 더해, 등록된 팀 전체를 한 할
+  // 일에 배정 요청하는 선택지를 추가한다("팀 관리" 탭에서 미리 구성).
+  let teamOptionsHtml = "";
+  if (isSupervisor) {
+    const teams = await api("GET", "/api/teams").catch(() => []);
+    const activeTeams = teams.filter(t => t.is_active);
+    teamOptionsHtml = activeTeams.length
+      ? '<form class="inline" id="task-detail-team-assign-form">' +
+        '<select id="task-detail-team-select" required>' +
+        activeTeams.map(t => '<option value="' + t.id + '">' + esc(t.name) + '</option>').join("") +
+        '</select><button class="small" type="submit">이 팀에 배정 요청</button></form>'
+      : '<p class="muted">등록된 활성 팀이 없습니다 — "팀 관리" 탭에서 먼저 만드세요.</p>';
+  }
 
   container.innerHTML =
     '<section class="card"><h4>할 일 #' + task.id + " — " + esc(task.role_name) + " 상세</h4>" +
     statusHtml + historyHtml +
-    (isSupervisor && !confirmed
-      ? '<button class="small" id="task-detail-match-btn">후보 매칭하기</button><div id="task-detail-match"></div>'
+    (isSupervisor
+      ? '<button class="small" id="task-detail-match-btn">후보 매칭하기</button><div id="task-detail-match"></div>' +
+        '<details><summary>팀에 배정 요청</summary>' + teamOptionsHtml + '</details>'
       : "") +
-    (isSupervisor && confirmed ? '<div id="task-detail-workspace"></div>' : "") +
+    (isSupervisor && confirmedList.length ? '<div id="task-detail-workspace"></div>' : "") +
     "</section>";
 
-  if (pending) {
-    document.getElementById("task-detail-goto-approvals").onclick = () => selectTab("approvals");
-  }
-  if (isSupervisor && !confirmed) {
+  container.querySelectorAll("[data-goto-approvals]").forEach(btn => {
+    btn.onclick = () => selectTab("approvals");
+  });
+  container.querySelectorAll("[data-change-team-leader]").forEach(btn => {
+    btn.onclick = async () => {
+      const assignmentId = btn.dataset.changeTeamLeader;
+      const input = container.querySelector('[data-team-leader-input="' + assignmentId + '"]');
+      const newLeaderId = Number(input.value);
+      if (!Number.isInteger(newLeaderId) || newLeaderId < 1) {
+        showMsg("global-msg", "새 팀 리더의 user ID를 입력하세요.", "error"); return;
+      }
+      try {
+        await api("PATCH", "/api/assignments/" + assignmentId + "/team-leader", { team_leader_id: newLeaderId });
+        showMsg("global-msg", "팀 리더를 변경했습니다.", "ok");
+        renderTaskDetailPanel(task);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  if (isSupervisor) {
     document.getElementById("task-detail-match-btn").onclick = async () => {
       try {
         const result = await api("POST", "/api/tasks/" + task.id + "/match");
         renderMatchResult(task.id, result, "task-detail-match", () => renderTaskDetailPanel(task));
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
+    const teamAssignForm = document.getElementById("task-detail-team-assign-form");
+    if (teamAssignForm) {
+      teamAssignForm.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const teamId = Number(document.getElementById("task-detail-team-select").value);
+        try {
+          await api("POST", "/api/tasks/" + task.id + "/assignments", {
+            resource_type: "team", resource_id: teamId,
+          });
+          showMsg("global-msg", "팀 배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.", "ok");
+          renderTaskDetailPanel(task);
+        } catch (e) { showMsg("global-msg", e.message, "error"); }
+      });
+    }
   }
-  if (isSupervisor && confirmed) {
+  if (isSupervisor && confirmedList.length) {
     renderCollabWorkspace(task.id, "task-detail-workspace");
   }
 }
@@ -1782,6 +1840,124 @@ async function renderPoolRegistry(content) {
       if (!window.confirm("이 스킬을 완전히 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
       try {
         await api("DELETE", "/api/skill-pool/" + btn.dataset.deleteSkill);
+        showMsg("global-msg", "삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+}
+
+/* ---------- 팀(사용자 요청, 2026-10-06, "복수의 사람이 복수의 Agent와
+   또는 CrewAI 장점인 역할에 따른 Agent를 묶어 생성된 그룹과 협업하도록...
+   다시 기획"). `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 1+2 —
+   human_pool/agent_pool 멤버를 역할명과 함께 묶어 등록하는 "등록→재사용"
+   화면(tool_pool/skill_pool/model_registry와 같은 패턴). 팀 자체를 할 일에
+   배정하는 동작("배정 요청")은 이 탭이 아니라 "업무 요청" 탭의 할 일 상세
+   패널에서 한다(팀 정의와 배정은 관심사가 다르다 — teams.py 참고). */
+
+async function renderTeams(content) {
+  const [teams, people, agents] = await Promise.all([
+    api("GET", "/api/teams"),
+    api("GET", "/api/human-pool"),
+    api("GET", "/api/agent-pool"),
+  ]);
+  const isAdmin = ME.role === "admin";
+  const memberOptionsHtml =
+    '<option value="">멤버 선택</option>' +
+    '<optgroup label="사람">' +
+    people.map(p => '<option value="human:' + p.id + '">' + esc(p.name) + '(' + esc(p.role) + ')</option>').join("") +
+    '</optgroup>' +
+    '<optgroup label="Agent">' +
+    agents.map(a => '<option value="agent:' + a.id + '">' + esc(a.role_name) + '(#' + a.id + ')</option>').join("") +
+    '</optgroup>';
+
+  const teamCardHtml = (t) =>
+    '<section class="card" data-team-card="' + t.id + '">' +
+    '<h3>#' + t.id + " " + esc(t.name) + (t.is_active ? "" : ' <span class="gate-badge gate-warn">비활성</span>') + '</h3>' +
+    (t.description ? '<p class="muted">' + esc(t.description) + '</p>' : "") +
+    table(["타입", "멤버", "역할 라벨", "동작"], t.members.map(m => [
+      esc(label(m.member_type)), esc(m.member_name || ("#" + m.member_id)), esc(m.role_label),
+      '<button class="small danger" data-remove-member="' + t.id + ':' + m.id + '">제외</button>',
+    ])) +
+    '<form class="inline" data-add-member-form="' + t.id + '">' +
+    '<select data-member-select required style="min-width:180px">' + memberOptionsHtml + '</select>' +
+    '<input data-role-label placeholder="역할 라벨(선택)" style="width:140px">' +
+    '<button class="small" type="submit">멤버 추가</button></form>' +
+    '<div class="actions" style="margin-top:0.5rem">' +
+    '<button class="small" data-toggle-active="' + t.id + '" data-next-active="' + (t.is_active ? "0" : "1") + '">' +
+    (t.is_active ? "비활성화" : "활성화") + '</button>' +
+    (isAdmin ? '<button class="small danger" data-delete-team="' + t.id + '">팀 삭제</button>' : "") +
+    '</div>' +
+    '</section>';
+
+  content.innerHTML =
+    '<section class="card"><h2>팀 — 복수 사람·Agent 그룹 등록</h2>' +
+    '<p class="muted">사람(human_pool)·Agent(agent_pool) 멤버를 역할 라벨과 함께 묶어두면, "업무 요청" 탭의 할 일 상세에서 이 팀 전체를 한 할 일에 배정(resource_type="team")할 수 있습니다. 팀 배정의 결재 주체는 팀 리더(기본값은 배정 요청자, 확정 전까지 변경 가능)입니다 — 배정이 승인되면 팀의 사람 멤버(계정 연결된 경우)·팀 리더 모두 그 할 일의 협업 워크스페이스에 결과물을 쓸 수 있습니다. Agent 멤버를 Crew 실행에 자동으로 묶는 기능은 아직 없습니다(계획 중 — docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md Phase 3).</p>' +
+    '<form class="inline" id="team-create-form">' +
+    '<input id="team-name" placeholder="팀 이름" required>' +
+    '<input id="team-description" placeholder="설명(선택)" style="flex:1;min-width:160px">' +
+    '<button class="primary" type="submit">팀 등록</button></form>' +
+    "</section>" +
+    (teams.length ? teams.map(teamCardHtml).join("") : '<p class="muted">등록된 팀이 없습니다.</p>');
+
+  document.getElementById("team-create-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      await api("POST", "/api/teams", {
+        name: document.getElementById("team-name").value,
+        description: document.getElementById("team-description").value,
+      });
+      showMsg("global-msg", "팀을 등록했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  content.querySelectorAll("[data-add-member-form]").forEach(form => {
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const teamId = form.dataset.addMemberForm;
+      const sel = form.querySelector("[data-member-select]").value;
+      if (!sel) { showMsg("global-msg", "멤버를 선택하세요.", "error"); return; }
+      const [memberType, memberId] = sel.split(":");
+      const roleLabel = form.querySelector("[data-role-label]").value;
+      try {
+        await api("POST", "/api/teams/" + teamId + "/members", {
+          member_type: memberType, member_id: Number(memberId), role_label: roleLabel,
+        });
+        showMsg("global-msg", "멤버를 추가했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  });
+
+  content.querySelectorAll("[data-remove-member]").forEach(btn => {
+    btn.onclick = async () => {
+      const [teamId, memberRowId] = btn.dataset.removeMember.split(":");
+      try {
+        await api("DELETE", "/api/teams/" + teamId + "/members/" + memberRowId);
+        showMsg("global-msg", "멤버를 제외했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  content.querySelectorAll("[data-toggle-active]").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        await api("PATCH", "/api/teams/" + btn.dataset.toggleActive + "/active", {
+          is_active: btn.dataset.nextActive === "1",
+        });
+        showMsg("global-msg", "변경했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  content.querySelectorAll("[data-delete-team]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 팀을 완전히 지웁니다(되돌릴 수 없음). 과거 배정 이력은 남습니다. 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/teams/" + btn.dataset.deleteTeam);
         showMsg("global-msg", "삭제했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }

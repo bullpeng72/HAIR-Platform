@@ -374,7 +374,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
   COLLABORATION_PLATFORM_PLAN.md  # 사람-AI 협업(결과물 전달/HITL/HOTL) 기획안 — Phase A/B 구현 완료
   HAIR_MASTER_PLAN.md             # 위 기획안을 포함하는 종합 기획/설계/개발 계획 — Phase 1-3 구현 완료
-  MULTI_PARTY_TEAM_COLLABORATION_PLAN.md  # N명 사람+M개 Agent(또는 역할 기반 Agent 그룹) 팀 협업 기획안 — 미구현(기획만)
+  MULTI_PARTY_TEAM_COLLABORATION_PLAN.md  # N명 사람+M개 Agent(또는 역할 기반 Agent 그룹) 팀 협업 기획안 — Phase 1+2 구현 완료, Phase 3-5는 미구현(§9)
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
