@@ -19,10 +19,13 @@ from hair_platform import db, pool_registry
 
 def test_gc108_init_schema_seeds_default_vectordb_graphdb_pools():
     """스키마 초기화 시 VectorDB/GraphDB native Tool과, 이걸 쓰는 skill_pool
-    항목(vectordb/rag/graphdb/관계질의)이 자동으로 채워져야 한다 — 이전에
-    코드로 하드코딩됐던 매핑이 데이터로도 그대로 살아있어야 기존 동작이
-    안 깨진다. `init_schema()`를 두 번 불러도 중복 생성되지 않아야 한다
-    (멱등성)."""
+    항목(rag/graphdb)이 자동으로 채워져야 한다 — 이전에 코드로 하드코딩됐던
+    매핑이 데이터로도 그대로 살아있어야 기존 동작이 안 깨진다.
+    `init_schema()`를 두 번 불러도 중복 생성되지 않아야 한다(멱등성).
+
+    **정정(2026-10-06)**: 원래 "vectordb"/"rag", "graphdb"/"관계질의" 두
+    쌍 다 별칭으로 있었으나, "필요 스킬" 자동완성 중복 리포트로 각각
+    "rag"/"graphdb" 하나로 통합했다(docs/LIMITS.md §49)."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     db.init_schema(conn)  # 멱등성 확인
@@ -38,8 +41,10 @@ def test_gc108_init_schema_seeds_default_vectordb_graphdb_pools():
 
     skills = pool_registry.list_skills(conn)
     skill_names = {s["name"] for s in skills}
-    vectordb_graphdb_names = {"vectordb", "rag", "graphdb", "관계질의"}
+    vectordb_graphdb_names = {"rag", "graphdb"}
     assert vectordb_graphdb_names <= skill_names
+    assert "vectordb" not in skill_names
+    assert "관계질의" not in skill_names
     for s in skills:
         if s["name"] in vectordb_graphdb_names:
             assert s["augmentation_mode"] == "tool"
@@ -168,7 +173,7 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
         tools = pool_registry.resolve_pool_tools(
             conn, stack, ["graphdb"], agent_id=agent_id
         )
-    assert [t.name for t in tools] == ["조직도 관계 조회"]
+    assert [t.name for t in tools] == ["org_relationship_query"]
 
     # VectorDB 도구를 스킬과 무관하게 명시적으로 하나 더 연결하면 같이 나온다.
     pool_registry.link_agent_tool(conn, admin_id, agent_id, vectordb_tool_id)
@@ -177,7 +182,7 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
             conn, stack, ["graphdb"], agent_id=agent_id
         )
     tool_names = {t.name for t in tools}
-    assert tool_names == {"조직도 관계 조회", "지식 베이스 검색"}
+    assert tool_names == {"org_relationship_query", "knowledge_base_search"}
 
     # 도구를 비활성화하면 스킬이 매칭돼도 더 이상 나오지 않는다.
     pool_registry.set_tool_active(conn, admin_id, graphdb_tool_id, False)
@@ -185,15 +190,19 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
         tools = pool_registry.resolve_pool_tools(
             conn, stack, ["graphdb"], agent_id=agent_id
         )
-    assert [t.name for t in tools] == ["지식 베이스 검색"]
+    assert [t.name for t in tools] == ["knowledge_base_search"]
 
 
 def test_gc196_init_schema_seeds_websearch_pool(client_and_conn):
     """사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
     API(가능한 무료)를... 추가해줘") — GC108과 같은 방식으로, 외부 자료
-    검색(Wikipedia) native Tool과 "websearch"/"외부검색" skill_pool
-    항목이 스키마 초기화 시 자동으로 채워지고, "websearch" 스킬을 가진
-    Agent에 실제로 그 Tool이 연결되는지 확인한다."""
+    검색(Wikipedia) native Tool과 "외부검색" skill_pool 항목이 스키마
+    초기화 시 자동으로 채워지고, "외부검색" 스킬을 가진 Agent에 실제로
+    그 Tool이 연결되는지 확인한다.
+
+    **정정(2026-10-06)**: 원래 "websearch"/"외부검색" 두 별칭이 모두
+    있었으나, "필요 스킬" 자동완성에 완전히 같은 뜻이 두 번 떠 중복으로
+    보인다는 리포트로 "외부검색" 하나로 통합했다(docs/LIMITS.md §49)."""
     from contextlib import ExitStack
 
     _client, conn = client_and_conn
@@ -207,22 +216,23 @@ def test_gc196_init_schema_seeds_websearch_pool(client_and_conn):
 
     skills = pool_registry.list_skills(conn)
     skill_names = {s["name"] for s in skills}
-    assert {"websearch", "외부검색"} <= skill_names
+    assert "외부검색" in skill_names
+    assert "websearch" not in skill_names
     for s in skills:
-        if s["name"] in {"websearch", "외부검색"}:
+        if s["name"] == "외부검색":
             assert s["augmentation_mode"] == "tool"
 
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부지식 Agent', '[\"websearch\"]', 'active')"
+        "('외부지식 Agent', '[\"외부검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
     with ExitStack() as stack:
         resolved = pool_registry.resolve_pool_tools(
-            conn, stack, ["websearch"], agent_id=agent_id
+            conn, stack, ["외부검색"], agent_id=agent_id
         )
-    assert [t.name for t in resolved] == ["외부 자료 검색"]
+    assert [t.name for t in resolved] == ["external_knowledge_search"]
 
 
 class _FakeGeneralWebSearchMCPAdapter:
@@ -361,8 +371,12 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 25
-    )  # 시드된 25개(vectordb/graphdb 4 + agent-eval 절차 스킬 18 + websearch 2 + 일반웹검색 1)
+        len(resp.json()) == 22
+    )  # 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 외부검색 1 +
+    # 일반웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복 통합으로
+    # 제거됨(docs/LIMITS.md §49)
+    # — "websearch"는 "외부검색"과 완전히 같은 뜻이라 2026-10-06에 하나로
+    # 통합했다(docs/LIMITS.md §49).
 
     resp = client.post(
         "/api/skill-pool",
@@ -431,4 +445,4 @@ def test_gc115_run_crew_resolves_tools_from_data_driven_skill_pool_not_hardcoded
 
     crew = captured["crew"]
     tool_names = [t.name for t in crew.agents[0].tools]
-    assert "조직도 관계 조회" in tool_names
+    assert "org_relationship_query" in tool_names

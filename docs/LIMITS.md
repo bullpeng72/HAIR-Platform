@@ -2382,6 +2382,593 @@ httpx 패턴, Ollama의 실제 `POST /api/embeddings` 계약(`{"model",
 1건(v1 파이프라인의 오래된 "member는 매칭 자체가 403" 단언) 발견·
 즉시 수정.
 
+## 48. 기획/설계·CrewAI·Agent-Evaluator 3종 감사 재실행 — 사용자
+    요청(2026-09-29, "(1)(2)(3) 확인해줘" 재실행 → "차이점들을
+    개선해줘")
+
+§46·§47 이후 같은 3종 감사를 병렬 fork 3개로 다시 돌렸다(문서만
+바뀌었는지, 코드 회귀는 없는지 재확인). 코드 버그는 0건 — 전부 문서
+갱신 누락 또는 SDK 자체의 알려지지 않은 한계였다.
+
+**문서 정정 5건(전부 이번에 수정 완료)**:
+1. `docs/SPEC.md:33`(§3 out-of-scope)가 "F14 breakdown 본인 공개는
+   백로그"라고 적은 채 남아있어, 같은 문서 §12의 "해결(2026-09-29)"
+   과 정면으로 모순됐다 — §47 작업이 §12만 고치고 §3을 놓친 것.
+   strikethrough+정정으로 바로잡음.
+2. `docs/ROLE_TASK_CLASSIFICATION.md` §2-1(admin 고유 13개 표)·
+   §4(최종 분류 요약표)가 §6(이번 세션에 추가한 결정 기록)과 내부
+   모순 — §2-1은 Human Pool 성과/비용 2건이 admin 전용으로 넘어온
+   걸 반영 안 해 13개인 채였고(15개로 정정), §4는 갭 1을 "재검토
+   대상"이라고 계속 표시했다(결정 완료로 정정). §5 제목 아래에도
+   "모두 결정·구현 완료" 포인터를 추가.
+3. `docs/HAIR_MASTER_PLAN.md:249`가 "내 업무/관리자 도구 2구역"이라는
+   §45에서 이미 정정했어야 할 문구를 그대로 갖고 있었다 — §45가
+   ADR.md/SPEC.md만 고치고 이 파일을 놓쳤다. strikethrough+정정.
+4. `docs/HAIR_ASSISTANT_PLAN.md:143-147`(미착수 기획 문서)이 "VectorDB
+   임베딩은 OpenAI 전용이라 OPENAI_API_KEY 없인 챗봇 검색이 동작
+   안 함"이라는, §47의 Ollama 지원 추가로 이제 틀린 전제 위에 대안
+   (a)/(b) 논의를 세우고 있었다. strikethrough+정정, 실제 구현 시
+   Ollama 경로 재검토를 명시.
+5. `README.md`의 §37 서술 단락이 "갭 2건은 열어둠"이라고만 적혀
+   §46·§47에서 해결된 사실이 이어지지 않았다 — 한 줄 추가로 연결.
+
+**SDK/설계상 한계 2건(문서화만, 코드 수정 안 함)**:
+6. **Gate F 구조화 모드가 CrewAI 경로에서 한 번도 안 켜진다** — SDK
+   v1.1.1의 `_extract_crewai_metadata()`(`framework_adapters.py`)가
+   만드는 `agent_interactions` 스키마(`from_agent`/`to_agent`/`type`/
+   `tool_name`)가 Gate F의 구조화 서브 평가기 3개(`gate_f_multiagent/
+   evaluators.py`의 `eval_consensus`/`eval_propagation`/
+   `eval_role_adherence`)가 실제로 찾는 키(`agent`/`intent`/
+   `facts_relayed`/`name`)와 하나도 안 맞는다 — SDK 내부(어댑터 vs
+   평가기)의 불일치이지 이 저장소가 잘못 쓴 게 아니다. 그 결과
+   `run_and_score_crew()`는 항상 텍스트 휴리스틱 폴백으로만 Gate F를
+   채점한다(`not_measured`는 아니지만 SDK가 의도한 고정밀 경로는
+   못 탐). SDK 쪽 버그라 이 저장소에서 고칠 수 없다 — 정직하게
+   기록만 해둔다.
+7. **여러 CrewAI 기능이 "검토 후 기각"이 아니라 그냥 안 쓰였다** —
+   `step_callback`·`planning=True`는 이미 검토·보류가 문서화돼
+   있는데, `Task(output_pydantic=...)`/`output_json=...`(구조화 출력
+   강제 — Gate A/G 채점이 지금 `.raw` 자유 텍스트를 파싱하는 걸
+   생각하면 가장 효과가 클 후보), `Task(guardrail=...)`,
+   `async_execution=True`, `Crew(before/after_kickoff_callbacks=...)`,
+   `crew.replay()`, `crewai.flow.flow.Flow`, CrewAI 자체 `Knowledge`
+   클래스(이 저장소는 자체 SQLite VectorDB를 씀)는 전부 grep 결과
+   0건 언급 — "고려했으나 기각"인지 "아예 몰랐다"인지 기록이 없다.
+   전부 오픈 이슈로 남긴다(사용자가 이번엔 진행 대상으로 고르지
+   않음, 다음에 필요하면 `output_pydantic`부터 검토 권장).
+
+**검증**: 문서 전용 변경(SPEC.md/ROLE_TASK_CLASSIFICATION.md/
+HAIR_MASTER_PLAN.md/HAIR_ASSISTANT_PLAN.md/README.md/LIMITS.md 자체),
+코드 변경 없음 — 골든셋 213건 그대로, 테스트 실행 불필요.
+
+## 49. Skill Pool 자동완성 중복 표시 — 사용자 보고(2026-10-06, "할일로
+    나누기"의 "필요 스킬" 입력에 "일반 웹 검색, websearch, 외부 검색"이
+    중복/유사 의미로 표시됨)
+
+**1단계(설명 문구 추가)**: `websearch`/`외부검색`은 완전히 같은 뜻의
+별칭(둘 다 `web_search` native 도구 = Wikipedia 검색)이고, `일반웹검색`은
+Wikipedia가 아니라 Parallel Search(전체 인터넷) 도구에 연결된 별개
+스킬이다(§44). 자동완성 `<datalist>`는 설명 없이 이름만 보여줘(`skill-
+pool/names`) 구분이 안 됐다 — 우선 사용자 선택대로 "데이터는 그대로 두고
+설명 문구만 추가"했다("할 일로 나누기" 폼에 `<p class="muted">` 추가,
+`webui.py`).
+
+**2단계(별칭 통합, 사용자 재요청)**: 이어서 "websearch/외부검색 하나만
+표시되도록 개선"을 요청받아, 실제 할 일(`tasks.id=4`)이 이미
+`required_skills=["외부검색"]`을 쓰고 있던 걸 근거로 **"외부검색"을
+정식 이름으로 남기고 "websearch"를 skill_pool에서 제거**했다(`db.py`
+`_seed_default_pools`). 이미 만들어진 DB(이 데모 서버 포함)에 남아있는
+"websearch" 행은 `INSERT OR IGNORE`만으로는 안 지워지므로, `_migrate_schema()`에
+멱등 정리 단계를 추가했다 — "websearch" 행이 있으면 그 이름을 쓰던
+`tasks.required_skills`/`agent_pool.skill_tags` JSON 배열을 "외부검색"으로
+치환한 뒤 skill_pool 행을 삭제한다(GC210, `test_phase13_db_migration.py`
+— 기존 DB에 "websearch"로 등록된 할 일·Agent가 있어도 안전하게
+넘어가는지 실제로 재현해 검증). 죽은 코드이던 `agent_runtime.
+WEBSEARCH_SKILL_TAGS`(ADR 11 하드코딩 집합 — 실제 매칭은 이미
+`pool_registry.resolve_static_augmentation_targets()`로 대체돼 있어
+아무 데서도 안 쓰임, `test_phase14_pool_registry.py`의 patch 테스트가
+이를 증명)도 `{"외부검색"}`으로 맞췄다.
+
+**다른 중복 점검(사용자 요청)**: 같은 패턴(완전히 같은 뜻의 영문/국문
+별칭 2개가 skill_pool에 따로 등록됨)이 두 군데 더 있다 — `vectordb`/
+`rag`(둘 다 `vectordb_search`), `graphdb`/`관계질의`(둘 다
+`graphdb_query`). 1단계에선 websearch 건만 통합 대상으로 지정받아 이
+둘은 손대지 않고 유지했으나, **사용자가 곧바로 "같은 방식으로
+통합해달라"고 재요청**해 이어서 처리했다.
+
+**3단계(vectordb/graphdb 별칭도 통합)**: 실사용 데이터를 확인한 결과
+`tasks.id=1`/`agent_pool.id=1`이 이미 `"rag"`를 쓰고 있었고(`"vectordb"`
+쓰는 곳은 없음), `"graphdb"`/`"관계질의"`는 둘 다 실사용 데이터가
+없어 코드·테스트에서 더 많이 참조되는 쪽(`"graphdb"` — `resolve_pool_
+tools` 테스트 3곳·`test_phase17` 등)을 기준으로 삼았다 — **"rag"**와
+**"graphdb"**를 정식 이름으로 남기고 `"vectordb"`/`"관계질의"`를
+제거했다. websearch 때 만든 `_migrate_schema()`의 1회성 정리 코드를
+`(removed_name, kept_name)` 3쌍을 순회하는 루프로 일반화해 세 통합을
+한 구조로 처리한다(`db.py`). `test_gc210`도 `@pytest.mark.parametrize`로
+3쌍 전부에 대해 "기존 DB에 제거 대상 이름으로 등록된 할 일/Agent가
+있어도 안전하게 넘어가는지"를 재현해 검증하도록 확장했다. 관련 테스트
+파일(`test_phase12/14/16/17`)의 하드코딩된 스킬 이름 집합·개수
+단언(25→24→22)도 전부 갱신했다 — 1단계 때 `test_phase16`의 카운트
+단언 하나를 놓쳐 전체 스위트가 1건 실패했던 것도 이번에 같이 바로잡음.
+그 외 18개 agent-eval 절차 스킬 + `recommend-fix-workflow` +
+`일반웹검색`은 이름이 전부 서로 다른 절차/도구를 가리켜 중복 없음.
+
+**검증**: `test_gc108`·`test_gc196`·`test_gc210`(3쌍 parametrize)·관련
+스킬 카운트 단언 갱신 후 영향받는 5개 테스트 파일 전부 통과(92
+passed). 데모 서버 `hair.db`에도 두 단계 마이그레이션을 실제로 순서대로
+실행해 `/api/skill-pool/names` 응답에서 `websearch`/`vectordb`/
+`관계질의`가 전부 사라졌고, 기존 `tasks.id=1,4`·`agent_pool.id=1`의
+스킬 태그가 각각 `["rag", ...]`·`["외부검색"]`로 안전하게 남아있음을
+라이브로 확인.
+
+## 50. "필요 스킬" 다중 입력 UX — 사용자 보고(2026-10-06, "하나의 스킬을
+    선택한 후에는 다른 스킬을 펼쳐 확인할 수 없어")
+
+§4(Phase 5)에서 이미 알려진 한계로 문서화만 해뒀던 문제를 실제로
+고쳤다 — 콤마로 여러 스킬을 입력하는 단일 텍스트필드(`d-skills`/
+`hp-skills`)는 브라우저가 입력값 전체를 기준으로 자동완성을 맞춰서,
+하나 입력한 뒤 콤마를 찍으면 드롭다운이 거의 안 열렸다. `skillPickerHtml()`/
+`initSkillPicker()`(`webui.py`)로 작은 태그 입력 위젯을 추가했다 — 값을
+하나씩 입력하고 Enter/"추가"로 칩에 담으면 입력창이 비워지므로, 다음
+항목을 고를 때도 매번 전체 자동완성이 뜬다. `skill_pool`에 없는 자유
+텍스트(기존 데이터 "인사 정책" 등)도 그대로 칩으로 추가돼 기존 자유
+입력 동작은 유지한다. 제출 핸들러가 읽는 숨은 `<input type="hidden">`은
+기존 `.value.split(",")` 코드와 호환되도록 그대로 콤마구분 문자열을
+담아 백엔드/제출 로직은 손대지 않았다. "할 일로 나누기"·"사람 인력
+등록" 두 곳에 적용. 검증: `node --check`로 JS 문법 확인, `test_phase8_
+webui.py`/`test_phase11_admin_user_nav_split.py` 통과, 데모 서버에 띄워
+실제 렌더링 확인(사용자가 스크린샷으로 직접 확인).
+
+## 51. Human Pool 등록과 사용자 계정의 분리 — 사용자 보고(2026-10-06,
+    "사람 인력으로 등록되어 있지만 사용자 관리에 등록되지 않은 경우
+    로그인도 안 돼 일을 할 수 없다") → "사용자 관리로 계정을 만들고
+    사람 인력 등록시 사용자로 등록된 사람을 불러와 등록하도록 개선"
+
+**확인된 갭**: `human_pool`과 `users`는 nullable FK(`human_pool.user_id`)
+하나로만 느슨하게 연결된 완전히 분리된 테이블이었다. `POST /api/human-pool`은
+`user_id`를 항상 `NULL`로 생성했고, 연결은 별도의 수동 PATCH("계정
+연결" 버튼, 사용자 ID를 직접 숫자로 입력)로만 가능했다. 더 심각한 건
+— `pool.human_pool_candidates()`(매칭 후보 조회)·`ResourceCandidate`
+모델(`user_id` 필드 자체가 없음)·`request_assignment()`·결재 승인
+흐름 **어디에도 `user_id` NULL 여부를 확인하는 코드가 없어서**, 계정
+연결을 깜빡한 사람도 매칭→배정 요청→승인(confirmed)까지 경고 없이
+전부 통과됐다. 그런데 `GET /api/my-work`는 `session user.id ==
+human_pool.user_id`로 찾으므로, 로그인 계정이 없는 사람은 애초에
+로그인을 못 해 자기 확정 배정을 영원히 볼 방법이 없다 — 이 사실을
+알려주는 곳이 Human Pool 목록의 "연결된 계정 ID" 열(`-` 표시) 하나뿐,
+그마저 매칭/배정 화면엔 안 보였다.
+
+**구현**: "사용자 관리"로 계정을 먼저 만들고 "사람 인력 등록"에서 그
+계정을 **골라서** 등록하는 흐름으로 바꿨다 — 임의 이름 입력이 아니라
+선택 방식으로 바꿔 구조적으로 갭을 줄인다.
+- `HumanPoolCreate.user_id`(optional) 추가 — 등록 시점에 바로
+  연결 가능(`models.py`). `POST /api/human-pool`이 user_id 존재
+  검증 + **이미 다른 Human Pool 레코드에 연결된 계정인지 검증**(409)
+  후 INSERT에 포함한다(`app.py`). 기존 `PATCH .../user_id`(계정
+  연결)에도 같은 중복-연결 가드를 추가했다 — 두 레코드가 같은 계정에
+  연결되면 `WHERE user_id = ?` 조회가 하나만 조용히 골라 다른 쪽이
+  안 보이게 되는 걸 막는다(자기 자신에게 재연결은 멱등 허용).
+- `GET /api/users/names` 신규 — `GET /api/users`는 ADMIN 전용인데
+  "사람 인력 등록"은 ADMIN/MANAGER 둘 다 접근 가능해 MANAGER가 계정
+  목록을 못 읽는 문제가 있었다. `/api/skill-pool/names`와 같은
+  패턴 — 관리용 전체 필드(manager_id/is_active) 대신 연결에 필요한
+  최소 필드(id/username/role)만, 그 화면과 같은 권한 범위(ADMIN/
+  MANAGER)로 노출. 비활성 계정은 제외.
+- Web UI(`renderHumanPool`): 등록 폼에 "계정 선택" `<select>`를
+  추가(이미 다른 레코드에 연결된 계정은 자동 제외), 제출 시 선택
+  안 하면 클라이언트에서 바로 막는다. 기존 "계정 연결" 버튼의 숫자
+  입력(오타 위험)도 같은 연결-가능 계정 드롭다운으로 바꿨다. 목록의
+  "연결된 계정 ID" 열은 숫자 대신 username으로 보이게 개선(가독성).
+
+**유지한 것**: `user_id`는 API 레벨에서는 여전히 optional이다 — 계정
+없이 순수 인력 계획 레코드를 등록하는 기존 사용 사례(및 기존 테스트
+호환성)를 깨지 않는다. 다만 Web UI의 기본 경로는 이제 "계정 선택"이
+표준이라, 계정 없이 등록하면 그 사람은 로그인할 수 없다는 걸 등록
+폼 안내 문구로 명시했다. 매칭/배정 화면 자체에 연결 여부 경고를
+추가하는 건 이번 요청 범위 밖으로 남겨뒀다(§51-1로 후속 가능).
+
+**검증**: `test_gc211`(RBAC: admin/manager만 `/api/users/names` 접근,
+비활성 계정 제외, 최소 필드만 반환)·`test_gc212`(등록 시점 연결)·
+`test_gc213`(없는 user_id → 404)·`test_gc214`(중복 연결 생성/PATCH
+양쪽 다 409, 자기 자신 재연결은 허용) 신규 — `test_phase17_collab_
+workspace.py` 47개 전부 통과. 데모 서버에 실제 계정 생성→연결→중복
+거부→존재하지 않는 ID 거부까지 라이브 HTTP로 확인 후 테스트 데이터
+정리.
+
+## 51-1. 매칭/배정 화면 계정 미연결 경고 — 사용자 요청(2026-10-06, §51
+     직후, "매칭/배정 화면에도 계정 미연결 경고 추가해줘")
+
+§51이 "등록" 시점 갭은 메웠지만, 그 전에 이미 등록됐거나 일부러 계정
+없이 등록한 사람이 "인력 매칭/배정" 화면에서 매칭·배정 요청될 때는
+여전히 아무 경고가 없었다. `ResourceCandidate`에 `user_id: int | None`
+필드를 추가해(`models.py`) 매칭 결과에도 연결 여부가 실리게 했다.
+
+- `pool.human_pool_candidates()`가 `human_pool.user_id`를 그대로
+  채워 넣는다(`pool.py`). Agent는 로그인 계정 개념이 없어 항상
+  `None`.
+- **노출 범위를 의도적으로 좁혔다**: `/api/tasks/{id}/match`(ADMIN/
+  MANAGER/MEMBER)는 그대로 노출하지만, `/api/pool/search`는 viewer
+  까지 전원 조회 가능한(RBAC 매트릭스) 엔드포인트라 `model_dump(exclude=
+  {"user_id"})`로 명시적으로 뺐다 — 이번 요청이 "매칭/배정 화면"으로
+  범위를 지정했고, 계정 연결 여부를 더 넓은 대상에게 노출할 이유가
+  없다.
+- Web UI(`renderMatchResult`): "계정" 열을 추가해 사람 후보는
+  "연결됨"/"⚠ 미연결"(기존 Gate 배지 warn 스타일 재사용), Agent는
+  "해당없음"으로 표시한다. 미연결 사람에게 "배정 요청"을 누르면
+  `window.confirm()`으로 "본인이 '내 업무'에서 확인할 방법이 없다"는
+  내용을 먼저 보여주고, 취소하면 API 호출 자체를 막는다(강제 차단은
+  아님 — 계획 단계에서 미리 배정해두고 계정은 나중에 연결하는 합리적
+  사용도 있을 수 있어 경고+확인으로 그친다).
+
+**검증**: `test_gc215`(매칭 결과에 연결/미연결 `user_id`가 정확히
+실리는지, admin/manager 전체 조회 기준)·`test_gc216`(`/api/pool/
+search`가 viewer에게 `user_id` 키 자체를 안 보내는지) 신규 —
+`test_phase17_collab_workspace.py` 49개 전부 통과. 데모 서버에 미연결
+사람 인력을 실제로 만들어 `/api/tasks/{id}/match` 응답에 `"user_id":
+null`이 실리는 것과, `/api/pool/search` 응답엔 `user_id` 키가 아예
+없는 것을 라이브로 확인 후 테스트 데이터 정리.
+
+## 52. "AI 에이전트 생성" 결과가 "AI 에이전트 관리"에서 안 보임 — 사용자
+    보고(2026-10-06, "생성은 '성공'으로 떴는데 관리 탭에 안 보임")
+
+**원인 확인**: 실제 `hair.db` 감사로그(`agent_generation_deduplicated`)를
+보니 2026-09-30~10-03에 같은 task(`id=1`)로 반복 생성 요청이 4차례
+있었다 — 전부 NF7 dedup(§2)으로 재사용돼 새 `agent_pool` 행이 안
+생겼는데, **당시엔 §49/§50/§51 작업 전이라 "재사용했다"는 안내 자체가
+없었다**(그 안내 배너는 이번 세션 초반에 이미 추가했다). 이번 보고로
+재확인한 결과, 배너가 생긴 지금도 **"재사용했다"고만 말할 뿐 "그래서
+몇 번 Agent를 보라는 건지"는 안 알려줘서**, "AI 에이전트 관리"의 여러
+행 중 어떤 게 그건지 못 찾는 혼란이 여전히 남아있었다 — status가
+"succeeded"로만 뜨는 것도 혼란을 더했다(신규 생성 성공과 재사용 성공이
+화면상 구분이 잘 안 됨).
+
+**구현**: `jobs._serialize_rows()`가 각 job_item이 **실제로 가리키는
+`agent_pool` 행(id/role_name)을 `source_job_item_id`로 직접 찾아**
+응답에 싣도록 바꿨다(신규 생성이든 재사용이든 전부 — 실패한 항목만
+자연히 `None`). Web UI(`renderJobResult`)는 재사용 배너에 "기존 Agent
+#2(버그재현 역할)를 그대로 씁니다" 식으로 구체적 ID를 명시하고, 결과
+표에 "연결된 Agent" 열을 새로 추가해 매 항목이 가리키는 Agent를 항상
+보여준다 — 이제 "어디 있는지" 찾을 필요 없이 ID를 그대로 "AI 에이전트
+관리"에서 검색하면 된다.
+
+**검증**: `test_gc37b` 확장(신규 생성·재사용 둘 다 `agent_pool_id`/
+`agent_pool_role_name`이 정확한 기존 Agent를 가리키는지)·`test_gc38`에
+실패 항목은 `agent_pool_id`가 `None`인지 단언 추가 — `test_phase4_
+verification.py`·`test_v3_pipeline.py`(retry 경로도 같은 직렬화 함수 공유)
+전부 통과. 데모 서버에서 실제 dedup을 재현해 `"agent_pool_id": 2`가
+응답에 실리는 것을 라이브로 확인 후 테스트 데이터 정리.
+
+## 53. "AI 에이전트 생성" 폼의 ID 직접 입력 제거 — 사용자 요청(2026-10-06,
+    "업무 요청 ID 등 불러올 수 있는 정보들을 찾아 오입력되지 않도록
+    개선")
+
+"업무 요청 ID"(숫자 직접 입력)·"할 일 ID(콤마로 구분)"(콤마구분 숫자
+직접 입력) 두 필드 다 존재 여부를 제출 전엔 확인할 방법이 없었다 —
+틀린 ID를 넣으면 제출 후 404로만 알 수 있었다(§51에서 Human Pool
+"계정 연결"에 적용한 것과 같은 패턴의 갭). 둘 다 서버가 이미 가진
+데이터로 교체했다.
+
+- "업무 요청"은 `GET /api/briefs`로 불러온 목록을 `<select>`로
+  고른다(라벨: `#id + 본문 앞 24자`). 가장 최근 것(id 내림차순 응답의
+  첫 항목)이 기본 선택된다.
+- "할 일"은 선택된 업무 요청이 바뀔 때마다 `GET /api/briefs/{id}/tasks`
+  로 다시 불러와 체크박스 목록으로 보여준다(`#id 역할명(필요 스킬)`) —
+  여러 개 선택 가능은 유지. 할 일이 없는 업무 요청을 고르면 "할 일로
+  나누기"로 유도하는 안내만 뜬다.
+- 제출 핸들러는 체크된 값들만 모아 기존 `task_ids` 배열 계약 그대로
+  보낸다 — 백엔드(`/api/briefs/{id}/generate`)는 전혀 손대지 않았다.
+
+**검증**: `node --check`로 JS 문법 확인, 영향받는 테스트 파일(`test_
+phase8_webui.py` 등, 이 화면의 구체적 input id를 참조하는 테스트 없음)
+포함 전체 스위트 통과. 데모 서버에 띄워 실제 브리프 목록이 드롭다운에,
+그 아래 할 일 체크박스가 실제 데이터로 채워지는 것을 라이브로 확인.
+
+## 54. 실사용 중 발견: native CrewAI Tool 3종이 전부 크래시(한글 함수명) —
+    사용자 실제 보고(2026-10-06, 실제 crewai+openai 생성 결과 붙여넣기)
+
+**사용자가 직접 붙여넣은 실패 결과**: "AI 에이전트 생성"을 실제로
+돌렸더니 두 건이 실패했다 — (1) `Model llama3.1 not found`(provider=
+ollama인데 로컬에 그 모델이 안 받아져 있던 환경 문제, 코드 버그 아님),
+(2) **`OpenAI function name cannot be empty`** — 이건 실제 코드
+버그였다.
+
+**원인(소스 레벨로 확인)**: `graphquery.py`/`vectorstore.py`/
+`websearch.py`의 `as_crewai_tool()`이 전부 `@tool("조직도 관계
+조회")`/`@tool("지식 베이스 검색")`/`@tool("외부 자료 검색")`처럼
+순한글 이름을 썼다. 설치된 crewai 버전의 `sanitize_tool_name()`
+(`crewai/utilities/string_utils.py`)이 함수명을 ASCII로 정규화하며
+`name.encode("ascii", "ignore")`로 비-ASCII 문자를 전부 버리는데,
+한글만으로 된 이름은 이 과정에서 **완전히 빈 문자열**이 되고,
+`validate_function_name()`(`crewai/llms/providers/utils/common.py`)이
+빈 문자열을 즉시 거부한다 — provider와 무관하게(litellm이 모든
+provider의 함수호출을 "OpenAI function calling" 스키마로 통일해서
+다루기 때문에 ollama를 써도 메시지는 "OpenAI function"으로 뜬다),
+VectorDB/GraphDB/외부검색 스킬을 가진 Agent가 **crewai 프레임워크로
+실제 실행될 때마다 100% 크래시**하는 상태였다. 기존 테스트들은 전부
+`crewai.Crew.kickoff`를 mock해서 이 검증 경로 자체를 타지 않아 지금까지
+못 잡았다 — 실제 API를 호출해본 사용자의 실사용 보고로만 발견 가능했다.
+
+**수정**: `tool_pool.name`(Tool Pool 관리 화면에 보이는 한글 이름,
+예: "VectorDB 지식검색")은 그대로 두고, LLM에 실제로 전달되는 `@tool()`
+함수명만 ASCII로 바꿨다 — `knowledge_base_search`/
+`org_relationship_query`/`external_knowledge_search`. 설명(docstring)은
+한글 그대로 둬 LLM이 용도를 이해하는 데는 지장이 없다.
+
+**검증**: 설치된 crewai의 `sanitize_tool_name()`/`validate_function_name()`
+에 변경 전/후 이름을 직접 넣어 변경 전 3개 전부 크래시·변경 후 3개 전부
+통과를 확인. 영향받는 3개 테스트 파일(`test_phase12/14/20`)의 `t.name`
+단언을 새 이름으로 갱신 후 51개 전부 통과. **실제 사용자가 보고한
+시나리오(task #4, "외부검색" 스킬, crewai+openai)를 그대로 재현**해 —
+수정 전엔 크래시했던 이 정확한 조합이 수정 후 실제 OpenAI API 호출까지
+성공해 실제 산출물을 받는 것을 라이브로 확인(테스트 데이터 정리 완료).
+
+## 55. 팀 구성·협업 프로세스 통합 검토 및 구현(옵션 C) — 사용자 요청
+    (2026-10-06, "사람-Agent 협업 관점의 프로세스 구성 및 팀 구성은
+    어느 메뉴에서 하는지 분석해줘" → "하나의 화면으로 합치는 방안도
+    검토해줘" → "C로 진행해줘")
+
+**분석**: "팀 구성"(업무 요청→할 일로 나누기→인력 매칭/배정→결재)과
+"협업 프로세스"(내 업무→협업 워크스페이스)가 서로 다른 탭에 분리돼
+있던 이유를 RBAC·사용 패턴 양쪽에서 확인했다 — (1) MEMBER는 F14
+결정(§47)으로 매칭 결과 중 본인 것만 보게 의도적으로 제한돼 있어
+"전원이 보는 한 화면"과 구조적으로 안 맞고, (2) 매니저의 매칭/결재는
+여러 업무 요청을 가로지르는 배치 작업인 반면 업무 요청 화면은 브리프
+단위 드릴다운이라 기준 축이 다르다.
+
+**검토한 옵션**: (A) 완전 통합 — RBAC 분기가 한 화면에 복잡하게
+얽히고 매니저의 일괄 처리 효율이 떨어질 위험(UI 자동테스트가 없는
+프로젝트라 대규모 리팩터링 자체도 회귀 위험), (B) 가벼운 딥링크만
+추가 — 리스크는 최소지만 "합쳐졌다"기엔 부족, **(C) "업무 요청"에
+할 일 상세 뷰 신설, 배치 화면(매칭/결재/내 업무)은 유지(GitHub PR
+목록+상세 페이지 패턴)** — 사용자가 C를 선택.
+
+**구현**:
+- `GET /api/tasks/{task_id}/assignments` 신규(`app.py`) — 조직도와
+  같은 노출 수준(이름+상태, 비용/성과점수 제외)으로 전원에게 열되,
+  status 제한 없이 이력 전체(requested/confirmed/rejected/superseded)를
+  최신순으로 반환한다.
+- "업무 요청"의 할 일 목록에 "상세" 버튼 추가 → `renderTaskDetailPanel()`
+  (신규)이 배정 현황을 보여주고, admin/manager에게만 "후보 매칭하기"
+  (미확정 시)와 협업 워크스페이스 요약(확정 시)을 임베드한다 —
+  member/viewer는 읽기 전용 상태만(자기 업무 처리는 기존처럼 "내 업무"
+  에서). member 제한 이유: admin/manager가 아니면 산출물 조회가 참가자
+  본인만 허용돼(403) 있어, 그 둘을 감독 권한이 있는 role에만 안전하게
+  임베드할 수 있다 — member용 셀프서비스 임베드는 이번 범위 밖(오픈
+  이슈로 남김).
+- 중복 구현을 피하려고 기존 `renderMatchResult()`/`renderCollabWorkspace()`
+  를 그대로 재사용했다 — 둘 다 렌더 대상 DOM id가 하드코딩돼 있던 걸
+  `containerId` 매개변수(기본값은 기존 id 그대로)로 일반화해서, 기존
+  "인력 매칭/배정"·"내 업무" 호출부는 전혀 안 건드리고 새 패널에서도
+  같은 로직을 그대로 쓴다. `renderMatchResult()`엔 `onAssigned` 콜백도
+  추가해 — 임베드된 쪽에서 배정 요청 성공 시 자기 패널을 새로고침할 수
+  있게 했다(이 함수 자체는 호출한 화면의 구조를 모른 채로).
+
+**검증**: `test_gc217`(배정 없음→요청→확정→재배치로 기존 건
+superseded 전환까지 전체 생애주기, viewer 읽기 접근 확인)·`test_gc218`
+(404) 신규 — `test_phase17_collab_workspace.py` 51개 전부 통과.
+`node --check`로 JS 문법 확인. 데모 서버에 실제로 띄워 새 엔드포인트가
+기존 confirmed 배정(agent)을 정확히 이름까지 resolve해 반환하는 것과,
+배정 없는 할 일의 매칭 결과(`generate_new: true`)가 기존 "인력
+매칭/배정" 탭과 동일하게 처리되는 것을 라이브로 확인.
+
+## 56. "Crew 실행" 폼의 Agent ID 직접 입력 제거 — 사용자 보고(2026-10-06,
+    "crew 실행 UI/UX를 개선해줘 (에이전트 ID를 알 수 없음 등)")
+
+이전엔 위쪽 표에서 Agent ID를 직접 읽어 `textarea`에 "1: 할 일" 형식의
+줄로 손으로 옮겨 적어야 했다 — §53(AI 에이전트 생성)·§51(Human Pool
+계정 연결)과 같은 "직접 입력 대신 실제 데이터에서 선택" 패턴의 또
+다른 사례다. `textarea` + `indexOf(":")` 파싱(할 일 설명에 콜론이
+들어가면 깨지는 취약점도 있었다)을 **Agent별 드롭다운+할 일 입력
+행**으로 바꿨다 — 드롭다운 옵션 자체가 "#id 역할명(스킬)"을 보여줘
+ID를 몰라도 된다. "+ Agent 추가"로 행을 늘리고 각 행의 ×로 제거(최소
+1행 유지). "매니저 Agent ID" 숫자 입력도 같은 드롭다운으로 바꿨다.
+온보딩된 Agent가 하나도 없으면 입력 영역 자체를 숨기고 제출 버튼을
+비활성화한다.
+
+**검증**: `node --check`로 JS 문법 확인, 드롭다운 옵션 생성 함수
+(`crewAgentOptionsHtml`)를 실제 `/api/agent-pool` 데이터로 Node에서
+직접 실행해 `#1 정책 문의 응답 (rag, 인사 정책)`처럼 ID+역할+스킬이
+한 옵션에 정확히 표시되는 것을 확인. 영향받는 테스트 파일(`test_
+phase8_webui.py` 등, 이 화면의 구체적 input id를 참조하는 테스트 없음)
+포함 전체 스위트 통과. 백엔드(`/api/crew/run`)는 손대지 않았다 —
+제출 시 보내는 `agent_ids`/`task_descriptions`/`manager_agent_id`
+계약은 그대로다.
+
+## 57. "Crew 실행" 결과에 협업 관계 다이어그램 추가 + ADR 결정 11
+    문서-코드 불일치 발견·수정 — 사용자 요청(2026-10-06, "crew 실행
+    UI/UX를 개선해줘 — 묶인 Agent간 협업 관계를 다이어그램으로 표시")
+
+**다이어그램을 만들려다 발견한 진짜 갭**: 화살표를 그리려면 위임의
+"누구에게"가 필요한데, `_capture_delegation()`은 `event.tool_args`를
+아예 안 읽어 `from_agent_role`+`tool`만 남기고 있었다. `docs/ADR.md:324`
+(결정 11)를 다시 보니 애초에 "누가 누구에게 무엇을 위임했는지"를
+기록하겠다고 명시돼 있었다 — 문서가 약속한 걸 코드가 반쪽만 구현한
+채 아무도 못 알아챈 상태였다. CrewAI 소스(`delegate_work_tool.py`/
+`ask_question_tool.py`)를 확인해 위임 Tool들이 전부 `coworker` 인자로
+대상 role을 받는다는 걸 확인하고, `event.tool_args["coworker"]`를
+CrewAI 자신의 `sanitize_agent_name()`과 같은 방식(공백 정리+소문자화)
+으로 정규화해 실제 Agent role과 매칭하는 `_resolve_delegation_target()`
+을 추가했다 — 매칭 실패 시(존재하지 않는 동료 호출 등) 원문을 그대로
+보존해 정보를 버리지 않는다.
+
+**다이어그램 구현**(`webui.py`, `crewDiagramSvg()`): 외부 차트
+라이브러리 없이 순수 inline SVG — 실선(회색)은 요청 시점에 정해진
+구조(sequential 순서 전달 또는 hierarchical 조율, 항상 그림), 점선
+(주황)은 `delegations`에 실제로 기록된 위임만 그린다(추측 금지, ADR
+결정 11의 "실제 발동 증거를 남긴다" 원칙과 같은 정신). 매니저가
+`manager_llm`으로 자동 배정돼(=우리 Agent 테이블에 없음) 노드로 그릴
+대상이 없는 경우엔 "매니저(LLM 자동 배정)"라는 합성 노드를 만들어
+구조는 보여주되 실제 Agent가 아님을 구분한다. 대상이 끝내 확인 안
+되는 위임은 다이어그램에서 빼는 대신 "확인 안 된 위임" 접이식 목록에
+원문 그대로 남긴다(숨기지 않음). 기존 "실제 위임/협업 발생 내역"
+표에도 "대상 Agent 역할" 열을 추가했다.
+
+**구현 중 발견·수정한 레이아웃 버그**: 위임 곡선이 여러 명(특히
+hierarchical의 워커 행) 아래로 처질 때, 미리 고정해 둔 `viewBox` 높이
+밖으로 곡선과 라벨이 튀어나가 잘리는 문제를 실제로 Node에서 좌표를
+계산해보고 발견했다 — 본문(body)을 먼저 그려 실제 좌표의 최대 y값을
+구한 뒤 그 값으로 `viewBox`를 결정하도록(선-그리기, 치수 나중 확정)
+순서를 바꿔 고쳤다.
+
+**검증**: `test_gc81` 확장(`to_agent_role`이 실제로 매칭되는지)·
+`test_gc219`(`_resolve_delegation_target()` 단위 테스트 — CrewAI와 같은
+정규화, 리스트 형태, 매칭 실패 시 원문 보존, 키 없음 케이스) 신규.
+`crewDiagramSvg()`를 Node에서 직접 실행해 — (1) sequential/hierarchical/
+단일 Agent/매니저 자동배정 4가지 레이아웃 전부 좌표가 `viewBox` 안에
+들어오는지, (2) 의도적으로 재현한 레이아웃 버그가 고친 후 사라지는지
+확인. **데모 서버에서 실제 Agent 2개로 진짜 CrewAI+OpenAI Crew를
+실행**해(최저임금 조사 역할극) — 실제 위임이 발생했고
+`to_agent_role`이 정확히 두 번째 Agent의 role_name으로 resolve된 것을
+확인, 그 실제 응답을 다시 `crewDiagramSvg()`에 넣어 화살표+라벨이
+기대대로 그려지는 것까지 라이브로 검증. 영향받는 3개 테스트 파일
+포함 전체 스위트 통과.
+
+## 58. Crew 실행이 Agent별 "모델 설정"을 실행 후 덮어쓰던 문제 수정 —
+    사용자 요청(2026-10-06, "model provider/모델명이 AI 생성·관리·Crew
+    실행 단계에 모두 있는데 최종 어떻게 적용되는지 분석" → "(b) 실행
+    후 덮어쓰기만이라도 막는 방향으로 수정")
+
+**분석으로 발견한 비대칭**: 세 화면의 provider/model이 각각 뭘 하는지
+추적한 결과 — "AI 에이전트 생성"은 생성 시점 값을 Agent의 초기
+`llm_provider`/`llm_model`로 저장하고, "AI 에이전트 관리 → 모델 설정"
+은 그 값을 호출 없이 순수 저장만 하며(`app.py:1238` 주석에 이미
+명시: "이후 `/execute`가 provider/model을 안 받으면 여기서 저장한
+값을 기본으로 쓴다"), 단일 실행(`agent_runtime.execute_agent()`)은
+실제로 그 저장값을 기본값으로 읽는다(`effective_provider = provider
+or agent["llm_provider"]`). 그런데 **"Crew 실행"은 참여 Agent 전원에게
+요청 시점의 provider/model 하나만 적용하고 개별 저장값은 아예 안 읽는
+것까지는 의도된 설계로 보이는데, 실행이 끝나면 그 하나의 값을 모든
+참여 Agent의 `llm_provider`/`llm_model`에 그대로 덮어쓰고 있었다**
+(`crew_runtime.py` 487행 — ADR/LIMITS 어디에도 이 덮어쓰기를 의도했다는
+근거가 없어 단일 실행 경로의 "실행 후 기록" 패턴을 그대로 복붙하면서
+생긴 부작용으로 보인다). 그 결과 Agent별로 "모델 설정"에서 따로
+구성해둔 기본값이 Crew 실행 한 번으로 조용히 사라지는 문제가 있었다.
+
+**수정**: 참여 Agent의 `UPDATE agent_pool` 문에서 `llm_provider`/
+`llm_model`을 뺐다 — `last_output`(실제 산출물)과 `framework`(이번
+실행이 crewai였다는 사실)는 그대로 갱신하되, "모델 설정"은 사용자가
+"AI 에이전트 관리"에서 명시적으로 바꾸기 전까지 Crew 실행과 무관하게
+유지된다. (a)안(Crew 실행이 Agent별 저장값을 각자 읽어서 쓰게 하는
+것)은 "여러 Agent를 한 LLM으로 통일해 비교·실행"하려는 현재 설계의
+전제 자체를 바꾸는 더 큰 변경이라 이번엔 (b)만 반영했다 — 필요하면
+후속으로 검토 가능.
+
+**검증**: `test_gc220` 신규 — Agent 둘에 각각 다른 provider/model을
+미리 저장해두고(anthropic/claude-sonnet-5, ollama/qwen3-coder) 전혀
+다른 provider(openai)로 Crew를 실행한 뒤, 두 Agent의 저장값이 그대로
+남아있고 `last_output`/`framework`만 갱신됨을 확인.
+`test_phase12_crewai_vectordb_graphdb.py` 33개 전부 통과(기존
+`test_gc79`도 `last_output`/`framework` 갱신은 그대로 됨을 이미
+검증하고 있어 회귀 없음을 같이 확인).
+
+## 59. 모델 레지스트리 신설 — 사용자 요청(2026-10-06, "운영 관리에 사용
+    가능한 ollama 모델 및 openai, anthropic 모델 등록하는 메뉴를 두고
+    등록된 모델을 불러오는 방식으로 UI/UX를 개선")
+
+**배경**: "AI 에이전트 생성"·"AI 에이전트 관리(모델 설정)"·"Crew 실행"·
+협업 워크스페이스 4곳의 "모델명"이 전부 자유 텍스트 입력이었다 —
+직전 §58 분석 중 실제로 겪은 "ollama 기본값 llama3.1이 로컬에 없어
+404" 사고가 이 구조의 직접적인 결과였다. skill_pool/tool_pool과 같은
+"등록→선택" 패턴을 모델명에도 적용한다.
+
+**구현**:
+- 신규 `model_registry` 테이블(`provider`+`name` UNIQUE, `is_active`)과
+  `model_registry.py` 모듈 — `pool_registry.py`와 같은 CRUD 패턴
+  (`create_model`/`list_models`/`set_model_active`/`delete_model`).
+- `fetch_available_models(provider)` — provider가 실제로 보유한 모델을
+  **라이브로 조회**한다: ollama는 로컬 서버 `GET /api/tags`(완전 무료),
+  openai/anthropic은 각 SDK의 `client.models.list()`(토큰 생성이 없는
+  카탈로그 조회라 과금 없음 — `llm.call_llm()`의 비용 경계와는 다름).
+  openai는 whisper/tts/dall-e/embedding/moderation 등 채팅에 못 쓰는
+  모델을 deny-list로 거른다. SDK가 자동 페이지네이션을 지원해(`__iter__`)
+  `.data`(첫 페이지만)가 아니라 객체 자체를 순회해 전체를 받는다.
+  조회 자체는 아무것도 저장하지 않는다 — 등록은 사용자가 고른 것만
+  별도 `POST`로.
+- API 5개(`GET /api/model-registry`[+`?provider=`], `GET .../fetch`,
+  `POST`, `PATCH .../active`, `DELETE`) — RBAC는 tool_pool/skill_pool과
+  동일(등록/조회/활성전환은 admin+manager, 삭제는 admin 전용). `/fetch`
+  실패(API 키 미설정, ollama 미접속 등 흔한 실패 모드)는 500이 아니라
+  400+사람이 읽을 메시지로 감싼다.
+- Web UI: "운영 관리"에 "모델 레지스트리" 탭 신설(provider별 불러오기+
+  체크박스 선택 등록, 수동 등록, 활성화/비활성화/삭제). 기존 4곳의
+  "모델명" `<input>`은 **그대로 자유 텍스트 유지**하되, `skill-datalist`
+  와 같은 이유(단일 값 필드라 datalist 자동완성이 문제없이 동작)로
+  provider별 `<datalist>`를 연결해 자동완성만 제공한다 — 레지스트리가
+  비어 있어도(초기 상태) 입력 자체는 전혀 안 막힌다는 게 핵심 설계
+  결정이다(등록을 강제했다면 콜드스타트에서 이 기능 자체가 막혔을 것).
+
+**검증**: `test_phase21_model_registry.py` 신규 5건 — provider/빈
+이름 검증, CRUD 전체 흐름(중복 409 포함), RBAC 매트릭스, "불러오기"가
+아무것도 저장 안 함(mock), provider 오류를 400으로 감싸는지(mock).
+`node --check`로 JS 문법 확인. 데모 서버에서 **실제 로컬 Ollama의
+`/api/tags`를 호출해 진짜 설치된 모델 5개**(`qwen3-coder:latest` 등)를
+불러오고 2개(ollama 1개, openai 1개)를 실제로 등록한 뒤, 그 데이터로
+datalist HTML이 정확히 생성되는 것까지 라이브로 확인. 전체 스위트
+232개 전부 통과.
+
+## 59-1. 모델 선택을 datalist 자동완성 → 진한 드롭다운으로 교체 —
+    사용자 요청(2026-10-06, §59 직후, "에이전트 생성, 관리, Crew 실행
+    등에도 연동되도록 적용해줘" → "진한 드롭다운으로 강제 선택")
+
+§59는 자유 텍스트 입력에 datalist 자동완성만 곁들였다 — 값을 강제하지
+않아 "진짜 연동"처럼 안 느껴질 수 있다는 점을 사용자가 확인 질문으로
+짚었고, 등록된 모델 중에서만 고르는 `<select>`로 바꾸는 쪽을
+선택했다.
+
+**구현**: `modelDatalistsHtml()`/`wireProviderModelDatalist()`를
+`fetchModelsByProvider()`(provider별 모델 이름 배열을 돌려줌)+
+`modelSelectHtml()`(드롭다운+숨겨진 "직접 입력" 텍스트칸 마크업)+
+`wireProviderModelSelect()`(provider 변경 시 옵션 재구성, 등록 안 된
+기존 값은 "직접 입력..."을 자동 선택해 보여줌)+`modelSelectValue()`
+(드롭다운이 "직접 입력..."이면 텍스트칸 값을, 아니면 드롭다운 값을
+반환)로 교체했다. "기본값 사용"(빈 값)과 "직접 입력..." 두 옵션은
+항상 있어 레지스트리가 비어 있어도 기능이 막히지 않고, "AI 에이전트
+관리"처럼 이미 저장된 모델명이 레지스트리에 없는 경우(과거 자유
+입력으로 저장된 값)도 데이터 손실 없이 "직접 입력..." 칸에 그대로
+보여준다. 4개 소비처(AI 에이전트 생성/관리/Crew 실행/협업 워크스페이스)
+전부 교체.
+
+**검증**: jsdom 등 외부 의존성 추가 없이, 이 세션이 실제 사용하는
+`<select>`/`<input>` 속성(`value`/`innerHTML`/`style.display`/
+`addEventListener`)만 흉내 낸 최소 가짜 DOM을 Node로 직접 작성해
+9가지 시나리오(provider 전환 시 옵션 재구성, 등록된 값 선택, "직접
+입력" 전환, 레지스트리에 없는 기존 저장값의 자동 "직접 입력" 폴백,
+레지스트리에 있는 기존 저장값의 정상 사전 선택 등)를 전부 확인 —
+전부 기대대로 동작. `node --check`로 JS 문법 확인, 전체 pytest
+스위트 232개 통과(백엔드 API/모델 변경 없음 — 프런트엔드 전용 교체).
+
+## 60. 다자간 팀 협업 기획안 작성(코드 변경 없음) — 사용자 요청
+    (2026-10-06, "사람들과 Agent들이 협업으로 기업의 업무를 수행하도록
+    하는 것이 HAIR Platform의 핵심이야... 복수의 사람이 복수의 Agent와
+    또는 CrewAI 장점인 역할에 따른 Agent를 묶어 생성된 그룹과 협업하도록
+    ... 다시 기획하고 개선 계획을 수립해줘")
+
+직전 질문("Crew 실행이 독립 실행인지 분석해줘")에서 실측으로 확인한
+구조적 한계(assignments가 할 일당 resource_type별 confirmed 1건만
+허용, `run_crew()`가 `task_id`/`deliverables`와 전혀 안 묶임, 역할
+기반 Agent 그룹을 저장할 방법이 없음, CrewAI 실행 도중 사람 개입은
+Phase C에서 이미 조사·기각된 기술적 한계)을 근거로 N명 사람+M개
+Agent(또는 팀) 협업 기획안을 `docs/COLLABORATION_PLATFORM_PLAN.md`
+(1:1 협업을 완성한 기존 기획)의 후속으로 작성했다 —
+`docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` 신규.
+
+**핵심 설계**: `teams`/`team_members` 신규 테이블(skill_pool/tool_pool과
+같은 "등록→재사용" 패턴) + `assignments.resource_type='team'` 추가 +
+`run_crew()`에 선택적 `task_id`를 더해 Agent 멤버별 산출물이
+`deliverables`/Gate A-G/F7 승인 파이프라인으로 흘러들게 다리를 놓는
+것 — 전부 **기존에 검증된 패턴의 재사용**이지 새 패러다임을 만들지
+않는다(예: `task_participant_relationship()`은 이미 "모든 confirmed
+배정"을 순회하는 루프라 팀 배정을 멤버별 배정으로 "전개"하면 그 함수
+자체는 거의 안 고쳐도 됨 — 실제 코드를 읽어 확인한 뒤 반영). 5단계
+로드맵(스키마→배정 확장→Crew-deliverable 연결→UI→Crew 탭 통합
+검토)과 스코프 밖 항목(실시간 동시 협업은 Phase C 기각 사유 그대로
+유지), 사용자 결정이 필요한 질문 3개를 명시했다.
+
+**검증**: 기획 문서 전용 — 코드/테스트 변경 없음, 골든셋 232건 그대로.
+`README.md` 문서 목록에 1줄 추가해 상태를 "미구현(기획만)"으로
+명시(이 레포의 관례 — 기획과 구현을 문서 표기로 항상 구분).
+
+| 항목 | 상태 |
 | 항목 | 상태 |
 |---|---|
 | Gate A–G 실측 | 배선 완료(`eval_wiring.py`) — **저장 버그(`auto_save=False`) 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공**(TCR 100% PASS, Gate A/G 미달 예상대로 확인). AgentForge 실제 생성기 연동은 여전히 오픈 이슈 |

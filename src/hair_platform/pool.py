@@ -59,6 +59,7 @@ def human_pool_candidates(
                 performance_score=(
                     row["performance_score"] if row["performance_consent"] else None
                 ),
+                user_id=row["user_id"],
             )
         )
     return candidates

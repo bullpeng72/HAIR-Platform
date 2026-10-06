@@ -116,7 +116,13 @@ def as_crewai_tool(conn: sqlite3.Connection):
     자체를 검사한다). `crewai`는 지연 import한다."""
     from crewai.tools import tool  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
 
-    @tool("조직도 관계 조회")
+    # 사용자 보고(2026-10-06, 실제 크루 실행에서 "OpenAI function name
+    # cannot be empty" 크래시) — 설치된 crewai 버전의 `sanitize_tool_name()`
+    # 이 함수명을 ASCII로 정규화하며 비-ASCII 문자를 전부 버린다(`name.
+    # encode("ascii", "ignore")`). 한글만으로 된 이름("조직도 관계 조회")은
+    # 빈 문자열이 돼 즉시 예외가 난다 — Tool Pool 한글 이름은 그대로 두고
+    # LLM에 실제로 전달되는 함수명만 ASCII로 바꾼다.
+    @tool("org_relationship_query")
     def query_org_relationships() -> str:
         """조직도·직속상사·배정 현황 등 관계형 데이터를 조회한다(성과
         데이터는 포함하지 않는다). 관계 정보가 실제로 필요할 때만 호출하라."""

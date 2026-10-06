@@ -133,6 +133,28 @@ CREATE TABLE IF NOT EXISTS agent_pool (
     mcp_servers TEXT NOT NULL DEFAULT '[]'
 );
 
+-- 사용자 요청(2026-10-06, "복수의 사람이 복수의 Agent와 또는 CrewAI
+-- 장점인 역할에 따른 Agent를 묶어 생성된 그룹과 협업하도록... 다시
+-- 기획") — `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 1+2.
+-- human_pool/agent_pool 멤버를 역할명과 함께 묶어 여러 업무에 재사용
+-- 가능한 "팀"으로 등록한다(skill_pool/tool_pool과 같은 "등록→재사용"
+-- 패턴). 사람/Agent 풀 자체는 그대로 두고 참조만 한다.
+CREATE TABLE IF NOT EXISTS teams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS team_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id INTEGER NOT NULL REFERENCES teams(id),
+    member_type TEXT NOT NULL CHECK (member_type IN ('human', 'agent')),
+    member_id INTEGER NOT NULL,
+    role_label TEXT NOT NULL DEFAULT '',
+    UNIQUE(team_id, member_type, member_id)
+);
+
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_agent_id INTEGER REFERENCES agent_pool(id),
@@ -160,6 +182,21 @@ CREATE TABLE IF NOT EXISTS skill_pool (
     default_tool_pool_ids TEXT NOT NULL DEFAULT '[]',
     augmentation_mode TEXT NOT NULL DEFAULT 'tool'
         CHECK (augmentation_mode IN ('tool', 'always', 'none'))
+);
+
+-- 사용자 요청(2026-10-06, "운영 관리에 사용 가능한 ollama 모델 및
+-- openai, anthropic 모델 등록하는 메뉴를 두고 등록된 모델을 불러오는
+-- 방식으로 UI/UX를 개선") — 지금까지 "모델명" 입력란이 전부 자유
+-- 텍스트라, 실제로 쓸 수 있는 모델이 뭔지 모른 채 타이핑해야 했다
+-- (ollama의 기본값 "llama3.1"이 로컬에 없어 404가 난 사고가 실제
+-- 선례). skill_pool/tool_pool과 같은 패턴으로 "등록→드롭다운에서
+-- 선택" 구조를 모델명에도 적용한다.
+CREATE TABLE IF NOT EXISTS model_registry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL CHECK (provider IN ('anthropic', 'openai', 'ollama')),
+    name TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(provider, name)
 );
 
 CREATE TABLE IF NOT EXISTS agent_tool_links (
@@ -280,6 +317,56 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 확인할 방법이 어디에도 없었다(결재자가 "이 답변이 실제 근거에
     # 기반했는지" 검증 불가). 실행 job에 근거를 같이 남긴다.
     _ensure_column(conn, "agent_execution_jobs", "retrieved_context", "TEXT")
+    # 사용자 요청(2026-10-06, "필요 스킬" 자동완성에 "websearch"/"외부검색"이
+    # 완전히 같은 뜻(둘 다 web_search native 도구)인데 둘 다 떠 중복으로
+    # 보인다는 리포트 → "하나만 표시되도록 개선") — 두 별칭 중 "외부검색"을
+    # 정식 이름으로 남기고 "websearch"는 skill_pool에서 제거한다. 같은
+    # 요청으로 "vectordb"/"rag"(둘 다 vectordb_search), "graphdb"/"관계질의"
+    # (둘 다 graphdb_query)도 같은 방식으로 통합한다 — "rag"/"graphdb"는
+    # 실제 테스트·데이터에서 더 많이 쓰이던 쪽(docs/LIMITS.md §49). 이미
+    # 만들어진 DB에 남아있는 제거 대상 행과, 그 이름을 쓰던
+    # tasks.required_skills/agent_pool.skill_tags의 값도 남기는 쪽 이름으로
+    # 맞춰야 매칭이 끊기지 않는다 — `_seed_default_pools`의 `INSERT OR
+    # IGNORE`만으로는 이미 심어진 행을 지우지 못하므로 여기서 명시적으로
+    # 정리한다(멱등 — 제거 대상 행이 없으면 조용히 0건).
+    for removed_name, kept_name in (
+        ("websearch", "외부검색"),
+        ("vectordb", "rag"),
+        ("관계질의", "graphdb"),
+    ):
+        removed_row = conn.execute(
+            "SELECT id FROM skill_pool WHERE name = ?", (removed_name,)
+        ).fetchone()
+        if removed_row is None:
+            continue
+        for table, column in (
+            ("tasks", "required_skills"),
+            ("agent_pool", "skill_tags"),
+        ):
+            for row in conn.execute(f"SELECT id, {column} FROM {table}").fetchall():
+                tags = json.loads(row[column] or "[]")
+                if removed_name in tags:
+                    tags = [kept_name if t == removed_name else t for t in tags]
+                    conn.execute(
+                        f"UPDATE {table} SET {column} = ? WHERE id = ?",
+                        (json.dumps(tags, ensure_ascii=False), row["id"]),
+                    )
+        conn.execute("DELETE FROM skill_pool WHERE id = ?", (removed_row["id"],))
+
+    # 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
+    # `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md`. `team_leader_id`는
+    # resource_type='team' 배정의 F7 결재 주체(기본값은 배정 요청자,
+    # 변경 가능 — `assignments.update_team_leader()`). `replaces_
+    # assignment_id`는 "다중 confirmed 허용"으로 바꾸면서(같은 task·
+    # 같은 resource_type이어도 더 이상 자동으로 서로를 밀어내지 않는다)
+    # 그래도 "이 배정은 저 배정을 명시적으로 교체한다"는 의도를 표현할
+    # 길이 필요해서 추가했다 — 이 값이 있을 때만 승인 시 그 특정
+    # assignment가 superseded된다(`assignments.resolve_assignment_
+    # decision()`).
+    _ensure_column(conn, "assignments", "team_leader_id", "INTEGER REFERENCES users(id)")
+    _ensure_column(
+        conn, "assignments", "replaces_assignment_id", "INTEGER REFERENCES assignments(id)"
+    )
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:
@@ -337,12 +424,9 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
         tool_ids[native_id] = row["id"]
 
     skills = [
-        ("vectordb", "VectorDB 기반 지식검색 역량", "vectordb_search"),
-        ("rag", "VectorDB 기반 지식검색 역량(별칭)", "vectordb_search"),
+        ("rag", "VectorDB 기반 지식검색 역량", "vectordb_search"),
         ("graphdb", "GraphDB 기반 관계분석 역량", "graphdb_query"),
-        ("관계질의", "GraphDB 기반 관계분석 역량(별칭)", "graphdb_query"),
-        ("websearch", "외부 자료(Wikipedia) 검색 역량", "web_search"),
-        ("외부검색", "외부 자료(Wikipedia) 검색 역량(별칭)", "web_search"),
+        ("외부검색", "외부 자료(Wikipedia) 검색 역량", "web_search"),
     ]
     for name, description, native_id in skills:
         conn.execute(

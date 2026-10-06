@@ -184,6 +184,7 @@ def create_and_run_job(
     audit.record(conn, created_by, "agent_generation_started", "job", job_id)
 
     item_ids: list[int] = []
+    reused_item_ids: set[int] = set()
     for task_id in task_ids:
         existing = _existing_active_item(conn, task_id)
         if existing is not None:
@@ -197,6 +198,7 @@ def create_and_run_job(
                 after={"reused_item_id": existing["id"]},
             )
             item_ids.append(existing["id"])
+            reused_item_ids.add(existing["id"])
             continue
 
         task_row = conn.execute(
@@ -215,7 +217,12 @@ def create_and_run_job(
     status = _status_from_rows(rows)
     conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
     conn.commit()
-    return {"job_id": job_id, "status": status, "items": _serialize_rows(rows)}
+    return {
+        "job_id": job_id,
+        "status": status,
+        "items": _serialize_rows(conn, rows, reused_item_ids),
+        "reused_count": len(reused_item_ids),
+    }
 
 
 def retry_failed_item(
@@ -258,18 +265,48 @@ def _fetch_items(conn: sqlite3.Connection, item_ids: list[int]) -> list[sqlite3.
     ).fetchall()
 
 
-def _serialize_rows(rows: list[sqlite3.Row]) -> list[dict]:
-    return [
-        {
-            "id": row["id"],
-            "task_id": row["task_id"],
-            "status": row["status"],
-            "result": json.loads(row["result"]) if row["result"] else None,
-            "error": row["error"],
-            "retry_count": row["retry_count"],
-        }
-        for row in rows
-    ]
+def _serialize_rows(
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    reused_item_ids: set[int] | None = None,
+) -> list[dict]:
+    reused_item_ids = reused_item_ids or set()
+    items = []
+    for row in rows:
+        reused = row["id"] in reused_item_ids
+        # 사용자 보고(2026-10-06, "AI Agent 생성 결과가 AI 에이전트 관리
+        # 메뉴에서 확인되지 않음") — 성공(reused 여부 무관)한 job_item이
+        # 실제로 어떤 agent_pool 행을 만들었는지/가리키는지 몰라 "AI
+        # 에이전트 관리"의 여러 행 중 어떤 게 그건지 못 찾는 게 혼란의
+        # 원인이었다. 매번(신규 생성이든 재사용이든) 그 id/role_name을
+        # 직접 찾아 응답에 실어, 몇 번 항목을 보면 되는지 항상 명시한다
+        # — 실패한 항목은 애초에 agent_pool 행이 없어 자연히 None.
+        agent_pool_id = None
+        agent_pool_role_name = None
+        agent_row = conn.execute(
+            "SELECT id, role_name FROM agent_pool WHERE source_job_item_id = ?",
+            (row["id"],),
+        ).fetchone()
+        if agent_row is not None:
+            agent_pool_id = agent_row["id"]
+            agent_pool_role_name = agent_row["role_name"]
+        items.append(
+            {
+                "id": row["id"],
+                "task_id": row["task_id"],
+                "status": row["status"],
+                "result": json.loads(row["result"]) if row["result"] else None,
+                "error": row["error"],
+                "retry_count": row["retry_count"],
+                # NF7 dedup으로 기존 job_item을 재사용한 항목 — 새로 생성한 게
+                # 아니라 "이미 있던 에이전트를 다시 가리킨 것"이라 UI가 이를
+                # 명시적으로 보여줘야 "생성했는데 안 보인다"는 오해를 피한다.
+                "reused": reused,
+                "agent_pool_id": agent_pool_id,
+                "agent_pool_role_name": agent_pool_role_name,
+            }
+        )
+    return items
 
 
 def _serialize_items(conn: sqlite3.Connection, job_id: int) -> list[dict]:
@@ -278,4 +315,4 @@ def _serialize_items(conn: sqlite3.Connection, job_id: int) -> list[dict]:
         "WHERE job_id = ?",
         (job_id,),
     ).fetchall()
-    return _serialize_rows(rows)
+    return _serialize_rows(conn, rows)

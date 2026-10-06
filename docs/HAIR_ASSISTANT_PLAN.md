@@ -140,7 +140,7 @@ POST /api/assistant/ask   (Depends(get_current_user) — 로그인만 하면 역
 
 ### 4-4. 의존성 제약(실측 기반)
 
-`vectorstore.embed_text()`는 **현재 OpenAI 임베딩만 지원**한다
+~~`vectorstore.embed_text()`는 **현재 OpenAI 임베딩만 지원**한다
 (`vectorstore.py:34-38`, Anthropic은 공개 임베딩 API가 없고 Ollama
 로컬 임베딩은 오픈 이슈로 이월돼 있음). 즉 이 챗봇의 검색 단계는
 `OPENAI_API_KEY` 없이는 동작하지 않는다 — 답변 생성(`call_llm`)은
@@ -148,7 +148,15 @@ provider를 Anthropic/Ollama로 바꿀 수 있어도 검색은 못 바꾼다. �
 없는 배포 환경을 고려한다면 대안은: (a) 매뉴얼 색인만은 필수
 전제조건으로 명시하거나, (b) 키워드 매칭(예: SQLite FTS5) 폴백을
 v1.1에서 추가 — 이번 기획에서는 (a)로 시작하고 (b)는 오픈 이슈로
-남긴다.
+남긴다.~~
+
+**정정(2026-09-29)**: `vectorstore.embed_text()`에 `provider="ollama"`
+지원이 추가됐다(`docs/LIMITS.md` §47, `llm.py`의 `_call_ollama()`와
+같은 `OLLAMA_BASE_URL`+httpx 패턴) — 이 챗봇(아직 미착수, §7 기준
+"기획만 완료")도 이제 `OPENAI_API_KEY` 없이 Ollama 로컬 임베딩만으로
+검색 단계를 구성할 수 있다. 위 (a)/(b) 대안 논의는 "OpenAI 키가
+필수"라는 전제 위에 있었으므로 더 이상 적용되지 않는다 — 실제 구현
+시점에 Ollama 경로를 기본값으로 재검토할 것.
 
 ## 5. UI 노출 지점
 

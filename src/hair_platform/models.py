@@ -60,7 +60,15 @@ class BriefSubmission(BaseModel):
 
 
 class HumanPoolCreate(BaseModel):
-    """F12 — Human Pool 온보딩 폼."""
+    """F12 — Human Pool 온보딩 폼.
+
+    `user_id`는 사용자 보고(2026-10-06, "사람 인력으로 등록되어 있지만
+    사용자 관리에 등록되지 않은 경우 로그인도 안 돼 일을 할 수 없다")로
+    확인한 구조적 갭을 메운다 — 이전엔 Human Pool 등록이 로그인 계정과
+    완전히 무관해서, 계정 연결을 깜빡해도 매칭·배정·승인까지 전부
+    경고 없이 통과됐다. 등록 시점에 바로 기존 계정을 골라 연결할 수
+    있게 해 그 갭을 줄인다(여전히 optional — 계정 없는 순수 인력 계획
+    레코드도 기존처럼 가능)."""
 
     name: str
     role: str
@@ -68,6 +76,7 @@ class HumanPoolCreate(BaseModel):
     availability: str = "available"
     cost_estimate: float = 0.0
     manager_id: int | None = None
+    user_id: int | None = None
 
 
 class HumanPoolUpdate(BaseModel):
@@ -117,7 +126,13 @@ class TaskDecomposition(BaseModel):
 
 
 class ResourceCandidate(BaseModel):
-    """ADR 결정 4 — Human Pool·Agent Pool 공통 인터페이스."""
+    """ADR 결정 4 — Human Pool·Agent Pool 공통 인터페이스.
+
+    `user_id`는 사용자 보고(2026-10-06, "매칭/배정 화면에도 계정 미연결
+    경고 추가해줘")로 추가했다 — `type="human"`인데 `user_id`가 `None`이면
+    로그인 계정이 연결 안 된 사람 인력이라, 매칭·배정이 돼도 당사자가
+    "내 업무"에서 그 일을 볼 방법이 없다(`docs/LIMITS.md` §51). Agent는
+    로그인 계정 개념이 없어 항상 `None`이다."""
 
     id: int
     type: Literal["human", "agent"]
@@ -126,13 +141,43 @@ class ResourceCandidate(BaseModel):
     cost: float
     skill_tags: list[str]
     performance_score: float | None = None
+    user_id: int | None = None
 
 
 class AssignmentRequest(BaseModel):
-    """F6 — 배분 화면에서 매니저가 후보를 배정 요청한다(상태는 항상 requested로 시작)."""
+    """F6 — 배분 화면에서 매니저가 후보를 배정 요청한다(상태는 항상 requested로 시작).
 
-    resource_type: Literal["human", "agent"]
+    사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
+    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md`. `resource_type`에
+    `"team"`을 추가했다 — `resource_id`는 이때 `teams.id`다.
+    `team_leader_id`는 팀 배정의 F7 결재 주체(비워두면 요청자 본인이
+    기본값). `replaces_assignment_id`는 "다중 confirmed 허용"으로 바뀐
+    뒤에도 "이 배정이 저 배정을 명시적으로 교체한다"를 표현하는 선택적
+    필드 — 비워두면 기존 confirmed 배정들과 그냥 공존한다(교체 아님)."""
+
+    resource_type: Literal["human", "agent", "team"]
     resource_id: int
+    team_leader_id: int | None = None
+    replaces_assignment_id: int | None = None
+
+
+class TeamLeaderUpdate(BaseModel):
+    team_leader_id: int
+
+
+class TeamCreate(BaseModel):
+    name: str
+    description: str = ""
+
+
+class TeamActiveUpdate(BaseModel):
+    is_active: bool
+
+
+class TeamMemberAdd(BaseModel):
+    member_type: Literal["human", "agent"]
+    member_id: int
+    role_label: str = ""
 
 
 class DeliverableCreate(BaseModel):
@@ -158,10 +203,19 @@ class AssistRequest(BaseModel):
 
 
 class ExecuteAgentRequest(BaseModel):
-    """협업 워크스페이스 — task에 배정된 Agent를 실행한다. §2-6."""
+    """협업 워크스페이스 — task에 배정된 Agent를 실행한다. §2-6.
+
+    `agent_id`는 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2)
+    으로 추가했다 — "다중 confirmed 허용"으로 한 task에 confirmed agent
+    배정이 여러 건 공존할 수 있게 되면서, "그중 어떤 Agent를 실행할지"가
+    더 이상 자명하지 않다. 비워두면 기존처럼 confirmed agent가 정확히
+    1건일 때만 자동으로 그걸 쓰고, 여러 건이면 명시를 요구한다(하위
+    호환 — 지금까지의 유일한 실사용 패턴인 "1 task 1 confirmed agent"는
+    동작이 전혀 안 바뀐다)."""
 
     provider: LlmProvider | None = None
     model: str | None = None
+    agent_id: int | None = None
 
 
 class GenerateRequest(BaseModel):
@@ -308,3 +362,20 @@ class SkillPoolCreate(BaseModel):
     description: str = ""
     default_tool_pool_ids: list[int] = []
     augmentation_mode: AugmentationMode = "tool"
+
+
+class ModelRegistryCreate(BaseModel):
+    """사용자 요청(2026-10-06, "운영 관리에 사용 가능한 ollama 모델 및
+    openai, anthropic 모델 등록하는 메뉴를 두고 등록된 모델을 불러오는
+    방식으로 UI/UX를 개선") — "AI 에이전트 생성"·"모델 설정"·"Crew 실행"의
+    자유 텍스트 모델명 입력을 등록된 목록에서 고르는 방식으로 바꾸기
+    위한 레지스트리 항목. `GET /api/model-registry/fetch`로 provider가
+    실제로 제공하는 모델 후보를 먼저 조회한 뒤, 고른 것만 여기로 등록
+    한다(조회와 등록을 분리 — 조회만으로는 아무것도 저장되지 않는다)."""
+
+    provider: LlmProvider
+    name: str
+
+
+class ModelActiveUpdate(BaseModel):
+    is_active: bool

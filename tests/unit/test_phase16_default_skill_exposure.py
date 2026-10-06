@@ -70,9 +70,12 @@ def test_gc125_init_schema_seeds_agent_eval_procedural_skills():
     skills = pool_registry.list_skills(conn)
     skill_names = {s["name"] for s in skills}
     assert _EXPECTED_AGENT_EVAL_SKILL_NAMES <= skill_names
-    assert len(skills) == 7 + len(
+    assert len(skills) == 4 + len(
         _EXPECTED_AGENT_EVAL_SKILL_NAMES
-    )  # vectordb/graphdb 4 + websearch 2 + 일반웹검색 1 + 절차 18
+    )  # rag/graphdb 2(원래 vectordb/rag/graphdb/관계질의 4였으나 2026-10-06
+    # 자동완성 중복 통합으로 2로 줄어듦, docs/LIMITS.md §49) + 외부검색 1
+    # (원래 websearch/외부검색 2였으나 역시 §49로 1로 줄어듦) + 일반웹검색 1
+    # + 절차 18
 
     by_name = {s["name"]: s for s in skills}
     for name in _UNTOOLED_AGENT_EVAL_SKILL_NAMES:

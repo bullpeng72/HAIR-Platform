@@ -30,7 +30,7 @@
 - 다중 조직/테넌트 지원 — 단일 팀/조직 로컬 또는 온프레미스 실행 전제(AgentForge의 L5 조직확장 밖 원칙 계승)
 - 알림/통지 체계(이메일·Slack), 외부 HR/SSO 연동, BI 리포팅 API — 5차 재검토에서 식별했으나 1차 출시 범위 밖으로 명시적 이월(오픈 이슈, §10 참고)
 - CrewAI 이외 프레임워크 출력, 크로스팀 Pool 공유(포트폴리오 단위) — AgentForge 범위 그대로 계승
-- F14 점수 breakdown의 배정 후보 본인 공개 — 1차는 매니저(요청자) 전용, 본인 공개는 백로그
+- ~~F14 점수 breakdown의 배정 후보 본인 공개 — 1차는 매니저(요청자) 전용, 본인 공개는 백로그~~ — **해결(2026-09-29)**: §12에서 이미 해결됨(본인 항목만 필터링해 MEMBER에게도 공개, `docs/LIMITS.md` §47) — 이 줄이 §12 갱신 때 같이 안 고쳐져 같은 문서 안에서 "백로그"와 "해결"이 모순되던 것을 여기서 바로잡는다.
 
 ## 4. 기능 요구사항
 
@@ -173,7 +173,7 @@
 
 - [x] F1–F14 전부 골든셋 케이스로 검증됨(v0–v4+코드 재점검 R1/R2/R3/R4+LLM 연동+Ollama/모델설정+UI 구역분리+CrewAI/VectorDB/GraphDB+500에러수정+CrewAI 기능 적용 리뷰+MCP 연동+CrewAI 개념 활용도 감사+Skill/Tool Pool 구현+데이터 삭제/초기화 기능+Agent-Evaluator 절차 스킬 기본 노출+협업 워크스페이스 Phase 1/Phase 2/Phase 3/Phase 4+Phase 1-4 리뷰(1·2·3회차)+Phase 5(부분)+Phase 1-5 리뷰+기획/설계 문서 리뷰+UI/UX 리뷰+라이브 시나리오 실행 리뷰+사람 deliverable 제출/승인 메커니즘 추가+업무 결과물 확인 기능 개선+§34/§35 라이브 재검증+역할별 메뉴 노출 개선(3구역 재구성)+human_pool.manager_id API 추가+AI 에이전트 실행 권한 사전 확인+워크스페이스 UI/UX 개선+사용자 관리 화면 보강(비밀번호 초기화/계정 비활성화)+Tool/Skill 활용 시나리오+VectorDB 그라운딩 근거 노출+"운영 관리" 버튼 순서 정정+외부 자료 검색(Wikipedia) 도구 추가+일반 웹 검색(Parallel Search MCP) 도구 추가+기획/설계 문서 3종 감사+Gate A-G를 CrewAI 멀티에이전트 경로(`run_crew()`)에도 연결+거버넌스 결정 8건(MCP 도구 admin 전용, Human Pool 비용/성과 admin 전용, F14 breakdown 본인 공개, 보관기간 1년, 팀원 셀프서비스 배정 요청, CrewAI 위임 캡처 방어 로직, augmentation_mode='always' 구현, VectorDB Ollama 임베딩), 총 213건 — pytest 골든셋 기준. Phase 3부터 Gate A–G가 단일 실행 경로에, 이후 `run_crew()` 멀티에이전트 경로에도 상시 연결됨(`docs/LIMITS.md` §46). Phase 4부터 execute-agent가 비동기(202+job 폴링)로 동작함. 리뷰에서 사람+Agent 동시 confirmed 시 조용히 깨지던 크로스-Phase 버그, 중복 실행 트리거 무방비, 감사로그 비대칭, Phase 5의 대시보드/검색 필터 버그 2건을 발견·수정함. Phase 5부터 통합 인박스·매니저 대시보드·페이지네이션된 검색이 생김. 라이브 실행 리뷰(`httpx`로 실제 HTTP 요청)에서 새 코드 버그는 없었으나 시나리오 문서 자체의 과장을 발견·정정했고, 그 리뷰가 범위 밖으로 남긴 갭(사람 deliverable에 승인 경로 없음)을 이어서 메웠다)
 - [x] F11 — 인증된 Web UI 셸에서 F1–F14 전부 조작 가능(`webui.py`, 단일 페이지 바닐라 JS, R4에서 뒤늦게 구현 — `docs/LIMITS.md` §10 참고. 실제 브라우저 수동 조작은 미검증, TestClient 전체 플로우 통합 테스트로 대체)
-- [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외), 저장 버그 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공(TCR 100% PASS, Gate A/G 미달 확인) — `improve verify`로 confirmed까지 완주하는 반복은 여전히 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
+- [~] Gate A–G 7개 전부 최소 한 번 fail을 거쳐 `improve verify`로 confirmed 판정까지 완주 — 부분: `agent-evaluator[sdk]` 설치+`eval_wiring.py` 배선 완료(Gate A/B/D/E/G 대상, C/F는 해당없음으로 제외 — **이 "해당없음"은 `eval_wiring.py`의 스텁 제너레이터 probe 스코프에서만 유효하다**, `run_crew()` 경로는 §46부터 Gate F도 `framework="crewai"`로 측정 대상이다, `docs/LIMITS.md` §46 참고), 저장 버그 발견·수정 후 `agent-eval gate` 채점까지 실제로 성공(TCR 100% PASS, Gate A/G 미달 확인) — `improve verify`로 confirmed까지 완주하는 반복은 여전히 사용자 선택으로 보류. `docs/LIMITS.md` §1 참고
 - [ ] 6개 승인 kind 전부 설계된 지점에서 실제 발동 — `spec_review`·`adr_review` 완료, `threshold_review`는 Phase 4 검증(아래)으로 대체 발동
 - [~] RBAC·샌드박스·Audit Log 3중 기록 트랜잭션 원자성에 대한 보안/무결성 테스트 통과 — 부분: 샌드박스 우회 방지·NF7 idempotency·append-only 트리거는 검증 완료, Docker 실제 격리 동작은 미검증(`docs/LIMITS.md` §2)
 - [ ] 2인 팀 + 진짜 GitHub 원격에서 클레임 충돌 최소 1회 실전 발생·해소 — **불가(단독 세션)**: CI 인프라(`.github/workflows/ci.yml`)는 구축했으나 실전 클레임 충돌은 실제 2인 이상 협업에서만 발생한다, `docs/LIMITS.md` §5 참고

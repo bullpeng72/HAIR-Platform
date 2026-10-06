@@ -62,20 +62,29 @@ def _make_brief_and_task(client, task_name="백엔드 개발자", skills=None):
     return brief_id, task_id
 
 
-def _confirm_assignment(client, task_id, resource_type, resource_id, requester):
+def _confirm_assignment(
+    client, task_id, resource_type, resource_id, requester, replaces_assignment_id=None
+):
     """요청자를 명시적으로 지정해 로그인한다 — self-approval 방지(ADR 3-A) 때문에
-    반드시 admin1이 아닌 계정으로 요청해야 admin1이 승인할 수 있다."""
+    반드시 admin1이 아닌 계정으로 요청해야 admin1이 승인할 수 있다.
+
+    `replaces_assignment_id`(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
+    "다중 confirmed 허용"으로 바뀐 뒤 명시적 교체 의도를 표현하는 선택적
+    값. 안 주면 기존 confirmed 배정들과 그냥 공존한다(더 이상 자동
+    supersede 안 됨)."""
     _login(client, requester[0], requester[1])
-    resp = client.post(
-        f"/api/tasks/{task_id}/assignments",
-        json={"resource_type": resource_type, "resource_id": resource_id},
-    )
+    payload = {"resource_type": resource_type, "resource_id": resource_id}
+    if replaces_assignment_id is not None:
+        payload["replaces_assignment_id"] = replaces_assignment_id
+    resp = client.post(f"/api/tasks/{task_id}/assignments", json=payload)
     assert resp.status_code == 201, resp.text
     approval_id = resp.json()["approval_id"]
+    assignment_id = resp.json()["assignment_id"]
     _login(client, "admin1", "adminpass")
     resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
     assert resp.status_code == 200, resp.text
     assert resp.json()["assignment"]["status"] == "confirmed"
+    return assignment_id
 
 
 def _member1_id(conn):
@@ -875,12 +884,15 @@ def test_gc149_human_assignee_and_agent_requester_coexist_confirmed(client_and_c
     assert rel["my_relationship"] == "requester"
 
 
-def test_gc150_reassignment_within_same_resource_type_still_supersedes(
+def test_gc150_explicit_replace_within_same_resource_type_still_supersedes(
     client_and_conn,
 ):
-    """GC149 수정이 기존 "같은 타입 재배치" 동작(`test_v2_pipeline.py`)을
-    깨지 않았는지 이 파일의 헬퍼로도 재확인 — 같은 resource_type끼리는
-    여전히 supersede돼야 한다."""
+    """**정정(2026-10-06, 다자간 팀 협업 기획 Phase 1+2)**: 같은
+    resource_type을 다시 confirmed해도 더 이상 자동으로는 supersede
+    안 된다("다중 confirmed 허용" 사용자 결정) — 명시적으로
+    `replaces_assignment_id`를 줘야만 교체된다. 원래 GC150은 "자동으로
+    여전히 supersede되는지"였지만, 이제는 "명시하면 여전히 supersede
+    가능한지"로 의미가 바뀌었다."""
     client, conn = client_and_conn
     brief_id, task_id = _make_brief_and_task(client, "재배치 업무")
     assert brief_id
@@ -891,7 +903,7 @@ def test_gc150_reassignment_within_same_resource_type_still_supersedes(
         json={"name": "후보A", "role": "재배치 업무", "skill_tags": []},
     )
     human_a = resp_a.json()["id"]
-    _confirm_assignment(
+    assignment_a = _confirm_assignment(
         client, task_id, "human", human_a, requester=("manager1", "managerpass")
     )
 
@@ -901,7 +913,12 @@ def test_gc150_reassignment_within_same_resource_type_still_supersedes(
     )
     human_b = resp_b.json()["id"]
     _confirm_assignment(
-        client, task_id, "human", human_b, requester=("manager1", "managerpass")
+        client,
+        task_id,
+        "human",
+        human_b,
+        requester=("manager1", "managerpass"),
+        replaces_assignment_id=assignment_a,
     )
 
     rows = {
@@ -1277,3 +1294,229 @@ def test_gc190_execute_agent_without_matching_skill_leaves_retrieved_context_nul
     job = next(j for j in resp.json() if j["id"] == job_id)
     assert job["status"] == "succeeded", job
     assert job["retrieved_context"] is None
+
+
+# ---------- Human Pool 등록 시점 계정 연결(사용자 보고, 2026-10-06) ----------
+# "사람 인력으로 등록되어 있지만 사용자 관리에 등록되지 않은 경우 로그인도
+# 안 돼 일을 할 수 없다" — Human Pool 등록이 로그인 계정과 완전히 무관해서
+# 매칭·배정·승인이 경고 없이 다 통과되던 구조적 갭(docs/LIMITS.md §50)을
+# 메운다. "사용자 관리"로 계정을 먼저 만들고, "사람 인력 등록"에서 그
+# 계정을 골라 바로 연결하는 흐름을 지원한다.
+
+
+def test_gc211_users_names_endpoint_exposes_minimal_fields_to_admin_and_manager(
+    client_and_conn,
+):
+    """`/api/users`(ADMIN 전용)와 달리 `/api/users/names`는 "사람 인력
+    등록" 화면과 같은 권한 범위(ADMIN/MANAGER)로 열리고, 연결 용도로
+    필요한 최소 필드(id/username/role)만 돌려준다. 비활성 계정은
+    연결 대상이 아니므로 제외한다."""
+    client, conn = client_and_conn
+    conn.execute(
+        "UPDATE users SET is_active = 0 WHERE username = 'viewer1'"
+    )
+    conn.commit()
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get("/api/users/names")
+    assert resp.status_code == 200, resp.text
+    names = {row["username"] for row in resp.json()}
+    assert {"admin1", "manager1", "member1"} <= names
+    assert "viewer1" not in names  # 비활성화됨
+    assert set(resp.json()[0].keys()) == {"id", "username", "role"}
+
+    _login(client, "member1", "memberpass")
+    resp = client.get("/api/users/names")
+    assert resp.status_code == 403  # Human Pool 등록 권한이 없는 role
+
+
+def test_gc212_create_human_pool_links_user_id_at_registration(client_and_conn):
+    """등록 시점에 바로 `user_id`를 넘기면, 이전처럼 "등록 → 별도로
+    계정 연결" 두 단계를 거치지 않고 한 번에 로그인 계정과 연결된
+    Human Pool 레코드가 만들어져야 한다."""
+    client, conn = client_and_conn
+    member1_id = _member1_id(conn)
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "김과장", "role": "백엔드 개발자", "user_id": member1_id},
+    )
+    assert resp.status_code == 201, resp.text
+    human_id = resp.json()["id"]
+
+    resp = client.get("/api/human-pool")
+    row = next(r for r in resp.json() if r["id"] == human_id)
+    assert row["user_id"] == member1_id
+
+
+def test_gc213_create_human_pool_rejects_unknown_user_id(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "김과장", "role": "백엔드 개발자", "user_id": 999999},
+    )
+    assert resp.status_code == 404
+
+
+def test_gc214_create_and_patch_human_pool_reject_double_linking_same_account(
+    client_and_conn,
+):
+    """같은 계정이 두 Human Pool 레코드에 동시에 연결되면
+    `WHERE user_id = ?` 기반 조회(`/api/my-work` 등)가 둘 중 하나만
+    조용히 골라, 다른 한쪽은 영원히 안 보이게 된다 — 생성·수정(PATCH)
+    양쪽 경로 다 막아야 한다."""
+    client, conn = client_and_conn
+    member1_id = _member1_id(conn)
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "김과장", "role": "백엔드 개발자", "user_id": member1_id},
+    )
+    assert resp.status_code == 201, resp.text
+    first_human_id = resp.json()["id"]
+
+    # 생성 시점에 이미 연결된 계정을 또 넘기면 막힌다.
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "이대리", "role": "백엔드 개발자", "user_id": member1_id},
+    )
+    assert resp.status_code == 409, resp.text
+
+    # 계정 없이 만든 뒤 PATCH로 이미 연결된 계정을 연결하려 해도 막힌다.
+    resp = client.post(
+        "/api/human-pool", json={"name": "이대리", "role": "백엔드 개발자"}
+    )
+    second_human_id = resp.json()["id"]
+    resp = client.patch(
+        f"/api/human-pool/{second_human_id}", json={"user_id": member1_id}
+    )
+    assert resp.status_code == 409, resp.text
+
+    # 자기 자신에게 다시 연결(멱등)은 허용된다.
+    resp = client.patch(
+        f"/api/human-pool/{first_human_id}", json={"user_id": member1_id}
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_gc215_match_result_flags_unlinked_human_candidate(client_and_conn):
+    """매칭/배정 화면 경고(사용자 보고, 2026-10-06, "매칭/배정 화면에도
+    계정 미연결 경고 추가해줘") — `ResourceCandidate.user_id`가 매칭
+    결과에 실려야 Web UI가 "이 사람은 로그인 계정이 없다"는 경고를
+    보여줄 수 있다. admin/manager 전체 후보 조회에서 연결/미연결이
+    둘 다 정확히 구분돼야 한다."""
+    client, conn = client_and_conn
+    member1_id = _member1_id(conn)
+    brief_id, task_id = _make_brief_and_task(client, "백엔드 개발자", ["python"])
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "연결됨", "role": "백엔드 개발자", "skill_tags": ["python"],
+              "user_id": member1_id},
+    )
+    linked_id = resp.json()["id"]
+    resp = client.post(
+        "/api/human-pool",
+        json={"name": "미연결", "role": "백엔드 개발자", "skill_tags": ["python"]},
+    )
+    unlinked_id = resp.json()["id"]
+
+    resp = client.post(f"/api/tasks/{task_id}/match")
+    assert resp.status_code == 200, resp.text
+    by_id = {t["candidate"]["id"]: t["candidate"] for t in resp.json()["top"]}
+    assert by_id[linked_id]["user_id"] == member1_id
+    assert by_id[unlinked_id]["user_id"] is None
+
+
+def test_gc216_pool_search_does_not_expose_user_id(client_and_conn):
+    """`/api/pool/search`는 viewer까지 전원 조회 가능(RBAC 매트릭스)이라,
+    매칭/배정 화면(admin/manager/member)에만 노출하는 `user_id`를 여기선
+    섞지 않는다(불필요한 노출 확대 방지)."""
+    client, conn = client_and_conn
+    member1_id = _member1_id(conn)
+    _login(client, "admin1", "adminpass")
+    client.post(
+        "/api/human-pool",
+        json={"name": "연결됨", "role": "백엔드 개발자", "user_id": member1_id},
+    )
+
+    _login(client, "viewer1", "viewerpass")
+    resp = client.get("/api/pool/search")
+    assert resp.status_code == 200, resp.text
+    for item in resp.json()["items"]:
+        assert "user_id" not in item
+
+
+# ---------- 할 일별 배정 현황 조회(사용자 요청, 2026-10-06) ----------
+# "팀 구성과 협업 프로세스를 하나의 화면으로 합치는 방안" 검토 후 옵션 C
+# (업무 요청에 할 일 상세 뷰 신설) 채택 — 그 상세 뷰가 배정 현황을 보여줄
+# 수 있어야 한다.
+
+
+def test_gc217_list_task_assignments_shows_current_and_superseded_status(
+    client_and_conn,
+):
+    """할 일 하나에 걸린 배정을 전부(상태 무관) 최신순으로 돌려준다 —
+    재배치로 기존 confirmed가 superseded로 바뀌는 것까지 구분해서
+    보여야 "업무 요청" 화면의 할 일 상세가 정확한 현재 상태를 그릴 수
+    있다."""
+    client, conn = client_and_conn
+    brief_id, task_id = _make_brief_and_task(client, "백엔드 개발자")
+
+    resp = client.post(
+        "/api/human-pool", json={"name": "김과장", "role": "백엔드 개발자"}
+    )
+    human1_id = resp.json()["id"]
+    resp = client.post(
+        "/api/human-pool", json={"name": "이대리", "role": "백엔드 개발자"}
+    )
+    human2_id = resp.json()["id"]
+
+    _login(client, "admin1", "adminpass")
+    resp = client.get(f"/api/tasks/{task_id}/assignments")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []  # 아직 배정 요청이 전혀 없다
+
+    assignment1 = _confirm_assignment(
+        client, task_id, "human", human1_id, ("manager1", "managerpass")
+    )
+    resp = client.get(f"/api/tasks/{task_id}/assignments")
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "confirmed"
+    assert rows[0]["resource_name"] == "김과장"
+
+    # 같은 task·같은 resource_type(human)을 `replaces_assignment_id`로
+    # 명시적으로 교체하면 기존 건이 superseded로 바뀐다(2026-10-06
+    # 정정 — "다중 confirmed 허용"으로 바뀌면서 더 이상 자동으로는
+    # 안 된다, assignments.resolve_assignment_decision).
+    _confirm_assignment(
+        client,
+        task_id,
+        "human",
+        human2_id,
+        ("manager1", "managerpass"),
+        replaces_assignment_id=assignment1,
+    )
+    resp = client.get(f"/api/tasks/{task_id}/assignments")
+    rows = resp.json()
+    assert len(rows) == 2
+    by_resource = {r["resource_id"]: r["status"] for r in rows}
+    assert by_resource[human1_id] == "superseded"
+    assert by_resource[human2_id] == "confirmed"
+
+    # viewer도 읽기 전용으로 접근 가능하다(조직도와 같은 노출 수준).
+    _login(client, "viewer1", "viewerpass")
+    resp = client.get(f"/api/tasks/{task_id}/assignments")
+    assert resp.status_code == 200, resp.text
+
+
+def test_gc218_list_task_assignments_404_for_unknown_task(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/tasks/999999/assignments")
+    assert resp.status_code == 404

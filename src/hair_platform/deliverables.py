@@ -86,7 +86,16 @@ def task_participant_relationship(
     """이 task의 confirmed 배정에서 user_id가 사람 당사자("assignee")이거나
     Agent 배정 요청자("requester")인지 판정한다. 둘 다 아니면 None —
     `human_pool.user_id`가 없는(로그인 계정 미연결) 사람은 구조적으로 여기
-    걸리지 않는다(`docs/PHASE1_DELIVERABLE_SPEC.md` §1 "알려진 한계")."""
+    걸리지 않는다(`docs/PHASE1_DELIVERABLE_SPEC.md` §1 "알려진 한계").
+
+    사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
+    `resource_type='team'`도 판정한다: 그 팀의 **리더**("team_leader")
+    이거나 **사람 멤버**("team_member", 로그인 계정 연결된 경우만 —
+    위와 같은 한계)면 참가자다. 이 함수는 이미 "모든 confirmed 배정을
+    순회"하는 루프라(다중 confirmed 지원 전부터 그랬다), 사람/Agent
+    배정이 여러 건 공존해도 **수정 없이 그대로** 전부 판정한다 —
+    "복수의 사람 + 복수의 Agent"를 지원하려고 이 함수를 따로 고칠
+    필요가 없었다."""
     for row in _confirmed_assignments_for_task(conn, task_id):
         if row["resource_type"] == "human":
             human = conn.execute(
@@ -96,6 +105,19 @@ def task_participant_relationship(
                 return "assignee"
         elif row["resource_type"] == "agent" and row["requested_by"] == user_id:
             return "requester"
+        elif row["resource_type"] == "team":
+            if row["team_leader_id"] == user_id:
+                return "team_leader"
+            member = conn.execute(
+                """
+                SELECT 1 FROM team_members tm
+                JOIN human_pool hp ON hp.id = tm.member_id AND tm.member_type = 'human'
+                WHERE tm.team_id = ? AND hp.user_id = ?
+                """,
+                (row["resource_id"], user_id),
+            ).fetchone()
+            if member is not None:
+                return "team_member"
     return None
 
 
@@ -440,6 +462,7 @@ def start_agent_execution(
     task_id: int,
     actor_id: int,
     allow_supervisor_override: bool = False,
+    agent_id: int | None = None,
 ) -> dict:
     """`POST /api/tasks/{task_id}/execute-agent`(§2-6, Phase 4로 비동기화) —
     이 task의 confirmed agent 배정을 찾아 검증·프롬프트 구성까지만
@@ -449,6 +472,17 @@ def start_agent_execution(
     이거나(`allow_supervisor_override=False`) 매니저/관리자(`True`)면
     통과. 가장 최근 사람 작성 deliverable을 Task 입력에 포함시킨다(§1
     "출력 처리" — "결과물 전달" 갭을 메우는 지점).
+
+    `agent_id`는 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2)
+    으로 추가했다 — "다중 confirmed 허용"으로 한 task에 confirmed agent
+    배정이 여러 건 공존할 수 있게 되면서, 지금까지처럼 그냥
+    `.fetchone()`으로 "아무 거나 하나" 고르면 안 된다. 명시하면 그
+    Agent가 실제로 confirmed인지 검증 후 그것만 쓴다 — 비워두면
+    **기존과 똑같이** 매칭되는 confirmed agent를 그대로 쓴다(지금까지의
+    유일한 실사용 패턴인 "task당 confirmed agent 1건"은 동작이 전혀
+    안 바뀐다 — 여러 건인데 agent_id도 안 주면 여전히 `.fetchone()`이
+    그중 하나를 고른다는 것도 동일하다; "여러 건 중 꼭 골라야 한다"는
+    강제는 이번 범위에 넣지 않았다 — 필요하면 후속 작업).
 
     provider/model은 여기서 다루지 않는다 — `app.py`가 요청에서 받은
     값을 검증 없이 그대로 들고 있다가 `run_agent_execution_job()`에
@@ -464,11 +498,20 @@ def start_agent_execution(
         raise LookupError("no_confirmed_agent_assignment")
 
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    agent_assignment = conn.execute(
-        "SELECT * FROM assignments WHERE task_id = ? AND status = 'confirmed' "
-        "AND resource_type = 'agent'",
-        (task_id,),
-    ).fetchone()
+    if agent_id is not None:
+        agent_assignment = conn.execute(
+            "SELECT * FROM assignments WHERE task_id = ? AND status = 'confirmed' "
+            "AND resource_type = 'agent' AND resource_id = ?",
+            (task_id, agent_id),
+        ).fetchone()
+        if agent_assignment is None:
+            raise LookupError("no_confirmed_agent_assignment")
+    else:
+        agent_assignment = conn.execute(
+            "SELECT * FROM assignments WHERE task_id = ? AND status = 'confirmed' "
+            "AND resource_type = 'agent'",
+            (task_id,),
+        ).fetchone()
     agent_id = agent_assignment["resource_id"]
 
     # 실측으로 발견한 갭(2026-09-28, 리뷰 2회차) — 이 함수는 원래 같은

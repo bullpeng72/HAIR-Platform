@@ -60,6 +60,42 @@ def test_gc37_duplicate_generation_request_reuses_existing_item_nf7(client_and_c
     assert "agent_generation_deduplicated" in actions
 
 
+def test_gc37b_dedup_response_flags_reused_items(client_and_conn):
+    """NF7 dedup 재사용을 응답에 `reused`/`reused_count`로 명시한다 — UI가
+    "생성했는데 안 보인다"는 오해를 피하도록(사용자 요청, 2026-10-02).
+
+    **정정(2026-10-06, 사용자 보고 "생성은 '성공'으로 떴는데 관리 탭에
+    안 보임")**: `reused` 플래그만으로는 "그래서 어떤 Agent를 보라는
+    건지" 알 수 없어 혼란이 계속됐다 — 매 항목(신규 생성이든 재사용이든)
+    에 실제로 연결된 `agent_pool_id`/`agent_pool_role_name`을 직접
+    실어 명시한다."""
+    client, _conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    brief_id, task_id = _make_brief_with_task(client)
+
+    resp1 = client.post(
+        f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]}
+    )
+    assert resp1.status_code == 201
+    item1 = resp1.json()["items"][0]
+    assert item1["reused"] is False
+    assert resp1.json()["reused_count"] == 0
+    assert item1["agent_pool_id"] is not None
+    assert item1["agent_pool_role_name"] == "백엔드 개발자"
+
+    resp2 = client.post(
+        f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]}
+    )
+    assert resp2.status_code == 201
+    body = resp2.json()
+    item2 = body["items"][0]
+    assert body["reused_count"] == 1
+    assert item2["reused"] is True
+    # 재사용돼도 같은 기존 Agent를 가리켜야 한다 — 새로 만들어진 게 아니다.
+    assert item2["agent_pool_id"] == item1["agent_pool_id"]
+    assert item2["agent_pool_role_name"] == "백엔드 개발자"
+
+
 def test_gc38_sandbox_failure_cannot_be_bypassed_into_success(client_and_conn):
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")
@@ -76,6 +112,7 @@ def test_gc38_sandbox_failure_cannot_be_bypassed_into_success(client_and_conn):
     body = resp.json()
     assert body["status"] == "failed"
     assert body["items"][0]["status"] == "failed"
+    assert body["items"][0]["agent_pool_id"] is None
 
     # 샌드박스가 실패라고 답했는데도 agent_pool에 항목이 생기면 우회된 것이다.
     count = conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"]

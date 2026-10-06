@@ -76,6 +76,42 @@ def _looks_like_delegation(tool_name: str) -> bool:
     lowered = tool_name.lower()
     return any(keyword in lowered for keyword in _DELEGATION_KEYWORDS)
 
+
+def _sanitize_role(name: str) -> str:
+    """CrewAI 자체의 `BaseAgentTool.sanitize_agent_name()`과 같은 정규화
+    (공백 정리+소문자화) — 아래 `_resolve_delegation_target()`이 LLM이
+    자유 텍스트로 써낸 `coworker` 값을 실제 Agent role과 매칭할 때,
+    CrewAI가 내부적으로 쓰는 것과 동일한 기준으로 비교해야 "매칭 안 됨"을
+    우리가 따로 오탐하지 않는다."""
+    return " ".join(name.split()).replace('"', "").casefold()
+
+
+def _resolve_delegation_target(tool_args, known_roles: list[str]) -> str | None:
+    """사용자 요청(2026-10-06, "묶인 Agent간 협업 관계를 다이어그램으로
+    표시") — 위임 다이어그램을 그리려면 "누가" 뿐 아니라 "누구에게"가
+    필요한데, 기존 `_capture_delegation`은 `event.tool_args`를 아예 안 읽어
+    대상을 버리고 있었다. CrewAI의 위임 Tool(`DelegateWorkTool`/
+    `AskQuestionTool`)은 둘 다 `coworker` 인자로 대상 role을 받는다
+    (crewai 소스 확인: `delegate_work_tool.py`/`ask_question_tool.py`) —
+    `ToolUsageEvent.tool_args`에 그 값이 그대로 실려 있어 꺼낼 수 있다.
+    LLM이 대소문자·공백을 자유롭게 써내므로, CrewAI 자신의 매칭 방식과
+    동일하게 정규화해 실제 Agent role과 맞춰본다 — 못 찾으면(예: 존재
+    하지 않는 동료를 호출해 CrewAI가 에러를 반환한 경우) 원문 그대로
+    돌려줘 정보를 버리지 않는다."""
+    if not isinstance(tool_args, dict):
+        return None
+    raw = tool_args.get("coworker") or tool_args.get("co_worker")
+    if not raw or not isinstance(raw, str):
+        return None
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1].split(",")[0]
+    sanitized = _sanitize_role(raw)
+    for role in known_roles:
+        if _sanitize_role(role) == sanitized:
+            return role
+    return raw.strip()
+
+
 # ADR 결정 11 한계 섹션이 "반드시 걸어야 한다"고 명시했던 상한(사용자 요청,
 # 2026-09-27, "crewai 기능 적절히 적용됐는지 분석" 리뷰에서 실제로 미반영 상태를
 # 발견해 반영함). CrewAI Agent 기본값(25)보다 보수적으로 잡는다 — 우리는 Crew
@@ -416,11 +452,18 @@ def run_crew(
         crew = Crew(**crew_kwargs)
 
         delegations: list[dict] = []
+        known_roles = [r["role_name"] for r in rows]
 
         def _capture_delegation(source, event) -> None:
             if _looks_like_delegation(event.tool_name):
                 delegations.append(
-                    {"from_agent_role": event.agent_role, "tool": event.tool_name}
+                    {
+                        "from_agent_role": event.agent_role,
+                        "to_agent_role": _resolve_delegation_target(
+                            event.tool_args, known_roles
+                        ),
+                        "tool": event.tool_name,
+                    }
                 )
 
         with crewai_event_bus.scoped_handlers():
@@ -440,10 +483,23 @@ def run_crew(
 
     per_agent = []
     for row, task_output in zip(worker_rows, result.tasks_output, strict=False):
+        # 사용자 요청(2026-10-06, "model provider/모델명이 AI 생성·관리·Crew
+        # 실행 단계에 모두 있는데 최종 어떻게 적용되는지 분석" → "(b)
+        # 실행 후 덮어쓰기만이라도 막는 방향으로 수정") — Crew 실행은 참여
+        # Agent 전원에게 요청 시점의 provider/model **하나**를 똑같이
+        # 적용한다(개별 Agent의 "모델 설정" 저장값은 애초에 안 읽음,
+        # `_crewai_llm()` 호출부 참고). 그런데 실행이 끝나면 그 하나의
+        # 값을 모든 참여 Agent의 `llm_provider`/`llm_model`에 그대로
+        # 덮어써 와서, "AI 에이전트 관리"에서 Agent별로 따로 설정해둔
+        # 기본값(단일 실행 경로 `agent_runtime.execute_agent()`가 쓰는
+        # 그 값)이 Crew 실행 한 번으로 조용히 사라지는 문제가 있었다.
+        # `last_output`/`framework`(이번 실행이 실제로 crewai였다는
+        # 사실)는 그대로 갱신하되, llm_provider/llm_model은 더 이상
+        # 건드리지 않는다 — "모델 설정"은 사용자가 명시적으로
+        # 바꾸기 전까지는 Crew 실행과 무관하게 유지된다.
         conn.execute(
-            "UPDATE agent_pool SET last_output = ?, llm_provider = ?, llm_model = ?, "
-            "framework = 'crewai' WHERE id = ?",
-            (task_output.raw, resolved_provider, resolved_model, row["id"]),
+            "UPDATE agent_pool SET last_output = ?, framework = 'crewai' WHERE id = ?",
+            (task_output.raw, row["id"]),
         )
         per_agent.append(
             {

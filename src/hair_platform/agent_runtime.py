@@ -5,7 +5,7 @@ F4(생성) 시점의 LLM 호출(`jobs.llm_agent_generator`)은 "처음 합류했
 배치된 Agent에게 구체적인 업무를 맡기고 결과를 받는 경로다. 이게 있어야
 "생성만 되고 일은 안 하는 레코드"가 아니라 실제로 호출해 쓸 수 있는 Agent가 된다.
 
-ADR 결정 11(사용자 요청, 2026-09-26, 3차) — `skill_tags`에 "vectordb"/"rag"
+ADR 결정 11(사용자 요청, 2026-09-26, 3차) — `skill_tags`에 "rag"
 또는 "graphdb"가 있으면 LLM을 부르기 전에 각각 `vectorstore.search()`(임베딩
 검색, 추가 비용 발생)·`graphquery.context_for_prompt()`(SQL 조회, 비용 없음)로
 검색 결과를 프롬프트에 덧붙인다(RAG) — 이게 "지식검색 Agent"·"관계분석
@@ -13,10 +13,12 @@ Agent"의 실제 동작이다. 관계분석 쪽은 NF9 경계를 지키기 위�
 자체가 성과 데이터를 절대 SELECT하지 않는다.
 
 사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
-API(가능한 무료)를... 추가해줘")로 "websearch"/"외부검색" skill_tags도
+API(가능한 무료)를... 추가해줘")로 "외부검색" skill_tags도
 같은 방식으로 지원한다 — `websearch.context_for_prompt()`(Wikipedia
 검색, API 키 불필요·무료)로 VectorDB/GraphDB가 못 다루는 "조직 밖
-일반 지식"을 보강한다.
+일반 지식"을 보강한다. ("websearch"/"vectordb"/"관계질의"는 각각
+"외부검색"/"rag"/"graphdb"와 완전히 같은 뜻의 별칭이었으나 자동완성
+중복 리포트로 2026-10-06에 한쪽으로 통합됨, docs/LIMITS.md §49.)
 """
 
 from __future__ import annotations
@@ -26,9 +28,9 @@ import sqlite3
 
 from hair_platform import audit, graphquery, llm, pool_registry, vectorstore, websearch
 
-VECTORDB_SKILL_TAGS = {"vectordb", "rag"}
-GRAPHDB_SKILL_TAGS = {"graphdb", "관계질의"}
-WEBSEARCH_SKILL_TAGS = {"websearch", "외부검색"}
+VECTORDB_SKILL_TAGS = {"rag"}
+GRAPHDB_SKILL_TAGS = {"graphdb"}
+WEBSEARCH_SKILL_TAGS = {"외부검색"}
 
 
 def augment_with_retrieval(

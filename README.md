@@ -189,7 +189,9 @@ ServiceNow) 리서치로 메뉴를 재분류하고 내비게이션을 3구역으
 분리했다. 리서치 과정에서 찾은 RBAC 갭 2건(MCP 도구 등록이 admin
 전용이 아닌 것, Human/Agent Pool 비용·성과 수정 권한 비대칭)은
 `docs/ROLE_TASK_CLASSIFICATION.md`에 남겨두고 이번엔 UI 그룹 재배치만
-반영했다(GC73-77, `docs/LIMITS.md` §37). 이어서 사용자 요청("admin,
+반영했다(GC73-77, `docs/LIMITS.md` §37) — **두 갭 모두 이후
+`docs/LIMITS.md` §47에서 사용자 결정을 받아 해결**(MCP는 admin 전용,
+Human Pool 비용·성과도 admin 전용으로 Agent Pool과 대칭). 이어서 사용자 요청("admin,
 사용자 계정을 정리해줘")을 실제로 수행하려다 **`human_pool.manager_id`
 를 채울 API가 스키마 도입 이후 한 번도 존재한 적이 없던 갭을
 발견·수정했다** — `GET /api/org-chart`는 이미 이 컬럼으로 사람을
@@ -372,6 +374,7 @@ docs/
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
   COLLABORATION_PLATFORM_PLAN.md  # 사람-AI 협업(결과물 전달/HITL/HOTL) 기획안 — Phase A/B 구현 완료
   HAIR_MASTER_PLAN.md             # 위 기획안을 포함하는 종합 기획/설계/개발 계획 — Phase 1-3 구현 완료
+  MULTI_PARTY_TEAM_COLLABORATION_PLAN.md  # N명 사람+M개 Agent(또는 역할 기반 Agent 그룹) 팀 협업 기획안 — 미구현(기획만)
   PHASE1_DELIVERABLE_SPEC.md      # Phase 1 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI

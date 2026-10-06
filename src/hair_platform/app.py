@@ -47,10 +47,12 @@ from hair_platform import (
     fairness,
     inbox,
     jobs,
+    model_registry,
     performance,
     pool,
     pool_registry,
     retention,
+    teams,
     webui,
 )
 from hair_platform import approvals as approvals_mod
@@ -82,9 +84,15 @@ from hair_platform.models import (
     KnowledgeIndexRequest,
     LoginRequest,
     ManagerUpdate,
+    ModelActiveUpdate,
+    ModelRegistryCreate,
     PerformanceScoreRequest,
     SkillPoolCreate,
     TaskDecomposition,
+    TeamActiveUpdate,
+    TeamCreate,
+    TeamLeaderUpdate,
+    TeamMemberAdd,
     ToolActiveUpdate,
     ToolPoolCreate,
     UserCreate,
@@ -294,6 +302,24 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         ).fetchall()
         return [{**dict(row), "is_active": bool(row["is_active"])} for row in rows]
 
+    @app.get("/api/users/names")
+    def list_user_names(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 보고(2026-10-06, "사람 인력으로 등록되어 있지만 사용자
+        관리에 등록되지 않은 경우 로그인도 안 돼 일을 할 수 없다")로 추가
+        — "사람 인력 등록" 화면(ADMIN/MANAGER 둘 다 접근 가능)이 "이미
+        만들어진 계정 중에서 골라 연결"하려면 계정 목록을 읽을 수 있어야
+        하는데, `GET /api/users`는 ADMIN 전용이라 MANAGER는 못 쓴다.
+        `/api/skill-pool/names`와 같은 이유로 — 관리 목적의 전체 레코드
+        (manager_id·is_active 등)가 아니라 연결 용도로 꼭 필요한 최소
+        정보(id/username/role)만, 그 화면과 같은 권한 범위로 노출한다.
+        비활성 계정은 연결 대상에서 의미가 없어 제외한다."""
+        rows = conn.execute(
+            "SELECT id, username, role FROM users WHERE is_active = 1 ORDER BY username"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     @app.post("/api/briefs", status_code=201)
     def submit_brief(
         payload: BriefSubmission,
@@ -350,10 +376,27 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         payload: HumanPoolCreate,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
+        if payload.user_id is not None:
+            target_user = conn.execute(
+                "SELECT id FROM users WHERE id = ?", (payload.user_id,)
+            ).fetchone()
+            if target_user is None:
+                raise HTTPException(
+                    status_code=404, detail="연결할 사용자를 찾을 수 없습니다"
+                )
+            already_linked = conn.execute(
+                "SELECT id FROM human_pool WHERE user_id = ?", (payload.user_id,)
+            ).fetchone()
+            if already_linked is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="이미 다른 사람 인력(id="
+                    f"{already_linked['id']})에 연결된 계정입니다",
+                )
         cur = conn.execute(
             "INSERT INTO human_pool "
-            "(name, role, skill_tags, availability, cost_estimate, manager_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(name, role, skill_tags, availability, cost_estimate, manager_id, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 payload.name,
                 payload.role,
@@ -361,6 +404,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 payload.availability,
                 payload.cost_estimate,
                 payload.manager_id,
+                payload.user_id,
             ),
         )
         conn.commit()
@@ -434,6 +478,20 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             if target_user is None:
                 raise HTTPException(
                     status_code=404, detail="연결할 사용자를 찾을 수 없습니다"
+                )
+            # 사용자 보고(2026-10-06)로 추가 — 두 Human Pool 레코드가 같은
+            # 계정에 연결되면 `WHERE user_id = ?` 기반 조회(`/api/my-work`
+            # 등)가 둘 중 하나만 조용히 골라 다른 쪽은 영원히 안 보이게
+            # 된다. 자기 자신에게 다시 연결하는 건 허용(멱등).
+            already_linked = conn.execute(
+                "SELECT id FROM human_pool WHERE user_id = ? AND id != ?",
+                (payload.user_id, human_id),
+            ).fetchone()
+            if already_linked is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="이미 다른 사람 인력(id="
+                    f"{already_linked['id']})에 연결된 계정입니다",
                 )
             updates["user_id"] = payload.user_id
         if payload.manager_id is not None:
@@ -643,9 +701,13 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         )
         rows = conn.execute("SELECT id, name FROM human_pool").fetchall()
         name_by_id = {row["id"]: row["name"] for row in rows}
+        # 사용자 보고(2026-10-06)로 `ResourceCandidate.user_id`가 추가됐다
+        # — 이 검색은 viewer까지 전원 조회 가능(RBAC 매트릭스)이라, 계정
+        # 미연결 경고는 그보다 좁은 매칭/배정 화면(admin/manager/member)
+        # 응답에만 노출하고 여긴 그대로 뺀다(불필요한 노출 확대 방지).
         items = [
             {
-                **c.model_dump(),
+                **c.model_dump(exclude={"user_id"}),
                 "name": name_by_id.get(c.id) if c.type == "human" else None,
             }
             for c in candidates
@@ -735,9 +797,62 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 raise HTTPException(
                     status_code=403, detail="본인 배정 요청만 가능합니다"
                 )
-        return assignments.create_assignment_request(
-            conn, task_id, payload.resource_type, payload.resource_id, user["id"]
-        )
+        try:
+            return assignments.create_assignment_request(
+                conn,
+                task_id,
+                payload.resource_type,
+                payload.resource_id,
+                user["id"],
+                team_leader_id=payload.team_leader_id,
+                replaces_assignment_id=payload.replaces_assignment_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/tasks/{task_id}/assignments")
+    def list_task_assignments(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """사용자 요청(2026-10-06, "팀 구성과 협업 프로세스를 하나의
+        화면으로 합치는 방안" → 옵션 C 채택) — "업무 요청" 탭에서 할 일
+        하나의 배정 현황(요청됨/확정됨/반려됨/대체됨)을 바로 보여주려면
+        이 할 일에 걸린 `assignments` 전체를 조회할 방법이 있어야 하는데
+        지금까지 없었다(`/api/org-chart`는 confirmed만, 그마저 task
+        단위 조회가 아니다). 조직도(`GET /api/org-chart`)가 이미 전원
+        공개하는 것과 같은 수준(이름+상태, 비용·성과점수는 제외)이라
+        `get_current_user`로 연다 — status 제한 없이 이력 전체를
+        최신순으로 돌려준다(화면에서 현재 상태/과거 이력을 구분해
+        보여줄 수 있도록)."""
+        task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
+        rows = conn.execute(
+            """
+            SELECT a.id, a.resource_type, a.resource_id, a.status,
+                   hp.name AS human_name, ap.role_name AS agent_role_name
+            FROM assignments a
+            LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
+            LEFT JOIN agent_pool ap ON ap.id = a.resource_id AND a.resource_type = 'agent'
+            WHERE a.task_id = ?
+            ORDER BY a.id DESC
+            """,
+            (task_id,),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "resource_type": row["resource_type"],
+                "resource_id": row["resource_id"],
+                "resource_name": (
+                    row["human_name"]
+                    if row["resource_type"] == "human"
+                    else row["agent_role_name"]
+                ),
+                "status": row["status"],
+            }
+            for row in rows
+        ]
 
     # ---------- 협업 워크스페이스(사용자 요청, 2026-09-28) ----------
     # `docs/PHASE1_DELIVERABLE_SPEC.md` 참고. RBAC 원칙: 관리자/매니저는
@@ -942,6 +1057,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 task_id,
                 user["id"],
                 allow_supervisor_override=user["role"] in ("admin", "manager"),
+                agent_id=payload.agent_id,
             )
         except ValueError:
             raise HTTPException(
@@ -1329,6 +1445,210 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 status_code=404, detail="스킬을 찾을 수 없습니다"
             ) from exc
         return {"id": skill_id, "deleted": True}
+
+    # ---------- 모델 레지스트리(사용자 요청, 2026-10-06) ----------
+    # "운영 관리"에 provider별 사용 가능한 모델을 등록해두고, "AI 에이전트
+    # 생성"·"AI 에이전트 관리(모델 설정)"·"Crew 실행"의 자유 텍스트
+    # 모델명 입력을 여기서 등록한 목록 중에서 고르는 방식으로 바꾼다
+    # (skill_pool/tool_pool과 같은 "등록→선택" 패턴, docs/LIMITS.md §59).
+
+    @app.get("/api/model-registry")
+    def list_model_registry(
+        provider: str | None = None,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        return model_registry.list_models(conn, provider=provider)
+
+    @app.get("/api/model-registry/fetch")
+    def fetch_model_registry_candidates(
+        provider: str,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """provider가 실제로 제공/보유한 모델 후보를 라이브로 조회한다 —
+        조회만으로는 아무것도 저장되지 않는다(등록은 별도
+        `POST /api/model-registry`). ollama는 로컬 서버 접속 실패,
+        openai/anthropic은 API 키 미설정·네트워크 오류가 흔한 실패
+        모드라 그대로 500을 내지 않고 사람이 읽을 수 있는 메시지로
+        바꿔 400으로 돌려준다."""
+        if provider not in model_registry.PROVIDERS:
+            raise HTTPException(
+                status_code=400, detail=f"지원하지 않는 provider입니다: {provider}"
+            )
+        try:
+            models = model_registry.fetch_available_models(provider)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{provider} 모델 목록을 불러오지 못했습니다: {exc}",
+            ) from exc
+        return {"provider": provider, "models": models}
+
+    @app.post("/api/model-registry", status_code=201)
+    def create_model_registry_entry(
+        payload: ModelRegistryCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            model_id = model_registry.create_model(
+                conn, user["id"], payload.provider, payload.name
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409, detail="이미 등록된 모델입니다"
+            ) from exc
+        return {"id": model_id, "provider": payload.provider, "name": payload.name}
+
+    @app.patch("/api/model-registry/{model_id}/active")
+    def set_model_registry_active(
+        model_id: int,
+        payload: ModelActiveUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            model_registry.set_model_active(
+                conn, user["id"], model_id, payload.is_active
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="모델을 찾을 수 없습니다"
+            ) from exc
+        return {"id": model_id, "is_active": payload.is_active}
+
+    @app.delete("/api/model-registry/{model_id}")
+    def delete_model_registry_entry(
+        model_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        try:
+            model_registry.delete_model(conn, user["id"], model_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="모델을 찾을 수 없습니다"
+            ) from exc
+        return {"id": model_id, "deleted": True}
+
+    # ---------- 팀(사용자 요청, 2026-10-06) ----------
+    # "복수의 사람이 복수의 Agent와 또는 CrewAI 장점인 역할에 따른 Agent를
+    # 묶어 생성된 그룹과 협업" — `docs/MULTI_PARTY_TEAM_COLLABORATION_
+    # PLAN.md` Phase 1+2. skill_pool/tool_pool/model_registry와 같은
+    # "등록→재사용" 패턴(`teams.py`)을 사람+Agent 혼합 그룹에 적용한다.
+
+    @app.get("/api/teams")
+    def list_teams_endpoint(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        return teams.list_teams(conn)
+
+    @app.get("/api/teams/{team_id}")
+    def get_team_endpoint(
+        team_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        team = teams.get_team(conn, team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="팀을 찾을 수 없습니다")
+        return team
+
+    @app.post("/api/teams", status_code=201)
+    def create_team_endpoint(
+        payload: TeamCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            team_id = teams.create_team(conn, user["id"], payload.name, payload.description)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": team_id, "name": payload.name}
+
+    @app.patch("/api/teams/{team_id}/active")
+    def set_team_active_endpoint(
+        team_id: int,
+        payload: TeamActiveUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            teams.set_team_active(conn, user["id"], team_id, payload.is_active)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="팀을 찾을 수 없습니다") from exc
+        return {"id": team_id, "is_active": payload.is_active}
+
+    @app.delete("/api/teams/{team_id}")
+    def delete_team_endpoint(
+        team_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        try:
+            teams.delete_team(conn, user["id"], team_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="팀을 찾을 수 없습니다") from exc
+        return {"id": team_id, "deleted": True}
+
+    @app.post("/api/teams/{team_id}/members", status_code=201)
+    def add_team_member_endpoint(
+        team_id: int,
+        payload: TeamMemberAdd,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            member_row_id = teams.add_team_member(
+                conn,
+                user["id"],
+                team_id,
+                payload.member_type,
+                payload.member_id,
+                payload.role_label,
+            )
+        except ValueError as exc:
+            detail = (
+                "팀을 찾을 수 없습니다"
+                if str(exc) == "team_not_found"
+                else "멤버를 찾을 수 없습니다"
+            )
+            raise HTTPException(status_code=404, detail=detail) from exc
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409, detail="이미 이 팀의 멤버입니다"
+            ) from exc
+        return {"id": member_row_id}
+
+    @app.delete("/api/teams/{team_id}/members/{member_row_id}")
+    def remove_team_member_endpoint(
+        team_id: int,
+        member_row_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            teams.remove_team_member(conn, user["id"], team_id, member_row_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="팀 멤버를 찾을 수 없습니다"
+            ) from exc
+        return {"id": member_row_id, "deleted": True}
+
+    @app.patch("/api/assignments/{assignment_id}/team-leader")
+    def update_team_leader_endpoint(
+        assignment_id: int,
+        payload: TeamLeaderUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 결정(2026-10-06, "팀 리더는 배정 요청자가 기본값,
+        변경 가능") — 팀 배정이 아직 `requested` 상태일 때만 바꿀 수
+        있다(`assignments.update_team_leader()` 참고)."""
+        try:
+            assignments.update_team_leader(
+                conn, user["id"], assignment_id, payload.team_leader_id
+            )
+        except ValueError as exc:
+            detail = {
+                "assignment_not_found": "배정을 찾을 수 없습니다",
+                "not_a_team_assignment": "팀 배정이 아닙니다",
+                "team_leader_only_changeable_while_requested": "결재 대기 중(requested)일 때만 팀 리더를 바꿀 수 있습니다",
+                "user_not_found": "사용자를 찾을 수 없습니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from exc
+        return {"id": assignment_id, "team_leader_id": payload.team_leader_id}
 
     @app.post("/api/agent-pool/{agent_id}/tools/{tool_pool_id}", status_code=201)
     def link_agent_tool_endpoint(

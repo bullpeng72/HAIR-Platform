@@ -37,24 +37,62 @@ def create_assignment_request(
     resource_type: str,
     resource_id: int,
     requested_by: int,
+    team_leader_id: int | None = None,
+    replaces_assignment_id: int | None = None,
 ) -> dict:
     """배정 요청(assignments.status='requested') + 결재라인(approvals) + 이력을 커밋한다.
 
     결재라인은 요청자의 조직도 매니저 체인을 따라 다단계로 구성된다(F7, ADR 결정 3).
     반환하는 `approval_id`는 체인의 1단계(즉시 결정 가능한 단계) id다 — 하위 호환용.
-    """
+
+    사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
+    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md`. `resource_type="team"`
+    이면 `resource_id`는 `teams.id`이고, 결재라인은 **팀 리더**(`team_
+    leader_id`, 비워두면 `requested_by`가 기본값)의 매니저 체인을 따른다
+    — "팀의 F7 승인 주체는 팀 리더"라는 사용자 결정을 그대로 반영한다
+    (요청을 대신 제출한 관리자가 아니라 리더의 조직도 위치가 결재
+    경로를 결정). `replaces_assignment_id`를 주면 그 배정이 같은
+    `task_id`를 가리키는지 미리 검증한다 — 승인 시점에야 틀렸다는 걸
+    알면 되돌리기 번거롭기 때문에 요청 시점에 막는다."""
+    if resource_type == "team":
+        team = conn.execute(
+            "SELECT id FROM teams WHERE id = ?", (resource_id,)
+        ).fetchone()
+        if team is None:
+            raise ValueError("team_not_found")
+        if team_leader_id is None:
+            team_leader_id = requested_by
+    if replaces_assignment_id is not None:
+        target = conn.execute(
+            "SELECT task_id FROM assignments WHERE id = ?", (replaces_assignment_id,)
+        ).fetchone()
+        if target is None:
+            raise ValueError("replaces_assignment_not_found")
+        if target["task_id"] != task_id:
+            raise ValueError("replaces_assignment_task_mismatch")
+
+    approval_chain_subject = team_leader_id if resource_type == "team" else requested_by
+
     try:
         cur = conn.execute(
             "INSERT INTO assignments "
-            "(task_id, resource_type, resource_id, requested_by, status) "
-            "VALUES (?, ?, ?, ?, 'requested')",
-            (task_id, resource_type, resource_id, requested_by),
+            "(task_id, resource_type, resource_id, requested_by, status, "
+            "team_leader_id, replaces_assignment_id) "
+            "VALUES (?, ?, ?, ?, 'requested', ?, ?)",
+            (
+                task_id,
+                resource_type,
+                resource_id,
+                requested_by,
+                team_leader_id,
+                replaces_assignment_id,
+            ),
         )
         assignment_id = cur.lastrowid
         assert assignment_id is not None
 
         approval_ids = approvals_mod.create_approval_chain(
-            conn, requested_by, "assignment", assignment_id
+            conn, approval_chain_subject, "assignment", assignment_id
         )
 
         conn.execute(
@@ -88,22 +126,20 @@ def resolve_assignment_decision(
 ) -> dict:
     """승인/반려 결과를 assignments·assignment_history에 반영한다(커밋은 호출자 책임).
 
-    승인 시 같은 task·같은 resource_type에 이미 confirmed인 배정이 있으면
-    재배치로 간주해 superseded로 전환한다(F5/F6 assignments 테이블 공유
-    원칙).
-
-    **실측으로 발견한 버그(2026-09-28, "Phase1~4까지... 분석하고
-    개선해줘" 리뷰 중)**: 원래는 `resource_type` 구분 없이 같은 task의
-    confirmed 배정을 전부 supersede했다 — "사람 배정을 재배치"만 있던
-    시절(F5/F6)엔 문제가 없었지만, 협업 워크스페이스(Phase 1-4)가
-    "사람 당사자 + Agent 요청자가 같은 task에 함께 confirmed"인 걸
-    전제로 하면서(`deliverables.task_participant_relationship()`) 사람
-    배정을 확정한 뒤 Agent 배정을 확정하면(또는 반대 순서) 먼저 확정된
-    쪽이 조용히 superseded돼 협업 자체가 깨지는 실제 버그가 됐다 —
-    `test_probe_both_human_and_agent_confirmed_on_same_task`로 재현
-    확인. `resource_type`이 같을 때만 supersede하도록 좁혀서 고쳤다
-    (기존 "같은 역할 재배치" 테스트 동작은 그대로 유지됨 —
-    `test_v2_pipeline.py`는 항상 human→human만 테스트했었다)."""
+    **정정(2026-10-06, 사용자 요청 — "다중 confirmed 허용의 경우 개별
+    배정에도")**: 2026-09-28 수정까지는 "같은 task·같은 resource_type에
+    이미 confirmed인 배정이 있으면 자동으로 superseded"였다(재배치
+    전제) — `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 1+2로
+    "복수의 사람 + 복수의 Agent가 한 task에 동시에 confirmed"를 정식
+    지원하면서 이 자동 supersede를 **완전히 없앴다**. 이제 승인은
+    기본적으로 아무것도 밀어내지 않고 기존 confirmed 배정들과 공존한다
+    — "교체"하고 싶으면 요청 시점에 `AssignmentRequest.replaces_
+    assignment_id`를 명시해야 한다(`create_assignment_request()`가 그
+    값을 이 배정 행에 저장해두고, 여기서는 그 값이 가리키는 **그
+    배정 하나만** confirmed였다면 superseded로 바꾼다 — "같은 task·
+    같은 resource_type이면 전부"가 아니라 "명시적으로 지목한 것 하나만"
+    이라 다른 resource_type을 건드리던 과거 버그(2026-09-28 수정 사유)
+    가 애초에 재발할 수 없는 구조다)."""
     assignment = conn.execute(
         "SELECT * FROM assignments WHERE id = ?", (assignment_id,)
     ).fetchone()
@@ -111,24 +147,24 @@ def resolve_assignment_decision(
         raise ValueError("assignment_not_found")
 
     if approve:
-        previous = conn.execute(
-            "SELECT id FROM assignments WHERE task_id = ? AND resource_type = ? "
-            "AND status = 'confirmed' AND id != ?",
-            (assignment["task_id"], assignment["resource_type"], assignment_id),
-        ).fetchall()
-        for prev in previous:
-            conn.execute(
-                "UPDATE assignments SET status = 'superseded' WHERE id = ?",
-                (prev["id"],),
-            )
-            _record_history(
-                conn,
-                prev["id"],
-                "confirmed",
-                "superseded",
-                decided_by,
-                reason="reassigned",
-            )
+        if assignment["replaces_assignment_id"] is not None:
+            prev = conn.execute(
+                "SELECT id FROM assignments WHERE id = ? AND status = 'confirmed'",
+                (assignment["replaces_assignment_id"],),
+            ).fetchone()
+            if prev is not None:
+                conn.execute(
+                    "UPDATE assignments SET status = 'superseded' WHERE id = ?",
+                    (prev["id"],),
+                )
+                _record_history(
+                    conn,
+                    prev["id"],
+                    "confirmed",
+                    "superseded",
+                    decided_by,
+                    reason="reassigned",
+                )
         new_status = "confirmed"
     else:
         new_status = "rejected"
@@ -138,3 +174,42 @@ def resolve_assignment_decision(
     )
     _record_history(conn, assignment_id, assignment["status"], new_status, decided_by)
     return {"assignment_id": assignment_id, "status": new_status}
+
+
+def update_team_leader(
+    conn: sqlite3.Connection, actor_id: int, assignment_id: int, new_leader_id: int
+) -> None:
+    """사용자 결정(2026-10-06, "팀 리더는 배정 요청자가 기본값, 변경
+    가능") — 팀 배정의 `team_leader_id`를 바꾼다. **`status='requested'`
+    일 때만 허용한다**(`confirmed` 이후로는 이미 그 리더 기준으로 결재
+    체인이 만들어져 있어, 바꾸면 "누가 승인해야 하는지"와 실제 결재
+    체인이 어긋난다 — 재배정하려면 새로 배정 요청을 하는 게 더 정직한
+    경로다)."""
+    assignment = conn.execute(
+        "SELECT * FROM assignments WHERE id = ?", (assignment_id,)
+    ).fetchone()
+    if assignment is None:
+        raise ValueError("assignment_not_found")
+    if assignment["resource_type"] != "team":
+        raise ValueError("not_a_team_assignment")
+    if assignment["status"] != "requested":
+        raise ValueError("team_leader_only_changeable_while_requested")
+    new_leader = conn.execute(
+        "SELECT id FROM users WHERE id = ?", (new_leader_id,)
+    ).fetchone()
+    if new_leader is None:
+        raise ValueError("user_not_found")
+    conn.execute(
+        "UPDATE assignments SET team_leader_id = ? WHERE id = ?",
+        (new_leader_id, assignment_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "team_leader_changed",
+        "assignment",
+        assignment_id,
+        before={"team_leader_id": assignment["team_leader_id"]},
+        after={"team_leader_id": new_leader_id},
+    )
+    conn.commit()

@@ -146,7 +146,16 @@ def as_crewai_tool(conn: sqlite3.Connection, top_k: int = 3):
     동작한다(기존 `execute_agent()` 경로가 이 모듈을 그렇게 쓰고 있다)."""
     from crewai.tools import tool  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
 
-    @tool("지식 베이스 검색")
+    # 사용자 보고(2026-10-06, 실제 크루 실행에서 "OpenAI function name
+    # cannot be empty" 크래시) — 설치된 crewai 버전의 `sanitize_tool_name()`
+    # (`crewai/utilities/string_utils.py`)이 함수명을 ASCII로 정규화할 때
+    # `name.encode("ascii", "ignore")`로 비-ASCII 문자를 전부 버린다.
+    # 한글만으로 된 이름("지식 베이스 검색")은 이 과정에서 완전히 빈
+    # 문자열이 돼 `validate_function_name()`이 즉시 예외를 던진다 — Tool
+    # Pool/감사로그에 보이는 한글 이름(`tool_pool.name` = "VectorDB
+    # 지식검색")은 건드리지 않고, LLM에 실제로 전달되는 함수명만 ASCII로
+    # 바꾼다(설명은 그대로 한글 docstring에 남겨 LLM이 용도를 이해하게 함).
+    @tool("knowledge_base_search")
     def search_knowledge_base(query: str) -> str:
         """과거에 저장된 산출물 중 이 질의와 관련된 내용을 검색한다.
         검색이 실제로 필요할 때만 호출하라 — 불필요하게 반복 호출하지 마라."""

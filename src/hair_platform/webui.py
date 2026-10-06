@@ -70,9 +70,16 @@ INDEX_HTML = """<!DOCTYPE html>
   button.danger { background: #d64545; color: #fff; border: none; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; }
   button.small { padding: 0.25rem 0.5rem; font-size: 0.8rem; cursor: pointer; }
   .msg { padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 0.75rem; font-size: 0.85rem; }
-  .msg.error { background: #fde2e2; color: #7a1212; }
-  .msg.ok { background: #e3f6e5; color: #185c2c; }
+   .msg.error { background: #fde2e2; color: #7a1212; }
+   .msg.ok { background: #e3f6e5; color: #185c2c; }
+   .msg.warn { background: #fff4d6; color: #7a5c00; }
+   .badge-reused { font-size: 0.65rem; background: #a15c00; color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
   .muted { color: #777; font-size: 0.8rem; }
+  .skill-picker { display: inline-flex; flex-direction: column; gap: 0.3rem; }
+  .skill-picker-row { display: flex; gap: 0.3rem; }
+  .skill-picker-chips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+  .skill-chip { display: inline-flex; align-items: center; gap: 0.25rem; background: #eef1f6; border-radius: 12px; padding: 0.1rem 0.3rem 0.1rem 0.6rem; font-size: 0.8rem; }
+  .skill-chip button { border: none; background: none; cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0 0.2rem; color: #666; }
   table { table-layout: fixed; }
   td, th { overflow-wrap: break-word; }
   td.col-actions, th.col-actions { width: 220px; }
@@ -235,11 +242,19 @@ function table(headers, rows) {
    자동완성). skill_pool에 등록된 이름을 <datalist>로 내려줘 스킬을 자유
    텍스트로 입력하는 곳마다 브라우저 기본 자동완성이 뜨게 한다 — Skill
    주입(§4)이 skill_pool 이름과 "정확히 일치"해야 매칭되므로, 오타로
-   조용히 매칭이 안 되는 걸 줄이는 게 목적이다. 한계: 콤마로 여러 개를
-   입력하는 필드(d-skills/hp-skills)는 브라우저가 입력값 전체를 기준으로
-   맞추기 때문에, 이미 뭔가 입력한 뒤 콤마 다음 항목에는 자동완성이 잘
-   안 먹는다(단일 값 필드인 검색의 s-skill은 문제없이 동작) — 완전한
-   태그 입력 위젯을 새로 만들진 않고 이 정도로 그쳤다. */
+   조용히 매칭이 안 되는 걸 줄이는 게 목적이다.
+
+   **정정(2026-10-06, 사용자 보고 "하나의 스킬을 선택한 후에는 다른
+   스킬을 펼쳐 확인할 수 없어")**: 콤마로 여러 개를 입력하는 단일
+   텍스트필드(d-skills/hp-skills)는 브라우저가 입력값 전체를 기준으로
+   자동완성을 맞춰서, 이미 뭔가 입력한 뒤 콤마 다음 항목부터는 드롭다운이
+   거의 안 열렸다 — 매번 입력을 지우고 다시 써야 했다. `skillPickerHtml()`/
+   `initSkillPicker()`로 작은 태그 입력 위젯을 추가해 해결한다: 값을
+   하나씩 입력(Enter 또는 "추가" 버튼)할 때마다 칩으로 빠지고 입력창이
+   비워지므로, 다음 항목을 고를 때도 매번 전체 자동완성 목록이 뜬다.
+   skill_pool에 없는 자유 텍스트(예: 기존 데이터의 "인사 정책")도 그대로
+   칩으로 추가할 수 있어 기존 자유 입력 동작은 그대로 유지한다. 단일 값
+   필드인 검색의 s-skill은 애초에 문제가 없어 그대로 둔다. */
 async function skillDatalistHtml() {
   let names;
   try {
@@ -250,6 +265,134 @@ async function skillDatalistHtml() {
   return '<datalist id="skill-datalist">' +
     names.map(n => '<option value="' + esc(n) + '">').join("") +
     "</datalist>";
+}
+
+/* 사용자 요청(2026-10-06, "운영 관리에 사용 가능한 ollama 모델 및
+   openai, anthropic 모델 등록하는 메뉴를 두고 등록된 모델을 불러오는
+   방식으로 UI/UX를 개선" → "에이전트 생성, 관리, Crew 실행 등에도
+   연동되도록 적용해줘" → "진한 드롭다운으로 강제 선택") — 처음엔
+   datalist 자동완성(참고용, 자유 입력 유지)으로 연결했으나, 사용자가
+   실제 `<select>` 드롭다운으로 바꿔 등록된 모델 중에서 고르게 하는
+   쪽을 선택했다. 레지스트리가 비어 있거나 원하는 모델이 아직 없는
+   경우를 위해 "직접 입력..." 옵션을 두고, 고르면 그 옆에 텍스트
+   입력이 나타난다 — 등록을 강제하지 않으면서도 평소엔 드롭다운으로
+   오타/오입력을 막는다. "AI 에이전트 생성"·"AI 에이전트 관리(모델
+   설정)"·"Crew 실행"·협업 워크스페이스 4곳이 전부 이 셋을 공유한다. */
+async function fetchModelsByProvider() {
+  const byProvider = { anthropic: [], openai: [], ollama: [] };
+  let models;
+  try {
+    models = await api("GET", "/api/model-registry");
+  } catch (e) {
+    return byProvider;
+  }
+  models.filter(m => m.is_active).forEach(m => {
+    if (byProvider[m.provider]) byProvider[m.provider].push(m.name);
+  });
+  return byProvider;
+}
+
+function modelSelectHtml(selectId) {
+  return '<select id="' + selectId + '"><option value="">기본값 사용</option>' +
+    '<option value="__custom__">직접 입력...</option></select> ' +
+    '<input id="' + selectId + '-custom" placeholder="모델명 직접 입력" style="display:none;width:160px">';
+}
+
+// providerSelectId가 바뀔 때마다 modelSelectId의 옵션을 그 provider의
+// 등록된 모델로 다시 채운다. `initialValue`는 이미 저장된 모델명(예:
+// "AI 에이전트 관리"의 기존 llm_model)을 미리 선택해두기 위함 —
+// 레지스트리에 없는(과거에 자유 입력으로 저장된) 값이면 "직접 입력..."
+// 을 골라 그 값을 미리 채워 보여준다(데이터 손실 없음).
+function wireProviderModelSelect(providerSelectId, modelSelectId, modelsByProvider, initialValue) {
+  const providerSelect = document.getElementById(providerSelectId);
+  const modelSelect = document.getElementById(modelSelectId);
+  const customInput = document.getElementById(modelSelectId + "-custom");
+  if (!providerSelect || !modelSelect || !customInput) return;
+
+  const rebuildOptions = (preselect) => {
+    const names = modelsByProvider[providerSelect.value] || [];
+    const useCustom = !!preselect && !names.includes(preselect);
+    modelSelect.innerHTML = '<option value="">기본값 사용</option>' +
+      names.map(n => '<option value="' + esc(n) + '"' + (n === preselect ? " selected" : "") + '>' + esc(n) + "</option>").join("") +
+      '<option value="__custom__"' + (useCustom ? " selected" : "") + '>직접 입력...</option>';
+    customInput.style.display = useCustom ? "" : "none";
+    customInput.value = useCustom ? preselect : "";
+  };
+
+  modelSelect.addEventListener("change", () => {
+    const isCustom = modelSelect.value === "__custom__";
+    customInput.style.display = isCustom ? "" : "none";
+    if (!isCustom) customInput.value = "";
+  });
+  providerSelect.addEventListener("change", () => rebuildOptions(null));
+  rebuildOptions(initialValue || null);
+}
+
+function modelSelectValue(modelSelectId) {
+  const select = document.getElementById(modelSelectId);
+  if (!select) return null;
+  if (select.value === "__custom__") {
+    const custom = document.getElementById(modelSelectId + "-custom");
+    return custom && custom.value.trim() ? custom.value.trim() : null;
+  }
+  return select.value || null;
+}
+
+/* 여러 스킬을 하나씩 추가/삭제하는 작은 태그 입력 위젯. `hiddenId` 입력은
+   기존 코드(제출 핸들러의 `.value.split(",")`)와 호환되도록 그대로
+   콤마구분 문자열을 담아둔다 — 폼 제출 로직은 손대지 않는다. */
+function skillPickerHtml(pickerId, hiddenId) {
+  return '<div class="skill-picker" id="' + pickerId + '">' +
+    '<div class="skill-picker-row">' +
+    '<input type="text" class="skill-picker-input" list="skill-datalist" placeholder="스킬 입력 후 Enter 또는 추가">' +
+    '<button type="button" class="small skill-picker-add">추가</button>' +
+    '</div>' +
+    '<div class="skill-picker-chips"></div>' +
+    '</div>' +
+    '<input type="hidden" id="' + hiddenId + '">';
+}
+
+/* 반환하는 `flush()`는 "추가" 버튼을 안 누르고 입력창에 값을 남겨둔 채
+   제출 버튼을 바로 눌러도 놓치지 않도록, 제출 핸들러 맨 앞에서 명시적으로
+   호출해 현재 입력을 칩으로 반영한다(같은 엘리먼트에 등록된 capture
+   리스너가 bubble 리스너보다 먼저 실행된다고 가정하지 않는다 — AT_TARGET
+   단계에선 등록 순서대로 실행되므로 암묵적 순서에 기대지 않는다). */
+function initSkillPicker(pickerId, hiddenId, initial) {
+  const root = document.getElementById(pickerId);
+  const hidden = document.getElementById(hiddenId);
+  const input = root.querySelector(".skill-picker-input");
+  const chips = root.querySelector(".skill-picker-chips");
+  const state = [...(initial || [])];
+
+  const render = () => {
+    hidden.value = state.join(",");
+    chips.innerHTML = state.map(s =>
+      '<span class="skill-chip">' + esc(s) +
+      '<button type="button" data-skill="' + esc(s) + '" title="제거">×</button></span>'
+    ).join("");
+    chips.querySelectorAll("[data-skill]").forEach(btn => {
+      btn.onclick = () => {
+        const i = state.indexOf(btn.dataset.skill);
+        if (i >= 0) state.splice(i, 1);
+        render();
+      };
+    });
+  };
+
+  const addCurrent = () => {
+    const v = input.value.trim();
+    if (v && !state.includes(v)) state.push(v);
+    input.value = "";
+    render();
+  };
+
+  root.querySelector(".skill-picker-add").onclick = addCurrent;
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); addCurrent(); }
+  });
+
+  render();
+  return { flush: addCurrent };
 }
 
 let ME = null;
@@ -301,6 +444,7 @@ const TABS = [
   { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "agentpool", label: "AI 에이전트 관리", group: "admin", roles: ["admin", "manager"], render: renderAgentPool },
   { id: "poolregistry", label: "도구/스킬 Pool", group: "admin", roles: ["admin", "manager"], render: renderPoolRegistry },
+  { id: "modelregistry", label: "모델 레지스트리", group: "admin", roles: ["admin", "manager"], render: renderModelRegistry },
   { id: "crew", label: "Crew 실행", group: "admin", roles: ["admin", "manager"], render: renderCrew },
   { id: "admin", label: "사용자 관리", group: "admin", roles: ["admin"], adminOnly: true, render: renderAdmin },
 ];
@@ -480,11 +624,17 @@ async function pollExecutionJob(taskId, jobId, intervalMs, timeoutMs) {
   throw new Error("실행 완료 확인 시간이 초과됐습니다 — 잠시 후 새로고침해 주세요.");
 }
 
-async function renderCollabWorkspace(taskId) {
-  const detail = document.getElementById("mywork-detail");
+// containerId: 사용자 요청(2026-10-06, "팀 구성과 협업 프로세스를 하나의
+// 화면으로 합치는 방안" → 옵션 C 채택)으로 일반화했다 — 원래 "내 업무"
+// 탭의 #mywork-detail에만 그릴 수 있었는데, "업무 요청" 탭의 할 일 상세
+// 패널에도 같은 워크스페이스를 그대로 재사용하기 위함(중복 구현 금지).
+// 기본값을 기존 id로 둬서 "내 업무" 쪽 기존 호출부는 전혀 안 바꿔도 된다.
+async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
+  const detail = document.getElementById(containerId);
   detail.dataset.taskId = String(taskId);
   detail.innerHTML = '<p class="muted">불러오는 중…</p>';
   const isSupervisor = ["admin", "manager"].includes(ME.role);
+  const modelsByProvider = isSupervisor ? await fetchModelsByProvider() : {};
   let items, jobs, permission;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
@@ -594,7 +744,7 @@ async function renderCollabWorkspace(taskId) {
     ? '<select id="ws-provider"><option value="">provider 자동 판별</option>' +
       '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
       '<option value="ollama">Ollama(로컬)</option></select>' +
-      '<input id="ws-model" placeholder="모델명(비우면 기본값)">'
+      modelSelectHtml("ws-model")
     : '<span class="muted">provider/model은 매니저·관리자만 선택할 수 있습니다(기본값 사용).</span>';
 
   // Phase 4 — 이미 생성 중인 job이 있으면 실행 버튼을 막는다(중복
@@ -645,6 +795,7 @@ async function renderCollabWorkspace(taskId) {
     '</section>' +
     '<div id="ws-result"></div>';
 
+  if (isSupervisor) wireProviderModelSelect("ws-provider", "ws-model", modelsByProvider);
   items.forEach(d => loadDeliverableComments(d.id));
 
   detail.querySelectorAll("[data-decide-deliverable]").forEach(btn => {
@@ -654,7 +805,7 @@ async function renderCollabWorkspace(taskId) {
           approve: btn.dataset.approve === "1",
         });
         showMsg("global-msg", "처리했습니다.", "ok");
-        renderCollabWorkspace(taskId);
+        renderCollabWorkspace(taskId, containerId);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
@@ -664,7 +815,7 @@ async function renderCollabWorkspace(taskId) {
       try {
         await api("POST", "/api/deliverables/" + btn.dataset.submitDeliverable + "/submit", {});
         showMsg("global-msg", "검토를 요청했습니다.", "ok");
-        renderCollabWorkspace(taskId);
+        renderCollabWorkspace(taskId, containerId);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
@@ -676,7 +827,7 @@ async function renderCollabWorkspace(taskId) {
     try {
       await api("POST", "/api/tasks/" + taskId + "/deliverables", { content: contentVal });
       showMsg("global-msg", "결과물을 제출했습니다.", "ok");
-      renderCollabWorkspace(taskId);
+      renderCollabWorkspace(taskId, containerId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
@@ -686,7 +837,7 @@ async function renderCollabWorkspace(taskId) {
     const payload = { draft_context: draftContext };
     if (isSupervisor) {
       const provider = document.getElementById("ws-provider").value;
-      const model = document.getElementById("ws-model").value;
+      const model = modelSelectValue("ws-model");
       if (provider) payload.provider = provider;
       if (model) payload.model = model;
     }
@@ -703,7 +854,7 @@ async function renderCollabWorkspace(taskId) {
     const payload = {};
     if (isSupervisor) {
       const provider = document.getElementById("ws-provider").value;
-      const model = document.getElementById("ws-model").value;
+      const model = modelSelectValue("ws-model");
       if (provider) payload.provider = provider;
       if (model) payload.model = model;
     }
@@ -712,14 +863,14 @@ async function renderCollabWorkspace(taskId) {
       // 202 응답 직후 즉시 새로고침해 "생성 중…" 카드를 먼저 보여준다
       // (Phase 4 — 응답이 빨리 오는 게 이 비동기화의 핵심이라, 여기서
       // 폴링이 끝날 때까지 버튼을 막아두면 의미가 없다).
-      renderCollabWorkspace(taskId);
+      renderCollabWorkspace(taskId, containerId);
       const job = await pollExecutionJob(taskId, queued.job_id);
       if (job.status === "succeeded") {
         showMsg("global-msg", "AI 에이전트 실행이 완료됐습니다.", "ok");
       } else {
         showMsg("global-msg", "AI 에이전트 실행이 실패했습니다: " + job.error, "error");
       }
-      if (isViewingWorkspace(taskId)) renderCollabWorkspace(taskId);
+      if (isViewingWorkspace(taskId, containerId)) renderCollabWorkspace(taskId, containerId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   };
 
@@ -728,19 +879,19 @@ async function renderCollabWorkspace(taskId) {
   // 눌러야만 완료를 알 수 있는 건 아니다.
   if (hasRunningJob) {
     pollExecutionJob(taskId, latestJob.id).then(job => {
-      if (!isViewingWorkspace(taskId)) return;
+      if (!isViewingWorkspace(taskId, containerId)) return;
       if (job.status === "failed") {
         showMsg("global-msg", "AI 에이전트 실행이 실패했습니다: " + job.error, "error");
       }
-      renderCollabWorkspace(taskId);
+      renderCollabWorkspace(taskId, containerId);
     }).catch(() => {});
   }
 }
 
 // 백그라운드 폴링이 끝났을 때, 사용자가 그사이 다른 업무/탭으로
 // 이동했다면 지금 화면을 덮어쓰지 않기 위한 가드(Phase 4).
-function isViewingWorkspace(taskId) {
-  const detail = document.getElementById("mywork-detail");
+function isViewingWorkspace(taskId, containerId = "mywork-detail") {
+  const detail = document.getElementById(containerId);
   return !!detail && detail.dataset.taskId === String(taskId);
 }
 
@@ -854,15 +1005,18 @@ async function renderDecomposeForm(briefId, stubRoles) {
     suggestions +
     '<form class="inline" id="decompose-form">' +
     '<input id="d-role" placeholder="필요한 역할(예: 백엔드 개발자)" required>' +
-    '<input id="d-skills" placeholder="필요 스킬(콤마로 구분)" list="skill-datalist">' +
+    skillPickerHtml("d-skills-picker", "d-skills") +
     '<input id="d-headcount" type="number" min="1" value="1" style="width:70px" title="인원 수">' +
     '<button class="primary" type="submit">할 일 추가</button></form>' +
+    '<p class="muted">필요 스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거) — 자동완성 중 "외부검색"은 위키백과 검색만 지원하고, "일반웹검색"은 위키백과가 아니라 전체 인터넷(Parallel Search)을 검색하는 별도 스킬입니다. 목록에 없는 이름도 자유롭게 추가할 수 있습니다.</p>' +
     skillDatalist;
+  const skillPicker = initSkillPicker("d-skills-picker", "d-skills", []);
   detail.querySelectorAll("[data-fill-role]").forEach(btn => {
     btn.onclick = () => { document.getElementById("d-role").value = btn.dataset.fillRole; };
   });
   document.getElementById("decompose-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    skillPicker.flush();
     const skills = document.getElementById("d-skills").value.split(",").map(s => s.trim()).filter(Boolean);
     try {
       await api("POST", "/api/briefs/" + briefId + "/tasks", {
@@ -891,9 +1045,19 @@ async function renderTaskList(briefId) {
       t.id, esc(t.role_name), esc(t.required_skills.join(", ")), t.headcount,
       t.latest_status ? esc(label(t.latest_status)) : '<span class="muted">아직 없음</span>',
       t.has_final_result ? '<span class="gate-badge gate-ok">✓ 승인됨</span>' : '<span class="muted">-</span>',
-      isAdmin ? '<button class="small danger" data-delete-task="' + t.id + '">삭제</button>' : "",
+      '<div class="actions"><button class="small" data-task-detail="' + t.id + '">상세</button>' +
+        (isAdmin ? '<button class="small danger" data-delete-task="' + t.id + '">삭제</button>' : "") +
+        "</div>",
     ])) +
-    '<p class="muted">할 일 ID는 "인력 매칭/배정", "AI 에이전트 생성" 탭에서 사용합니다. 결과물 상세는 "내 업무" 탭에서 워크스페이스를 열어 확인하세요.</p>';
+    // 사용자 요청(2026-10-06, "팀 구성과 협업 프로세스를 하나의 화면으로
+    // 합치는 방안" → 옵션 C 채택) — "상세"를 누르면 이 할 일의 배정
+    // 현황(+admin/manager는 매칭·배정 요청, 확정됐으면 협업 워크스페이스
+    // 요약까지)을 아래에 바로 펼친다. "인력 매칭/배정"·"결재"·"내 업무"는
+    // 여러 업무를 가로지르는 일괄 처리용으로 그대로 남겨둔다 — 완전
+    // 통합은 매니저의 일괄 처리 효율을 떨어뜨릴 위험이 있어 기각했다
+    // (검토 근거: docs/LIMITS.md §55).
+    '<p class="muted">"상세"에서 배정 현황을 바로 확인할 수 있습니다. "인력 매칭/배정"·"결재"는 여러 할 일을 한꺼번에 처리할 때, "AI 에이전트 생성"은 새 Agent가 필요할 때 씁니다.</p>' +
+    '<div id="task-detail"></div>';
   detail.querySelectorAll("[data-delete-task]").forEach(btn => {
     btn.onclick = async () => {
       if (!window.confirm("이 할 일과 그 배정·결과물(산출물 평가 이력 포함)을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
@@ -904,6 +1068,73 @@ async function renderTaskList(briefId) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  detail.querySelectorAll("[data-task-detail]").forEach(btn => {
+    btn.onclick = () => {
+      const task = tasks.find(t => t.id === Number(btn.dataset.taskDetail));
+      renderTaskDetailPanel(task);
+    };
+  });
+}
+
+/* 할 일 하나의 생애주기(배정 현황 → 매칭/배정 요청 → 확정 후 협업
+   워크스페이스)를 한 화면에서 보여준다(옵션 C, docs/LIMITS.md §55).
+   매칭 폼·워크스페이스는 기존 "인력 매칭/배정"·"내 업무" 탭의 렌더
+   함수를 containerId 파라미터로 그대로 재사용한다(중복 구현 금지) —
+   admin/manager만 노출한다: 매칭 결과가 다른 후보의 비용을 보여주고,
+   deliverables 조회는 admin/manager가 아니면 참가자 본인만 허용돼
+   (403) 있어, 그 둘은 감독 권한이 있는 role에만 안전하게 임베드할 수
+   있다. member/viewer는 배정 현황만 읽기 전용으로 본다(자기 업무
+   처리는 기존처럼 "내 업무" 탭에서). */
+async function renderTaskDetailPanel(task) {
+  const container = document.getElementById("task-detail");
+  const isSupervisor = ["admin", "manager"].includes(ME.role);
+  container.innerHTML = '<p class="muted">불러오는 중...</p>';
+  const assignments = await api("GET", "/api/tasks/" + task.id + "/assignments");
+  const confirmed = assignments.find(a => a.status === "confirmed");
+  const pending = assignments.find(a => a.status === "requested");
+  const history = assignments.filter(a => a !== confirmed && a !== pending);
+
+  const resourceLabel = (a) => esc(label(a.resource_type)) + " " +
+    (a.resource_name ? esc(a.resource_name) : "#" + a.resource_id);
+
+  let statusHtml;
+  if (confirmed) {
+    statusHtml = '<p><span class="gate-badge gate-ok">확정됨</span> ' + resourceLabel(confirmed) + "에게 배정됨</p>";
+  } else if (pending) {
+    statusHtml = '<p><span class="gate-badge gate-warn">결재 대기</span> ' + resourceLabel(pending) +
+      ' — <button class="small" id="task-detail-goto-approvals">결재 탭에서 처리</button></p>';
+  } else {
+    statusHtml = '<p class="muted">아직 배정 요청이 없습니다.</p>';
+  }
+  const historyHtml = history.length
+    ? '<details class="muted"><summary>이전 배정 이력(' + history.length + '건)</summary>' +
+      table(["타입", "대상", "상태"], history.map(a => [esc(label(a.resource_type)), esc(a.resource_name || ("#" + a.resource_id)), esc(label(a.status))])) +
+      "</details>"
+    : "";
+
+  container.innerHTML =
+    '<section class="card"><h4>할 일 #' + task.id + " — " + esc(task.role_name) + " 상세</h4>" +
+    statusHtml + historyHtml +
+    (isSupervisor && !confirmed
+      ? '<button class="small" id="task-detail-match-btn">후보 매칭하기</button><div id="task-detail-match"></div>'
+      : "") +
+    (isSupervisor && confirmed ? '<div id="task-detail-workspace"></div>' : "") +
+    "</section>";
+
+  if (pending) {
+    document.getElementById("task-detail-goto-approvals").onclick = () => selectTab("approvals");
+  }
+  if (isSupervisor && !confirmed) {
+    document.getElementById("task-detail-match-btn").onclick = async () => {
+      try {
+        const result = await api("POST", "/api/tasks/" + task.id + "/match");
+        renderMatchResult(task.id, result, "task-detail-match", () => renderTaskDetailPanel(task));
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  }
+  if (isSupervisor && confirmed) {
+    renderCollabWorkspace(task.id, "task-detail-workspace");
+  }
 }
 
 /* ---------- 인력 매칭·배정 ---------- */
@@ -929,30 +1160,52 @@ async function renderMatch(content) {
   });
 }
 
-function renderMatchResult(taskId, result) {
-  const box = document.getElementById("match-result");
+// containerId/onAssigned: 사용자 요청(2026-10-06, "팀 구성과 협업
+// 프로세스를 하나의 화면으로 합치는 방안" → 옵션 C) — "업무 요청" 탭의
+// 할 일 상세 패널에서도 같은 매칭 결과 표를 재사용하기 위해 일반화했다.
+// 기본값을 기존 id로 둬서 "인력 매칭/배정" 탭의 기존 호출부는 그대로
+// 둔다. `onAssigned`는 배정 요청 성공 직후 호출돼, 임베드한 쪽(할 일
+// 상세 패널)이 자기 상태를 새로고침할 수 있게 한다(이 함수 자체는 그
+// 화면 구조를 몰라도 된다).
+function renderMatchResult(taskId, result, containerId = "match-result", onAssigned) {
+  const box = document.getElementById(containerId);
   if (result.generate_new) {
     box.innerHTML = '<p class="msg error">매칭되는 후보가 없습니다 — "AI 에이전트 생성" 탭에서 새 Agent를 만들거나, "사람 인력 관리" 탭에서 이 역할의 사람을 등록해보세요.</p>';
     return;
   }
+  // 사용자 보고(2026-10-06, "매칭/배정 화면에도 계정 미연결 경고
+  // 추가해줘") — 사람 후보가 로그인 계정과 연결 안 돼 있으면 배정·승인이
+  // 돼도 당사자가 "내 업무"에서 그 일을 볼 방법이 없다(docs/LIMITS.md
+  // §51). Agent는 로그인 계정 개념이 없어 "해당없음"으로 둔다.
+  const accountCell = (c) => {
+    if (c.type !== "human") return '<span class="muted">해당없음</span>';
+    return c.user_id != null
+      ? "연결됨"
+      : '<span class="gate-badge gate-warn">⚠ 미연결</span>';
+  };
   box.innerHTML = table(
-    ["순위", "타입", "ID", "역할", "가용", "비용", "점수", "점수 상세", "동작"],
+    ["순위", "타입", "ID", "역할", "가용", "비용", "점수", "점수 상세", "계정", "동작"],
     result.top.map((sc, i) => [
       i + 1, esc(label(sc.candidate.type)), sc.candidate.id, esc(sc.candidate.role),
       sc.candidate.is_available ? "가능" : "불가",
       sc.candidate.cost,
       sc.score.toFixed(3) + (sc.exact_match ? " (완전일치)" : ""),
       esc(JSON.stringify(sc.breakdown)),
-      '<button class="small" data-assign-type="' + esc(sc.candidate.type) + '" data-assign-id="' + sc.candidate.id + '">배정 요청</button>',
+      accountCell(sc.candidate),
+      '<button class="small" data-assign-type="' + esc(sc.candidate.type) + '" data-assign-id="' + sc.candidate.id + '" data-unlinked="' + (sc.candidate.type === "human" && sc.candidate.user_id == null ? "1" : "0") + '">배정 요청</button>',
     ])
   );
   box.querySelectorAll("[data-assign-id]").forEach(btn => {
     btn.onclick = async () => {
+      if (btn.dataset.unlinked === "1" && !window.confirm(
+        "이 사람은 로그인 계정이 연결돼 있지 않습니다 — 배정이 승인돼도 본인이 \\"내 업무\\"에서 확인할 방법이 없습니다. \\"사람 인력 관리\\"에서 계정을 먼저 연결하는 걸 권장합니다. 그래도 배정 요청하시겠습니까?"
+      )) return;
       try {
         await api("POST", "/api/tasks/" + taskId + "/assignments", {
           resource_type: btn.dataset.assignType, resource_id: Number(btn.dataset.assignId),
         });
         showMsg("global-msg", "배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.", "ok");
+        if (onAssigned) onAssigned();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
@@ -1002,37 +1255,79 @@ function approvalTable(rows, withActions) {
 /* ---------- AI 에이전트 생성 ---------- */
 
 async function renderJobs(content) {
+  // 사용자 보고(2026-10-06, "업무 요청 ID 등 불러올 수 있는 정보들을
+  // 찾아 오입력되지 않도록 개선") — 이전엔 "업무 요청 ID"·"할 일 ID"를
+  // 숫자로 직접 타이핑해야 해서, 존재하지 않거나 엉뚱한 ID를 입력해도
+  // 제출 전엔 알 방법이 없었다(404는 제출 후에야 뜸). 이미 서버가 갖고
+  // 있는 업무 요청/할 일 목록을 그대로 불러와 고르는 방식으로 바꾼다.
+  const briefs = await api("GET", "/api/briefs");
+  const briefLabel = (b) => {
+    const text = (b.raw_text || "").trim();
+    const snippet = text.length > 24 ? text.slice(0, 24) + "…" : text;
+    return "#" + b.id + " " + snippet;
+  };
+  const briefOptionsHtml = briefs.length
+    ? briefs.map(b => '<option value="' + b.id + '">' + esc(briefLabel(b)) + '</option>').join("")
+    : '<option value="">(등록된 업무 요청이 없습니다)</option>';
+  const modelsByProvider = await fetchModelsByProvider();
+
   content.innerHTML =
     '<section class="card"><h2>AI 에이전트 생성</h2>' +
     '<form class="inline" id="job-form">' +
-    '<input id="job-brief-id" type="number" min="1" step="1" placeholder="업무 요청 ID" required style="width:110px">' +
-    '<input id="job-task-ids" placeholder="할 일 ID(콤마로 구분)" required style="width:180px">' +
+    '<select id="job-brief-id" required style="width:220px">' + briefOptionsHtml + '</select>' +
     '<select id="job-framework"><option value="stub">stub(무료 스텁)</option>' +
     '<option value="simple_llm">simple_llm(1회 LLM 호출)</option>' +
     '<option value="crewai">crewai(실제 CrewAI Agent)</option></select>' +
     '<select id="job-provider"><option value="">provider 자동 판별</option>' +
     '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
     '<option value="ollama">Ollama(로컬)</option></select>' +
-    '<input id="job-model" placeholder="모델명(비우면 기본값)" style="width:200px">' +
+    modelSelectHtml("job-model") +
     '<button class="primary" type="submit">생성 실행</button></form>' +
+    '<div id="job-tasks-picker" class="muted" style="margin-bottom:0.75rem">업무 요청을 선택하면 그 아래 할 일 목록이 뜹니다.</div>' +
     '<p class="muted"><b>stub</b>(무료): LLM을 전혀 호출하지 않는 규칙 기반 스텁입니다 — 역할명·스킬로 자리표시자 산출물만 만들고 즉시 끝납니다. 조직도/배정 흐름만 비용 없이 채워보고 싶을 때 씁니다.<br>' +
     '<b>simple_llm</b>(비용 발생): 실제 LLM API를 딱 한 번만 호출해 "이 역할이 처음 맡을 산출물 하나"를 받아옵니다. CrewAI 같은 프레임워크 오버헤드 없이 가장 가벼운 실제 호출입니다.<br>' +
     '<b>crewai</b>(비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 vectordb/graphdb 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 실행" 탭에서 바로 협업시킬 Agent를 만들 때 씁니다.<br>' +
-    '만든 Agent는 이 탭이 아니라 "AI 에이전트 관리" 탭에서 온보딩 승인(pending_onboarding → active) 후에야 실제 업무 배정·실행에 쓸 수 있습니다.</p>' +
+      '만든 Agent는 이 탭이 아니라 "AI 에이전트 관리" 탭에서 온보딩 승인(pending_onboarding → active) 후에야 실제 업무 배정·실행에 쓸 수 있습니다.<br>' +
+      '<b>중복 방지(NF7)</b>: 같은 할 일(역할)에 이미 생성된 Agent가 있으면 새 Agent를 만들지 않고 기존 것을 재사용합니다 — 이 경우 "AI 에이전트 관리"에 새 행이 안 생기는데, 결과에 "재사용" 배지와 안내가 표시됩니다. 새 Agent를 만들려면 다른 할 일을 고르세요.</p>' +
     '<div id="job-result"></div></section>';
+
+  const tasksPicker = document.getElementById("job-tasks-picker");
+  const loadTasksForBrief = async (briefId) => {
+    if (!briefId) {
+      tasksPicker.innerHTML = '<span class="muted">업무 요청을 선택하면 그 아래 할 일 목록이 뜹니다.</span>';
+      return;
+    }
+    tasksPicker.innerHTML = '<span class="muted">불러오는 중...</span>';
+    const tasks = await api("GET", "/api/briefs/" + briefId + "/tasks");
+    tasksPicker.innerHTML = tasks.length
+      ? '<b>할 일 선택(여러 개 가능):</b> ' +
+        tasks.map(t =>
+          '<label style="margin-right:0.75rem"><input type="checkbox" class="job-task-checkbox" value="' + t.id + '"> ' +
+          "#" + t.id + " " + esc(t.role_name) +
+          (t.required_skills.length ? " (" + esc(t.required_skills.join(", ")) + ")" : "") +
+          "</label>"
+        ).join("")
+      : '<span class="muted">이 업무 요청엔 할 일이 없습니다 — "업무 요청" 탭의 "할 일로 나누기"에서 먼저 만드세요.</span>';
+  };
+
+  const briefSelect = document.getElementById("job-brief-id");
+  briefSelect.addEventListener("change", () => loadTasksForBrief(briefSelect.value));
+  if (briefSelect.value) await loadTasksForBrief(briefSelect.value);
+  wireProviderModelSelect("job-provider", "job-model", modelsByProvider);
+
   document.getElementById("job-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const briefId = Number(document.getElementById("job-brief-id").value);
+    const briefId = Number(briefSelect.value);
     if (!Number.isInteger(briefId) || briefId < 1) {
-      showMsg("global-msg", "업무 요청 ID는 1 이상의 정수여야 합니다.", "error"); return;
+      showMsg("global-msg", "업무 요청을 선택하세요.", "error"); return;
     }
-    const taskIds = document.getElementById("job-task-ids").value.split(",").map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0);
+    const taskIds = Array.from(tasksPicker.querySelectorAll(".job-task-checkbox:checked")).map(cb => Number(cb.value));
     if (!taskIds.length) {
-      showMsg("global-msg", "할 일 ID는 1 이상의 정수로 최소 하나 입력해야 합니다.", "error"); return;
+      showMsg("global-msg", "할 일을 하나 이상 선택하세요.", "error"); return;
     }
     const framework = document.getElementById("job-framework").value;
     const provider = document.getElementById("job-provider").value || null;
-    const model = document.getElementById("job-model").value || null;
+    const model = modelSelectValue("job-model");
     const submitBtn = ev.submitter || document.querySelector("#job-form button[type=submit]");
     const busyLabel = framework === "stub" ? "생성 중…" : "생성 중…(실제 API 호출, 시간이 걸릴 수 있습니다)";
     try {
@@ -1046,9 +1341,40 @@ async function renderJobs(content) {
 
 function renderJobResult(result) {
   const box = document.getElementById("job-result");
-  box.innerHTML = "<p>생성 결과 상태: <b>" + esc(label(result.status)) + "</b></p>" +
-    table(["ID", "할 일 ID", "상태", "에러", "재시도", "동작"], result.items.map(it => [
-      it.id, it.task_id, esc(label(it.status)), esc(it.error || ""), it.retry_count,
+  const reusedItems = (result.items || []).filter(it => it.reused);
+  const reusedCount = result.reused_count != null ? result.reused_count : reusedItems.length;
+
+  // NF7 dedup: 같은 역할(task)에 이미 생성된 에이전트가 있으면 새 에이전트를
+  // 만들지 않고 기존 job_item을 재사용한다. 이 경우 "AI 에이전트 관리"에 새
+  // 행이 안 생기는데, 화면이 "성공"으로만 뜨면 "생성했는데 안 보인다"는
+  // 오해를 피할 수 없다 — 재사용을 명시적으로 알리고 관리 탭으로 이동을 돕는다.
+  //
+  // **정정(2026-10-06, 사용자 보고 "생성은 '성공'으로 떴는데 관리 탭에
+  // 안 보임")**: 배너가 "재사용했다"고만 말하고 "그래서 몇 번 Agent를
+  // 보라는 건지"는 안 알려줘서, 관리 탭에 가도 여러 행 중 어떤 게
+  // 그건지 못 찾는 게 진짜 혼란의 원인이었다 — 이제 재사용된 기존
+  // Agent의 ID·역할명을 배너와 표에 직접 명시한다.
+  let banner = "";
+  if (reusedCount > 0) {
+    const refs = reusedItems
+      .filter(it => it.agent_pool_id != null)
+      .map(it => "#" + it.agent_pool_id + "(" + esc(it.agent_pool_role_name) + ")")
+      .join(", ");
+    banner =
+      '<div class="msg warn"><b>새 에이전트가 생성되지 않았습니다.</b> ' +
+      "같은 역할에 이미 생성된 에이전트가 있어 " + reusedCount + "건을 재사용했습니다(NF7 중복 방지)" +
+      (refs ? " — 기존 Agent " + refs + "를 그대로 씁니다." : ".") +
+      ' "AI 에이전트 관리" 탭에서 위 ID로 찾으세요. 새 에이전트를 만들려면 다른 할 일 ID로 생성하세요. ' +
+      '<button class="small" id="goto-agentpool">AI 에이전트 관리로 이동</button></div>';
+  }
+
+  box.innerHTML = banner +
+    "<p>생성 결과 상태: <b>" + esc(label(result.status)) + "</b></p>" +
+    table(["ID", "할 일 ID", "상태", "연결된 Agent", "에러", "재시도", "동작"], result.items.map(it => [
+      it.id, it.task_id,
+      esc(label(it.status)) + (it.reused ? ' <span class="badge-reused">재사용</span>' : ""),
+      it.agent_pool_id != null ? "#" + it.agent_pool_id + " " + esc(it.agent_pool_role_name) : '<span class="muted">-</span>',
+      esc(it.error || ""), it.retry_count,
       it.status === "failed" ? '<button class="small" data-retry-job="' + result.job_id + '" data-retry-item="' + it.id + '">재시도</button>' : "",
     ]));
   box.querySelectorAll("[data-retry-item]").forEach(btn => {
@@ -1059,53 +1385,88 @@ function renderJobResult(result) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  const goto = document.getElementById("goto-agentpool");
+  if (goto) goto.onclick = () => selectTab("agentpool");
 }
 
 /* ---------- 사람 인력 ---------- */
 
 async function renderHumanPool(content) {
-  const [people, skillDatalist] = await Promise.all([
+  const [people, skillDatalist, userNames] = await Promise.all([
     api("GET", "/api/human-pool"),
     skillDatalistHtml(),
+    api("GET", "/api/users/names").catch(() => []),
   ]);
   const isAdmin = ME.role === "admin";
+  // 사용자 보고(2026-10-06, "사람 인력으로 등록되어 있지만 사용자 관리에
+  // 등록되지 않은 경우 로그인도 안 돼 일을 할 수 없다") — 등록을 로그인
+  // 계정과 무관하게 둬서 매칭·배정·승인이 경고 없이 통과되던 갭을
+  // 메운다. 계정은 한 Human Pool 레코드에만 연결 가능하므로(백엔드가
+  // 거부), 이미 다른 레코드에 연결된 계정은 "등록 가능한 계정" 목록에서
+  // 제외한다.
+  const linkedUserIds = new Set(people.filter(p => p.user_id !== null).map(p => p.user_id));
+  const usersById = Object.fromEntries(userNames.map(u => [u.id, u]));
+  const linkableOptionsHtml = (currentUserId) =>
+    '<option value="">— 계정 선택 —</option>' +
+    userNames
+      .filter(u => u.id === currentUserId || !linkedUserIds.has(u.id))
+      .map(u => '<option value="' + u.id + '"' + (u.id === currentUserId ? " selected" : "") +
+        '>' + esc(u.username) + " (" + esc(u.role) + ")</option>")
+      .join("");
+
   content.innerHTML =
     '<section class="card"><h2>사람 인력 등록</h2>' +
     '<form class="inline" id="hp-form">' +
-    '<input id="hp-name" placeholder="이름" required>' +
+    '<select id="hp-user-id" required>' + linkableOptionsHtml(null) + '</select>' +
+    '<input id="hp-name" placeholder="이름(표시용, 계정 선택 시 자동 채움)" required>' +
     '<input id="hp-role" placeholder="역할" required>' +
-    '<input id="hp-skills" placeholder="스킬(콤마로 구분)" list="skill-datalist">' +
+    skillPickerHtml("hp-skills-picker", "hp-skills") +
     skillDatalist +
     '<input id="hp-cost" type="number" step="0.01" placeholder="비용" value="0">' +
     '<button class="primary" type="submit">등록</button></form>' +
-    '<p class="muted">"비용"은 인력 매칭 점수의 25%(또는 성과점수가 없으면 40%)를 차지합니다 — 낮을수록 유리합니다. 아직 성과 데이터가 없으니 초기엔 "가능" 상태여야 매칭 후보로 잡히고(가용성이 매칭 점수의 40~60%), 스킬은 할 일의 필요 스킬과 겹칠수록 유리합니다.</p>' +
+    '<p class="muted">"계정 선택"은 "사용자 관리"에서 먼저 만든 로그인 계정 중 아직 다른 사람 인력에 연결 안 된 것만 보여줍니다 — 계정 없이 등록하면 그 사람은 로그인할 수 없어 매칭·배정이 돼도 실제로 업무를 볼 수 없으니(docs/LIMITS.md §50), 계정을 먼저 "사용자 관리"에서 만드세요. 스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거) — 목록에 없는 이름도 자유롭게 추가할 수 있습니다. "비용"은 인력 매칭 점수의 25%(또는 성과점수가 없으면 40%)를 차지합니다 — 낮을수록 유리합니다. 아직 성과 데이터가 없으니 초기엔 "가능" 상태여야 매칭 후보로 잡히고(가용성이 매칭 점수의 40~60%), 스킬은 할 일의 필요 스킬과 겹칠수록 유리합니다.</p>' +
     '</section><section class="card"><h2>사람 인력 목록</h2>' +
-    '<p class="muted">"동의"는 성과 리뷰 사전 동의(NF9)입니다 — 동의 없이는 성과점수를 절대 입력·노출하지 않고, 동의를 철회하면 기존 점수도 즉시 지워집니다. "오프보딩"은 가용성을 offboarded로 바꿔 매칭 후보에서 빠지게 하는데, 이 화면에서 다시 되돌리는 버튼은 없습니다(사실상 편도) — 실수로 눌렀다면 관리자가 DB를 직접 고쳐야 합니다. "삭제"(관리자 전용)는 오프보딩과 별개로 레코드 자체를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 삭제가 막힙니다. "계정 연결"은 이 사람을 로그인 계정과 이어줍니다(사용자 관리 탭에서 만든 사용자의 ID) — 연결해야만 그 사람이 "내 업무" 탭에서 자기 업무를 볼 수 있습니다(연결 안 하면 구조적으로 절대 안 보입니다).</p>' +
-    table(["ID", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "연결된 계정 ID", "동작"], people.map(p => {
+    '<p class="muted">"동의"는 성과 리뷰 사전 동의(NF9)입니다 — 동의 없이는 성과점수를 절대 입력·노출하지 않고, 동의를 철회하면 기존 점수도 즉시 지워집니다. "오프보딩"은 가용성을 offboarded로 바꿔 매칭 후보에서 빠지게 하는데, 이 화면에서 다시 되돌리는 버튼은 없습니다(사실상 편도) — 실수로 눌렀다면 관리자가 DB를 직접 고쳐야 합니다. "삭제"(관리자 전용)는 오프보딩과 별개로 레코드 자체를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 삭제가 막힙니다. "계정 연결"은 이 사람을 로그인 계정과 이어줍니다 — 연결해야만 그 사람이 "내 업무" 탭에서 자기 업무를 볼 수 있습니다(연결 안 하면 구조적으로 절대 안 보입니다). 드롭다운엔 아직 다른 사람 인력에 연결 안 된 계정만 뜹니다.</p>' +
+    table(["ID", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "연결된 계정", "동작"], people.map(p => {
       const middleActions = p.availability === "offboarded" ? "" :
         '<button class="small" data-toggle-consent="' + p.id + '" data-consent="' + (p.performance_consent ? "0" : "1") + '">' +
           (p.performance_consent ? "동의 철회" : "동의") + "</button>" +
         '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="score-' + p.id + '">' +
         '<button class="small" data-set-score="' + p.id + '">점수입력</button></span>' +
-        '<span class="pair"><input type="number" min="1" step="1" placeholder="사용자 ID" id="linkuser-' + p.id + '">' +
+        '<span class="pair"><select id="linkuser-' + p.id + '">' + linkableOptionsHtml(p.user_id) + '</select>' +
         '<button class="small" data-link-user="' + p.id + '">계정 연결</button></span>' +
         '<button class="small danger" data-offboard="' + p.id + '">오프보딩</button>';
       const deleteAction = isAdmin ? '<button class="small danger" data-delete-human="' + p.id + '">삭제</button>' : "";
+      const linkedAccount = p.user_id === null ? "-" :
+        (usersById[p.user_id] ? esc(usersById[p.user_id].username) : "#" + p.user_id);
       return [p.id, esc(p.name), esc(p.role), esc(p.skill_tags.join(", ")), esc(label(p.availability)), p.cost_estimate,
         p.performance_consent ? "동의함" : "미동의",
         p.performance_score === null ? "-" : p.performance_score,
-        p.user_id === null ? "-" : p.user_id,
+        linkedAccount,
         '<div class="actions">' + middleActions + deleteAction + "</div>"];
     })) + "</section>";
 
+  const skillPicker = initSkillPicker("hp-skills-picker", "hp-skills", []);
+  document.getElementById("hp-user-id").addEventListener("change", (ev) => {
+    const selected = userNames.find(u => String(u.id) === ev.target.value);
+    const nameInput = document.getElementById("hp-name");
+    if (selected && !nameInput.value.trim()) nameInput.value = selected.username;
+  });
   document.getElementById("hp-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    skillPicker.flush();
+    const userIdValue = document.getElementById("hp-user-id").value;
+    if (!userIdValue) {
+      showMsg("global-msg", '계정을 선택하세요 — 없으면 "사용자 관리"에서 먼저 만드세요.', "error");
+      return;
+    }
     try {
       await api("POST", "/api/human-pool", {
         name: document.getElementById("hp-name").value,
         role: document.getElementById("hp-role").value,
         skill_tags: document.getElementById("hp-skills").value.split(",").map(s => s.trim()).filter(Boolean),
         cost_estimate: Number(document.getElementById("hp-cost").value) || 0,
+        user_id: Number(userIdValue),
       });
       showMsg("global-msg", "등록했습니다.", "ok");
       refresh();
@@ -1131,10 +1492,10 @@ async function renderHumanPool(content) {
   });
   content.querySelectorAll("[data-link-user]").forEach(btn => {
     btn.onclick = async () => {
-      const input = document.getElementById("linkuser-" + btn.dataset.linkUser);
-      const userId = Number(input.value);
+      const select = document.getElementById("linkuser-" + btn.dataset.linkUser);
+      const userId = Number(select.value);
       if (!Number.isInteger(userId) || userId < 1) {
-        showMsg("global-msg", "사용자 ID는 1 이상의 정수여야 합니다.", "error"); return;
+        showMsg("global-msg", "연결할 계정을 선택하세요.", "error"); return;
       }
       try {
         await api("PATCH", "/api/human-pool/" + btn.dataset.linkUser, { user_id: userId });
@@ -1170,6 +1531,7 @@ async function renderAgentPool(content) {
   const agents = await api("GET", "/api/agent-pool");
   const isAdmin = ME.role === "admin";
   const canExecute = ["admin", "manager"].includes(ME.role);
+  const modelsByProvider = canExecute ? await fetchModelsByProvider() : {};
   content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
     '<p class="muted">"생성방식" 열은 "AI 에이전트 생성" 탭에서 어떤 옵션(stub/simple_llm/crewai)으로 태어났는지를 보여줍니다 — crewai로 만든 Agent만 그 시점에 스킬 매칭 도구를 갖고 태어납니다. 신규 Agent는 전부 pending_onboarding 상태로 생기고, "온보딩 승인"을 눌러야 active가 돼 "인력 검색"·매칭 후보로 노출됩니다. "오프보딩"(active→deprecated)은 이 화면에서 되돌릴 버튼이 없습니다 — 다시 쓰려면 관리자가 API/DB를 직접 손대야 합니다. "모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11). "지식 색인"은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생). "MCP 서버(JSON)"에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다(ADR 결정 10) — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다. "Tool Pool ID"에 "도구/스킬 Pool" 탭에서 등록한 도구 ID를 넣고 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다(ADR 결정 12). "삭제"(관리자 전용)는 레코드를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 막힙니다.</p>' +
     table(["ID", "역할", "스킬", "비용", "성과점수(수동)", "자동평가(Gate/TCR)", "상태", "생성방식", "LLM", "최근 산출물", "동작"], agents.map(a => {
@@ -1189,7 +1551,7 @@ async function renderAgentPool(content) {
         actions += '<select id="provider-' + a.id + '">' +
           providers.map(p => '<option value="' + p + '"' + (p === a.llm_provider ? " selected" : "") + ">" + p + "</option>").join("") +
           "</select>" +
-          '<input placeholder="모델명(비우면 기본값)" id="model-' + a.id + '" value="' + esc(a.llm_model || "") + '">' +
+          modelSelectHtml("model-" + a.id) +
           '<input placeholder="MCP 서버(JSON, 비우면 유지)" id="mcp-' + a.id + '" value="' + esc(a.mcp_servers && a.mcp_servers.length ? JSON.stringify(a.mcp_servers) : "").replace(/"/g, "&quot;") + '">' +
           '<button class="small" data-set-model="' + a.id + '">모델 설정</button>';
       }
@@ -1218,6 +1580,10 @@ async function renderAgentPool(content) {
         a.performance_score === null ? "-" : a.performance_score, autoEval, esc(label(a.status)), esc(a.framework), llmInfo, output,
         '<div class="actions">' + actions + "</div>"];
     })) + '<div id="execute-result"></div></section>';
+
+  if (canExecute) {
+    agents.forEach(a => wireProviderModelSelect("provider-" + a.id, "model-" + a.id, modelsByProvider, a.llm_model));
+  }
 
   content.querySelectorAll("[data-onboard]").forEach(btn => {
     btn.onclick = async () => { try { await api("POST", "/api/agent-pool/" + btn.dataset.onboard + "/onboard"); refresh(); } catch (e) { showMsg("global-msg", e.message, "error"); } };
@@ -1262,7 +1628,7 @@ async function renderAgentPool(content) {
     btn.onclick = async () => {
       const id = btn.dataset.setModel;
       const provider = document.getElementById("provider-" + id).value;
-      const model = document.getElementById("model-" + id).value || null;
+      const model = modelSelectValue("model-" + id);
       const mcpRaw = document.getElementById("mcp-" + id).value.trim();
       const payload = { provider, model };
       if (mcpRaw) {
@@ -1336,7 +1702,7 @@ async function renderPoolRegistry(content) {
   const isAdmin = ME.role === "admin";
   content.innerHTML =
     '<section class="card"><h2>Tool Pool — 재사용 가능한 도구</h2>' +
-    '<p class="muted">MCP 서버나 native 도구(VectorDB/GraphDB/외부 자료 검색)를 이름으로 등록해 여러 Agent가 재사용합니다. native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"} 또는 {"native_id": "web_search"}(Wikipedia 검색, API 키 불필요·무료 — skill_tags에 "websearch"/"외부검색"을 넣으면 매칭됩니다)를 지원합니다. mcp_stdio/mcp_remote는 {"command":...,"args":[...]} 또는 {"url":...,"transport":...} 형태입니다 — 이 두 종류는 Agent가 실행될 때마다 실제로 서버(로컬 프로세스 또는 원격)에 접속을 시도하므로, 잘못된 command/url을 등록해두면 그 스킬을 가진 Agent 실행이 접속 단계에서 실패합니다. "활성" 표시를 꺼두면(비활성) 스킬이 매칭돼도 더 이상 자동으로 붙지 않습니다(등록은 유지). "삭제"(관리자 전용)는 이 도구를 참조하던 Agent 개별 연결도 함께 지웁니다.</p>' +
+    '<p class="muted">MCP 서버나 native 도구(VectorDB/GraphDB/외부 자료 검색)를 이름으로 등록해 여러 Agent가 재사용합니다. native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"} 또는 {"native_id": "web_search"}(Wikipedia 검색, API 키 불필요·무료 — skill_tags에 "외부검색"을 넣으면 매칭됩니다)를 지원합니다. mcp_stdio/mcp_remote는 {"command":...,"args":[...]} 또는 {"url":...,"transport":...} 형태입니다 — 이 두 종류는 Agent가 실행될 때마다 실제로 서버(로컬 프로세스 또는 원격)에 접속을 시도하므로, 잘못된 command/url을 등록해두면 그 스킬을 가진 Agent 실행이 접속 단계에서 실패합니다. "활성" 표시를 꺼두면(비활성) 스킬이 매칭돼도 더 이상 자동으로 붙지 않습니다(등록은 유지). "삭제"(관리자 전용)는 이 도구를 참조하던 Agent 개별 연결도 함께 지웁니다.</p>' +
     table(["ID", "이름", "종류", "설명", "활성", "동작"], tools.map(t => [
       t.id, esc(t.name), esc(t.kind), esc(t.description), t.is_active ? "활성" : "비활성",
       isAdmin ? '<div class="actions"><button class="small danger" data-delete-tool="' + t.id + '">삭제</button></div>' : "",
@@ -1423,50 +1789,210 @@ async function renderPoolRegistry(content) {
   });
 }
 
+/* ---------- 모델 레지스트리(사용자 요청, 2026-10-06, "운영 관리에 사용
+   가능한 ollama 모델 및 openai, anthropic 모델 등록하는 메뉴를 두고
+   등록된 모델을 불러오는 방식으로 UI/UX를 개선") ---------- */
+
+async function renderModelRegistry(content) {
+  const isAdmin = ME.role === "admin";
+  const models = await api("GET", "/api/model-registry");
+  const byProvider = (p) => models.filter(m => m.provider === p);
+  const providerLabel = { anthropic: "Anthropic", openai: "OpenAI", ollama: "Ollama(로컬)" };
+  const providerOptionsHtml = Object.keys(providerLabel)
+    .map(p => '<option value="' + p + '">' + providerLabel[p] + "</option>").join("");
+  const providerTableHtml = (provider) => {
+    const rows = byProvider(provider);
+    return "<h3>" + providerLabel[provider] + "</h3>" +
+      table(["모델명", "상태", "동작"], rows.map(m => [
+        esc(m.name),
+        m.is_active ? "활성" : "비활성",
+        '<div class="actions">' +
+          '<button class="small" data-toggle-model-active="' + m.id + '" data-active="' + (m.is_active ? "0" : "1") + '">' +
+          (m.is_active ? "비활성화" : "활성화") + "</button>" +
+          (isAdmin ? '<button class="small danger" data-delete-model="' + m.id + '">삭제</button>' : "") +
+          "</div>",
+      ]));
+  };
+
+  content.innerHTML =
+    '<section class="card"><h2>모델 레지스트리</h2>' +
+    '<p class="muted">여기 등록한 모델이 "AI 에이전트 생성"·"AI 에이전트 관리(모델 설정)"·"Crew 실행"·협업 워크스페이스의 "모델명" 입력창 자동완성에 뜹니다 — 목록에 없는 이름도 그대로 입력할 수 있어 자유 입력 자체는 막지 않습니다(참고용 자동완성). "불러오기"는 Ollama면 로컬 서버(OLLAMA_BASE_URL)에서, OpenAI/Anthropic이면 그 계정의 API 키로 실제 보유 중인 모델 목록을 조회합니다(토큰을 생성하지 않는 카탈로그 조회라 과금되지 않습니다) — 조회만으로는 아무것도 저장되지 않고, 선택 후 "선택한 모델 등록"을 눌러야 저장됩니다. "비활성화"는 자동완성에서만 빼고 등록 자체는 유지합니다. "삭제"(관리자 전용)는 레지스트리 항목만 지웁니다 — 이미 Agent에 저장된 모델 설정 자체는 안 바뀝니다.</p>' +
+    '<form class="inline" id="mr-fetch-form">' +
+    '<select id="mr-fetch-provider">' + providerOptionsHtml + "</select>" +
+    '<button type="submit" class="small">불러오기</button>' +
+    "</form>" +
+    '<div id="mr-fetch-result"></div>' +
+    '<form class="inline" id="mr-manual-form">' +
+    '<select id="mr-manual-provider">' + providerOptionsHtml + "</select>" +
+    '<input id="mr-manual-name" placeholder="모델명 직접 입력(불러오기 없이 바로 등록)" style="flex:1;min-width:200px" required>' +
+    '<button type="submit" class="small">수동 등록</button>' +
+    "</form>" +
+    providerTableHtml("anthropic") +
+    providerTableHtml("openai") +
+    providerTableHtml("ollama") +
+    "</section>";
+
+  document.getElementById("mr-fetch-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const provider = document.getElementById("mr-fetch-provider").value;
+    const resultBox = document.getElementById("mr-fetch-result");
+    resultBox.innerHTML = '<p class="muted">불러오는 중...</p>';
+    let resp;
+    try {
+      resp = await api("GET", qs("/api/model-registry/fetch", { provider }));
+    } catch (e) {
+      resultBox.innerHTML = "";
+      showMsg("global-msg", e.message, "error");
+      return;
+    }
+    const registeredNames = new Set(byProvider(provider).map(m => m.name));
+    resultBox.innerHTML = resp.models.length
+      ? '<div style="max-height:220px;overflow-y:auto;border:1px solid #ddd;padding:0.5rem;margin:0.5rem 0">' +
+        resp.models.map(name =>
+          '<label style="display:block"><input type="checkbox" class="mr-candidate" value="' + esc(name) + '"' +
+          (registeredNames.has(name) ? " disabled checked" : "") + "> " + esc(name) +
+          (registeredNames.has(name) ? ' <span class="muted">(이미 등록됨)</span>' : "") + "</label>"
+        ).join("") +
+        "</div>" +
+        '<button type="button" class="small primary" id="mr-register-selected">선택한 모델 등록</button>'
+      : '<p class="muted">불러올 수 있는 모델이 없습니다.</p>';
+    const registerBtn = document.getElementById("mr-register-selected");
+    if (registerBtn) {
+      registerBtn.onclick = async () => {
+        const names = Array.from(resultBox.querySelectorAll(".mr-candidate:checked:not(:disabled)")).map(cb => cb.value);
+        if (!names.length) { showMsg("global-msg", "등록할 모델을 선택하세요.", "error"); return; }
+        try {
+          for (const name of names) {
+            await api("POST", "/api/model-registry", { provider, name });
+          }
+          showMsg("global-msg", names.length + "개 모델을 등록했습니다.", "ok");
+          refresh();
+        } catch (e) { showMsg("global-msg", e.message, "error"); }
+      };
+    }
+  });
+
+  document.getElementById("mr-manual-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      await api("POST", "/api/model-registry", {
+        provider: document.getElementById("mr-manual-provider").value,
+        name: document.getElementById("mr-manual-name").value,
+      });
+      showMsg("global-msg", "모델을 등록했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  content.querySelectorAll("[data-toggle-model-active]").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        await api("PATCH", "/api/model-registry/" + btn.dataset.toggleModelActive + "/active", {
+          is_active: btn.dataset.active === "1",
+        });
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-delete-model]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 모델을 레지스트리에서 지웁니다(되돌릴 수 없음, 이미 저장된 Agent의 모델 설정 자체는 안 바뀝니다). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/model-registry/" + btn.dataset.deleteModel);
+        showMsg("global-msg", "삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+}
+
 /* ---------- Crew 실행(ADR 결정 11 — Agent 협업) ---------- */
+
+// 사용자 보고(2026-10-06, "crew 실행 UI/UX를 개선해줘 — 에이전트 ID를
+// 알 수 없음 등") — 이전엔 위 표에서 ID를 직접 읽어 textarea에
+// "1: 할 일" 식으로 손으로 옮겨 적어야 했다(오타·형식 실수 위험, 이
+// 세션에서 반복 고친 "직접 입력 대신 실제 데이터에서 선택" 패턴과 같은
+// 문제). Agent별로 드롭다운+할 일 입력 행을 두고 "+ Agent 추가"로 늘리는
+// 방식으로 바꾼다 — 드롭다운 자체가 "#id 역할명(스킬)"을 보여줘 ID를
+// 몰라도 된다.
+function crewAgentOptionsHtml(active) {
+  return active.map(a =>
+    '<option value="' + a.id + '">#' + a.id + " " + esc(a.role_name) +
+    (a.skill_tags.length ? " (" + esc(a.skill_tags.join(", ")) + ")" : "") + "</option>"
+  ).join("");
+}
+
+function crewRowHtml(active) {
+  return '<div class="inline crew-row" style="margin-bottom:0.3rem">' +
+    '<select class="crew-row-agent" style="min-width:220px"><option value="">— Agent 선택 —</option>' +
+    crewAgentOptionsHtml(active) + "</select>" +
+    '<input class="crew-row-task" placeholder="이 Agent가 할 일" style="flex:1;min-width:200px">' +
+    '<button type="button" class="small danger crew-row-remove">×</button>' +
+    "</div>";
+}
+
+function wireCrewRowRemovers() {
+  document.querySelectorAll(".crew-row-remove").forEach(btn => {
+    btn.onclick = () => {
+      const rows = document.querySelectorAll(".crew-row");
+      if (rows.length <= 1) { showMsg("global-msg", "최소 한 Agent는 있어야 합니다.", "error"); return; }
+      btn.closest(".crew-row").remove();
+    };
+  });
+}
 
 async function renderCrew(content) {
   const agents = await api("GET", "/api/agent-pool");
   const active = agents.filter(a => a.status === "active");
+  const modelsByProvider = await fetchModelsByProvider();
   content.innerHTML =
     '<section class="card"><h2>Crew 실행 — 여러 Agent를 묶어 실제로 협업시키기</h2>' +
-    '<p class="muted">한 줄에 "에이전트ID: 이 에이전트가 할 일"을 입력하세요. <b>sequential</b>이면 앞줄 에이전트의 산출물이 다음 에이전트에게 자동으로 전달됩니다(순서대로 릴레이). <b>hierarchical</b>은 "매니저 Agent ID"를 지정하면 그 매니저가 작업을 조율·위임만 하고 직접 산출물을 내지는 않습니다(비워두면 CrewAI가 자동으로 매니저 LLM을 하나 배정) — 아래 결과의 "Agent별 산출물"에서 매니저 행은 항상 "(없음)"으로 나옵니다. 모든 Agent는 위임(allow_delegation)이 켜져 있어 필요하면 서로에게 실제로 질문·재위임할 수 있고, 그 내역이 "실제 위임/협업 발생 내역"에 기록됩니다. 온보딩(active) 안 된 Agent는 목록에 안 뜨고 지정할 수도 없습니다. 실제 LLM API를 호출하므로 비용이 발생합니다(참여 Agent 수만큼 커질 수 있음).</p>' +
+    '<p class="muted">Agent를 드롭다운으로 고르고 그 옆에 할 일을 입력하세요 — "+ Agent 추가"로 참여 인원을 늘릴 수 있습니다. <b>sequential</b>이면 앞줄 에이전트의 산출물이 다음 에이전트에게 자동으로 전달됩니다(순서대로 릴레이). <b>hierarchical</b>은 "매니저 Agent"를 지정하면 그 매니저가 작업을 조율·위임만 하고 직접 산출물을 내지는 않습니다(비워두면 CrewAI가 자동으로 매니저 LLM을 하나 배정) — 아래 결과의 "Agent별 산출물"에서 매니저 행은 항상 "(없음)"으로 나옵니다. 모든 Agent는 위임(allow_delegation)이 켜져 있어 필요하면 서로에게 실제로 질문·재위임할 수 있고, 그 내역이 "실제 위임/협업 발생 내역"에 기록됩니다. 온보딩(active) 안 된 Agent는 드롭다운에 안 뜨고 지정할 수도 없습니다. 실제 LLM API를 호출하므로 비용이 발생합니다(참여 Agent 수만큼 커질 수 있음).</p>' +
     (active.length
       ? table(["ID", "역할", "스킬"], active.map(a => [a.id, esc(a.role_name), esc(a.skill_tags.join(", "))]))
       : '<p class="muted">온보딩된(활성) 에이전트가 없습니다 — 먼저 "AI 에이전트 생성"·"AI 에이전트 관리" 탭에서 준비하세요.</p>') +
     '<form id="crew-form">' +
-    '<textarea id="crew-lines" rows="5" style="width:100%;box-sizing:border-box" placeholder="1: 요구사항 정의서 초안을 작성해줘&#10;2: 그 요구사항을 바탕으로 화면 설계를 해줘"></textarea>' +
+    '<div id="crew-rows">' + (active.length ? crewRowHtml(active) : "") + "</div>" +
+    (active.length ? '<button type="button" class="small" id="crew-add-row">+ Agent 추가</button>' : "") +
     '<div class="inline" style="margin-top:0.5rem">' +
     '<select id="crew-process"><option value="sequential">sequential(순서대로 전달)</option>' +
     '<option value="hierarchical">hierarchical(매니저가 조율)</option></select>' +
-    '<input id="crew-manager" type="number" min="1" step="1" placeholder="매니저 Agent ID(hierarchical 전용, 선택)">' +
+    '<select id="crew-manager"><option value="">매니저 자동 배정(hierarchical 전용)</option>' +
+    crewAgentOptionsHtml(active) + "</select>" +
     '<select id="crew-provider"><option value="">provider 자동 판별</option>' +
     '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
     '<option value="ollama">Ollama(로컬)</option></select>' +
-    '<input id="crew-model" placeholder="모델명(비우면 기본값)">' +
-    '<button class="primary" type="submit">Crew 실행(비용 발생)</button>' +
+    modelSelectHtml("crew-model") +
+    '<button class="primary" type="submit"' + (active.length ? "" : " disabled") + '>Crew 실행(비용 발생)</button>' +
     "</div></form>" +
     '<div id="crew-result"></div></section>';
+
+  wireProviderModelSelect("crew-provider", "crew-model", modelsByProvider);
+  wireCrewRowRemovers();
+  const addRowBtn = document.getElementById("crew-add-row");
+  if (addRowBtn) {
+    addRowBtn.onclick = () => {
+      document.getElementById("crew-rows").insertAdjacentHTML("beforeend", crewRowHtml(active));
+      wireCrewRowRemovers();
+    };
+  }
 
   document.getElementById("crew-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     showMsg("global-msg", "", "");  // 이전 시도의 에러 배너가 남아 새 결과와 헷갈리지 않도록 지운다
-    const lines = document.getElementById("crew-lines").value.split("\\n").map(l => l.trim()).filter(Boolean);
+    const rows = Array.from(document.querySelectorAll(".crew-row"));
     const agentIds = [];
     const taskDescriptions = [];
-    for (const line of lines) {
-      const idx = line.indexOf(":");
-      if (idx < 0) { showMsg("global-msg", '형식이 잘못됐습니다: "' + line + '" (예: "1: 할 일")', "error"); return; }
-      const id = Number(line.slice(0, idx).trim());
-      if (!Number.isInteger(id) || id < 1) { showMsg("global-msg", "에이전트 ID는 1 이상의 정수여야 합니다: " + line, "error"); return; }
-      agentIds.push(id);
-      taskDescriptions.push(line.slice(idx + 1).trim());
+    for (const row of rows) {
+      const agentId = Number(row.querySelector(".crew-row-agent").value);
+      const taskDesc = row.querySelector(".crew-row-task").value.trim();
+      if (!agentId) { showMsg("global-msg", "모든 줄에서 Agent를 선택하세요.", "error"); return; }
+      if (!taskDesc) { showMsg("global-msg", "모든 줄에서 할 일을 입력하세요.", "error"); return; }
+      agentIds.push(agentId);
+      taskDescriptions.push(taskDesc);
     }
-    if (!agentIds.length) { showMsg("global-msg", "최소 한 줄은 입력해야 합니다.", "error"); return; }
+    if (!agentIds.length) { showMsg("global-msg", "최소 한 Agent는 선택해야 합니다.", "error"); return; }
     const managerVal = document.getElementById("crew-manager").value;
-    if (managerVal && (!Number.isInteger(Number(managerVal)) || Number(managerVal) < 1)) {
-      showMsg("global-msg", "매니저 Agent ID는 1 이상의 정수여야 합니다.", "error"); return;
-    }
     if (!window.confirm(agentIds.length + "개 Agent로 Crew를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
 
     const submitBtn = ev.submitter || document.querySelector("#crew-form button[type=submit]");
@@ -1477,16 +2003,117 @@ async function renderCrew(content) {
         process: document.getElementById("crew-process").value,
         manager_agent_id: managerVal ? Number(managerVal) : null,
         provider: document.getElementById("crew-provider").value || null,
-        model: document.getElementById("crew-model").value || null,
+        model: modelSelectValue("crew-model"),
       }));
       renderCrewResult(result);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 }
 
+/* 사용자 요청(2026-10-06, "crew 실행 UI/UX를 개선해줘 — 묶인 Agent간
+   협업 관계를 다이어그램으로 표시") — 지금까지는 "Agent별 산출물"·"위임
+   내역" 표만 있어, 몇 명이 어떤 구조(순차 릴레이 vs 매니저 조율)로
+   묶였는지, 실제로 누가 누구에게 위임했는지를 표를 읽어 머릿속으로
+   재구성해야 했다. 실선(회색)은 요청 시점에 이미 정해진 구조(sequential
+   순서 전달 / hierarchical 조율 관계) — 항상 그린다. 점선(주황)은
+   `result.delegations`에 실제로 기록된 위임만 그린다(추측 금지, ADR
+   결정 11 "실제 발동 증거를 남긴다" 원칙과 같은 정신) — 대상이
+   확인되지 않으면(알 수 없는 동료를 호출해 CrewAI가 에러를 반환한
+   경우 등) 화살표 대신 아래 "확인 안 된 위임" 목록에 원문을 남긴다.
+   외부 차트 라이브러리 없이 순수 inline SVG로 그린다(이 앱의 기존
+   무의존성 원칙과 동일). */
+function crewDiagramSvg(result) {
+  const agents = result.agents;
+  const manager = agents.find(a => a.output === null) || null;
+  const workers = agents.filter(a => a !== manager);
+  const isHierarchical = result.process === "hierarchical";
+  const nodeW = 150, nodeH = 44, gapX = 190;
+  const positions = {};
+  let managerNode = null;
+  let svgWidth, svgHeight;
+
+  if (isHierarchical) {
+    svgWidth = Math.max(workers.length, 1) * gapX + 20;
+    svgHeight = 170;
+    managerNode = manager || { role_name: "매니저(LLM 자동 배정)", synthetic: true };
+    positions[managerNode.role_name] = { x: svgWidth / 2 - nodeW / 2, y: 16 };
+    workers.forEach((a, i) => { positions[a.role_name] = { x: i * gapX + 20, y: 112 }; });
+  } else {
+    svgWidth = Math.max(agents.length, 1) * gapX + 20;
+    svgHeight = 90;
+    agents.forEach((a, i) => { positions[a.role_name] = { x: i * gapX + 20, y: 23 }; });
+  }
+  let maxY = svgHeight;  // 위임 곡선이 마지막 행 아래로 처지면 viewBox가 그만큼 커져야 잘리지 않는다.
+
+  let body = "";
+
+  if (isHierarchical) {
+    const mPos = positions[managerNode.role_name];
+    workers.forEach(a => {
+      const wPos = positions[a.role_name];
+      body += '<line x1="' + (mPos.x + nodeW / 2) + '" y1="' + (mPos.y + nodeH) + '" x2="' + (wPos.x + nodeW / 2) + '" y2="' + wPos.y +
+        '" stroke="#999" stroke-width="2" marker-end="url(#crew-arrow-structural)" />';
+    });
+  } else {
+    for (let i = 0; i < agents.length - 1; i++) {
+      const p1 = positions[agents[i].role_name], p2 = positions[agents[i + 1].role_name];
+      body += '<line x1="' + (p1.x + nodeW) + '" y1="' + (p1.y + nodeH / 2) + '" x2="' + p2.x + '" y2="' + (p2.y + nodeH / 2) +
+        '" stroke="#999" stroke-width="2" marker-end="url(#crew-arrow-structural)" />';
+    }
+  }
+
+  const unresolved = [];
+  const pairs = {};
+  (result.delegations || []).forEach(d => {
+    if (!d.to_agent_role || !positions[d.to_agent_role] || !positions[d.from_agent_role]) {
+      unresolved.push(d);
+      return;
+    }
+    const key = d.from_agent_role + "\\u2192" + d.to_agent_role;
+    if (!pairs[key]) pairs[key] = { from: d.from_agent_role, to: d.to_agent_role, tools: [] };
+    if (!pairs[key].tools.includes(d.tool)) pairs[key].tools.push(d.tool);
+  });
+  Object.values(pairs).forEach(pair => {
+    const p1 = positions[pair.from], p2 = positions[pair.to];
+    const x1 = p1.x + nodeW / 2, y1 = p1.y + nodeH, x2 = p2.x + nodeW / 2, y2 = p2.y + nodeH;
+    const midX = (x1 + x2) / 2, midY = Math.max(y1, y2) + 26;
+    maxY = Math.max(maxY, midY + 14);  // 라벨 텍스트 한 줄 높이만큼 여유를 더 둔다.
+    body += '<path d="M' + x1 + "," + y1 + " Q" + midX + "," + midY + " " + x2 + "," + y2 +
+      '" stroke="#b45309" stroke-width="2" stroke-dasharray="4,3" fill="none" marker-end="url(#crew-arrow-delegation)" />' +
+      '<text x="' + midX + '" y="' + (midY - 4) + '" font-size="10" fill="#b45309" text-anchor="middle">' + esc(pair.tools.join(", ")) + "</text>";
+  });
+
+  const allNodes = isHierarchical ? [managerNode].concat(workers) : agents;
+  allNodes.forEach(a => {
+    const pos = positions[a.role_name];
+    const isManagerNode = a === managerNode;
+    const label = a.role_name.length > 18 ? a.role_name.slice(0, 17) + "…" : a.role_name;
+    body += '<rect x="' + pos.x + '" y="' + pos.y + '" width="' + nodeW + '" height="' + nodeH + '" rx="8" ' +
+      'fill="' + (isManagerNode ? "#fef3c7" : "#eef1f6") + '" stroke="' + (isManagerNode ? "#b45309" : "#888") + '" stroke-width="1.5" />' +
+      '<text x="' + (pos.x + nodeW / 2) + '" y="' + (pos.y + nodeH / 2 + 4) + '" font-size="12" text-anchor="middle" fill="#222">' +
+      esc(label) + "</text>";
+  });
+
+  const svg = '<svg viewBox="0 0 ' + svgWidth + " " + maxY + '" style="width:100%;max-width:' + svgWidth + 'px;height:auto;display:block" xmlns="http://www.w3.org/2000/svg">' +
+    "<defs>" +
+    '<marker id="crew-arrow-structural" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#999"/></marker>' +
+    '<marker id="crew-arrow-delegation" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#b45309"/></marker>' +
+    "</defs>" + body + "</svg>";
+  return { svg, unresolved };
+}
+
 function renderCrewResult(result) {
   const box = document.getElementById("crew-result");
-  let html = '<h3>최종 산출물</h3><div class="msg ok">' + esc(result.final_output).replace(/\\n/g, "<br>") + "</div>";
+  const diagram = crewDiagramSvg(result);
+  let html = "<h3>협업 관계 다이어그램</h3>" +
+    '<p class="muted">실선(회색)은 요청 시점에 정해진 구조(순차 전달 또는 매니저 조율), 점선(주황)은 실제로 발생한 위임/질의입니다.</p>' +
+    diagram.svg +
+    (diagram.unresolved.length
+      ? '<details class="muted"><summary>확인 안 된 위임(' + diagram.unresolved.length + '건) — 대상 Agent를 다이어그램에서 특정하지 못함</summary>' +
+        table(["위임한 Agent", "LLM이 지목한 대상(원문)", "도구"], diagram.unresolved.map(d => [esc(d.from_agent_role || "-"), esc(d.to_agent_role || "(응답에 coworker 없음)"), esc(d.tool)])) +
+        "</details>"
+      : "");
+  html += '<h3>최종 산출물</h3><div class="msg ok">' + esc(result.final_output).replace(/\\n/g, "<br>") + "</div>";
   // 사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
   // 연결해줘") — run_crew()가 이제 gate_scores/tcr을 반환한다. 단건
   // deliverable 카드의 gateBadge와 같은 "측정 없음" 구분 원칙(위 §530
@@ -1505,7 +2132,7 @@ function renderCrewResult(result) {
   ]));
   html += "<h3>실제 위임/협업 발생 내역(" + result.delegations.length + "건)</h3>";
   html += result.delegations.length
-    ? table(["위임한 Agent 역할", "사용한 도구"], result.delegations.map(d => [esc(d.from_agent_role || "-"), esc(d.tool)]))
+    ? table(["위임한 Agent 역할", "대상 Agent 역할", "사용한 도구"], result.delegations.map(d => [esc(d.from_agent_role || "-"), esc(d.to_agent_role || "(확인 안 됨)"), esc(d.tool)]))
     : '<p class="muted">이번 실행에서는 Agent 간 실제 위임이 발생하지 않았습니다(각자 독립적으로 완수).</p>';
   box.innerHTML = html;
 }

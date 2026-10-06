@@ -138,6 +138,65 @@ def test_gc79_run_crew_chains_context_and_stores_each_agent_output(client_and_co
     assert "crew_run_completed" in actions
 
 
+def test_gc220_run_crew_preserves_each_agents_saved_model_config(client_and_conn):
+    """사용자 요청(2026-10-06, "model provider/모델명이 AI 생성·관리·Crew
+    실행 단계에 모두 있는데 최종 어떻게 적용되는지 분석" → "(b) 실행 후
+    덮어쓰기만이라도 막는 방향으로 수정") — Crew 실행은 참여 Agent
+    전원에게 요청 시점의 provider/model 하나를 동일하게 적용하는데,
+    실행이 끝나면 그 값을 모든 참여 Agent의 `llm_provider`/`llm_model`
+    (="AI 에이전트 관리"의 "모델 설정" 저장값, 단일 실행 경로
+    `agent_runtime.execute_agent()`가 기본값으로 읽는 바로 그 컬럼)에
+    덮어써 와서, Agent별로 따로 설정해둔 기본값이 Crew 실행 한 번으로
+    조용히 사라지는 문제가 있었다. `last_output`/`framework`는 여전히
+    갱신하되 `llm_provider`/`llm_model`은 더 이상 안 건드려야 한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)
+    # "AI 에이전트 관리 → 모델 설정"으로 Agent별 기본값을 미리 따로
+    # 저장해둔 상태를 흉내낸다 — 이후 Crew 실행에 쓸 provider(openai)와는
+    # 일부러 다르게 둔다.
+    conn.execute(
+        "UPDATE agent_pool SET llm_provider = 'anthropic', llm_model = 'claude-sonnet-5' "
+        "WHERE id = ?",
+        (agent1,),
+    )
+    conn.execute(
+        "UPDATE agent_pool SET llm_provider = 'ollama', llm_model = 'qwen3-coder' "
+        "WHERE id = ?",
+        (agent2,),
+    )
+    conn.commit()
+
+    with patch(
+        "crewai.Crew.kickoff",
+        return_value=_crew_output("최종 산출물", ["기획서", "분석서"]),
+    ):
+        crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["기획서를 작성해줘", "그 기획서를 분석해줘"],
+            admin_id,
+            process="sequential",
+            provider="openai",
+            model="gpt-4o-mini",
+        )
+
+    row1 = conn.execute("SELECT * FROM agent_pool WHERE id = ?", (agent1,)).fetchone()
+    row2 = conn.execute("SELECT * FROM agent_pool WHERE id = ?", (agent2,)).fetchone()
+    # 저장해둔 모델 설정은 Crew 실행과 무관하게 그대로 남아야 한다.
+    assert row1["llm_provider"] == "anthropic"
+    assert row1["llm_model"] == "claude-sonnet-5"
+    assert row2["llm_provider"] == "ollama"
+    assert row2["llm_model"] == "qwen3-coder"
+    # last_output/framework는 여전히 이번 실행 결과로 갱신된다.
+    assert row1["last_output"] == "기획서"
+    assert row2["last_output"] == "분석서"
+    assert row1["framework"] == "crewai"
+    assert row2["framework"] == "crewai"
+
+
 def test_gc80_run_crew_rejects_mismatched_lengths_and_inactive_agents(client_and_conn):
     _client, conn = client_and_conn
     admin_id = conn.execute(
@@ -230,7 +289,14 @@ def test_gc199_crew_run_endpoint_exposes_gate_scores(client_and_conn):
 
 def test_gc81_run_crew_captures_real_delegation_events():
     """CrewAI 이벤트버스에서 실제로 위임 도구 사용 이벤트가 오면 정직하게
-    캡처하는지 확인한다(추측이 아니라 실제 이벤트 기반)."""
+    캡처하는지 확인한다(추측이 아니라 실제 이벤트 기반).
+
+    **정정(2026-10-06, 사용자 요청 "묶인 Agent간 협업 관계를 다이어그램
+    으로 표시")** — ADR 결정 11이 애초에 "누가 누구에게 무엇을
+    위임했는지" 기록을 약속했는데(`docs/ADR.md:324`), 실제 구현은 "누구
+    에게"(`event.tool_args`의 `coworker`)를 읽지도 않고 버리고 있었다 —
+    다이어그램에 화살표 대상이 필요해 다시 보니 발견한 문서-코드
+    불일치였다. `to_agent_role`을 추가해 메운다."""
     from crewai.events.event_bus import crewai_event_bus
     from crewai.events.types.tool_usage_events import ToolUsageFinishedEvent
 
@@ -263,12 +329,53 @@ def test_gc81_run_crew_captures_real_delegation_events():
 
     assert len(result["delegations"]) == 1
     assert result["delegations"][0]["from_agent_role"] == "기획자"
+    assert result["delegations"][0]["to_agent_role"] == "분석가"
     assert result["delegations"][0]["tool"] == "Delegate work to coworker"
 
     actions = [
         r["action"] for r in conn.execute("SELECT action FROM audit_log").fetchall()
     ]
     assert "agent_delegation_occurred" in actions
+
+
+def test_gc219_resolve_delegation_target_sanitizes_like_crewai_and_falls_back():
+    """`_resolve_delegation_target()`은 CrewAI 자신의 `sanitize_agent_name()`
+    (공백 정리+소문자화)과 같은 기준으로 매칭해야, LLM이 대소문자/공백을
+    다르게 써내도(실사용에서 흔함) 실제 Agent로 정확히 맞춰진다. 매칭
+    실패(존재하지 않는 동료를 지목 — CrewAI 쪽에서도 에러가 나는 상황)
+    시에는 원문을 그대로 보존해 정보를 버리지 않는다."""
+    known_roles = ["백엔드 개발자", "QA 엔지니어"]
+
+    assert (
+        crew_runtime._resolve_delegation_target(
+            {"coworker": "  QA   엔지니어  "}, known_roles
+        )
+        == "QA 엔지니어"
+    )
+    assert (
+        crew_runtime._resolve_delegation_target(
+            {"co_worker": "백엔드 개발자"}, known_roles
+        )
+        == "백엔드 개발자"
+    )
+    # 대괄호로 감싼 리스트 형태(LLM이 가끔 이렇게 써냄, base_agent_tools.py
+    # 참고)도 첫 항목만 취해 매칭한다.
+    assert (
+        crew_runtime._resolve_delegation_target(
+            {"coworker": "[QA 엔지니어, 백엔드 개발자]"}, known_roles
+        )
+        == "QA 엔지니어"
+    )
+    # 존재하지 않는 동료 — 원문을 그대로 보존(정보 손실 없음).
+    assert (
+        crew_runtime._resolve_delegation_target(
+            {"coworker": "데이터 과학자"}, known_roles
+        )
+        == "데이터 과학자"
+    )
+    # coworker 키 자체가 없으면 None.
+    assert crew_runtime._resolve_delegation_target({"task": "x"}, known_roles) is None
+    assert crew_runtime._resolve_delegation_target("not a dict", known_roles) is None
 
 
 def test_gc82_crew_run_endpoint_rbac_and_errors(client_and_conn):
@@ -669,8 +776,11 @@ def test_gc106_run_crew_attaches_real_crewai_tool_for_graphdb_agent(client_and_c
     개선해줘")**: 처음엔 execute_agent()와 똑같이 Task description에
     정적으로 끼워 넣는 방식으로 고쳤었지만, 이번 요청으로 진짜 CrewAI
     Tool을 붙이는 방식으로 바꿨다 — description은 원문 그대로 두고,
-    Agent의 `tools`에 실제 "조직도 관계 조회" Tool이 붙어서 Agent가
-    스스로 호출 여부를 판단하게 한다."""
+    Agent의 `tools`에 실제 "org_relationship_query" Tool이 붙어서 Agent가
+    스스로 호출 여부를 판단하게 한다. (CrewAI Tool 함수명은 2026-10-06에
+    한글→ASCII로 변경됨, docs/LIMITS.md §54 — 설치된 crewai 버전이 함수명을
+    ASCII로 정규화하며 비-ASCII 문자를 전부 지워 한글 전용 이름이 빈
+    문자열이 되는 크래시를 막기 위함.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
@@ -710,13 +820,15 @@ def test_gc106_run_crew_attaches_real_crewai_tool_for_graphdb_agent(client_and_c
     # 대신 실제 CrewAI Tool이 해당 Agent에만 붙는다.
     assert crew.agents[0].tools == []
     tool_names = [t.name for t in crew.agents[1].tools]
-    assert "조직도 관계 조회" in tool_names
+    assert "org_relationship_query" in tool_names
 
 
 def test_gc107_crewai_agent_generator_attaches_vectordb_tool(client_and_conn):
-    """F4 생성 시점(`crewai_agent_generator`)에도 vectordb 스킬을 요청하면
+    """F4 생성 시점(`crewai_agent_generator`)에도 rag 스킬을 요청하면
     실제 CrewAI Tool이 붙는지 확인한다(사용자 요청, 2026-09-27 — "이미
-    생성된 또는 생성하는 AI Agent"에서 둘 다 동작해야 한다는 요구)."""
+    생성된 또는 생성하는 AI Agent"에서 둘 다 동작해야 한다는 요구).
+    (원래 "vectordb" 별칭으로도 됐으나 자동완성 중복 정리로 2026-10-06에
+    "rag"로 통합됨, docs/LIMITS.md §49.)"""
     _client, conn = client_and_conn
     captured = {}
 
@@ -726,12 +838,12 @@ def test_gc107_crewai_agent_generator_attaches_vectordb_tool(client_and_conn):
 
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         crew_runtime.crewai_agent_generator(
-            conn, "지식검색 Agent", ["vectordb"], provider="openai"
+            conn, "지식검색 Agent", ["rag"], provider="openai"
         )
 
     crew = captured["crew"]
     tool_names = [t.name for t in crew.agents[0].tools]
-    assert "지식 베이스 검색" in tool_names
+    assert "knowledge_base_search" in tool_names
 
 
 # ---------- vectorstore(VectorDB 지식검색 Agent) ----------
@@ -874,13 +986,16 @@ def test_gc89_context_for_prompt_handles_empty_org(client_and_conn):
 
 
 def test_gc90_execute_agent_augments_prompt_for_vectordb_role(client_and_conn):
+    """(원래 "vectordb"/"rag" 두 별칭을 같이 넣어 테스트했으나, 자동완성
+    중복 정리로 2026-10-06에 "vectordb"가 "rag"로 통합돼 "rag" 하나만
+    남음, docs/LIMITS.md §49.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('지식검색 Agent', '[\"vectordb\", \"rag\"]', 'active')"
+        "('지식검색 Agent', '[\"rag\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -956,16 +1071,18 @@ def test_gc92_execute_agent_does_not_augment_normal_role(client_and_conn):
 
 def test_gc195_execute_agent_augments_prompt_for_websearch_role(client_and_conn):
     """사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
-    API를... 추가해줘") — "websearch"/"외부검색" skill_tags를 가진
-    Agent는 GC90(vectordb)·GC91(graphdb)과 같은 방식으로 실행 전에
-    `websearch.search()` 결과를 프롬프트에 덧붙여야 한다."""
+    API를... 추가해줘") — "외부검색" skill_tags를 가진 Agent는
+    GC90(vectordb)·GC91(graphdb)과 같은 방식으로 실행 전에
+    `websearch.search()` 결과를 프롬프트에 덧붙여야 한다. (원래
+    "websearch" 별칭으로도 됐으나 자동완성 중복 리포트로 2026-10-06에
+    "외부검색"으로 통합됨, docs/LIMITS.md §49.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부지식 Agent', '[\"websearch\"]', 'active')"
+        "('외부지식 Agent', '[\"외부검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()

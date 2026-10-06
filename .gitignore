@@ -10,3 +10,5 @@ results/
 *.db
 *.db-shm
 *.db-wal
+*.db.bak-*
+.claude/.agent-evaluator/

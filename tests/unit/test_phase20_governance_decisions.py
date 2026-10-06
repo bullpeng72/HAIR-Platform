@@ -269,8 +269,8 @@ def test_gc204_delegation_capture_tolerates_renamed_tool_strings():
     assert crew_runtime._looks_like_delegation("delegate task to teammate")
     assert crew_runtime._looks_like_delegation("Ask Question To Coworker")
     # 위임과 무관한 도구는 여전히 아니라고 판단해야 한다(오탐 방지 확인).
-    assert not crew_runtime._looks_like_delegation("지식 베이스 검색")
-    assert not crew_runtime._looks_like_delegation("조직도 관계 조회")
+    assert not crew_runtime._looks_like_delegation("knowledge_base_search")
+    assert not crew_runtime._looks_like_delegation("org_relationship_query")
 
 
 # ---------- (7) skill_pool.augmentation_mode='always' 실제 구현 ----------
@@ -335,15 +335,17 @@ def test_gc205_always_mode_forces_static_injection_in_run_crew(client_and_conn):
 
 
 def test_gc206_tool_mode_skill_still_unaugmented_in_run_crew(client_and_conn):
-    """`'always'` 구현이 기존 `'tool'` 모드 스킬(기본 시드된 vectordb 등)의
-    동작을 바꾸지 않는지 확인한다 — GC106의 회귀 방지 버전."""
+    """`'always'` 구현이 기존 `'tool'` 모드 스킬(기본 시드된 rag 등)의
+    동작을 바꾸지 않는지 확인한다 — GC106의 회귀 방지 버전. (원래 "vectordb"
+    별칭으로도 됐으나 자동완성 중복 정리로 2026-10-06에 "rag"로 통합됨,
+    docs/LIMITS.md §49.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('지식검색 Agent', '[\"vectordb\"]', 'active')"
+        "('지식검색 Agent', '[\"rag\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -361,13 +363,13 @@ def test_gc206_tool_mode_skill_still_unaugmented_in_run_crew(client_and_conn):
 
     assert captured["crew"].tasks[0].description == "결제 모듈 설계 사례 있어?"
     tool_names = [t.name for t in captured["crew"].agents[0].tools]
-    assert "지식 베이스 검색" in tool_names
+    assert "knowledge_base_search" in tool_names
 
 
 def test_gc207_always_mode_also_augments_single_shot_execute_agent(client_and_conn):
     """단일 실행 경로(`execute_agent()`)는 도구 호출 루프가 없어 `'tool'`
     이든 `'always'`든 정적 주입이 유일한 선택지다 — 새로 만든 `'always'`
-    스킬도(기본 시드된 vectordb/graphdb/websearch 태그가 전혀 아니어도)
+    스킬도(기본 시드된 rag/graphdb/외부검색 태그가 전혀 아니어도)
     실제로 주입되는지 확인해, 하드코딩된 태그 집합이 아니라 skill_pool
     데이터로 판별한다는 것을 증명한다."""
     from hair_platform import agent_runtime

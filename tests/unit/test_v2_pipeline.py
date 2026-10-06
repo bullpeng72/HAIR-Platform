@@ -177,9 +177,16 @@ def test_gc17_reassignment_supersedes_previous_confirmed_assignment(client_and_c
         json={"name": "후보B", "role": "QA 엔지니어", "skill_tags": []},
     )
     resource_b = resp.json()["id"]
+    # 2026-10-06 정정(다자간 팀 협업 기획 Phase 1+2) — "다중 confirmed
+    # 허용"으로 바뀌어 더 이상 같은 resource_type이라고 자동으로
+    # supersede되지 않는다. 명시적으로 교체 의도를 표현해야 한다.
     resp = client.post(
         f"/api/tasks/{task_id}/assignments",
-        json={"resource_type": "human", "resource_id": resource_b},
+        json={
+            "resource_type": "human",
+            "resource_id": resource_b,
+            "replaces_assignment_id": assignment_a,
+        },
     )
     approval_b = resp.json()["approval_id"]
     assignment_b = resp.json()["assignment_id"]
@@ -220,9 +227,15 @@ def test_gc18_assignment_history_records_full_reassignment_sequence(client_and_c
         "/api/human-pool", json={"name": "후보C", "role": "PM", "skill_tags": []}
     )
     resource_c = resp.json()["id"]
+    # 2026-10-06 정정(다자간 팀 협업 기획 Phase 1+2) — 위 gc17과 같은 이유로
+    # 명시적 replaces_assignment_id가 필요해졌다.
     resp = client.post(
         f"/api/tasks/{task_id}/assignments",
-        json={"resource_type": "human", "resource_id": resource_c},
+        json={
+            "resource_type": "human",
+            "resource_id": resource_c,
+            "replaces_assignment_id": assignment_a,
+        },
     )
     approval_c = resp.json()["approval_id"]
     _login(client, "admin1", "adminpass")
