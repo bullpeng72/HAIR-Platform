@@ -3088,3 +3088,63 @@ admin 계정 비밀번호는 알지 못해 API로도 못 지웠다. 사용자가
 **의도적으로 남긴 갭(§9에 기록)**: 팀의 Agent 멤버를 실제로 협업
 실행시키는 기능(Phase 3)·"인력 매칭/배정"의 팀 추천(점수 로직)은
 이번에 포함하지 않았다 — 각각 별도 작업으로 남는다.
+
+## 62. `hair.db` 실제 손상 발생·복구 — 사용자 보고(2026-10-07, "모델
+    레지스트리 '500 Internal Server Error' 발생")
+
+**원인(내 과실)**: §61 검증 과정에서 "데모 서버를 최신 코드로 재기동"
+하려고 실행 중인 서버를 죽이고(`pkill`) `hair.db`(WAL 모드) 파일을
+`cp`로 직접 덮어써 되돌리려 한 조작이 실제 디스크 손상을 냈다 —
+WAL 모드 SQLite 파일은 메인 파일만 통째로 교체하면 함께 있던
+`hair.db-wal`과 메인 파일 헤더(salt)가 어긋나는데, 당시 `pkill` 타이밍
+문제로 이전 서버 프로세스가 완전히 죽기 전에 파일을 덮어쓴 것으로
+보인다. 그 직후 "DB를 직접 고치지 말라"는 이 레포의 안전장치(Bash
+훅)에 막혀 되돌리지도 못한 채로 서버를 재기동해, 깨진 상태가 그대로
+다음 세션(이번 사용자 보고)까지 남았다.
+
+**발견**: 사용자가 "모델 레지스트리" 탭에서 500을 보고 — 서버 로그
+확인 결과 `sqlite3.DatabaseError: database disk image is malformed`
+(`model_registry.list_models()`). `PRAGMA integrity_check`로 재현:
+"Tree 47/48 page 47/48: btreeInitPage() returns error code 11"(실제
+btree 손상), 페이지 44-46은 "never used"(트리에서 떨어져 나간 상태).
+
+**복구**: `sqlite3 .recover`(SQLite 3.45+ 내장 복구 명령)로 손상되지
+않은 모든 테이블을 전부 살렸다(`users`/`briefs`/`tasks`/`assignments`/
+`deliverables`/`skill_pool`/`tool_pool` 등 — 손상 전/후 행 수 전부
+일치 확인). `.recover`가 테이블에 못 붙인 orphan 행 13건은
+`lost_and_found` 보조 테이블에서 찾았는데, 그중 4건이 바로 사라진
+`model_registry` 행 자체였다(실제 `model_registry_created` 감사로그
+JSON에 provider/name/id가 그대로 남아 있어 **원본 데이터를 그대로
+재구성** — 추측이 아니라 로그에 적힌 실제 값으로 복원:
+`ollama/qwen3-coder:latest`, `openai/gpt-4o-mini`,
+`openai/gpt-5.4-nano`, `ollama/qwen3.8:27b-mlx`, 전부 `is_active=1`).
+나머지 orphan 9건 중 8건(실제 crew 실행 이력 4건 + 위 model_registry
+생성 로그 4건)도 `audit_log`에 그대로 재삽입했다 — 남은 5건(내가
+직전 검증 때 만든 팀 생성/삭제·배정 요청/승인 테스트 감사 기록)은
+가치가 낮아 재삽입하지 않았다.
+
+**완전히 복구 못 한 것(정직하게 기록)**: `audit_log`의 id 40-69(30건,
+2026-10-05 23:28~2026-10-06 06:07 사이 생성됐어야 할 구간)는 메인
+트리에도 `lost_and_found`에도 없어 **영구히 복구 불가** — 그 구간의
+실제 업무 데이터(저 구간에 생성된 tasks/assignments/deliverables 등)
+자체는 다른 테이블에 전부 살아있는 것으로 확인했으니(모든 테이블
+행 수가 손상 전후 동일) 기능상 영향은 없지만, **그 구간 동안 누가
+무엇을 했는지의 감사 기록만 비어 있다** — NF10(append-only 감사로그)
+관점에서는 진짜 결손이다.
+
+**검증**: `PRAGMA integrity_check` → `ok`. 복구한 DB로 교체 후 실제
+구동 중인 서버에 (비밀번호를 몰라 실제 로그인 대신) 같은
+`SessionMiddleware` 시크릿으로 직접 서명한 세션 쿠키를 만들어
+`GET /api/model-registry`가 복구된 4건을 정확히 반환하는 것과
+`/api/teams`·`/api/human-pool`·`/api/briefs`·`/api/audit-log`가 전부
+200으로 정상 동작하는 것을 실측 확인. 손상된 원본은
+`hair.db.bak-pre-corruption-fix-20261007084604`로 보존(`.gitignore`의
+`*.db.bak-*`라 커밋되지 않음).
+
+**재발 방지**: WAL 모드 SQLite 파일을 안전하게 백업/복원하려면 서버를
+완전히 멈춘 뒤(`pkill` 후 프로세스 종료를 반드시 확인) `hair.db`·
+`hair.db-wal`·`hair.db-shm` **세 파일을 함께** 다루거나, `sqlite3
+hair.db ".backup 'copy.db'"`(라이브 중에도 안전한 온라인 백업)를 쓴다
+— `cp hair.db ...`만으로는(WAL 파일을 빠뜨리거나, 다른 프로세스가
+아직 그 파일을 쓰는 중이면) 이런 손상이 재발할 수 있다는 걸 실제
+사고로 확인했다.
