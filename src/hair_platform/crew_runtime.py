@@ -54,6 +54,7 @@ from hair_platform import (
     graphquery,
     llm,
     pool_registry,
+    teams,
     vectorstore,
     websearch,
 )
@@ -260,6 +261,20 @@ def crewai_agent_generator(
         "generated_output": result.raw,
         "framework": "crewai",
     }
+
+
+# `deliverables.py`의 `_CONTENT_TYPE_INSTRUCTIONS`와 내용이 같다(의도적
+# 중복 — 2026-10-07, "Tier 2까지 진행해줘"). 이 모듈은 `deliverables.py`를
+# import할 수 없다(순환 참조 — `deliverables.py`가 이미 이 모듈을 쓴다).
+_CONTENT_TYPE_INSTRUCTIONS = {
+    "text": "",
+    "markdown": "결과물은 Markdown 형식으로 작성하세요(제목은 #, 목록은 -, 강조는 **, "
+    "코드는 ``` 블록을 쓰세요).",
+    "html": "결과물은 완전한 HTML 문서로 작성하세요(<!DOCTYPE html>부터 </html>까지, "
+    "스타일은 <style> 태그 안에 인라인으로만 넣고 외부 리소스는 참조하지 마세요).",
+    "code": "결과물은 코드로 작성하세요. 전체를 ``` 코드 블록 안에 넣고, 필요하면 "
+    "블록 앞뒤에 짧은 설명만 덧붙이세요.",
+}
 
 
 def run_crew(
@@ -574,3 +589,90 @@ def run_crew(
         "gate_scores": eval_result["gate_scores"],
         "tcr": eval_result["tcr"],
     }
+
+
+def run_crew_for_team(
+    conn: sqlite3.Connection,
+    team_id: int,
+    task_id: int,
+    actor_id: int,
+    process: str = "sequential",
+    provider: str | None = None,
+    model: str | None = None,
+    manager_agent_id: int | None = None,
+    content_type: str = "text",
+) -> dict:
+    """사용자 요청(2026-10-07, "crew 실행에서 묶인 에이전트 그룹의 경우
+    하나의 그룹만 가능한 구조인데, 복수 그룹 가능하도록 개선, 이 그룹이
+    전체 업무에서 사람-에이전트 연동이 가능한 구조인지 확인") —
+    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 기존
+    `run_crew()`(즉석 실행 — `agent_ids`를 매번 직접 고름, `task_id` 없이
+    결과가 `agent_pool.last_output`에만 남고 끝)와 달리, 이 함수는 **팀
+    (teams.py, "등록→재사용" 그룹)을 실제 할 일(task)의 맥락에서** 실행한다
+    — "복수 그룹"은 한 할 일에 팀을 여러 개 배정할 수 있다는 뜻이다(§61
+    "다중 confirmed 허용"으로 이미 가능했다 — team 배정도 resource_type별
+    제한 없이 여러 건 confirmed로 공존한다). 이 함수 자체는 그중 **한
+    팀**을 실행한다(호출자가 어느 팀인지 고른다 — 사용자 결정, "팀 하나를
+    골라서 실행").
+
+    `task_descriptions`는 팀의 Agent 멤버 전원에게 **같은 내용**을 준다
+    — 할 일의 `role_name`과 최신 사람 작성 deliverable(있으면)을
+    맥락으로 묶은 것으로, `deliverables.start_agent_execution()`의
+    단일-Agent 프롬프트와 같은 패턴이다(일관성 유지). CrewAI의
+    sequential/hierarchical 프로세스가 그 공통 맥락을 agent들에게 어떻게
+    나눠 처리할지는 평소처럼 Crew 자체가 정한다 — 여기서 Agent별로 다른
+    지시를 미리 쪼개지 않는다(쪼개려면 팀 멤버의 `role_label`을 더 적극
+    활용해야 하는데, 이는 스코프 밖의 더 큰 설계 변경이다).
+
+    사람-에이전트 연동: 이 함수가 반환하는 `agents`(Agent별 산출물)는
+    호출자(`deliverables.run_team_crew_job()`)가 각각 `deliverables`
+    (author_type='agent') + F7 결재 체인으로 저장한다 — 그 순간부터
+    팀 리더·팀원(사람)이 같은 할 일의 협업 워크스페이스에서 결과물을
+    보고, 댓글을 달고, 승인/반려할 수 있다. 즉 "즉석 실행"이던 Crew가
+    처음으로 업무 파이프라인(F5-F7, 협업 워크스페이스, Gate A-G)에
+    연결된다 — 지금까지 `run_crew()`가 완전히 격리돼 있던 것과의 핵심
+    차이."""
+    team = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if team is None:
+        raise ValueError("team_not_found")
+    confirmed = conn.execute(
+        "SELECT id FROM assignments WHERE task_id = ? AND resource_type = 'team' "
+        "AND resource_id = ? AND status = 'confirmed'",
+        (task_id, team_id),
+    ).fetchone()
+    if confirmed is None:
+        raise ValueError("team_not_confirmed_for_task")
+
+    agent_ids = teams.active_agent_member_ids(conn, team_id)
+    if not agent_ids:
+        raise ValueError("team_has_no_active_agents")
+
+    task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    latest_human = conn.execute(
+        "SELECT content FROM deliverables WHERE task_id = ? AND author_type = 'human' "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    required_skills = json.loads(task["required_skills"])
+    skills_text = ", ".join(required_skills) if required_skills else "없음"
+    desc_parts = [f"'{task['role_name']}' 업무를 수행하세요(필요 스킬: {skills_text})."]
+    if latest_human is not None:
+        desc_parts.append(f"참고할 사람 작성 자료:\n{latest_human['content']}")
+    instruction = _CONTENT_TYPE_INSTRUCTIONS.get(content_type, "")
+    if instruction:
+        desc_parts.append(instruction)
+    description = "\n\n".join(desc_parts)
+    task_descriptions = [description] * len(agent_ids)
+
+    return run_crew(
+        conn,
+        agent_ids,
+        task_descriptions,
+        actor_id,
+        process=process,
+        provider=provider,
+        model=model,
+        manager_agent_id=manager_agent_id,
+    )

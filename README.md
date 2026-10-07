@@ -5,9 +5,9 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료, F1–F14/NF1–13 전부 구현, `pytest` 241건 통과,
-API 엔드포인트 82개. 알려진 갭·미구현 범위는 전부 `docs/LIMITS.md`에
-정직하게 기록돼 있다(가장 최신: §62).
+**상태**: Phase 0–6 완료, F1–F14/NF1–13 전부 구현, `pytest` 256건 통과,
+API 엔드포인트 83개. 알려진 갭·미구현 범위는 전부 `docs/LIMITS.md`에
+정직하게 기록돼 있다(가장 최신: §71).
 
 ## 핵심 기능
 
@@ -19,13 +19,24 @@ API 엔드포인트 82개. 알려진 갭·미구현 범위는 전부 `docs/LIMIT
   여러 명, Agent 여러 개, 또는 팀) — 교체하려면 `replaces_assignment_id`로
   명시해야 그 배정만 superseded 처리된다
 - **팀(teams/team_members)** — 사람 N명 + Agent M명을 역할명과 함께
-  묶어 등록해두고 할 일에 팀 전체를 한 번에 배정(`resource_type='team'`).
-  F7 결재 주체는 팀 리더(기본값은 배정 요청자, 확정 전까지 변경 가능).
-  팀의 Agent 멤버를 실제 CrewAI Crew로 협업 실행시키는 단계는 아직
-  미구현(`docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3)
+  묶어 등록해두고 할 일에 팀 전체를 한 번에 배정(`resource_type='team'`,
+  한 할 일에 팀을 여러 개 배정하는 것도 가능). F7 결재 주체는 팀 리더
+  (기본값은 배정 요청자, 확정 전까지 변경 가능). 협업 워크스페이스의
+  "팀 Agent 실행" 버튼으로 팀의 Agent 멤버 전원을 실제 CrewAI Crew로
+  실행하고, 결과가 Agent별 결과물+F7 결재 체인으로 그 할 일에 그대로
+  연결된다(팀이 여러 개 배정돼 있으면 그중 하나를 골라 실행). "AI
+  에이전트 생성"에서 여러 할 일을 한 번에 골라 역할별 Agent를 만든
+  직후 그 결과 화면에서 바로 "팀으로 묶기"도 가능 — "AI 에이전트
+  관리"에는 Agent별 소속 팀이 노출된다
 - 협업 워크스페이스 — 결과물(deliverable) 타임라인, 댓글, 사람이 작성한
   결과물도 "검토 요청"을 누르면 Agent 결과물과 같은 결재 체인을 거침,
   승인된 최종 결과물은 타임라인 위에 고정 노출
+- 결과물 형식(`content_type`: 일반 텍스트/Markdown/HTML/코드) — 작성자·
+  Agent·팀 Crew 모두 형식을 지정할 수 있고(LLM/Agent 경로는 프롬프트에
+  형식 지시 자동 추가), 화면에서 형식에 맞게 그대로 렌더링(Markdown
+  헤딩/목록/굵게, 코드 구문 강조, HTML은 `sandbox="allow-scripts"`
+  iframe 미리보기) + 결과물별 다운로드 버튼. 실제 파일(PPTX 등) 생성·
+  저장은 범위 밖(`docs/LIMITS.md` §68)
 
 ### Agent 실행 · LLM 연동
 - 실제 Anthropic / OpenAI / Ollama 연동(`llm.py`, `agent_runtime.py`) —
@@ -80,7 +91,7 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 241건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 256건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -153,7 +164,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(82개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(83개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -185,18 +196,18 @@ src/hair_platform/
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
   ADR.md             # 설계 결정 목록
-  LIMITS.md          # 알려진 갭(정직하게 기록, §62까지)
+  LIMITS.md          # 알려진 갭(정직하게 기록, §71까지)
   RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
   ROLE_TASK_CLASSIFICATION.md      # 관리자/사용자 고유·공통 업무 재분류(외부 사례 리서치)
   SCENARIOS.md                     # 대표 시나리오 워크스루(개발/일반업무/CS/Tool·Skill 활용)
   COLLABORATION_PLATFORM_PLAN.md   # 사람-AI 협업(결과물 전달/HITL/HOTL) 기획안 — 구현 완료
   HAIR_MASTER_PLAN.md              # 위 기획안을 포함하는 종합 기획/설계/개발 계획 — 구현 완료
-  MULTI_PARTY_TEAM_COLLABORATION_PLAN.md  # N명 사람+M개 Agent(또는 역할 기반 Agent 그룹) 팀 협업 기획안 — Phase 1+2 구현 완료, Phase 3-5는 미구현(§9)
+  MULTI_PARTY_TEAM_COLLABORATION_PLAN.md  # N명 사람+M개 Agent(또는 역할 기반 Agent 그룹) 팀 협업 기획안 — Phase 1-3 구현 완료, Phase 4-5는 미구현(§9)
   HAIR_ASSISTANT_PLAN.md           # HAIR 매뉴얼 기반 챗봇 도우미 기획안 — 미구현(기획만)
   PHASE1_DELIVERABLE_SPEC.md       # 협업 워크스페이스 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 241건
+tests/unit/                            # 골든셋 256건
 ```
 
 ## 로드맵

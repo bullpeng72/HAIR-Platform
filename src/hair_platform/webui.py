@@ -75,6 +75,9 @@ INDEX_HTML = """<!DOCTYPE html>
    .msg.warn { background: #fff4d6; color: #7a5c00; }
    .badge-reused { font-size: 0.65rem; background: #a15c00; color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
   .muted { color: #777; font-size: 0.8rem; }
+  .help-list { margin: 0.3rem 0 0.75rem; padding-left: 1.1rem; }
+  .help-list li { margin-bottom: 0.35rem; line-height: 1.4; }
+  .help-list li:last-child { margin-bottom: 0; }
   .skill-picker { display: inline-flex; flex-direction: column; gap: 0.3rem; }
   .skill-picker-row { display: flex; gap: 0.3rem; }
   .skill-picker-chips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
@@ -93,6 +96,23 @@ INDEX_HTML = """<!DOCTYPE html>
   #login-view .card { width: 320px; }
   #login-view input { width: 100%; margin-bottom: 0.5rem; box-sizing: border-box; }
   code { background: #f0f1f4; padding: 0 0.25rem; border-radius: 3px; }
+
+  /* 사용자 요청(2026-10-07, "HAIR 협업 결과물이 코드, 마크다운, PPT,
+     HTML 등 다양할 수 있을텐데... Tier 2까지 진행해줘") — content_type별
+     표시 스타일. .code-block 안의 토큰 클래스는 renderContent()의 경량
+     정규식 하이라이터가 붙인다(완전한 파서가 아니라 식별자/문자열/주석/
+     숫자/일부 키워드만 색을 입히는 수준 — 외부 라이브러리 없이 안전하게
+     처리하려는 기존 관례를 그대로 따른다). */
+  .code-block { background: #1e1e1e; color: #d4d4d4; border-radius: 6px; padding: 0.6rem 0.75rem; overflow-x: auto; }
+  .code-block code { background: transparent; padding: 0; color: inherit; }
+  .code-block .tok-kw { color: #569cd6; }
+  .code-block .tok-str { color: #ce9178; }
+  .code-block .tok-com { color: #6a9955; }
+  .code-block .tok-num { color: #b5cea8; }
+  .md-content h1, .md-content h2, .md-content h3,
+  .md-content h4, .md-content h5, .md-content h6 { margin: 0.4rem 0 0.2rem; }
+  .md-content li { margin-left: 1rem; }
+  .html-preview { width: 100%; min-height: 240px; border: 1px solid #e2e4e8; border-radius: 6px; background: #fff; }
 
   /* Phase 5(사용자 요청, 2026-09-28, "반응형만 포함(내 업무/알림 확인용)")
      — 이 앱은 고정 1100px 레이아웃(과거 다크모드 회귀 회피와 같은 이유로
@@ -146,6 +166,118 @@ function esc(s) {
   const d = document.createElement("div");
   d.textContent = (s === null || s === undefined) ? "" : String(s);
   return d.innerHTML;
+}
+
+// esc()는 엘리먼트 콘텐츠로 쓰기엔 안전하지만 따옴표(")는 안 바꿔준다
+// (텍스트 노드엔 필요 없어서) — HTML 속성값(예: iframe srcdoc="...")에
+// 그대로 넣으면 따옴표에서 값이 끊길 수 있어 별도로 이스케이프한다.
+function escAttr(s) {
+  return esc(s).replace(/"/g, "&quot;");
+}
+
+// 경량 구문 강조 — 완전한 토크나이저가 아니라 문자열/주석/숫자/흔한
+// 키워드만 정규식으로 색을 입힌다(2026-10-07, "Tier 2까지 진행해줘").
+// 입력은 호출자가 이미 esc()로 이스케이프한 문자열이라는 전제라, 여기서
+// 추가하는 <span> 태그 외에는 원본 텍스트에 있던 "<"/">"가 전부 엔티티로
+// 바뀌어 있어 새 HTML을 주입할 수 없다 — 그래서 외부 라이브러리(마크다운
+// 렌더러 등을 안 쓰기로 한 기존 결정, 위 주석 참고) 없이도 안전하다.
+const _CODE_KEYWORDS = /\\b(function|const|let|var|return|if|else|for|while|def|class|import|from|export|async|await|try|except|catch|finally|new|this|self)\\b/g;
+function highlightCode(escaped) {
+  // 순서 중요 — 키워드 치환을 가장 먼저 해야 한다. 나중에 하면 뒤 패스들이
+  // 이미 넣은 `class="tok-..."` 속성의 "class"라는 글자 자체를 키워드로
+  // 다시 매칭해 중첩·깨진 span을 만든다(실측으로 발견, 2026-10-07).
+  return escaped
+    .replace(_CODE_KEYWORDS, '<span class="tok-kw">$1</span>')
+    .replace(/(&quot;.*?&quot;|&#39;.*?&#39;)/g, '<span class="tok-str">$1</span>')
+    .replace(/(\\/\\/.*$|#.*$)/gm, '<span class="tok-com">$1</span>')
+    .replace(/\\b(\\d+)\\b/g, '<span class="tok-num">$1</span>');
+}
+
+// 실사용 리뷰로 발견한 갭(2026-10-07, 시나리오 1/2 실행 중) — Agent/사람
+// 산출물에 마크다운 코드펜스(```)나 **굵게**가 섞여 있어도 전부 이스케이프
+// 후 줄바꿈만 <br>로 바꿔 보여줘, 백틱·별표가 그대로 노출돼 가독성이
+// 떨어졌다(코드 패치 설명 같은 산출물일수록 심함).
+//
+// Tier 2(사용자 요청, 2026-10-07, "HAIR 협업 결과물이 코드, 마크다운,
+// PPT, HTML 등 다양할 수 있을텐데... Tier 2까지 진행해줘") — content_type
+// 별로 다르게 그린다. markdown/code/text 세 경로 모두 esc()로 이스케이프한
+// "뒤에" 정규식으로 안전한 태그만 덧씌우므로(원본의 "<"/">"는 이미
+// 엔티티라 다시 해석되지 않음) XSS 위험이 없다 — 완전한 마크다운 렌더러를
+// 새로 들이지 않기로 한 기존 결정을 그대로 유지한다. html만 예외: 그
+// 자체가 실행 가능한 HTML이라 브라우저가 파싱해야 하므로, 부모 페이지와
+// 완전히 분리된 sandboxed <iframe>(allow-same-origin 없음 — 그 안의
+// 스크립트가 부모 쿠키/DOM/세션에 접근할 수 없음) 안에서만 렌더링한다.
+// 실측으로 발견한 버그(2026-10-07, 실제 서버에 실제 gpt-4o-mini로 시나리오를
+// 돌려보다 발견 — 리뷰 서버의 손수 만든 가짜 응답으로는 한 번도 안 드러났다):
+// content_type을 "html"/"markdown"으로 지정해도 실제 LLM은 응답 전체를
+// ```html ... ``` / ```markdown ... ``` 한 겹으로 또 감싸는 경우가 흔하다.
+// html은 그 결과 iframe 위에 "```html" 글자가 그대로 떠 보기 흉했고,
+// markdown은 더 심각했다 — 전체가 "```markdown 코드 펜스" 하나로 인식돼
+// highlightCode()의 주석 강조 규칙(`#.*$`)이 마크다운 헤딩(`#`/`##`)을
+// 전부 "주석"으로 착각해 <span>으로 감싸버리는 바람에, 그 아래 헤딩/목록
+// 정규식이 더 이상 줄 맨 앞에서 "#"/"-"를 못 찾아 헤딩이 전혀 안 먹혔다
+// (Node로 실제 응답을 직접 렌더링해 재현·확인). 응답 "전체"가 코드
+// 펜스 하나로만 감싸여 있을 때만 그 바깥 펜스를 벗겨내고 안쪽 내용으로
+// 렌더링한다 — 본문 중간에 섞인 펜스(예: 시나리오 1의 설명+코드 혼합
+// 응답)는 그대로 둔다(그건 의도된 "그 형식을 먼저 보여주는" 문서지,
+// 벗겨낼 "감싸기"가 아니다).
+function stripOuterFence(raw) {
+  const m = raw.match(/^```[a-zA-Z0-9]*\\n([\\s\\S]*?)\\n?```\\s*$/);
+  return m ? m[1] : raw;
+}
+
+function renderContent(raw, contentType) {
+  if (contentType === "html" || contentType === "code" || contentType === "markdown") {
+    raw = stripOuterFence(raw);
+  }
+  if (contentType === "html") {
+    return '<iframe class="html-preview" sandbox="allow-scripts" srcdoc="' + escAttr(raw) + '"></iframe>';
+  }
+  if (contentType === "code") {
+    return '<pre class="code-block"><code>' + highlightCode(esc(raw)) + '</code></pre>';
+  }
+  const escaped = esc(raw);
+  const withCodeBlocks = escaped.replace(
+    /```[a-zA-Z0-9]*\\n([\\s\\S]*?)```/g,
+    (_match, code) => '<pre class="code-block"><code>' + highlightCode(code.replace(/\\n$/, "")) + "</code></pre>"
+  );
+  if (contentType !== "markdown") {
+    return withCodeBlocks
+      .replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>")
+      .replace(/\\n/g, "<br>");
+  }
+  // markdown — 헤딩/목록/인라인 코드까지 조금 더 넓게 처리한다(여전히
+  // esc() 이후의 안전한 치환일 뿐, 별도 파서 라이브러리는 안 씀).
+  return '<div class="md-content">' + withCodeBlocks
+    .replace(/^###### (.+)$/gm, "<h6>$1</h6>")
+    .replace(/^##### (.+)$/gm, "<h5>$1</h5>")
+    .replace(/^#### (.+)$/gm, "<h4>$1</h4>")
+    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
+    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
+    .replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+?)`/g, "<code>$1</code>")
+    .replace(/^- (.+)$/gm, "<li>$1</li>")
+    .replace(/\\n/g, "<br>") + '</div>';
+}
+
+// 결과물을 그대로 다운로드(2026-10-07, Tier 1 — "다운로드는 가능한지
+// 확인해줘"에 대한 답). content_type별 확장자만 붙이고 Blob으로 바로
+// 저장한다 — 서버에 파일로 저장하는 게 아니라 브라우저가 들고 있는
+// 문자열을 그 순간 파일로 바꿔주는 것뿐이라 Tier 3(실제 파일 저장소)
+// 없이도 가능하다.
+const _CONTENT_TYPE_EXTENSIONS = { text: "txt", markdown: "md", html: "html", code: "txt" };
+function downloadDeliverable(content, contentType, deliverableId) {
+  const ext = _CONTENT_TYPE_EXTENSIONS[contentType] || "txt";
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "deliverable-" + deliverableId + "." + ext;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function api(method, path, body) {
@@ -296,6 +428,19 @@ function modelSelectHtml(selectId) {
   return '<select id="' + selectId + '"><option value="">기본값 사용</option>' +
     '<option value="__custom__">직접 입력...</option></select> ' +
     '<input id="' + selectId + '-custom" placeholder="모델명 직접 입력" style="display:none;width:160px">';
+}
+
+// Tier 2(2026-10-07, "Tier 2까지 진행해줘") — "결과물 작성"/"LLM으로
+// 도와줘"/"AI 에이전트 실행"/"팀 Agent 실행" 4곳 모두 이 select 하나를
+// 재사용한다 — 작성자가 고르는 형식과 Agent/LLM에게 지시하는 형식이
+// 같아야 자연스럽기 때문이다(`deliverables._CONTENT_TYPE_INSTRUCTIONS`).
+const CONTENT_TYPE_LABELS = { text: "일반 텍스트", markdown: "Markdown", html: "HTML", code: "코드" };
+function contentTypeSelectHtml(selectId) {
+  return '<select id="' + selectId + '" title="결과물 형식">' +
+    Object.keys(CONTENT_TYPE_LABELS).map(v =>
+      '<option value="' + v + '">' + esc(CONTENT_TYPE_LABELS[v]) + '</option>'
+    ).join("") +
+    '</select>';
 }
 
 // providerSelectId가 바뀔 때마다 modelSelectId의 옵션을 그 provider의
@@ -567,7 +712,10 @@ async function renderInbox(content) {
 
   content.innerHTML =
     '<section class="card"><h2>내게 필요한 조치</h2>' +
-    '<p class="muted">결재 대기·AI 에이전트 실행 실패·낮은 Gate 점수 경고(승인/반려 전인 것만)를 한 곳에 모았습니다. 완전한 시간순 통합은 아니고 종류별로 묶여 있습니다 — 처리는 각 항목의 원래 화면(결재/내 업무)에서 합니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>결재 대기·AI 에이전트 실행 실패·낮은 Gate 점수 경고(승인/반려 전인 것만)를 한 곳에 모았습니다.</li>' +
+    '<li>완전한 시간순 통합은 아니고 종류별로 묶여 있습니다 — 처리는 각 항목의 원래 화면(결재/내 업무)에서 합니다.</li>' +
+    '</ul>' +
     (items.length ? cards : '<p class="muted">지금 조치가 필요한 항목이 없습니다.</p>') +
     '</section>';
 
@@ -588,7 +736,10 @@ async function renderMyWork(content) {
   const rows = await api("GET", "/api/my-work");
   content.innerHTML =
     '<section class="card"><h2>내 업무</h2>' +
-    '<p class="muted">확정된 배정 중 내가 직접 할 일(사람 배정 당사자)이거나 내가 AI에게 맡긴 일(Agent 배정 요청자)만 보입니다. "열기"를 누르면 그 업무의 협업 워크스페이스(결과물 타임라인)가 아래에 펼쳐집니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>확정된 배정 중 내가 직접 할 일(사람 배정 당사자)이거나 내가 AI에게 맡긴 일(Agent 배정 요청자)이거나, 내가 속한 팀이 배정된 일(팀 리더/팀원)만 보입니다.</li>' +
+    '<li>"열기"를 누르면 그 업무의 협업 워크스페이스(결과물 타임라인)가 아래에 펼쳐집니다.</li>' +
+    '</ul>' +
     // 사용자 요청(2026-09-29, "각 업무의 결과물을 어떻게 확인하는지...
     // 분석하고 부족한 기능을 개선해줘") — 이전엔 "결과물 수"·"최근
     // 결과물" 시각만 있어 지금 상태가 뭔지, 최종 결과물(승인)이 나왔는지
@@ -596,7 +747,14 @@ async function renderMyWork(content) {
     // 열을 추가한다.
     table(["할 일 ID", "역할", "유형", "관계", "상태", "최종 결과물", "결과물 수", "최근 갱신", "동작"], rows.map(r => [
       r.task_id, esc(r.role_name), esc(label(r.resource_type)),
-      r.my_relationship === "assignee" ? "내가 할 일" : "내가 맡긴 일",
+      // 2026-10-07 — "팀 Crew 그룹" 배정만 있고 개별 사람/Agent 배정이
+      // 없는 task도 "내 업무"에 뜨게 된 뒤(list_my_work() 수정) 추가.
+      ({
+        assignee: "내가 할 일",
+        requester: "내가 맡긴 일",
+        team_leader: "내 팀이 할 일(팀 리더)",
+        team_member: "내 팀이 할 일(팀원)",
+      })[r.my_relationship] || "내가 맡긴 일",
       r.latest_status ? esc(label(r.latest_status)) : '<span class="muted">아직 없음</span>',
       r.has_final_result ? '<span class="gate-badge gate-ok">✓ 승인됨</span>' : '<span class="muted">-</span>',
       r.deliverable_count,
@@ -636,7 +794,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   detail.innerHTML = '<p class="muted">불러오는 중…</p>';
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = isSupervisor ? await fetchModelsByProvider() : {};
-  let items, jobs, permission;
+  let items, jobs, permission, confirmedAgents, confirmedTeams;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
     jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
@@ -644,6 +802,22 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     // 무조건 실행 버튼을 보여줘, human assignee가 눌러야만 "권한이
     // 없습니다" 403으로 뒤늦게 알게 됐다. 버튼을 그리기 전에 먼저 확인한다.
     permission = await api("GET", "/api/tasks/" + taskId + "/execution-permission");
+    // 실사용 리뷰로 발견한 갭(2026-10-07, 시나리오 5 실행 중) — "다중
+    // confirmed 허용" 이후 한 할 일에 confirmed agent가 2개 이상이면
+    // 이 버튼이 어느 쪽을 실행하는지 전혀 알려주지 않았다(그냥 "먼저
+    // 걸리는 하나"가 조용히 실행됨) — 의도와 다른 Agent가 실행돼
+    // 실비용만 낭비될 위험이 있었다. 확정된 Agent 배정을 미리 조회해
+    // 2개 이상이면 선택 드롭다운을 보여준다(`ExecuteAgentRequest.
+    // agent_id`는 §61에서 이미 추가돼 있었는데 이 UI만 안 쓰고 있었다).
+    const assignments = await api("GET", "/api/tasks/" + taskId + "/assignments");
+    confirmedAgents = assignments.filter(a => a.resource_type === "agent" && a.status === "confirmed");
+    // 사용자 요청(2026-10-07, "crew 실행에서... 복수 그룹 가능하도록
+    // 개선... 사람-에이전트 연동이 가능한 구조인지 확인") —
+    // `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
+    // confirmed로 배정된 팀이 있으면 그 팀의 Agent 멤버를 실제 Crew로
+    // 실행하는 섹션을 보여준다(팀이 여러 개면 드롭다운으로 하나를
+    // 고른다 — 사용자 결정, 전부 동시 실행 아님).
+    confirmedTeams = assignments.filter(a => a.resource_type === "team" && a.status === "confirmed");
   } catch (e) {
     detail.innerHTML = "";
     showMsg("global-msg", e.message, "error");
@@ -667,8 +841,15 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // — d.evaluation(Phase 3부터 API엔 있었지만 이전까지 화면 어디에도
   // 안 나오고 있었다).
   const deliverableCards = items.map(d => {
+    // 실사용 리뷰로 발견한 갭(2026-10-07, 시나리오 3 실행 중) — 결재자가
+    // 그 task의 참가자가 아니면(흔한 경우 — F7 체인은 조직도 기준이지
+    // task 참가 여부와 무관) 반려해도 "왜"를 댓글로 남길 방법이 전혀
+    // 없었다(댓글은 참가자 전용). 승인/반려에 선택적 사유를 붙여 그
+    // 사유를 결재자 자격으로(참가자 여부와 무관하게) 타임라인에 남긴다.
     const decideActions = (isSupervisor && d.approval_id)
-      ? '<div class="actions"><button class="small" data-decide-deliverable="' + d.approval_id + '" data-approve="1">승인</button>' +
+      ? '<div class="actions">' +
+        '<input placeholder="사유(선택)" data-decide-reason="' + d.approval_id + '" style="flex:1;min-width:120px">' +
+        '<button class="small" data-decide-deliverable="' + d.approval_id + '" data-approve="1">승인</button>' +
         '<button class="small danger" data-decide-deliverable="' + d.approval_id + '" data-approve="0">반려</button></div>'
       : (d.approval_id ? '<p class="muted">결재 대기 중 — "결재" 탭 또는 담당 매니저/관리자가 처리합니다.</p>' : '');
     // Phase 2 후속(라이브 시나리오 실행에서 발견한 갭 보완, docs/LIMITS.md
@@ -705,11 +886,12 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     const sourceJob = jobs.find(j => j.deliverable_id === d.id && j.retrieved_context);
     const evidenceBlock = sourceJob
       ? '<details class="muted"><summary>참고한 근거(Tool/Skill 검색 결과)</summary>' +
-        '<div>' + esc(sourceJob.retrieved_context).replace(/\\n/g, "<br>") + '</div></details>'
+        '<div>' + renderContent(sourceJob.retrieved_context) + '</div></details>'
       : '';
     return '<div class="deliverable-card ' + side + '">' +
     '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + " " + gateBadge + '</div>' +
-    '<div>' + esc(d.content).replace(/\\n/g, "<br>") + '</div>' +
+    '<div>' + renderContent(d.content, d.content_type) + '</div>' +
+    '<div class="actions"><button class="small" data-download-deliverable="' + d.id + '">다운로드</button></div>' +
     evidenceBlock +
     decideActions +
     submitAction +
@@ -737,7 +919,8 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const finalResultCard = finalResult
     ? '<div class="final-result-card">' +
       '<div class="muted">✓ 최종 결과물(승인됨) · ' + esc(label(finalResult.author_type)) + ' · ' + esc(finalResult.created_at) + '</div>' +
-      '<div>' + esc(finalResult.content).replace(/\\n/g, "<br>") + '</div>' +
+      '<div>' + renderContent(finalResult.content, finalResult.content_type) + '</div>' +
+      '<div class="actions"><button class="small" data-download-deliverable="' + finalResult.id + '">다운로드</button></div>' +
       '</div>'
     : '<p class="muted">아직 승인된 최종 결과물이 없습니다 — 아래는 진행 중인 이력입니다.</p>';
 
@@ -762,12 +945,57 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const hasRunningJob = !!(latestJob && latestJob.status === "running");
   const executeDisabled = hasRunningJob || !permission.eligible;
   const executeBtnLabel = hasRunningJob ? "생성 중…" : "이 업무의 AI 에이전트 실행(비용 발생)";
+  // confirmed agent가 2개 이상이면 어느 Agent를 실행할지 명시적으로
+  // 고르게 한다 — 1개뿐이면(기존 동작) 선택 없이 바로 실행된다.
+  const agentPickerHtml = confirmedAgents.length > 1
+    ? '<select id="ws-agent-picker" style="margin-right:0.5rem">' +
+      confirmedAgents.map(a => '<option value="' + a.resource_id + '">' +
+        esc(a.resource_name || ("Agent #" + a.resource_id)) + '</option>').join("") +
+      '</select>'
+    : '';
   const executeBtnHtml =
+    agentPickerHtml +
     '<button class="small" id="ws-execute-agent-btn"' + (executeDisabled ? " disabled" : "") + '>' +
     esc(executeBtnLabel) + '</button>' +
     (!hasRunningJob && !permission.eligible
       ? '<p class="muted">' + esc(EXECUTION_BLOCK_REASONS[permission.reason] || "실행할 수 없습니다.") + '</p>'
+      : '') +
+    (!hasRunningJob && confirmedAgents.length > 1
+      ? '<p class="muted">이 업무에 확정된 Agent가 ' + confirmedAgents.length + '개입니다 — 실행할 Agent를 위에서 선택하세요.</p>'
       : '');
+
+  // 사용자 요청(2026-10-07, "crew 실행에서... 복수 그룹 가능하도록
+  // 개선... 사람-에이전트 연동이 가능한 구조인지 확인") —
+  // `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
+  // confirmed로 배정된 팀이 있으면 그 팀의 Agent 멤버 전원을 실제
+  // CrewAI Crew로 실행하는 섹션을 보여준다. 팀이 여러 개 배정돼
+  // 있어도 한 번에 "팀 하나"만 실행한다(사용자 결정) — 전부 동시
+  // 실행하면 비용이 팀 수만큼 자동으로 커지고, 의도치 않은 팀이 섞여
+  // 실행될 위험도 있다(위 Agent 다중 확정과 같은 이유).
+  const teamCrewPickerHtml = confirmedTeams.length > 1
+    ? '<select id="ws-team-picker" style="margin-right:0.5rem">' +
+      confirmedTeams.map(t => '<option value="' + t.resource_id + '">' +
+        esc(t.resource_name || ("팀 #" + t.resource_id)) + '</option>').join("") +
+      '</select>'
+    : '';
+  const teamCrewModelFields = isSupervisor
+    ? '<select id="ws-team-crew-provider"><option value="">provider 자동 판별</option>' +
+      '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
+      '<option value="ollama">Ollama(로컬)</option></select>' +
+      modelSelectHtml("ws-team-crew-model")
+    : '<span class="muted">provider/model은 매니저·관리자만 선택할 수 있습니다(기본값 사용).</span>';
+  const teamCrewBtnHtml = confirmedTeams.length
+    ? teamCrewPickerHtml +
+      '<select id="ws-team-crew-process" style="margin-right:0.5rem">' +
+      '<option value="sequential">sequential(순서대로 전달)</option>' +
+      '<option value="hierarchical">hierarchical(매니저가 조율)</option></select>' +
+      teamCrewModelFields +
+      '<button class="small" id="ws-execute-team-crew-btn"' + (hasRunningJob ? " disabled" : "") + '>' +
+      esc(hasRunningJob ? "생성 중…" : "팀 Agent 실행(Crew, 비용 발생)") + '</button>' +
+      (confirmedTeams.length > 1
+        ? '<p class="muted">이 업무에 확정된 팀이 ' + confirmedTeams.length + '개입니다 — 실행할 팀을 위에서 선택하세요(그 팀만 실행됩니다).</p>'
+        : '<p class="muted">팀의 온보딩된(active) Agent 멤버 전원이 CrewAI로 함께 실행되고, 각자의 산출물이 이 할 일의 결과물로 쌓입니다.</p>')
+    : '';
 
   // 사용자 요청(2026-09-29, "UI/UX를 개선해줘") — 원래 textarea·provider/
   // model·"LLM으로 도와줘"·"결과물 제출"이 한 줄(.inline flex-wrap)에 전부
@@ -784,6 +1012,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '<form id="ws-submit-form">' +
     '<textarea id="ws-content" rows="3" placeholder="결과물 내용을 입력하세요" style="width:100%;box-sizing:border-box"></textarea>' +
     '<div class="inline" style="margin-top:0.5rem">' +
+    contentTypeSelectHtml("ws-content-type") +
     modelFields +
     '<button class="small" type="button" id="ws-assist-btn">LLM으로 도와줘(비용 발생)</button>' +
     '<button class="primary" type="submit">결과물 제출</button>' +
@@ -792,18 +1021,29 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '</section>' +
     '<section class="card">' +
     '<h4>AI 에이전트 실행</h4>' +
+    contentTypeSelectHtml("ws-execute-content-type") + ' ' +
     executeBtnHtml +
     '</section>' +
+    (confirmedTeams.length
+      ? '<section class="card"><h4>팀 Agent 실행(Crew)</h4>' +
+        contentTypeSelectHtml("ws-team-crew-content-type") + ' ' + teamCrewBtnHtml + '</section>'
+      : '') +
     '<div id="ws-result"></div>';
 
   if (isSupervisor) wireProviderModelSelect("ws-provider", "ws-model", modelsByProvider);
+  if (isSupervisor && confirmedTeams.length) {
+    wireProviderModelSelect("ws-team-crew-provider", "ws-team-crew-model", modelsByProvider);
+  }
   items.forEach(d => loadDeliverableComments(d.id));
 
   detail.querySelectorAll("[data-decide-deliverable]").forEach(btn => {
     btn.onclick = async () => {
+      const reasonInput = detail.querySelector('[data-decide-reason="' + btn.dataset.decideDeliverable + '"]');
+      const reason = reasonInput ? reasonInput.value.trim() : "";
       try {
         await api("POST", "/api/approvals/" + btn.dataset.decideDeliverable + "/decide", {
           approve: btn.dataset.approve === "1",
+          reason: reason || null,
         });
         showMsg("global-msg", "처리했습니다.", "ok");
         renderCollabWorkspace(taskId, containerId);
@@ -821,12 +1061,23 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     };
   });
 
+  detail.querySelectorAll("[data-download-deliverable]").forEach(btn => {
+    btn.onclick = () => {
+      const d = items.find(x => String(x.id) === btn.dataset.downloadDeliverable)
+        || (finalResult && String(finalResult.id) === btn.dataset.downloadDeliverable ? finalResult : null);
+      if (d) downloadDeliverable(d.content, d.content_type, d.id);
+    };
+  });
+
   document.getElementById("ws-submit-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const contentVal = document.getElementById("ws-content").value.trim();
     if (!contentVal) { showMsg("global-msg", "내용을 입력해야 합니다.", "error"); return; }
     try {
-      await api("POST", "/api/tasks/" + taskId + "/deliverables", { content: contentVal });
+      await api("POST", "/api/tasks/" + taskId + "/deliverables", {
+        content: contentVal,
+        content_type: document.getElementById("ws-content-type").value,
+      });
       showMsg("global-msg", "결과물을 제출했습니다.", "ok");
       renderCollabWorkspace(taskId, containerId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
@@ -835,7 +1086,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const assistBtn = document.getElementById("ws-assist-btn");
   assistBtn.onclick = async () => {
     const draftContext = document.getElementById("ws-content").value.trim() || null;
-    const payload = { draft_context: draftContext };
+    const payload = { draft_context: draftContext, content_type: document.getElementById("ws-content-type").value };
     if (isSupervisor) {
       const provider = document.getElementById("ws-provider").value;
       const model = modelSelectValue("ws-model");
@@ -852,7 +1103,9 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const executeBtn = document.getElementById("ws-execute-agent-btn");
   executeBtn.onclick = async () => {
     if (!window.confirm("이 업무에 배정된 AI 에이전트를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
-    const payload = {};
+    const payload = { content_type: document.getElementById("ws-execute-content-type").value };
+    const agentPicker = document.getElementById("ws-agent-picker");
+    if (agentPicker) payload.agent_id = Number(agentPicker.value);
     if (isSupervisor) {
       const provider = document.getElementById("ws-provider").value;
       const model = modelSelectValue("ws-model");
@@ -874,6 +1127,38 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       if (isViewingWorkspace(taskId, containerId)) renderCollabWorkspace(taskId, containerId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   };
+
+  const executeTeamCrewBtn = document.getElementById("ws-execute-team-crew-btn");
+  if (executeTeamCrewBtn) {
+    executeTeamCrewBtn.onclick = async () => {
+      const teamPicker = document.getElementById("ws-team-picker");
+      const teamId = teamPicker ? Number(teamPicker.value) : confirmedTeams[0].resource_id;
+      if (!window.confirm("이 팀의 Agent 멤버 전원을 Crew로 실행합니다(실제 LLM API 호출, 비용은 참여 Agent 수만큼 커질 수 있습니다). 계속할까요?")) return;
+      const payload = {
+        team_id: teamId,
+        process: document.getElementById("ws-team-crew-process").value,
+        content_type: document.getElementById("ws-team-crew-content-type").value,
+      };
+      if (isSupervisor) {
+        const provider = document.getElementById("ws-team-crew-provider").value;
+        const model = modelSelectValue("ws-team-crew-model");
+        if (provider) payload.provider = provider;
+        if (model) payload.model = model;
+      }
+      try {
+        const queued = await api("POST", "/api/tasks/" + taskId + "/execute-team-crew", payload);
+        renderCollabWorkspace(taskId, containerId);
+        const jobs = await Promise.all(queued.job_ids.map(id => pollExecutionJob(taskId, id)));
+        if (jobs.every(j => j.status === "succeeded")) {
+          showMsg("global-msg", "팀 Agent 실행이 완료됐습니다(" + jobs.length + "건).", "ok");
+        } else {
+          const failed = jobs.filter(j => j.status === "failed").length;
+          showMsg("global-msg", "팀 Agent 실행 중 " + failed + "건이 실패했습니다 — 진행 이력을 확인하세요.", "error");
+        }
+        if (isViewingWorkspace(taskId, containerId)) renderCollabWorkspace(taskId, containerId);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  }
 
   // 페이지를 새로고침했거나 다른 탭에 갔다 왔을 때도, 이미 돌고 있던
   // job이 있으면 자동으로 이어서 폴링해 끝나는 대로 갱신한다 — 버튼을
@@ -942,13 +1227,20 @@ async function renderBriefs(content) {
   const briefs = await api("GET", "/api/briefs");
   let html = "<section class=\\"card\\"><h2>업무 요청 등록</h2>";
   if (canWrite) {
-    html += '<p class="muted">여기서 하는 일은 "제안된 역할" 칸을 채우는 것뿐입니다 — 실제 AI 분석이 아니라 입력한 텍스트를 줄바꿈 단위로 그대로 나누는 규칙 기반 처리라 비용이 없고 즉시 끝납니다. 이 제안은 참고용이고, 실제 인원 배정 단위인 "할 일(Task)"은 아래 "할 일로 나누기"에서 직접 만들어야 합니다. 뷰어(viewer) role은 조회만 가능하고 제출은 못 합니다.</p>' +
+    html += '<ul class="muted help-list">' +
+      '<li>여기서 하는 일은 "제안된 역할" 칸을 채우는 것뿐입니다 — 실제 AI 분석이 아니라 입력한 텍스트를 줄바꿈 단위로 그대로 나누는 규칙 기반 처리라 비용이 없고 즉시 끝납니다.</li>' +
+      '<li>이 제안은 참고용이고, 실제 인원 배정 단위인 "할 일(Task)"은 아래 "할 일로 나누기"에서 직접 만들어야 합니다.</li>' +
+      '<li>뷰어(viewer) role은 조회만 가능하고 제출은 못 합니다.</li>' +
+      '</ul>' +
       '<form class="inline" id="brief-form">' +
       '<textarea id="brief-text" placeholder="한 줄에 역할 하나씩 입력하세요(줄바꿈 단위로 나뉩니다). 예:&#10;백엔드 개발자 1명&#10;UI/UX 디자이너 1명" rows="3" style="flex:1;min-width:240px"></textarea>' +
       '<button class="primary" type="submit">제출</button></form>';
   }
   html += "</section><section class=\\"card\\"><h2>업무 요청 목록</h2>" +
-    '<p class="muted">"할 일로 나누기"로 만든 할 일(Task)이 "인력 매칭/배정"·"AI 에이전트 생성" 탭에서 쓸 단위입니다. "삭제"(관리자 전용)는 이 업무 요청과 그 아래 할 일·배정·이력까지 전부 되돌릴 수 없게 지웁니다 — 확정된(confirmed) 배정이 하나라도 있으면 막힙니다.</p>';
+    '<ul class="muted help-list">' +
+    '<li>"할 일로 나누기"로 만든 할 일(Task)이 "인력 매칭/배정"·"AI 에이전트 생성" 탭에서 쓸 단위입니다.</li>' +
+    '<li><b>삭제</b>(관리자 전용)는 이 업무 요청과 그 아래 할 일·배정·이력까지 전부 되돌릴 수 없게 지웁니다 — 확정된(confirmed) 배정이 하나라도 있으면 막힙니다.</li>' +
+    '</ul>';
   html += table(["ID", "내용", "상태", "제안된 역할", "동작"], briefs.map(b => {
     let actions = '<button class="small" data-decompose="' + b.id + '">할 일로 나누기</button>' +
       '<button class="small" data-viewtasks="' + b.id + '">할 일 보기</button>';
@@ -1009,7 +1301,11 @@ async function renderDecomposeForm(briefId, stubRoles) {
     skillPickerHtml("d-skills-picker", "d-skills") +
     '<input id="d-headcount" type="number" min="1" value="1" style="width:70px" title="인원 수">' +
     '<button class="primary" type="submit">할 일 추가</button></form>' +
-    '<p class="muted">필요 스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거) — 자동완성 중 "외부검색"은 위키백과 검색만 지원하고, "일반웹검색"은 위키백과가 아니라 전체 인터넷(Parallel Search)을 검색하는 별도 스킬입니다. 목록에 없는 이름도 자유롭게 추가할 수 있습니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>필요 스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거).</li>' +
+    '<li>자동완성 중 "외부검색"은 위키백과 검색만 지원하고, "일반웹검색"은 위키백과가 아니라 전체 인터넷(Parallel Search)을 검색하는 별도 스킬입니다.</li>' +
+    '<li>목록에 없는 이름도 자유롭게 추가할 수 있습니다.</li>' +
+    '</ul>' +
     skillDatalist;
   const skillPicker = initSkillPicker("d-skills-picker", "d-skills", []);
   detail.querySelectorAll("[data-fill-role]").forEach(btn => {
@@ -1057,7 +1353,10 @@ async function renderTaskList(briefId) {
     // 여러 업무를 가로지르는 일괄 처리용으로 그대로 남겨둔다 — 완전
     // 통합은 매니저의 일괄 처리 효율을 떨어뜨릴 위험이 있어 기각했다
     // (검토 근거: docs/LIMITS.md §55).
-    '<p class="muted">"상세"에서 배정 현황을 바로 확인할 수 있습니다. "인력 매칭/배정"·"결재"는 여러 할 일을 한꺼번에 처리할 때, "AI 에이전트 생성"은 새 Agent가 필요할 때 씁니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>"상세"에서 배정 현황을 바로 확인할 수 있습니다.</li>' +
+    '<li>"인력 매칭/배정"·"결재"는 여러 할 일을 한꺼번에 처리할 때, "AI 에이전트 생성"은 새 Agent가 필요할 때 씁니다.</li>' +
+    '</ul>' +
     '<div id="task-detail"></div>';
   detail.querySelectorAll("[data-delete-task]").forEach(btn => {
     btn.onclick = async () => {
@@ -1140,13 +1439,22 @@ async function renderTaskDetailPanel(task) {
       : '<p class="muted">등록된 활성 팀이 없습니다 — "팀 관리" 탭에서 먼저 만드세요.</p>';
   }
 
+  // 실사용 리뷰로 발견한 갭(2026-10-07) — "다중 confirmed 허용" 이후
+  // 이미 배정이 확정된 할 일에도 "후보 매칭하기"가 변함없이 1순위로
+  // 노출돼, 이미 담당자가 있는 일도 아직 비어있는 것처럼 보였다(배정을
+  // *추가*하는 것과 *처음* 배정하는 건 의도가 다르다). confirmed가
+  // 하나라도 있으면 "<details>" 뒤로 접어 넣고 문구를 "추가 배정"으로
+  // 바꿔 이게 보충 동작임을 분명히 한다.
+  const matchAndTeamHtml = isSupervisor
+    ? '<button class="small" id="task-detail-match-btn">후보 매칭하기</button><div id="task-detail-match"></div>' +
+      '<details><summary>팀에 배정 요청</summary>' + teamOptionsHtml + '</details>'
+    : "";
   container.innerHTML =
     '<section class="card"><h4>할 일 #' + task.id + " — " + esc(task.role_name) + " 상세</h4>" +
     statusHtml + historyHtml +
-    (isSupervisor
-      ? '<button class="small" id="task-detail-match-btn">후보 매칭하기</button><div id="task-detail-match"></div>' +
-        '<details><summary>팀에 배정 요청</summary>' + teamOptionsHtml + '</details>'
-      : "") +
+    (isSupervisor && confirmedList.length
+      ? '<details><summary>추가 배정(이미 확정된 배정이 있습니다 — 사람/Agent/팀을 더 투입하려면)</summary>' + matchAndTeamHtml + '</details>'
+      : matchAndTeamHtml) +
     (isSupervisor && confirmedList.length ? '<div id="task-detail-workspace"></div>' : "") +
     "</section>";
 
@@ -1200,7 +1508,12 @@ async function renderTaskDetailPanel(task) {
 async function renderMatch(content) {
   content.innerHTML =
     '<section class="card"><h2>할 일에 맞는 인력 찾기</h2>' +
-    '<p class="muted">"할 일 ID"는 "업무 요청" 탭에서 "할 일로 나누기"로 만든 것을 씁니다. 완전히 일치하는 역할·스킬을 가진 후보가 있으면 그것부터 보여주고, 없으면 가용성40%·적합도35%·비용25% 가중치로 점수를 매겨 상위 3명을 제시합니다(사람 후보가 아직 성과점수를 안 받았으면 적합도를 빼고 가용성60%·비용40%로 재계산). 후보가 아예 없으면 "AI 에이전트 생성" 탭으로 유도합니다. "배정 요청"을 누르면 즉시 확정되는 게 아니라 "결재" 탭에서 승인 절차를 거쳐야 확정(confirmed)됩니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>"할 일 ID"는 "업무 요청" 탭에서 "할 일로 나누기"로 만든 것을 씁니다.</li>' +
+    '<li>완전히 일치하는 역할·스킬을 가진 후보가 있으면 그것부터 보여주고, 없으면 가용성40%·적합도35%·비용25% 가중치로 점수를 매겨 상위 3명을 제시합니다(사람 후보가 아직 성과점수를 안 받았으면 적합도를 빼고 가용성60%·비용40%로 재계산).</li>' +
+    '<li>후보가 아예 없으면 "AI 에이전트 생성" 탭으로 유도합니다.</li>' +
+    '<li>"배정 요청"을 누르면 즉시 확정되는 게 아니라 "결재" 탭에서 승인 절차를 거쳐야 확정(confirmed)됩니다.</li>' +
+    '</ul>' +
     '<form class="inline" id="match-form">' +
     '<input id="match-task-id" type="number" min="1" step="1" placeholder="할 일 ID" required style="width:100px">' +
     '<button class="primary" type="submit">찾기</button></form>' +
@@ -1275,19 +1588,31 @@ async function renderApprovals(content) {
   const isDecider = ["admin", "manager"].includes(ME.role);
   let html = "";
   if (isDecider) {
-    html += '<p class="muted">배정 요청은 요청자의 상사 체인(조직도 "상사" 지정)을 따라 자동으로 단계가 만들어집니다 — 1단계가 처리돼야 2단계가 열립니다(다단계 결재). 상사가 지정 안 돼 있으면(예: 관리자 본인 요청) 특정 승인자 없이 1단계만 만들어져 admin/manager 누구나 처리할 수 있습니다. 본인이 요청한 건은 본인이 승인할 수 없습니다(자기 승인 방지) — "내 승인 대기함"에는 애초에 안 뜹니다.</p>';
+    html += '<ul class="muted help-list">' +
+      '<li>배정 요청은 요청자의 상사 체인(조직도 "상사" 지정)을 따라 자동으로 단계가 만들어집니다 — 1단계가 처리돼야 2단계가 열립니다(다단계 결재).</li>' +
+      '<li>상사가 지정 안 돼 있으면(예: 관리자 본인 요청) 특정 승인자 없이 1단계만 만들어져 admin/manager 누구나 처리할 수 있습니다.</li>' +
+      '<li>본인이 요청한 건은 본인이 승인할 수 없습니다(자기 승인 방지) — "내 승인 대기함"에는 애초에 안 뜹니다.</li>' +
+      '</ul>';
     const inbox = await api("GET", qs("/api/approvals", { scope: "inbox" }));
     html += '<section class="card"><h2>내 승인 대기함</h2>' + approvalTable(inbox, true) + "</section>";
   }
   const mine = await api("GET", qs("/api/approvals", { scope: "mine" }));
   html += '<section class="card"><h2>내가 요청한 건</h2>' +
-    '<p class="muted">"승인"하면 배정 상태가 confirmed(확정)로 바뀌어 조직도·비용·성과 리뷰에 실제로 반영됩니다. "반려"하면 그 배정 요청은 거기서 끝나고(재사용 불가), 다시 배정하려면 "인력 매칭/배정"에서 새로 요청해야 합니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li><b>승인</b>하면 배정 상태가 confirmed(확정)로 바뀌어 조직도·비용·성과 리뷰에 실제로 반영됩니다.</li>' +
+    '<li><b>반려</b>하면 그 배정 요청은 거기서 끝나고(재사용 불가), 다시 배정하려면 "인력 매칭/배정"에서 새로 요청해야 합니다.</li>' +
+    '</ul>' +
     approvalTable(mine, false) + "</section>";
   content.innerHTML = html;
   content.querySelectorAll("[data-decide]").forEach(btn => {
     btn.onclick = async () => {
+      const reasonInput = content.querySelector('[data-decide-reason-for="' + btn.dataset.decide + '"]');
+      const reason = reasonInput ? reasonInput.value.trim() : "";
       try {
-        await api("POST", "/api/approvals/" + btn.dataset.decide + "/decide", { approve: btn.dataset.approve === "1" });
+        await api("POST", "/api/approvals/" + btn.dataset.decide + "/decide", {
+          approve: btn.dataset.approve === "1",
+          reason: reason || null,
+        });
         showMsg("global-msg", "처리했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
@@ -1302,7 +1627,9 @@ function approvalTable(rows, withActions) {
     const row = [a.id, esc(label(a.subject_type)), a.subject_id, a.step, esc(label(a.status))];
     if (withActions) {
       row.push(a.status === "pending"
-        ? '<div class="actions"><button class="small" data-decide="' + a.id + '" data-approve="1">승인</button>' +
+        ? '<div class="actions">' +
+          '<input placeholder="사유(선택)" data-decide-reason-for="' + a.id + '" style="width:120px">' +
+          '<button class="small" data-decide="' + a.id + '" data-approve="1">승인</button>' +
           '<button class="small danger" data-decide="' + a.id + '" data-approve="0">반려</button></div>'
         : "");
     }
@@ -1342,11 +1669,13 @@ async function renderJobs(content) {
     modelSelectHtml("job-model") +
     '<button class="primary" type="submit">생성 실행</button></form>' +
     '<div id="job-tasks-picker" class="muted" style="margin-bottom:0.75rem">업무 요청을 선택하면 그 아래 할 일 목록이 뜹니다.</div>' +
-    '<p class="muted"><b>stub</b>(무료): LLM을 전혀 호출하지 않는 규칙 기반 스텁입니다 — 역할명·스킬로 자리표시자 산출물만 만들고 즉시 끝납니다. 조직도/배정 흐름만 비용 없이 채워보고 싶을 때 씁니다.<br>' +
-    '<b>simple_llm</b>(비용 발생): 실제 LLM API를 딱 한 번만 호출해 "이 역할이 처음 맡을 산출물 하나"를 받아옵니다. CrewAI 같은 프레임워크 오버헤드 없이 가장 가벼운 실제 호출입니다.<br>' +
-    '<b>crewai</b>(비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 vectordb/graphdb 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 실행" 탭에서 바로 협업시킬 Agent를 만들 때 씁니다.<br>' +
-      '만든 Agent는 이 탭이 아니라 "AI 에이전트 관리" 탭에서 온보딩 승인(pending_onboarding → active) 후에야 실제 업무 배정·실행에 쓸 수 있습니다.<br>' +
-      '<b>중복 방지(NF7)</b>: 같은 할 일(역할)에 이미 생성된 Agent가 있으면 새 Agent를 만들지 않고 기존 것을 재사용합니다 — 이 경우 "AI 에이전트 관리"에 새 행이 안 생기는데, 결과에 "재사용" 배지와 안내가 표시됩니다. 새 Agent를 만들려면 다른 할 일을 고르세요.</p>' +
+    '<ul class="muted help-list">' +
+    '<li><b>stub</b>(무료): LLM을 전혀 호출하지 않는 규칙 기반 스텁입니다 — 역할명·스킬로 자리표시자 산출물만 만들고 즉시 끝납니다. 조직도/배정 흐름만 비용 없이 채워보고 싶을 때 씁니다.</li>' +
+    '<li><b>simple_llm</b>(비용 발생): 실제 LLM API를 딱 한 번만 호출해 "이 역할이 처음 맡을 산출물 하나"를 받아옵니다. CrewAI 같은 프레임워크 오버헤드 없이 가장 가벼운 실제 호출입니다.</li>' +
+    '<li><b>crewai</b>(비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 vectordb/graphdb 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 실행" 탭에서 바로 협업시킬 Agent를 만들 때 씁니다.</li>' +
+      '<li>만든 Agent는 이 탭이 아니라 "AI 에이전트 관리" 탭에서 온보딩 승인(pending_onboarding → active) 후에야 실제 업무 배정·실행에 쓸 수 있습니다.</li>' +
+      '<li><b>중복 방지(NF7)</b>: 같은 할 일(역할)에 이미 생성된 Agent가 있으면 새 Agent를 만들지 않고 기존 것을 재사용합니다 — 이 경우 "AI 에이전트 관리"에 새 행이 안 생기는데, 결과에 "재사용" 배지와 안내가 표시됩니다. 새 Agent를 만들려면 다른 할 일을 고르세요.</li>' +
+      '</ul>' +
     '<div id="job-result"></div></section>';
 
   const tasksPicker = document.getElementById("job-tasks-picker");
@@ -1426,15 +1755,38 @@ function renderJobResult(result) {
       '<button class="small" id="goto-agentpool">AI 에이전트 관리로 이동</button></div>';
   }
 
+  // 사용자 요청(2026-10-07, "현재 UI가 복수의 에이전트 그룹 생성 및
+  // HAIR 관점의 연동에 적합한 경우는 아님... AI 에이전트 생성과 통합
+  // 검토") — 한 브리프의 여러 할 일을 한 번에 골라 역할별 Agent를
+  // 동시에 만드는 기능이 이미 있었으므로(CrewAI의 "역할 기반 그룹"
+  // 장점이 여기서 나온다), 생성 직후 그 Agent들을 바로 "팀"으로
+  // 묶을 수 있게 한다 — 지금까지는 "Crew 실행"이라는 업무와 무관한
+  // 즉석 화면에서만 여러 Agent를 다룰 수 있었고, 그룹을 저장할 방법도
+  // 없었다. "팀 관리"에서 하려면 Agent를 다른 할 일로 따로 만들어야
+  // 했던 갭(§64)도 이걸로 없어진다 — 할 일을 처음부터 같이 고르면
+  // 되므로.
+  const agentItems = result.items.filter(it => it.agent_pool_id != null);
+  const bundleCheckbox = (it) => it.agent_pool_id != null
+    ? '<input type="checkbox" class="bundle-agent-checkbox" value="' + it.agent_pool_id + '" checked>'
+    : "";
+  const bundleFormHtml = agentItems.length > 1
+    ? '<form id="bundle-team-form" class="inline" style="margin-top:0.75rem">' +
+      '<input id="bundle-team-name" placeholder="팀 이름" required>' +
+      '<button class="small" type="submit">체크한 Agent를 팀으로 묶기</button></form>' +
+      '<p class="muted">역할별로 같이 만든 Agent를 팀으로 등록해두면, 나중에 "업무 요청"의 할 일 상세에서 팀 전체를 배정하고 "팀 Agent 실행"으로 CrewAI 협업을 시킬 수 있습니다 — "팀 관리" 탭에서 멤버를 더 추가/제외할 수도 있습니다.</p>'
+    : "";
+
   box.innerHTML = banner +
     "<p>생성 결과 상태: <b>" + esc(label(result.status)) + "</b></p>" +
-    table(["ID", "할 일 ID", "상태", "연결된 Agent", "에러", "재시도", "동작"], result.items.map(it => [
+    table(["묶기", "ID", "할 일 ID", "상태", "연결된 Agent", "에러", "재시도", "동작"], result.items.map(it => [
+      bundleCheckbox(it),
       it.id, it.task_id,
       esc(label(it.status)) + (it.reused ? ' <span class="badge-reused">재사용</span>' : ""),
       it.agent_pool_id != null ? "#" + it.agent_pool_id + " " + esc(it.agent_pool_role_name) : '<span class="muted">-</span>',
       esc(it.error || ""), it.retry_count,
       it.status === "failed" ? '<button class="small" data-retry-job="' + result.job_id + '" data-retry-item="' + it.id + '">재시도</button>' : "",
-    ]));
+    ])) +
+    bundleFormHtml;
   box.querySelectorAll("[data-retry-item]").forEach(btn => {
     btn.onclick = async () => {
       try {
@@ -1445,6 +1797,25 @@ function renderJobResult(result) {
   });
   const goto = document.getElementById("goto-agentpool");
   if (goto) goto.onclick = () => selectTab("agentpool");
+
+  const bundleForm = document.getElementById("bundle-team-form");
+  if (bundleForm) {
+    bundleForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const agentIds = Array.from(box.querySelectorAll(".bundle-agent-checkbox:checked")).map(cb => Number(cb.value));
+      if (agentIds.length < 1) { showMsg("global-msg", "팀으로 묶을 Agent를 하나 이상 체크하세요.", "error"); return; }
+      const name = document.getElementById("bundle-team-name").value.trim();
+      if (!name) { showMsg("global-msg", "팀 이름을 입력하세요.", "error"); return; }
+      try {
+        const team = await api("POST", "/api/teams", { name });
+        for (const agentId of agentIds) {
+          await api("POST", "/api/teams/" + team.id + "/members", { member_type: "agent", member_id: agentId });
+        }
+        showMsg("global-msg", "팀 \\"" + name + "\\"을(를) 만들고 Agent " + agentIds.length + "명을 추가했습니다 — \\"팀 관리\\" 탭에서 확인하세요.", "ok");
+        bundleForm.reset();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  }
 }
 
 /* ---------- 사람 인력 ---------- */
@@ -1482,9 +1853,19 @@ async function renderHumanPool(content) {
     skillDatalist +
     '<input id="hp-cost" type="number" step="0.01" placeholder="비용" value="0">' +
     '<button class="primary" type="submit">등록</button></form>' +
-    '<p class="muted">"계정 선택"은 "사용자 관리"에서 먼저 만든 로그인 계정 중 아직 다른 사람 인력에 연결 안 된 것만 보여줍니다 — 계정 없이 등록하면 그 사람은 로그인할 수 없어 매칭·배정이 돼도 실제로 업무를 볼 수 없으니(docs/LIMITS.md §50), 계정을 먼저 "사용자 관리"에서 만드세요. 스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거) — 목록에 없는 이름도 자유롭게 추가할 수 있습니다. "비용"은 인력 매칭 점수의 25%(또는 성과점수가 없으면 40%)를 차지합니다 — 낮을수록 유리합니다. 아직 성과 데이터가 없으니 초기엔 "가능" 상태여야 매칭 후보로 잡히고(가용성이 매칭 점수의 40~60%), 스킬은 할 일의 필요 스킬과 겹칠수록 유리합니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li><b>계정 선택</b>은 "사용자 관리"에서 먼저 만든 로그인 계정 중 아직 다른 사람 인력에 연결 안 된 것만 보여줍니다 — 계정 없이 등록하면 그 사람은 로그인할 수 없어 매칭·배정이 돼도 실제로 업무를 볼 수 없으니(docs/LIMITS.md §50), 계정을 먼저 "사용자 관리"에서 만드세요.</li>' +
+    '<li>스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거) — 목록에 없는 이름도 자유롭게 추가할 수 있습니다.</li>' +
+    '<li><b>비용</b>은 인력 매칭 점수의 25%(또는 성과점수가 없으면 40%)를 차지합니다 — 낮을수록 유리합니다.</li>' +
+    '<li>아직 성과 데이터가 없으니 초기엔 "가능" 상태여야 매칭 후보로 잡히고(가용성이 매칭 점수의 40~60%), 스킬은 할 일의 필요 스킬과 겹칠수록 유리합니다.</li>' +
+    '</ul>' +
     '</section><section class="card"><h2>사람 인력 목록</h2>' +
-    '<p class="muted">"동의"는 성과 리뷰 사전 동의(NF9)입니다 — 동의 없이는 성과점수를 절대 입력·노출하지 않고, 동의를 철회하면 기존 점수도 즉시 지워집니다. "오프보딩"은 가용성을 offboarded로 바꿔 매칭 후보에서 빠지게 하는데, 이 화면에서 다시 되돌리는 버튼은 없습니다(사실상 편도) — 실수로 눌렀다면 관리자가 DB를 직접 고쳐야 합니다. "삭제"(관리자 전용)는 오프보딩과 별개로 레코드 자체를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 삭제가 막힙니다. "계정 연결"은 이 사람을 로그인 계정과 이어줍니다 — 연결해야만 그 사람이 "내 업무" 탭에서 자기 업무를 볼 수 있습니다(연결 안 하면 구조적으로 절대 안 보입니다). 드롭다운엔 아직 다른 사람 인력에 연결 안 된 계정만 뜹니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li><b>동의</b>는 성과 리뷰 사전 동의(NF9)입니다 — 동의 없이는 성과점수를 절대 입력·노출하지 않고, 동의를 철회하면 기존 점수도 즉시 지워집니다.</li>' +
+    '<li><b>오프보딩</b>은 가용성을 offboarded로 바꿔 매칭 후보에서 빠지게 하는데, 이 화면에서 다시 되돌리는 버튼은 없습니다(사실상 편도) — 실수로 눌렀다면 관리자가 DB를 직접 고쳐야 합니다.</li>' +
+    '<li><b>삭제</b>(관리자 전용)는 오프보딩과 별개로 레코드 자체를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 삭제가 막힙니다.</li>' +
+    '<li><b>계정 연결</b>은 이 사람을 로그인 계정과 이어줍니다 — 연결해야만 그 사람이 "내 업무" 탭에서 자기 업무를 볼 수 있습니다(연결 안 하면 구조적으로 절대 안 보입니다). 드롭다운엔 아직 다른 사람 인력에 연결 안 된 계정만 뜹니다.</li>' +
+    '</ul>' +
     table(["ID", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "연결된 계정", "동작"], people.map(p => {
       const middleActions = p.availability === "offboarded" ? "" :
         '<button class="small" data-toggle-consent="' + p.id + '" data-consent="' + (p.performance_consent ? "0" : "1") + '">' +
@@ -1591,8 +1972,18 @@ async function renderAgentPool(content) {
   const canExecute = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = canExecute ? await fetchModelsByProvider() : {};
   content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
-    '<p class="muted">"생성방식" 열은 "AI 에이전트 생성" 탭에서 어떤 옵션(stub/simple_llm/crewai)으로 태어났는지를 보여줍니다 — crewai로 만든 Agent만 그 시점에 스킬 매칭 도구를 갖고 태어납니다. 신규 Agent는 전부 pending_onboarding 상태로 생기고, "온보딩 승인"을 눌러야 active가 돼 "인력 검색"·매칭 후보로 노출됩니다. "오프보딩"(active→deprecated)은 이 화면에서 되돌릴 버튼이 없습니다 — 다시 쓰려면 관리자가 API/DB를 직접 손대야 합니다. "모델 설정"은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음). "실행"은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11). "지식 색인"은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생). "MCP 서버(JSON)"에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다(ADR 결정 10) — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다. "Tool Pool ID"에 "도구/스킬 Pool" 탭에서 등록한 도구 ID를 넣고 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다(ADR 결정 12). "삭제"(관리자 전용)는 레코드를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 막힙니다.</p>' +
-    table(["ID", "역할", "스킬", "비용", "성과점수(수동)", "자동평가(Gate/TCR)", "상태", "생성방식", "LLM", "최근 산출물", "동작"], agents.map(a => {
+    '<ul class="muted help-list">' +
+    '<li>"생성방식" 열은 "AI 에이전트 생성" 탭에서 어떤 옵션(stub/simple_llm/crewai)으로 태어났는지를 보여줍니다 — crewai로 만든 Agent만 그 시점에 스킬 매칭 도구를 갖고 태어납니다.</li>' +
+    '<li>신규 Agent는 전부 pending_onboarding 상태로 생기고, <b>온보딩 승인</b>을 눌러야 active가 돼 "인력 검색"·매칭 후보로 노출됩니다.</li>' +
+    '<li><b>오프보딩</b>(active→deprecated)은 이 화면에서 되돌릴 버튼이 없습니다 — 다시 쓰려면 관리자가 API/DB를 직접 손대야 합니다.</li>' +
+    '<li><b>모델 설정</b>은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음).</li>' +
+    '<li><b>실행</b>은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11).</li>' +
+    '<li><b>지식 색인</b>은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생).</li>' +
+    '<li><b>MCP 서버(JSON)</b>에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다(ADR 결정 10) — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다.</li>' +
+    '<li><b>Tool Pool ID</b>에 "도구/스킬 Pool" 탭에서 등록한 도구 ID를 넣고 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다(ADR 결정 12).</li>' +
+    '<li><b>삭제</b>(관리자 전용)는 레코드를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 막힙니다.</li>' +
+    '</ul>' +
+    table(["ID", "역할", "스킬", "소속 팀", "비용", "성과점수(수동)", "자동평가(Gate/TCR)", "상태", "생성방식", "LLM", "최근 산출물", "동작"], agents.map(a => {
       let actions = "";
       if (isAdmin) {
         if (a.status === "pending_onboarding") actions += '<button class="small" data-onboard="' + a.id + '">온보딩 승인</button>';
@@ -1634,7 +2025,13 @@ async function renderAgentPool(content) {
         ? (a.auto_evaluation.avg_tcr === null ? "TCR 미측정" : "TCR " + a.auto_evaluation.avg_tcr.toFixed(0) + "%") +
           " (n=" + a.auto_evaluation.sample_count + ")"
         : "-";
-      return [a.id, esc(a.role_name), esc(a.skill_tags.join(", ")), a.cost_estimate,
+      // 사용자 요청(2026-10-07, "현재 UI가 복수의 에이전트 그룹 생성 및
+      // HAIR 관점의 연동에 적합한 경우는 아님... AI 에이전트 관리 노출
+      // 검토") — 이 Agent가 어느 팀 소속인지 여기서 바로 보여준다.
+      const teamNames = a.team_names && a.team_names.length
+        ? '<button class="small" data-goto-teams="1" title="팀 관리로 이동">' + a.team_names.map(esc).join(", ") + '</button>'
+        : '<span class="muted">-</span>';
+      return [a.id, esc(a.role_name), esc(a.skill_tags.join(", ")), teamNames, a.cost_estimate,
         a.performance_score === null ? "-" : a.performance_score, autoEval, esc(label(a.status)), esc(a.framework), llmInfo, output,
         '<div class="actions">' + actions + "</div>"];
     })) + '<div id="execute-result"></div></section>';
@@ -1643,6 +2040,9 @@ async function renderAgentPool(content) {
     agents.forEach(a => wireProviderModelSelect("provider-" + a.id, "model-" + a.id, modelsByProvider, a.llm_model));
   }
 
+  content.querySelectorAll("[data-goto-teams]").forEach(btn => {
+    btn.onclick = () => selectTab("teams");
+  });
   content.querySelectorAll("[data-onboard]").forEach(btn => {
     btn.onclick = async () => { try { await api("POST", "/api/agent-pool/" + btn.dataset.onboard + "/onboard"); refresh(); } catch (e) { showMsg("global-msg", e.message, "error"); } };
   });
@@ -1711,7 +2111,7 @@ async function renderAgentPool(content) {
       try {
         const r = await withBusy(btn, "실행 중…", () => api("POST", "/api/agent-pool/" + btn.dataset.execute + "/execute", { prompt: taskPrompt }));
         document.getElementById("execute-result").innerHTML =
-          '<div class="msg ok"><b>실행 결과</b><br>' + esc(r.output).replace(/\\n/g, "<br>") + "</div>";
+          '<div class="msg ok"><b>실행 결과</b><br>' + renderContent(r.output) + "</div>";
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
@@ -1760,7 +2160,13 @@ async function renderPoolRegistry(content) {
   const isAdmin = ME.role === "admin";
   content.innerHTML =
     '<section class="card"><h2>Tool Pool — 재사용 가능한 도구</h2>' +
-    '<p class="muted">MCP 서버나 native 도구(VectorDB/GraphDB/외부 자료 검색)를 이름으로 등록해 여러 Agent가 재사용합니다. native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"} 또는 {"native_id": "web_search"}(Wikipedia 검색, API 키 불필요·무료 — skill_tags에 "외부검색"을 넣으면 매칭됩니다)를 지원합니다. mcp_stdio/mcp_remote는 {"command":...,"args":[...]} 또는 {"url":...,"transport":...} 형태입니다 — 이 두 종류는 Agent가 실행될 때마다 실제로 서버(로컬 프로세스 또는 원격)에 접속을 시도하므로, 잘못된 command/url을 등록해두면 그 스킬을 가진 Agent 실행이 접속 단계에서 실패합니다. "활성" 표시를 꺼두면(비활성) 스킬이 매칭돼도 더 이상 자동으로 붙지 않습니다(등록은 유지). "삭제"(관리자 전용)는 이 도구를 참조하던 Agent 개별 연결도 함께 지웁니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>MCP 서버나 native 도구(VectorDB/GraphDB/외부 자료 검색)를 이름으로 등록해 여러 Agent가 재사용합니다.</li>' +
+    '<li>native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"} 또는 {"native_id": "web_search"}(Wikipedia 검색, API 키 불필요·무료 — skill_tags에 "외부검색"을 넣으면 매칭됩니다)를 지원합니다.</li>' +
+    '<li>mcp_stdio/mcp_remote는 {"command":...,"args":[...]} 또는 {"url":...,"transport":...} 형태입니다 — 이 두 종류는 Agent가 실행될 때마다 실제로 서버(로컬 프로세스 또는 원격)에 접속을 시도하므로, 잘못된 command/url을 등록해두면 그 스킬을 가진 Agent 실행이 접속 단계에서 실패합니다.</li>' +
+    '<li>"활성" 표시를 꺼두면(비활성) 스킬이 매칭돼도 더 이상 자동으로 붙지 않습니다(등록은 유지).</li>' +
+    '<li><b>삭제</b>(관리자 전용)는 이 도구를 참조하던 Agent 개별 연결도 함께 지웁니다.</li>' +
+    '</ul>' +
     table(["ID", "이름", "종류", "설명", "활성", "동작"], tools.map(t => [
       t.id, esc(t.name), esc(t.kind), esc(t.description), t.is_active ? "활성" : "비활성",
       isAdmin ? '<div class="actions"><button class="small danger" data-delete-tool="' + t.id + '">삭제</button></div>' : "",
@@ -1773,7 +2179,12 @@ async function renderPoolRegistry(content) {
     '<button class="primary" type="submit">도구 등록</button></form>' +
     "</section>" +
     '<section class="card"><h2>Skill Pool — skill_tags 정식 등록</h2>' +
-    '<p class="muted">모드 "tool"인 스킬은 기본 도구 ID가 가리키는 도구를 이 스킬(이름이 정확히 일치)을 가진 모든 Agent에게 실행할 때마다 자동으로 붙입니다(run_crew/crewai_agent_generator 실행마다 다시 계산 — 나중에 스킬 설정을 바꾸면 이미 만들어진 Agent에도 다음 실행부터 바로 반영됩니다). 모드 "none"은 도구 연결 없이 이름표만 붙이는 용도입니다 — 하니스 방법론/agent-evaluator 절차 스킬 17개가 여기 해당합니다(사람 판단이 필요한 절차라 자동 도구화가 안 됨). "recommend-fix-workflow" 하나만 예외로 실제 MCP 도구(정적 Gate 조치 지식 조회)가 붙어 있습니다. "삭제"(관리자 전용)는 이 스킬 레코드만 지웁니다 — 같은 이름의 skill_tags를 가진 Agent/사람은 그대로 남고, 다음 실행부터 자동 도구 연결만 안 됩니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>모드 "tool"인 스킬은 기본 도구 ID가 가리키는 도구를 이 스킬(이름이 정확히 일치)을 가진 모든 Agent에게 실행할 때마다 자동으로 붙입니다(run_crew/crewai_agent_generator 실행마다 다시 계산 — 나중에 스킬 설정을 바꾸면 이미 만들어진 Agent에도 다음 실행부터 바로 반영됩니다).</li>' +
+    '<li>모드 "none"은 도구 연결 없이 이름표만 붙이는 용도입니다 — 하니스 방법론/agent-evaluator 절차 스킬 17개가 여기 해당합니다(사람 판단이 필요한 절차라 자동 도구화가 안 됨).</li>' +
+    '<li>"recommend-fix-workflow" 하나만 예외로 실제 MCP 도구(정적 Gate 조치 지식 조회)가 붙어 있습니다.</li>' +
+    '<li><b>삭제</b>(관리자 전용)는 이 스킬 레코드만 지웁니다 — 같은 이름의 skill_tags를 가진 Agent/사람은 그대로 남고, 다음 실행부터 자동 도구 연결만 안 됩니다.</li>' +
+    '</ul>' +
     table(["ID", "이름", "설명", "기본 도구 ID", "모드", "동작"], skills.map(s => [
       s.id, esc(s.name), esc(s.description), esc(s.default_tool_pool_ids.join(", ") || "-"), esc(s.augmentation_mode),
       isAdmin ? '<div class="actions"><button class="small danger" data-delete-skill="' + s.id + '">삭제</button></div>' : "",
@@ -1892,7 +2303,12 @@ async function renderTeams(content) {
 
   content.innerHTML =
     '<section class="card"><h2>팀 — 복수 사람·Agent 그룹 등록</h2>' +
-    '<p class="muted">사람(human_pool)·Agent(agent_pool) 멤버를 역할 라벨과 함께 묶어두면, "업무 요청" 탭의 할 일 상세에서 이 팀 전체를 한 할 일에 배정(resource_type="team")할 수 있습니다. 팀 배정의 결재 주체는 팀 리더(기본값은 배정 요청자, 확정 전까지 변경 가능)입니다 — 배정이 승인되면 팀의 사람 멤버(계정 연결된 경우)·팀 리더 모두 그 할 일의 협업 워크스페이스에 결과물을 쓸 수 있습니다. Agent 멤버를 Crew 실행에 자동으로 묶는 기능은 아직 없습니다(계획 중 — docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md Phase 3).</p>' +
+    '<ul class="muted help-list">' +
+    '<li>사람(human_pool)·Agent(agent_pool) 멤버를 역할 라벨과 함께 묶어두면, "업무 요청" 탭의 할 일 상세에서 이 팀 전체를 한 할 일에 배정(resource_type="team")할 수 있습니다.</li>' +
+    '<li>팀 배정의 결재 주체는 팀 리더(기본값은 배정 요청자, 확정 전까지 변경 가능)입니다 — 배정이 승인되면 팀의 사람 멤버(계정 연결된 경우)·팀 리더 모두 그 할 일의 협업 워크스페이스에 결과물을 쓸 수 있습니다.</li>' +
+    '<li>그 워크스페이스의 "팀 Agent 실행" 버튼으로 이 팀의 온보딩된 Agent 멤버 전원을 실제 CrewAI Crew로 함께 실행할 수 있습니다(결과는 Agent별 결과물+결재 체인으로 그대로 쌓입니다).</li>' +
+    '<li>Agent를 이 탭에서 바로 만들려면 "AI 에이전트 생성"에서 여러 할 일을 한 번에 골라 생성한 뒤 그 결과 화면의 "팀으로 묶기"를 쓰는 게 더 빠릅니다.</li>' +
+    '</ul>' +
     '<form class="inline" id="team-create-form">' +
     '<input id="team-name" placeholder="팀 이름" required>' +
     '<input id="team-description" placeholder="설명(선택)" style="flex:1;min-width:160px">' +
@@ -1992,7 +2408,12 @@ async function renderModelRegistry(content) {
 
   content.innerHTML =
     '<section class="card"><h2>모델 레지스트리</h2>' +
-    '<p class="muted">여기 등록한 모델이 "AI 에이전트 생성"·"AI 에이전트 관리(모델 설정)"·"Crew 실행"·협업 워크스페이스의 "모델명" 입력창 자동완성에 뜹니다 — 목록에 없는 이름도 그대로 입력할 수 있어 자유 입력 자체는 막지 않습니다(참고용 자동완성). "불러오기"는 Ollama면 로컬 서버(OLLAMA_BASE_URL)에서, OpenAI/Anthropic이면 그 계정의 API 키로 실제 보유 중인 모델 목록을 조회합니다(토큰을 생성하지 않는 카탈로그 조회라 과금되지 않습니다) — 조회만으로는 아무것도 저장되지 않고, 선택 후 "선택한 모델 등록"을 눌러야 저장됩니다. "비활성화"는 자동완성에서만 빼고 등록 자체는 유지합니다. "삭제"(관리자 전용)는 레지스트리 항목만 지웁니다 — 이미 Agent에 저장된 모델 설정 자체는 안 바뀝니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>여기 등록한 모델이 "AI 에이전트 생성"·"AI 에이전트 관리(모델 설정)"·"Crew 실행"·협업 워크스페이스의 "모델명" 입력창 자동완성에 뜹니다 — 목록에 없는 이름도 그대로 입력할 수 있어 자유 입력 자체는 막지 않습니다(참고용 자동완성).</li>' +
+    '<li><b>불러오기</b>는 Ollama면 로컬 서버(OLLAMA_BASE_URL)에서, OpenAI/Anthropic이면 그 계정의 API 키로 실제 보유 중인 모델 목록을 조회합니다(토큰을 생성하지 않는 카탈로그 조회라 과금되지 않습니다) — 조회만으로는 아무것도 저장되지 않고, 선택 후 "선택한 모델 등록"을 눌러야 저장됩니다.</li>' +
+    '<li><b>비활성화</b>는 자동완성에서만 빼고 등록 자체는 유지합니다.</li>' +
+    '<li><b>삭제</b>(관리자 전용)는 레지스트리 항목만 지웁니다 — 이미 Agent에 저장된 모델 설정 자체는 안 바뀝니다.</li>' +
+    '</ul>' +
     '<form class="inline" id="mr-fetch-form">' +
     '<select id="mr-fetch-provider">' + providerOptionsHtml + "</select>" +
     '<button type="submit" class="small">불러오기</button>' +
@@ -2122,8 +2543,18 @@ async function renderCrew(content) {
   const active = agents.filter(a => a.status === "active");
   const modelsByProvider = await fetchModelsByProvider();
   content.innerHTML =
-    '<section class="card"><h2>Crew 실행 — 여러 Agent를 묶어 실제로 협업시키기</h2>' +
-    '<p class="muted">Agent를 드롭다운으로 고르고 그 옆에 할 일을 입력하세요 — "+ Agent 추가"로 참여 인원을 늘릴 수 있습니다. <b>sequential</b>이면 앞줄 에이전트의 산출물이 다음 에이전트에게 자동으로 전달됩니다(순서대로 릴레이). <b>hierarchical</b>은 "매니저 Agent"를 지정하면 그 매니저가 작업을 조율·위임만 하고 직접 산출물을 내지는 않습니다(비워두면 CrewAI가 자동으로 매니저 LLM을 하나 배정) — 아래 결과의 "Agent별 산출물"에서 매니저 행은 항상 "(없음)"으로 나옵니다. 모든 Agent는 위임(allow_delegation)이 켜져 있어 필요하면 서로에게 실제로 질문·재위임할 수 있고, 그 내역이 "실제 위임/협업 발생 내역"에 기록됩니다. 온보딩(active) 안 된 Agent는 드롭다운에 안 뜨고 지정할 수도 없습니다. 실제 LLM API를 호출하므로 비용이 발생합니다(참여 Agent 수만큼 커질 수 있음).</p>' +
+    '<section class="card"><h2>Crew 실행(즉석 테스트) — 여러 Agent를 묶어 실제로 협업시키기</h2>' +
+    '<p class="muted"><b>이 화면은 업무(할 일)와 연결되지 않는 즉석 실험용입니다</b> — 결과가 어떤 할 일의 결과물로도 저장되지 않고, 끝나면 그걸로 끝입니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>실제 업무에 여러 Agent를 역할별로 묶어 투입하려면: ① "AI 에이전트 생성"에서 한 브리프의 여러 할 일을 같이 선택해 역할별 Agent를 만들고 그 결과 화면에서 "팀으로 묶기"를 누르거나, 이미 있는 Agent들을 "팀 관리"에서 팀으로 등록한 뒤 ② "업무 요청"의 할 일 상세에서 그 팀을 배정 → 결재까지 마치면 ③ 협업 워크스페이스의 "팀 Agent 실행(Crew)" 버튼으로 실행하세요 — 그 경로는 결과가 그 할 일의 결과물+결재 체인으로 그대로 쌓입니다.</li>' +
+    '<li>아래는 그 전에 조합·프롬프트를 미리 테스트해보고 싶을 때만 쓰세요.</li>' +
+    '<li>Agent를 드롭다운으로 고르고 그 옆에 할 일을 입력하세요 — "+ Agent 추가"로 참여 인원을 늘릴 수 있습니다.</li>' +
+    '<li><b>sequential</b>이면 앞줄 에이전트의 산출물이 다음 에이전트에게 자동으로 전달됩니다(순서대로 릴레이).</li>' +
+    '<li><b>hierarchical</b>은 "매니저 Agent"를 지정하면 그 매니저가 작업을 조율·위임만 하고 직접 산출물을 내지는 않습니다(비워두면 CrewAI가 자동으로 매니저 LLM을 하나 배정) — 아래 결과의 "Agent별 산출물"에서 매니저 행은 항상 "(없음)"으로 나옵니다.</li>' +
+    '<li>모든 Agent는 위임(allow_delegation)이 켜져 있어 필요하면 서로에게 실제로 질문·재위임할 수 있고, 그 내역이 "실제 위임/협업 발생 내역"에 기록됩니다.</li>' +
+    '<li>온보딩(active) 안 된 Agent는 드롭다운에 안 뜨고 지정할 수도 없습니다.</li>' +
+    '<li>실제 LLM API를 호출하므로 비용이 발생합니다(참여 Agent 수만큼 커질 수 있음).</li>' +
+    '</ul>' +
     (active.length
       ? table(["ID", "역할", "스킬"], active.map(a => [a.id, esc(a.role_name), esc(a.skill_tags.join(", "))]))
       : '<p class="muted">온보딩된(활성) 에이전트가 없습니다 — 먼저 "AI 에이전트 생성"·"AI 에이전트 관리" 탭에서 준비하세요.</p>') +
@@ -2282,14 +2713,17 @@ function renderCrewResult(result) {
   const box = document.getElementById("crew-result");
   const diagram = crewDiagramSvg(result);
   let html = "<h3>협업 관계 다이어그램</h3>" +
-    '<p class="muted">실선(회색)은 요청 시점에 정해진 구조(순차 전달 또는 매니저 조율), 점선(주황)은 실제로 발생한 위임/질의입니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>실선(회색)은 요청 시점에 정해진 구조(순차 전달 또는 매니저 조율)입니다.</li>' +
+    '<li>점선(주황)은 실제로 발생한 위임/질의입니다.</li>' +
+    '</ul>' +
     diagram.svg +
     (diagram.unresolved.length
       ? '<details class="muted"><summary>확인 안 된 위임(' + diagram.unresolved.length + '건) — 대상 Agent를 다이어그램에서 특정하지 못함</summary>' +
         table(["위임한 Agent", "LLM이 지목한 대상(원문)", "도구"], diagram.unresolved.map(d => [esc(d.from_agent_role || "-"), esc(d.to_agent_role || "(응답에 coworker 없음)"), esc(d.tool)])) +
         "</details>"
       : "");
-  html += '<h3>최종 산출물</h3><div class="msg ok">' + esc(result.final_output).replace(/\\n/g, "<br>") + "</div>";
+  html += '<h3>최종 산출물</h3><div class="msg ok">' + renderContent(result.final_output) + "</div>";
   // 사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
   // 연결해줘") — run_crew()가 이제 gate_scores/tcr을 반환한다. 단건
   // deliverable 카드의 gateBadge와 같은 "측정 없음" 구분 원칙(위 §530
@@ -2322,7 +2756,11 @@ async function renderSearch(content) {
   const skillDatalist = await skillDatalistHtml();
   content.innerHTML =
     '<section class="card"><h2>사람·AI 에이전트 통합 검색</h2>' +
-    '<p class="muted">이 화면은 매칭 알고리즘 없이 필터로 후보를 훑어보는 용도입니다(실제 배정 점수·순위를 보려면 "인력 매칭/배정" 탭을 쓰세요). AI 에이전트는 온보딩 승인(active) 안 된 것(pending_onboarding/deprecated)은 여기 안 뜹니다 — "AI 에이전트 관리" 탭에서 상태 무관 전체 목록을 볼 수 있습니다. 오프보딩된 사람도 마찬가지로 빠집니다. "부서" 필터는 없습니다 — 이 시스템엔 부서 데이터가 없고, "역할"이 사실상 같은 구실을 합니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>이 화면은 매칭 알고리즘 없이 필터로 후보를 훑어보는 용도입니다(실제 배정 점수·순위를 보려면 "인력 매칭/배정" 탭을 쓰세요).</li>' +
+    '<li>AI 에이전트는 온보딩 승인(active) 안 된 것(pending_onboarding/deprecated)은 여기 안 뜹니다 — "AI 에이전트 관리" 탭에서 상태 무관 전체 목록을 볼 수 있습니다. 오프보딩된 사람도 마찬가지로 빠집니다.</li>' +
+    '<li>"부서" 필터는 없습니다 — 이 시스템엔 부서 데이터가 없고, "역할"이 사실상 같은 구실을 합니다.</li>' +
+    '</ul>' +
     '<form class="inline" id="search-form">' +
     '<input id="s-role" placeholder="역할"><input id="s-skill" placeholder="스킬" list="skill-datalist">' +
     '<select id="s-avail"><option value="">가용 전체</option><option value="available">가능만</option><option value="unavailable">불가만</option></select>' +
@@ -2375,7 +2813,11 @@ async function renderSearch(content) {
 async function renderOrgChart(content) {
   const chart = await api("GET", "/api/org-chart");
   let html = '<section class="card"><h2>조직도(확정된 배정)</h2>' +
-    '<p class="muted">여기 나오는 건 결재까지 끝나 상태가 confirmed(확정)된 배정뿐입니다 — "인력 매칭/배정"에서 방금 요청했거나 "결재" 탭에서 아직 대기 중인 건은 승인되기 전까지 이 화면에 나타나지 않습니다. 묶는 기준(관리자)이 사람과 AI 에이전트가 다릅니다: 사람 배정은 그 사람의 "상사"(사용자 관리에서 지정)로, AI 에이전트 배정은 Agent에게 상사가 없으므로 그 배정을 요청한 사람으로 귀속시킵니다. 상사가 없으면 "(지정된 관리자 없음)" 묶음에 들어갑니다.</p>';
+    '<ul class="muted help-list">' +
+    '<li>여기 나오는 건 결재까지 끝나 상태가 confirmed(확정)된 배정뿐입니다 — "인력 매칭/배정"에서 방금 요청했거나 "결재" 탭에서 아직 대기 중인 건은 승인되기 전까지 이 화면에 나타나지 않습니다.</li>' +
+    '<li>묶는 기준(관리자)이 사람과 AI 에이전트가 다릅니다: 사람 배정은 그 사람의 "상사"(사용자 관리에서 지정)로, AI 에이전트 배정은 Agent에게 상사가 없으므로 그 배정을 요청한 사람으로 귀속시킵니다.</li>' +
+    '<li>상사가 없으면 "(지정된 관리자 없음)" 묶음에 들어갑니다.</li>' +
+    '</ul>';
   for (const bucket of chart) {
     html += "<h3>" + (bucket.manager_username ? esc(bucket.manager_username) : "(지정된 관리자 없음)") + "</h3>";
     html += table(["배정 ID", "할 일 ID", "역할", "타입", "리소스"], bucket.reports.map(r => [
@@ -2392,7 +2834,12 @@ async function renderOrgChart(content) {
 async function renderPerformance(content) {
   const rows = await api("GET", "/api/performance-review");
   content.innerHTML = '<section class="card"><h2>성과 리뷰</h2>' +
-    '<p class="muted">사람의 "성과점수"는 사전 동의(NF9)가 있어야만 값이 채워집니다 — "사람 인력 관리" 탭에서 동의를 받은 사람만 점수를 입력할 수 있고, 동의를 철회하면 그 순간 점수가 지워집니다. AI 에이전트는 동의 개념이 없어 항상 입력·조회 가능합니다. 이 화면의 점수는 둘 다 관리자가 직접 입력한 수동값입니다 — Agent의 실제 Gate A-G 자동 채점 결과는 이 화면이 아니라 "AI 에이전트 관리" 탭의 "자동평가(Gate/TCR)" 열에서 따로 봅니다(둘을 아직 한 화면에 병기하진 않습니다). "확정 배정 수"만 실제 데이터(confirmed 배정 건수)입니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>사람의 "성과점수"는 사전 동의(NF9)가 있어야만 값이 채워집니다 — "사람 인력 관리" 탭에서 동의를 받은 사람만 점수를 입력할 수 있고, 동의를 철회하면 그 순간 점수가 지워집니다.</li>' +
+    '<li>AI 에이전트는 동의 개념이 없어 항상 입력·조회 가능합니다.</li>' +
+    '<li>이 화면의 점수는 둘 다 관리자가 직접 입력한 수동값입니다 — Agent의 실제 Gate A-G 자동 채점 결과는 이 화면이 아니라 "AI 에이전트 관리" 탭의 "자동평가(Gate/TCR)" 열에서 따로 봅니다(둘을 아직 한 화면에 병기하진 않습니다).</li>' +
+    '<li>"확정 배정 수"만 실제 데이터(confirmed 배정 건수)입니다.</li>' +
+    '</ul>' +
     table(["타입", "ID", "이름", "역할", "동의", "성과점수", "확정 배정 수"], rows.map(r => [
       esc(label(r.type)), r.id, esc(r.name || "-"), esc(r.role),
       r.performance_consent === null ? "-" : (r.performance_consent ? "동의함" : "미동의"),
@@ -2417,7 +2864,11 @@ async function renderDashboard(content) {
 
   content.innerHTML =
     '<section class="card"><h2>매니저 대시보드</h2>' +
-    '<p class="muted">팀 전체 Agent Gate 점수 평균·대기 승인 건수·비용 변경 이력을 한 화면에 모았습니다. Gate 점수는 실제로 측정된 산출물이 있을 때만 값이 나옵니다(not_measured는 평균에서 제외). 비용 추이는 "AI 에이전트 관리"·"사람 인력 관리" 탭에서 단가를 바꿀 때마다 남는 감사로그 이력이라, 지금까지 아무도 단가를 바꾼 적이 없으면 비어 있습니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>팀 전체 Agent Gate 점수 평균·대기 승인 건수·비용 변경 이력을 한 화면에 모았습니다.</li>' +
+    '<li>Gate 점수는 실제로 측정된 산출물이 있을 때만 값이 나옵니다(not_measured는 평균에서 제외).</li>' +
+    '<li>비용 추이는 "AI 에이전트 관리"·"사람 인력 관리" 탭에서 단가를 바꿀 때마다 남는 감사로그 이력이라, 지금까지 아무도 단가를 바꾼 적이 없으면 비어 있습니다.</li>' +
+    '</ul>' +
     '<div class="dashboard-grid">' +
     '<div class="card"><h3>팀 Agent 평균 Gate 점수(표본 ' + gs.sample_count + '건)</h3>' + gateRow +
     '<div class="stat-row"><span>평균 TCR</span><span>' + (gs.avg_tcr === null ? "-" : gs.avg_tcr.toFixed(1) + "%") + '</span></div></div>' +
@@ -2434,7 +2885,11 @@ async function renderDashboard(content) {
 async function renderCost(content) {
   const report = await api("GET", "/api/cost-report");
   content.innerHTML = '<section class="card"><h2>비용 리포트(총액: ' + report.total_cost + ')</h2>' +
-    '<p class="muted">이 "합계"는 "단가(cost_estimate, 사람/에이전트 관리 탭에서 수동 입력)" × "확정 배정 수"입니다 — 실제로 LLM API에 청구된 금액이 아닙니다(simple_llm/crewai 생성이나 Crew 실행·에이전트 실행 때 실제로 나간 API 비용은 이 리포트에 잡히지 않습니다). 즉 "일 시켰을 때 실제 API 비용"이 아니라 "이 인력을 계속 쓰면 예상되는 인건비/도입비" 관점의 숫자입니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>이 "합계"는 "단가(cost_estimate, 사람/에이전트 관리 탭에서 수동 입력)" × "확정 배정 수"입니다.</li>' +
+    '<li>실제로 LLM API에 청구된 금액이 아닙니다(simple_llm/crewai 생성이나 Crew 실행·에이전트 실행 때 실제로 나간 API 비용은 이 리포트에 잡히지 않습니다).</li>' +
+    '<li>즉 "일 시켰을 때 실제 API 비용"이 아니라 "이 인력을 계속 쓰면 예상되는 인건비/도입비" 관점의 숫자입니다.</li>' +
+    '</ul>' +
     table(["타입", "ID", "이름", "역할", "단가", "확정 배정 수", "합계"], report.resources.map(r => [
       esc(label(r.type)), r.id, esc(r.name || "-"), esc(r.role), r.cost_estimate, r.confirmed_assignments, r.total_cost,
     ])) + "</section>";
@@ -2445,7 +2900,11 @@ async function renderCost(content) {
 async function renderFairness(content) {
   const r = await api("GET", "/api/fairness-report");
   content.innerHTML = '<section class="card"><h2>배정 공정성 지표</h2>' +
-    '<p class="muted">사람과 AI 에이전트가 같은 매칭 기준(가용성/적합도/비용 가중치)으로 배정되는데도 반려율에 체계적 차이가 나는지 보는 지표입니다 — "확정"·"반려"는 결재까지 끝난(confirmed/rejected) 배정만 세고, 아직 대기 중인 배정은 "결정됨"에 안 들어갑니다. "반려율 격차"가 크면 어느 한쪽이 불리하게 반려되는 패턴이 있을 수 있다는 신호입니다(단, 표본이 작으면 우연일 수 있음).</p>' +
+    '<ul class="muted help-list">' +
+    '<li>사람과 AI 에이전트가 같은 매칭 기준(가용성/적합도/비용 가중치)으로 배정되는데도 반려율에 체계적 차이가 나는지 보는 지표입니다.</li>' +
+    '<li>"확정"·"반려"는 결재까지 끝난(confirmed/rejected) 배정만 세고, 아직 대기 중인 배정은 "결정됨"에 안 들어갑니다.</li>' +
+    '<li>"반려율 격차"가 크면 어느 한쪽이 불리하게 반려되는 패턴이 있을 수 있다는 신호입니다(단, 표본이 작으면 우연일 수 있음).</li>' +
+    '</ul>' +
     (r.low_sample_warning ? '<p class="msg error">표본이 작아(각 10건 미만) 통계적 해석에 주의가 필요합니다.</p>' : "") +
     table(["구분", "확정", "반려", "결정됨", "반려율"], [
       ["사람", r.human.confirmed, r.human.rejected, r.human.decided, r.human.rejection_rate === null ? "-" : r.human.rejection_rate.toFixed(3)],
@@ -2459,7 +2918,10 @@ async function renderFairness(content) {
 async function renderAudit(content) {
   content.innerHTML =
     '<section class="card"><h2>활동 기록</h2>' +
-    '<p class="muted">이 로그는 DB 트리거로 수정·삭제 자체가 막혀 있는 append-only 기록입니다(NF10) — 다른 탭의 "삭제" 버튼으로 브리프/할 일/사람/에이전트/도구/스킬을 실제로 지워도, "무엇을 언제 누가 지웠는지"는 여기 그대로 남습니다. Admin·매니저만 조회할 수 있습니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>이 로그는 DB 트리거로 수정·삭제 자체가 막혀 있는 append-only 기록입니다(NF10) — 다른 탭의 "삭제" 버튼으로 브리프/할 일/사람/에이전트/도구/스킬을 실제로 지워도, "무엇을 언제 누가 지웠는지"는 여기 그대로 남습니다.</li>' +
+    '<li>Admin·매니저만 조회할 수 있습니다.</li>' +
+    '</ul>' +
     '<form class="inline" id="audit-form">' +
     '<input id="a-actor" type="number" min="1" step="1" placeholder="처리자 ID">' +
     '<input id="a-subject" placeholder="대상 종류(예: brief, assignment)">' +
@@ -2487,7 +2949,14 @@ async function renderAdmin(content) {
   const users = await api("GET", "/api/users");
   content.innerHTML =
     '<section class="card"><h2>사용자 생성</h2>' +
-    '<p class="muted">4가지 권한(role)은 화면 접근 범위를 결정합니다 — 관리자: 전 기능, 매니저: "운영 관리" 대부분에 접근 가능하지만 사용자 생성/상사 지정·각종 삭제·Agent 온보딩 승인/오프보딩처럼 조직 구조에 직접 영향을 주는 기능은 관리자 전용, 팀원: 업무 요청 제출·결재 요청 등 "내 업무" 화면, 뷰어: 조회만. 생성 직후엔 상사가 지정 안 돼 있어(아래에서 지정), 이 사용자가 배정을 요청하면 결재가 단일 단계(승인자 미지정)로 처리됩니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>4가지 권한(role)은 화면 접근 범위를 결정합니다.</li>' +
+    '<li><b>관리자</b>: 전 기능.</li>' +
+    '<li><b>매니저</b>: "운영 관리" 대부분에 접근 가능하지만, 사용자 생성/상사 지정·각종 삭제·Agent 온보딩 승인/오프보딩처럼 조직 구조에 직접 영향을 주는 기능은 관리자 전용.</li>' +
+    '<li><b>팀원</b>: 업무 요청 제출·결재 요청 등 "내 업무" 화면.</li>' +
+    '<li><b>뷰어</b>: 조회만.</li>' +
+    '<li>생성 직후엔 상사가 지정 안 돼 있어(아래에서 지정), 이 사용자가 배정을 요청하면 결재가 단일 단계(승인자 미지정)로 처리됩니다.</li>' +
+    '</ul>' +
     '<form class="inline" id="user-form">' +
     '<input id="u-username" placeholder="아이디" required>' +
     '<input id="u-password" type="password" placeholder="비밀번호" required>' +
@@ -2504,7 +2973,12 @@ async function renderAdmin(content) {
     // FK 위반으로 불가능하다(append-only 감사 이력 보존 원칙과 충돌) — Human/Agent
     // Pool과 같은 "비활성화"(계정은 남기고 로그인만 막음) 방식을 쓴다.
     // "동작" 열은 실제로 상사 지정 하나뿐이었으므로 그대로 이름을 바꿨다.
-    '<p class="muted">비밀번호는 bcrypt 해시로 저장돼 "조회"는 할 수 없습니다 — "초기화"로 새 비밀번호를 지정한 뒤 별도 채널로 전달하세요. "계정 상태"는 하드 삭제 대신 비활성화 방식입니다(감사 이력·배정 이력이 이 계정을 참조하고 있어 완전히 지우면 그 이력이 깨집니다) — 비활성화된 계정은 즉시 로그인이 막히고 기존 세션도 끊깁니다. 상사를 지정하면 그 사람이 배정을 요청할 때 결재가 상사 체인을 따라 다단계로 자동 라우팅됩니다("결재" 탭 참고). 본인을 직접 상사로 지정하는 것만 막혀 있고, A→B→A 같은 두 단계 이상의 순환은 막지 않습니다.</p>' +
+    '<ul class="muted help-list">' +
+    '<li>비밀번호는 bcrypt 해시로 저장돼 "조회"는 할 수 없습니다 — <b>초기화</b>로 새 비밀번호를 지정한 뒤 별도 채널로 전달하세요.</li>' +
+    '<li><b>계정 상태</b>는 하드 삭제 대신 비활성화 방식입니다(감사 이력·배정 이력이 이 계정을 참조하고 있어 완전히 지우면 그 이력이 깨집니다) — 비활성화된 계정은 즉시 로그인이 막히고 기존 세션도 끊깁니다.</li>' +
+    '<li>상사를 지정하면 그 사람이 배정을 요청할 때 결재가 상사 체인을 따라 다단계로 자동 라우팅됩니다("결재" 탭 참고).</li>' +
+    '<li>본인을 직접 상사로 지정하는 것만 막혀 있고, A→B→A 같은 두 단계 이상의 순환은 막지 않습니다.</li>' +
+    '</ul>' +
     table(["ID", "아이디", "권한", "계정 상태", "상사", "상사 지정", "비밀번호 재설정", "계정 상태 변경"], users.map(u => {
       const isSelf = u.id === ME.id;
       return [

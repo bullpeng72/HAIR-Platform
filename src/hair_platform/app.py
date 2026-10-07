@@ -91,6 +91,7 @@ from hair_platform.models import (
     TaskDecomposition,
     TeamActiveUpdate,
     TeamCreate,
+    TeamCrewExecuteRequest,
     TeamLeaderUpdate,
     TeamMemberAdd,
     ToolActiveUpdate,
@@ -909,7 +910,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         """§2-3 — 사람 결과물 작성. 대리 작성 금지(참가자 본인만)."""
         try:
             deliverable_id = deliverables.create_deliverable(
-                conn, task_id, user["id"], payload.content
+                conn, task_id, user["id"], payload.content, payload.content_type
             )
         except ValueError as exc:
             if str(exc) == "task_not_found":
@@ -1024,6 +1025,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 payload.draft_context,
                 payload.provider,
                 payload.model,
+                payload.content_type,
             )
         except ValueError:
             raise HTTPException(
@@ -1063,6 +1065,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 user["id"],
                 allow_supervisor_override=user["role"] in ("admin", "manager"),
                 agent_id=payload.agent_id,
+                content_type=payload.content_type,
             )
         except ValueError:
             raise HTTPException(
@@ -1094,8 +1097,73 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             job["prompt"],
             payload.provider,
             payload.model,
+            payload.content_type,
         )
         return {"job_id": job["job_id"], "status": "running"}
+
+    @app.post("/api/tasks/{task_id}/execute-team-crew", status_code=202)
+    def trigger_team_crew_execution(
+        task_id: int,
+        payload: TeamCrewExecuteRequest,
+        background_tasks: BackgroundTasks,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-10-07, "crew 실행에서... 복수 그룹 가능하도록
+        개선... 사람-에이전트 연동이 가능한 구조인지 확인") —
+        `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
+        confirmed로 배정된 팀 하나의 Agent 멤버 전원을 CrewAI Crew로
+        실행하고, 결과를 이 할 일의 deliverables/결재 체인에 연결한다 —
+        단일 Agent 실행(`execute-agent`)과 같은 비동기 패턴."""
+        if user["role"] not in ("admin", "manager") and (
+            payload.provider or payload.model
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="팀원은 provider/model을 직접 선택할 수 없습니다",
+            )
+        try:
+            job = deliverables.start_team_crew_execution(
+                conn,
+                task_id,
+                payload.team_id,
+                user["id"],
+                manager_agent_id=payload.manager_agent_id,
+                allow_supervisor_override=user["role"] in ("admin", "manager"),
+            )
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+        except LookupError as exc:
+            if str(exc) == "agent_already_running":
+                raise HTTPException(
+                    status_code=409,
+                    detail="이미 실행 중인 작업이 있습니다 — 완료를 기다려 주세요",
+                ) from None
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        except ValueError as exc:
+            detail = {
+                "team_not_found": "팀을 찾을 수 없습니다",
+                "team_not_confirmed_for_task": "이 할 일에 확정 배정된 팀이 아닙니다",
+                "team_has_no_active_agents": "이 팀에 온보딩(active)된 Agent 멤버가 없습니다",
+                "manager_agent_not_in_team": "매니저로 지정한 Agent가 이 팀의 멤버가 아닙니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from None
+        background_tasks.add_task(
+            deliverables.run_team_crew_job,
+            conn,
+            job["job_by_agent_id"],
+            task_id,
+            payload.team_id,
+            user["id"],
+            payload.process,
+            payload.provider,
+            payload.model,
+            payload.manager_agent_id,
+            payload.content_type,
+        )
+        return {"job_ids": list(job["job_by_agent_id"].values()), "status": "running"}
 
     @app.get("/api/tasks/{task_id}/agent-execution-jobs")
     def list_task_agent_execution_jobs(
@@ -1221,6 +1289,12 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "framework": row["framework"],
                 "mcp_servers": json.loads(row["mcp_servers"]),
                 "linked_tool_ids": pool_registry.list_agent_tool_ids(conn, row["id"]),
+                # 사용자 요청(2026-10-07, "AI 에이전트 관리 노출 검토") —
+                # 이 Agent가 어느 팀 소속인지 여기서 바로 보여준다(팀은
+                # "팀 관리" 탭에서 정의하지만, 관리 화면에도 연결 관계가
+                # 보여야 "복수 에이전트 그룹"이 업무와 어떻게 이어지는지
+                # 알 수 있다).
+                "team_names": teams.team_names_for_agent(conn, row["id"]),
             }
             for row in rows
         ]
@@ -2161,8 +2235,23 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "approval",
                 approval_id,
                 before={"step": approval["step"], "subject_type": subject_type},
-                after={"next_step_pending": next_step_pending},
+                after={
+                    "next_step_pending": next_step_pending,
+                    "reason": payload.reason,
+                },
             )
+            # 2026-10-07, 실사용 리뷰로 발견한 갭 — 결재 사유를 그
+            # 산출물의 댓글 타임라인에도 남긴다(참가자 여부와 무관하게,
+            # deliverables.record_decision_comment() 참고). assignment
+            # 결재는 아직 댓글 개념이 없어 감사로그에만 남는다.
+            if payload.reason and subject_type == "deliverable":
+                deliverables.record_decision_comment(
+                    conn,
+                    subject_id,
+                    user["id"],
+                    ("[승인 사유] " if payload.approve else "[반려 사유] ")
+                    + payload.reason,
+                )
             conn.commit()
         except Exception:
             conn.rollback()

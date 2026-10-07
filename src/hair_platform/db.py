@@ -211,6 +211,8 @@ CREATE TABLE IF NOT EXISTS deliverables (
     author_type TEXT NOT NULL CHECK (author_type IN ('human', 'agent')),
     author_id INTEGER NOT NULL,
     content TEXT NOT NULL,
+    content_type TEXT NOT NULL DEFAULT 'text'
+        CHECK (content_type IN ('text', 'markdown', 'html', 'code')),
     status TEXT NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft', 'pending_review', 'approved', 'rejected', 'revised')),
     revises_id INTEGER REFERENCES deliverables(id),
@@ -371,6 +373,22 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "assignments",
         "replaces_assignment_id",
         "INTEGER REFERENCES assignments(id)",
+    )
+    # 사용자 요청(2026-10-07, "HAIR 협업 결과물이 코드, 마크다운, PPT,
+    # HTML 등 다양할 수 있을텐데 현재 지원 가능한 범위와... Tier 2까지
+    # 진행해줘") — 지금까지 `deliverables.content`는 포맷 구분 없는
+    # 순수 TEXT였다(LLM이 뭘 내든, 사람이 뭘 쓰든 전부 같은 컬럼에
+    # 섞여 들어감 — 렌더링도 `renderContent()`의 코드펜스/굵게 처리
+    # 뿐이었다). `content_type`으로 저장 시점에 포맷을 명시해 화면이
+    # 포맷에 맞게 렌더링(마크다운 전체 렌더링, HTML은 sandbox iframe
+    # 미리보기)할 수 있게 한다 — 실제 파일(PPT 등) 저장은 Tier 3(스키마
+    # 재구성 필요)로 남겨둔 범위 밖이다.
+    _ensure_column(
+        conn,
+        "deliverables",
+        "content_type",
+        "TEXT NOT NULL DEFAULT 'text' "
+        "CHECK (content_type IN ('text', 'markdown', 'html', 'code'))",
     )
 
 

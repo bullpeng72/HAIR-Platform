@@ -7,6 +7,12 @@ from typing import Literal
 from pydantic import BaseModel
 
 LlmProvider = Literal["anthropic", "openai", "ollama"]
+# 사용자 요청(2026-10-07, "HAIR 협업 결과물이 코드, 마크다운, PPT, HTML
+# 등 다양할 수 있을텐데... Tier 2까지 진행해줘") — `deliverables.
+# content_type`과 같은 값 집합. 실제 파일(PPT 등) 생성·저장은 범위
+# 밖(Tier 3)이라 여기엔 없다 — "code"는 신택스 하이라이팅만 된 텍스트로
+# 저장·표시되는 것이지 실행 가능한 파일이 아니다.
+ContentType = Literal["text", "markdown", "html", "code"]
 GeneratorFramework = Literal["stub", "simple_llm", "crewai"]
 CrewProcess = Literal["sequential", "hierarchical"]
 McpTransport = Literal["sse", "streamable-http"]
@@ -108,7 +114,16 @@ class HumanPoolUpdate(BaseModel):
 
 
 class ApprovalDecision(BaseModel):
+    """`reason`(2026-10-07, 실사용 리뷰로 발견한 갭) — 결재자가 그
+    subject(assignment/deliverable)의 task 참가자가 아닌 경우가 흔한데
+    (F7 체인은 조직도 기준이지 참가 여부와 무관), 참가자 전용인 댓글
+    기능으로는 반려 사유를 전혀 남길 수 없었다. 비워도 되는 선택
+    필드 — 주면 감사로그에 남고, `subject_type='deliverable'`이면
+    그 산출물의 댓글 타임라인에도 결재자 자격으로(참가자 여부 무관)
+    남는다(`deliverables.record_decision_comment()`)."""
+
     approve: bool
+    reason: str | None = None
 
 
 class TaskItem(BaseModel):
@@ -182,9 +197,14 @@ class TeamMemberAdd(BaseModel):
 
 class DeliverableCreate(BaseModel):
     """협업 워크스페이스(사용자 요청, 2026-09-28) — 사람이 작성한 결과물을
-    올린다. `docs/PHASE1_DELIVERABLE_SPEC.md` §2-3."""
+    올린다. `docs/PHASE1_DELIVERABLE_SPEC.md` §2-3.
+
+    `content_type`(2026-10-07, Tier 2)은 작성자가 직접 고른다 — 사람이
+    쓰는 글이라 LLM 프롬프트 지시가 필요 없고, 본인이 뭘 썼는지 가장
+    잘 안다."""
 
     content: str
+    content_type: ContentType = "text"
 
 
 class DeliverableCommentCreate(BaseModel):
@@ -200,6 +220,7 @@ class AssistRequest(BaseModel):
     draft_context: str | None = None
     provider: LlmProvider | None = None
     model: str | None = None
+    content_type: ContentType = "text"
 
 
 class ExecuteAgentRequest(BaseModel):
@@ -216,6 +237,9 @@ class ExecuteAgentRequest(BaseModel):
     provider: LlmProvider | None = None
     model: str | None = None
     agent_id: int | None = None
+    # 2026-10-07, Tier 2 — 비워두면(기존 동작 그대로) 'text'로 저장되고
+    # 프롬프트에 형식 지시를 추가하지 않는다.
+    content_type: ContentType = "text"
 
 
 class GenerateRequest(BaseModel):
@@ -293,6 +317,22 @@ class CrewRunRequest(BaseModel):
     provider: LlmProvider | None = None
     model: str | None = None
     manager_agent_id: int | None = None
+
+
+class TeamCrewExecuteRequest(BaseModel):
+    """사용자 요청(2026-10-07, "crew 실행에서... 복수 그룹 가능하도록
+    개선... 사람-에이전트 연동이 가능한 구조인지 확인") —
+    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
+    confirmed로 배정된 팀 중 `team_id` 하나를 골라 그 팀의 Agent
+    멤버들을 실제 CrewAI Crew로 실행한다(한 할 일에 팀이 여러 개
+    배정돼 있어도 한 번에 하나씩 — 사용자 결정)."""
+
+    team_id: int
+    process: CrewProcess = "sequential"
+    provider: LlmProvider | None = None
+    model: str | None = None
+    manager_agent_id: int | None = None
+    content_type: ContentType = "text"
 
 
 class KnowledgeIndexRequest(BaseModel):

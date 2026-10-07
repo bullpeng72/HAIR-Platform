@@ -68,7 +68,15 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from hair_platform import agent_evaluation, agent_runtime, approvals, audit, llm
+from hair_platform import (
+    agent_evaluation,
+    agent_runtime,
+    approvals,
+    audit,
+    crew_runtime,
+    llm,
+    teams,
+)
 
 
 def _confirmed_assignments_for_task(
@@ -154,13 +162,27 @@ def list_my_work(
     conn: sqlite3.Connection, user_id: int, limit: int = 50, offset: int = 0
 ) -> list[dict]:
     """`GET /api/my-work`(§2-1) — 확정된 배정 중 user_id가 사람 당사자이거나
-    Agent 배정 요청자인 task 목록. rbac 제약 없음(자기 관련 것만 나온다)."""
+    Agent 배정 요청자인 task 목록. rbac 제약 없음(자기 관련 것만 나온다).
+
+    실측으로 발견한 갭(2026-10-07, SCENARIOS.md 시나리오 5를 "팀 Crew
+    그룹 실행"만으로 재작성해 라이브 실행하다 발견 — 개별 사람/Agent
+    배정 없이 **팀 배정 하나만** 있는 task는 team_leader/team_member
+    둘 다 "내 업무"에 전혀 안 떴다) — 이 함수는 `resource_type='team'`
+    을 아예 모르고 'human'/'agent' 두 경우만 봤다. `task_participant_
+    relationship()`(워크스페이스 접근 권한 판정, 바로 위 함수)은 Phase
+    1+2 때 이미 team_leader/team_member를 인식하도록 고쳤는데, "내 업무"
+    **목록** 조회는 완전히 별개의 쿼리라 그때 같이 안 고쳐졌다 — 지금까지
+    모든 팀 배정 시나리오가 개별 배정도 같이 써서 우연히 가려져 있었다."""
     rows = conn.execute(
         """
         SELECT a.id AS assignment_id, a.task_id, a.resource_type, a.resource_id,
                t.brief_id, t.role_name,
-               CASE WHEN a.resource_type = 'human' THEN 'assignee' ELSE 'requester' END
-                   AS rel
+               CASE
+                   WHEN a.resource_type = 'human' THEN 'assignee'
+                   WHEN a.resource_type = 'agent' THEN 'requester'
+                   WHEN a.resource_type = 'team' AND a.team_leader_id = ? THEN 'team_leader'
+                   ELSE 'team_member'
+               END AS rel
         FROM assignments a
         JOIN tasks t ON t.id = a.task_id
         LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
@@ -168,11 +190,20 @@ def list_my_work(
           AND (
             (a.resource_type = 'human' AND hp.user_id = ?)
             OR (a.resource_type = 'agent' AND a.requested_by = ?)
+            OR (a.resource_type = 'team' AND (
+                a.team_leader_id = ?
+                OR EXISTS (
+                    SELECT 1 FROM team_members tm
+                    JOIN human_pool hp2
+                        ON hp2.id = tm.member_id AND tm.member_type = 'human'
+                    WHERE tm.team_id = a.resource_id AND hp2.user_id = ?
+                )
+            ))
           )
         ORDER BY a.id DESC
         LIMIT ? OFFSET ?
         """,
-        (user_id, user_id, limit, offset),
+        (user_id, user_id, user_id, user_id, user_id, limit, offset),
     ).fetchall()
 
     result = []
@@ -252,11 +283,20 @@ def resolve_deliverable_decision(
 
 
 def create_deliverable(
-    conn: sqlite3.Connection, task_id: int, actor_id: int, content: str
+    conn: sqlite3.Connection,
+    task_id: int,
+    actor_id: int,
+    content: str,
+    content_type: str = "text",
 ) -> int:
     """`POST /api/tasks/{task_id}/deliverables`(§2-3) — 그 task의 사람
     당사자/Agent 요청자 본인만 작성할 수 있다(대리 작성 금지 — 관리자/매니저도
-    이 함수로는 남 대신 못 쓴다, `app.py`도 role 우회를 안 줌)."""
+    이 함수로는 남 대신 못 쓴다, `app.py`도 role 우회를 안 줌).
+
+    `content_type`(2026-10-07, Tier 2) — 작성자 본인이 고른다(사람이
+    직접 쓰는 글이라 LLM처럼 프롬프트로 형식을 지시할 필요가 없다).
+    `DeliverableCreate` Pydantic 모델이 이미 4개 값으로 검증했으므로
+    여기선 그대로 믿는다 — DB의 CHECK 제약이 마지막 방어선."""
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
@@ -266,9 +306,9 @@ def create_deliverable(
         raise PermissionError("not_a_participant")
 
     cur = conn.execute(
-        "INSERT INTO deliverables (task_id, author_type, author_id, content, status) "
-        "VALUES (?, 'human', ?, ?, 'draft')",
-        (task_id, actor_id, content),
+        "INSERT INTO deliverables (task_id, author_type, author_id, content, "
+        "content_type, status) VALUES (?, 'human', ?, ?, ?, 'draft')",
+        (task_id, actor_id, content, content_type),
     )
     deliverable_id = cur.lastrowid
     assert deliverable_id is not None
@@ -377,6 +417,60 @@ def create_comment(
     return comment_id
 
 
+def record_decision_comment(
+    conn: sqlite3.Connection, deliverable_id: int, actor_id: int, content: str
+) -> int:
+    """승인/반려 시 남긴 선택적 사유를 댓글 타임라인에 남긴다(2026-10-07,
+    실사용 리뷰로 발견한 갭) — `create_comment()`와 거의 같지만 참가자
+    판정(`task_participant_relationship()`)을 **일부러 건너뛴다**: F7
+    결재 체인은 조직도 매니저 체인 기준이라 결재자가 그 task의 참가자가
+    아닌 경우가 흔한데(예: 시나리오 3 CS — 다른 task에 배정된 매니저가
+    결재), 그 경우 반려해도 "왜"를 시스템에 남길 방법이 전혀 없었다.
+    호출자(`app.py::decide_approval`)가 이미 F7 승인/반려 권한 자체를
+    확인했으므로 여기서 다시 참가자 여부를 확인할 필요가 없다 — 오히려
+    참가자가 아닌 결재자야말로 이 함수가 메우려는 정확한 사용자층이다."""
+    d = conn.execute(
+        "SELECT id FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    if d is None:
+        raise ValueError("deliverable_not_found")
+    cur = conn.execute(
+        "INSERT INTO deliverable_comments (deliverable_id, author_type, author_id, "
+        "content) VALUES (?, 'human', ?, ?)",
+        (deliverable_id, actor_id, content),
+    )
+    comment_id = cur.lastrowid
+    assert comment_id is not None
+    audit.record(
+        conn,
+        actor_id,
+        "deliverable_decision_comment_created",
+        "deliverable_comments",
+        comment_id,
+        after={"deliverable_id": deliverable_id},
+    )
+    conn.commit()
+    return comment_id
+
+
+# 사용자 요청(2026-10-07, "HAIR 협업 결과물이 코드, 마크다운, PPT, HTML 등
+# 다양할 수 있을텐데... Tier 2까지 진행해줘") — Agent/LLM이 지정된
+# content_type으로 결과물을 쓰도록 프롬프트에 지시를 덧붙인다. "text"는
+# 지시 없음(기존 동작 그대로 — 이 기능 추가 전 모든 호출은 암묵적으로
+# content_type="text"였다). `crew_runtime.py`에도 같은 내용을 복사해
+# 둔다 — 그 모듈은 이 모듈을 거꾸로 import할 수 없다(순환 참조,
+# `deliverables.py`가 이미 `crew_runtime.py`를 쓴다).
+_CONTENT_TYPE_INSTRUCTIONS = {
+    "text": "",
+    "markdown": "결과물은 Markdown 형식으로 작성하세요(제목은 #, 목록은 -, 강조는 **, "
+    "코드는 ``` 블록을 쓰세요).",
+    "html": "결과물은 완전한 HTML 문서로 작성하세요(<!DOCTYPE html>부터 </html>까지, "
+    "스타일은 <style> 태그 안에 인라인으로만 넣고 외부 리소스는 참조하지 마세요).",
+    "code": "결과물은 코드로 작성하세요. 전체를 ``` 코드 블록 안에 넣고, 필요하면 "
+    "블록 앞뒤에 짧은 설명만 덧붙이세요.",
+}
+
+
 def _skill_grounded_system_prompt(
     conn: sqlite3.Connection, role_name: str, required_skills: list[str]
 ) -> str:
@@ -404,11 +498,16 @@ def assist(
     draft_context: str | None,
     provider: str | None,
     model: str | None,
+    content_type: str = "text",
 ) -> str:
     """`POST /api/tasks/{task_id}/assist`(§2-5) — "LLM으로 도와줘". 결과는
     저장하지 않는다(사람이 검토·편집 후 `create_deliverable()`로 별도
     제출). provider/model이 팀원 요청인지 확인하는 RBAC은 `app.py`가
-    한다(이 함수는 role을 모른다 — 참가자 여부만 확인)."""
+    한다(이 함수는 role을 모른다 — 참가자 여부만 확인).
+
+    `content_type`(2026-10-07, Tier 2) — 사람이 결과물을 만들 때 고를
+    형식과 LLM에게 "이 형식으로 써 달라"고 미리 알려주는 지시가 같아야
+    자연스럽다(예: 마크다운으로 받을 거면 LLM도 마크다운으로 쓰게)."""
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
@@ -421,6 +520,9 @@ def assist(
     prompt = draft_context or (
         f"'{task['role_name']}' 업무를 처음 시작합니다. 초안을 작성해 주세요."
     )
+    instruction = _CONTENT_TYPE_INSTRUCTIONS.get(content_type, "")
+    if instruction:
+        prompt = f"{prompt}\n\n{instruction}"
     return llm.call_llm(resolved_provider, resolved_model, system, prompt)
 
 
@@ -463,6 +565,7 @@ def start_agent_execution(
     actor_id: int,
     allow_supervisor_override: bool = False,
     agent_id: int | None = None,
+    content_type: str = "text",
 ) -> dict:
     """`POST /api/tasks/{task_id}/execute-agent`(§2-6, Phase 4로 비동기화) —
     이 task의 confirmed agent 배정을 찾아 검증·프롬프트 구성까지만
@@ -490,7 +593,14 @@ def start_agent_execution(
 
     반환값의 `agent_id`/`role_name`/`prompt`는 DB에 다시 저장하지 않고
     `app.py`가 그대로 `run_agent_execution_job()`에 넘긴다 — 새 컬럼을
-    안 늘리려는 선택."""
+    안 늘리려는 선택.
+
+    `content_type`(2026-10-07, Tier 2)은 `provider`/`model`과 달리 이
+    함수가 직접 쓴다 — 프롬프트에 형식 지시를 덧붙여야 하기 때문이다.
+    실제 deliverable 저장은 `run_agent_execution_job()`이 하므로,
+    `content_type` 자체는 `app.py`가 그 함수에 별도로 그대로 넘긴다
+    (이 함수의 반환값엔 포함하지 않음 — provider/model과 같은 순수
+    통과값 패턴)."""
     elig = execution_eligibility(conn, task_id, actor_id, allow_supervisor_override)
     if elig["reason"] == "not_requester":
         raise PermissionError("not_a_participant")
@@ -542,6 +652,9 @@ def start_agent_execution(
     ]
     if latest_human is not None:
         prompt_parts.append(f"참고할 사람 작성 자료:\n{latest_human['content']}")
+    instruction = _CONTENT_TYPE_INSTRUCTIONS.get(content_type, "")
+    if instruction:
+        prompt_parts.append(instruction)
     prompt = "\n\n".join(prompt_parts)
 
     cur = conn.execute(
@@ -578,6 +691,7 @@ def run_agent_execution_job(
     prompt: str,
     provider: str | None,
     model: str | None,
+    content_type: str = "text",
 ) -> None:
     """`start_agent_execution()`이 반환한 job을 실제로 실행한다 —
     `app.py`가 `BackgroundTasks.add_task()`로 등록해 HTTP 응답을 보낸
@@ -611,9 +725,9 @@ def run_agent_execution_job(
         )
 
         cur = conn.execute(
-            "INSERT INTO deliverables (task_id, author_type, author_id, content, status) "
-            "VALUES (?, 'agent', ?, ?, 'pending_review')",
-            (task_id, agent_id, eval_result["output"]),
+            "INSERT INTO deliverables (task_id, author_type, author_id, content, "
+            "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
+            (task_id, agent_id, eval_result["output"], content_type),
         )
         deliverable_id = cur.lastrowid
         assert deliverable_id is not None
@@ -663,6 +777,171 @@ def run_agent_execution_job(
             job_id,
             after={"task_id": task_id, "agent_id": agent_id, "error": friendly_error},
         )
+        conn.commit()
+
+
+def start_team_crew_execution(
+    conn: sqlite3.Connection,
+    task_id: int,
+    team_id: int,
+    actor_id: int,
+    manager_agent_id: int | None = None,
+    allow_supervisor_override: bool = False,
+) -> dict:
+    """`POST /api/tasks/{task_id}/execute-team-crew` — 사용자 요청
+    (2026-10-07, "crew 실행에서... 복수 그룹 가능하도록 개선, 이 그룹이
+    전체 업무에서 사람-에이전트 연동이 가능한 구조인지 확인") —
+    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
+    confirmed로 배정된 **팀 하나**의 Agent 멤버 전원을 실제 CrewAI
+    Crew로 묶어 실행한다(사용자 결정 — 한 할 일에 팀이 여러 개 배정돼
+    있어도 "팀 하나를 골라서 실행", 전부 동시 실행 아님).
+
+    `start_agent_execution()`과 같은 비동기 2단계 패턴(검증+job 행
+    생성까지만 동기, 실제 CrewAI kickoff은 `run_team_crew_job()`이
+    BackgroundTasks로 처리) — 다만 팀은 Agent가 여러 명이라
+    `agent_execution_jobs` 행도 **참여 Agent 수만큼** 만든다(매니저로
+    지정된 Agent는 산출물이 없으므로 job을 안 만든다 — `run_crew()`의
+    기존 관례와 동일). 기존 "AI 에이전트 실행" 폴링 UI(`GET .../
+    agent-execution-jobs`)가 그대로 여러 job을 보여줄 수 있어 새 폴링
+    메커니즘을 만들지 않았다.
+
+    참가자 판정은 단일 Agent 실행(`execution_eligibility()`, "요청자
+    본인만")보다 넓다 — 팀 리더·팀원 둘 다 실행을 트리거할 수 있다(팀은
+    원래 여럿이 함께 일하는 단위라 "요청자 1인"으로 좁히면 팀의 취지와
+    안 맞는다는 판단, admin/manager는 기존처럼 감독 대리 허용)."""
+    rel = task_participant_relationship(conn, task_id, actor_id)
+    if rel not in ("team_leader", "team_member") and not allow_supervisor_override:
+        raise PermissionError("not_a_team_participant")
+
+    already_running = conn.execute(
+        "SELECT id FROM agent_execution_jobs WHERE task_id = ? AND status = 'running'",
+        (task_id,),
+    ).fetchone()
+    if already_running is not None:
+        raise LookupError("agent_already_running")
+
+    team = conn.execute("SELECT id FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if team is None:
+        raise ValueError("team_not_found")
+    confirmed = conn.execute(
+        "SELECT id FROM assignments WHERE task_id = ? AND resource_type = 'team' "
+        "AND resource_id = ? AND status = 'confirmed'",
+        (task_id, team_id),
+    ).fetchone()
+    if confirmed is None:
+        raise ValueError("team_not_confirmed_for_task")
+
+    agent_ids = teams.active_agent_member_ids(conn, team_id)
+    if not agent_ids:
+        raise ValueError("team_has_no_active_agents")
+    if manager_agent_id is not None and manager_agent_id not in agent_ids:
+        raise ValueError("manager_agent_not_in_team")
+
+    worker_agent_ids = [a for a in agent_ids if a != manager_agent_id]
+    job_by_agent_id: dict[int, int] = {}
+    for agent_id in worker_agent_ids:
+        cur = conn.execute(
+            "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
+            "VALUES (?, ?, 'running')",
+            (task_id, actor_id),
+        )
+        job_by_agent_id[agent_id] = cur.lastrowid
+    audit.record(
+        conn,
+        actor_id,
+        "team_crew_execution_started",
+        "agent_execution_jobs",
+        None,
+        after={"task_id": task_id, "team_id": team_id, "agent_ids": agent_ids},
+    )
+    conn.commit()
+    return {"job_by_agent_id": job_by_agent_id, "agent_ids": agent_ids}
+
+
+def run_team_crew_job(
+    conn: sqlite3.Connection,
+    job_by_agent_id: dict[int, int],
+    task_id: int,
+    team_id: int,
+    actor_id: int,
+    process: str,
+    provider: str | None,
+    model: str | None,
+    manager_agent_id: int | None,
+    content_type: str = "text",
+) -> None:
+    """`start_team_crew_execution()`이 만든 job들을 실제로 실행한다 —
+    `run_agent_execution_job()`과 같은 백그라운드 경계(예외가 여기서
+    끝난다, 실패도 job 행에 기록). 팀의 Agent별 산출물 각각을
+    `deliverables`(author_type='agent') + F7 결재 체인으로 만든다 —
+    이 순간부터 팀 리더·팀원(사람)이 협업 워크스페이스에서 그 결과물을
+    보고 댓글·승인/반려할 수 있다(이 함수가 Crew를 업무 파이프라인에
+    연결하는 지점)."""
+    try:
+        result = crew_runtime.run_crew_for_team(
+            conn,
+            team_id,
+            task_id,
+            actor_id,
+            process=process,
+            provider=provider,
+            model=model,
+            manager_agent_id=manager_agent_id,
+            content_type=content_type,
+        )
+        for agent in result["agents"]:
+            job_id = job_by_agent_id.get(agent["agent_id"])
+            if job_id is None or agent["output"] is None:
+                continue  # 매니저 — job 자체를 안 만들었으므로 스킵
+            cur = conn.execute(
+                "INSERT INTO deliverables (task_id, author_type, author_id, content, "
+                "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
+                (task_id, agent["agent_id"], agent["output"], content_type),
+            )
+            deliverable_id = cur.lastrowid
+            assert deliverable_id is not None
+            agent_evaluation.record_evaluation(
+                conn, deliverable_id, result["gate_scores"], result["tcr"]
+            )
+            approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
+            conn.execute(
+                "UPDATE agent_execution_jobs SET status = 'succeeded', deliverable_id = ?, "
+                "finished_at = datetime('now') WHERE id = ?",
+                (deliverable_id, job_id),
+            )
+            audit.record(
+                conn,
+                actor_id,
+                "deliverable_created",
+                "deliverables",
+                deliverable_id,
+                after={
+                    "task_id": task_id,
+                    "author_type": "agent",
+                    "agent_id": agent["agent_id"],
+                    "team_id": team_id,
+                    "gate_scores": result["gate_scores"],
+                    "tcr": result["tcr"],
+                },
+            )
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
+        conn.rollback()
+        friendly_error = _friendly_execution_error(exc)
+        for agent_id, job_id in job_by_agent_id.items():
+            conn.execute(
+                "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "
+                "finished_at = datetime('now') WHERE id = ?",
+                (friendly_error, job_id),
+            )
+            audit.record(
+                conn,
+                actor_id,
+                "agent_execution_failed",
+                "agent_execution_jobs",
+                job_id,
+                after={"task_id": task_id, "agent_id": agent_id, "error": friendly_error},
+            )
         conn.commit()
 
 

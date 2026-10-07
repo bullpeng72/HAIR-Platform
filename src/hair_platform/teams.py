@@ -210,3 +210,23 @@ def active_agent_member_ids(conn: sqlite3.Connection, team_id: int) -> list[int]
         (team_id,),
     ).fetchall()
     return [r["agent_id"] for r in rows]
+
+
+def team_names_for_agent(conn: sqlite3.Connection, agent_id: int) -> list[str]:
+    """사용자 요청(2026-10-07, "현재 UI가 복수의 에이전트 그룹 생성 및
+    HAIR 관점의 연동에 적합한 경우는 아님... AI 에이전트 관리 노출
+    검토") — "AI 에이전트 관리" 목록에서 이 Agent가 어느 팀 소속인지
+    바로 보여주기 위함(팀은 여러 Agent/사람을 가질 수 있고, 한 Agent도
+    여러 팀에 속할 수 있다 — `team_members`에 UNIQUE(team_id,
+    member_type, member_id)만 있지 Agent당 팀 1개 제한은 없다)."""
+    rows = conn.execute(
+        """
+        SELECT t.name AS name
+        FROM team_members tm
+        JOIN teams t ON t.id = tm.team_id
+        WHERE tm.member_type = 'agent' AND tm.member_id = ?
+        ORDER BY t.id
+        """,
+        (agent_id,),
+    ).fetchall()
+    return [r["name"] for r in rows]

@@ -142,13 +142,13 @@ CrewAI `kickoff()` 도중 실시간으로 사람이 끼어드는 건(L4) 여전�
 
 ## 6. 단계별 로드맵
 
-| Phase | 내용 | 리스크 |
+| Phase | 내용 | 상태 |
 |---|---|---|
-| 1 | `teams`/`team_members` 스키마+CRUD API+"팀 관리" UI(배정과 무관하게 "팀을 정의"만) | 낮음 — 신규 테이블, 기존 흐름 무변경 |
-| 2 | `assignments.resource_type='team'` + 다중-confirmed 허용 옵션 + "인력 매칭/배정"에 팀 후보 추가 | 중간 — `resolve_assignment_decision()` 핵심 로직 변경, 회귀 테스트 필수(기존 "재배치=supersede" 동작 보존 검증) |
-| 3 | `run_crew(task_id=...)` → deliverables/Gate 저장 다리 | 중간 — 비용 발생 경로 확장(팀 전체 Agent가 매번 실제 LLM 호출), 트리거 전 비용 안내 UI 필수(기존 "비용 발생" 경고 패턴 재사용) |
-| 4 | 협업 워크스페이스/할 일 상세 UI를 N:M 타임라인으로 확장(역할 배지, 다이어그램 재사용) | 낮음 — 표시 전용 변경 |
-| 5 | (오픈 이슈, 선택) "Crew 실행" 탭을 팀 실행으로 완전히 흡수할지, 즉석 실행 용도로 분리 유지할지 | 사용자 결정 필요 |
+| 1 | `teams`/`team_members` 스키마+CRUD API+"팀 관리" UI(배정과 무관하게 "팀을 정의"만) | **구현 완료**(2026-10-06) |
+| 2 | `assignments.resource_type='team'` + 다중-confirmed 허용 옵션 + "인력 매칭/배정"에 팀 후보 추가 | **구현 완료**(2026-10-06) — "인력 매칭/배정"의 팀 후보 추천만 미구현(§9) |
+| 3 | `run_crew(task_id=...)` → deliverables/Gate 저장 다리 | **구현 완료**(2026-10-07, §9 "Phase 3 구현") — 비용 안내는 기존 "비용 발생" 경고 패턴 재사용 |
+| 4 | 협업 워크스페이스/할 일 상세 UI를 N:M 타임라인으로 확장(역할 배지, 다이어그램 재사용) | 미구현 |
+| 5 | (오픈 이슈, 선택) "Crew 실행" 탭을 팀 실행으로 완전히 흡수할지, 즉석 실행 용도로 분리 유지할지 | 미결정 — 지금은 "Crew 실행" 탭(즉석)과 "팀 Agent 실행"(업무 연동)을 별개 화면으로 공존시킴 |
 
 ## 7. 명시적으로 스코프 밖에 두는 것
 
@@ -179,13 +179,15 @@ CrewAI `kickoff()` 도중 실시간으로 사람이 끼어드는 건(L4) 여전�
    default로 지정, 변경 가능)"**로 결정 — `team_leader_id` 컬럼을
    추가하고 기본값은 요청자, `requested` 상태일 때만 변경 가능.
 
-## 9. 구현 현황(Phase 1+2, 2026-10-06/07 완료)
+## 9. 구현 현황(Phase 1+2 2026-10-06/07, Phase 3 2026-10-07 완료)
 
 위 결정에 따라 Phase 1(팀 정의 CRUD)과 Phase 2(`resource_type='team'`
-배정 + 다중 confirmed 허용)를 한 번에 구현했다. Phase 3(`run_crew()`
-↔ `task_id` 다리, §3-3)·Phase 4(협업 워크스페이스 N:M 타임라인 UI,
-§5의 역할 배지·다이어그램 재사용)는 **아직 구현하지 않았다** — 이
-문서가 여전히 유효한 다음 단계 계획이다.
+배정 + 다중 confirmed 허용)를 한 번에 구현했고, 이어서 사용자 요청
+("crew 실행에서... 복수 그룹 가능하도록 개선, 이 그룹이 전체 업무에서
+사람-에이전트 연동이 가능한 구조인지 확인")으로 Phase 3(`run_crew()`
+↔ `task_id` 다리, §3-3)도 구현했다. Phase 4(협업 워크스페이스 N:M
+타임라인 UI, §5의 역할 배지·다이어그램 재사용)만 **아직 미구현**으로
+남는다.
 
 **구현된 것**:
 
@@ -228,23 +230,84 @@ CrewAI `kickoff()` 도중 실시간으로 사람이 끼어드는 건(L4) 여전�
   않았다** — 지금은 "할 일 상세"에서 활성 팀 목록 중 고르는 방식만
   있고, 매칭 점수 로직에 팀을 넣지는 않았다.
 
-**검증**: `tests/unit/test_phase22_team_collaboration.py`(GC226-234,
-9건) + 기존 4건 수정(`test_v2_pipeline.py::test_gc17/18`,
+**검증(Phase 1+2)**: `tests/unit/test_phase22_team_collaboration.py`
+(GC226-234, 9건) + 기존 4건 수정(`test_v2_pipeline.py::test_gc17/18`,
 `test_phase17_collab_workspace.py::test_gc150/217` — "다중 confirmed
 허용"으로 자동 supersede가 없어져 명시적 `replaces_assignment_id`가
-필요해졌다). 전체 스위트 241건 통과. 실제 데모 서버(`hair.db`)에
-팀 생성→멤버 추가→배정 요청→F7 결재→확정까지 실측 완료(`docs/
-LIMITS.md` §61 참고).
+필요해졌다). 실제 데모 서버(`hair.db`)에 팀 생성→멤버 추가→배정
+요청→F7 결재→확정까지 실측 완료(`docs/LIMITS.md` §61 참고).
+
+### Phase 3 구현(2026-10-07) — `run_crew()` ↔ `task_id` 다리
+
+**구현된 것**:
+
+- `crew_runtime.run_crew_for_team(conn, team_id, task_id, actor_id, ...)`
+  — 팀이 그 task에 confirmed로 배정돼 있는지 검증 → `teams.
+  active_agent_member_ids()`(Phase 1+2에서 미리 만들어둔 헬퍼, 드디어
+  호출부가 생겼다)로 active Agent 멤버만 추출 → 전원에게 같은
+  task_description(할 일 `role_name` + 최신 사람 작성 deliverable,
+  `deliverables.start_agent_execution()`의 단일 Agent 프롬프트와 같은
+  패턴)을 주고 기존 `run_crew()`를 그대로 호출.
+- `deliverables.start_team_crew_execution()` / `run_team_crew_job()`
+  — 단일 Agent 비동기 실행(Phase 4)과 같은 2단계 패턴(검증+job 행
+  생성은 동기, 실제 CrewAI kickoff은 `BackgroundTasks`). 팀은 Agent가
+  여럿이라 `agent_execution_jobs` 행도 참여 Agent 수만큼 만들고
+  (매니저로 지정된 Agent는 산출물이 없어 제외), Crew 결과의 Agent별
+  산출물 각각을 `deliverables`(author_type='agent') + F7 결재 체인
+  으로 저장한다 — **이 저장이 L2를 실제로 없앤다**: 그 순간부터 팀
+  리더·팀원(사람)이 협업 워크스페이스에서 그 결과물을 보고 댓글을
+  달고 승인/반려할 수 있다.
+- `POST /api/tasks/{id}/execute-team-crew` — 참가자 판정은 단일 Agent
+  실행(`요청자 본인만`)보다 넓게 뒀다: 팀 리더·팀원 둘 다 트리거
+  가능(admin/manager는 기존처럼 감독 대리 허용) — 팀은 원래 여럿이
+  함께 쓰는 단위라는 전제.
+- **UI**(`webui.py`) — 협업 워크스페이스에 "팀 Agent 실행(Crew)" 카드
+  신설. "복수 그룹"(사용자 질문의 핵심)은 한 할 일에 팀이 여러 개
+  confirmed로 공존하는 것 자체는 이미 Phase 2의 "다중 confirmed
+  허용"으로 가능했으므로, 이 카드는 그중 **팀 하나를 골라 실행**하는
+  드롭다운을 보여준다(사용자 결정 — "팀 하나를 골라서 실행", 전체
+  동시 실행 아님). 한 할 일에 confirmed Agent가 2개 이상일 때 실행할
+  Agent를 고르게 한 §63의 패턴을 팀 단위로 그대로 확장한 것이다.
+
+**사용자 질문에 대한 답**: "이 그룹이 전체 업무에서 사람-에이전트
+연동이 가능한 구조인가" — Phase 3 이전엔 **아니다**였다(`run_crew()`
+결과가 `agent_pool.last_output`에만 남고 끝, `assignments`/
+`deliverables`/결재 체인 어디에도 안 이어짐, §63에서 재확인). 이제는
+**그렇다** — 팀의 Agent 그룹을 실행하면 각자의 산출물이 그 할 일의
+deliverable로 쌓이고 F7 결재·Gate A-G·댓글까지 기존 1:1 협업과 동일한
+파이프라인을 그대로 탄다.
+
+**검증(Phase 3)**: 신규 `tests/unit/test_phase24_team_crew_bridge.py`
+(GC237-241, 5건) — 미확정 팀 거부, active 멤버만 포함(오프보딩 Agent
+제외), Agent별 deliverable+결재 체인 생성(§3의 "저장이 L2를 없앤다"를
+직접 검증), 비참가자 403, **한 할 일에 팀 2개가 공존하며 각각 독립
+실행**(복수 그룹의 핵심 시나리오). 전체 골든셋 246건(241+5) 통과.
 
 **알려진 한계(사용자에게 그대로 노출)**:
 
-- 팀의 Agent 멤버를 실제로 협업 실행시키는 기능(Phase 3)이 없다 —
-  팀을 배정해도 "AI 에이전트 실행" 버튼은 여전히 `agent_id`가 모호하면
-  (confirmed agent가 여럿이면) 그중 먼저 걸리는 하나만 실행한다
-  (`deliverables.start_agent_execution()`, agent_id 미지정 시 기존
-  동작 그대로 — 하위 호환 우선, §Pending). 팀 멤버는 "결과물 작성·
-  댓글"만 할 수 있고, "AI 에이전트 실행"의 `execution_eligibility()`는
-  여전히 `requester`(Agent 배정 요청자) 전용이라 팀 리더/팀원이라는
-  이유만으로는 실행 권한이 생기지 않는다.
-- "인력 매칭/배정"의 자동 추천은 사람/Agent 후보만 대상이다 — 팀은
-  "할 일 상세"에서 수동으로 골라야 한다.
+- 팀의 Agent 멤버 중 **매니저로 지정된 1명**은(hierarchical) 산출물이
+  없어 deliverable이 안 생긴다 — `run_crew()`의 기존 설계(매니저는
+  조율만 함)를 그대로 물려받은 것이지 버그가 아니다.
+- "팀 Agent 실행" UI는 provider/model은 고를 수 있지만 `manager_agent_id`
+  (팀 멤버 중 매니저로 지정)는 UI에 없다 — API(`TeamCrewExecuteRequest.
+  manager_agent_id`)는 지원하지만, 그걸 고르려면 팀 멤버 상세 조회가
+  필요한데 `GET /api/teams/{id}`가 admin/manager 전용이라(팀원인
+  member 역할은 403) 당장은 단순화를 위해 뺐다 — 후속 작업으로 남긴다.
+- "인력 매칭/배정"의 자동 추천은 여전히 사람/Agent 후보만 대상이다 —
+  팀은 "할 일 상세"에서 수동으로 골라야 한다(Phase 4 범위).
+- 여러 job이 동시에 도는 중 하나만 완료되면 Web UI가 "실행 중" 표시를
+  살짝 이르게 내릴 수 있다(표시만의 문제 — 서버 쪽 "이미 실행 중"
+  가드는 전체 job이 끝날 때까지 정확히 막는다, 중복 과금 위험 없음).
+
+### Phase 3 UX 후속(2026-10-07) — 그룹 생성 경로를 업무 흐름 안으로
+
+Phase 3가 "실행"(업무 연동)은 해결했지만, 사용자가 "현재 UI가 복수의
+에이전트 그룹 생성... HAIR 관점의 연동에 적합한 경우는 아님"이라고
+다시 짚었다 — **그룹을 어디서 만드는가**가 여전히 "Crew 실행"이라는
+업무 무관 즉석 화면에 고립돼 있었다. "AI 에이전트 생성"(여러 할 일을
+한 번에 골라 역할별 Agent를 동시 생성하는 기능이 이미 있었음)의 결과
+화면에 "체크한 Agent를 팀으로 묶기"를 추가하고, "AI 에이전트 관리"에
+Agent별 소속 팀을 노출해(`teams.team_names_for_agent()`) 그룹 생성·
+가시성을 업무 생성 흐름 안으로 옮겼다. "Crew 실행" 탭은 "업무와
+연결되지 않는 즉석 실험용"으로 안내 문구를 명확히 해 역할을 분리했다
+— 자세한 내용은 `docs/LIMITS.md` §65.
