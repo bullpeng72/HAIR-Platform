@@ -831,14 +831,27 @@ async function renderConversationDetail(conversationId, containerId) {
     (conv.linked_task_id ? ' <span class="muted">업무 #' + conv.linked_task_id + ' 전용 대화</span>' : '') +
     '</h3>' +
     '<div class="inline">' +
-    '<select id="conv-provider"><option value="">provider 자동 판별</option>' +
-    '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
-    '<option value="ollama">Ollama(로컬)</option></select>' +
+    // "AI 에이전트 관리"(provider-{id} select)와 같은 관례 — provider
+    // 선택을 JS `.value =` 사후 대입이 아니라 마크업의 `selected`
+    // 속성으로 미리 심어둔다(위 사용자 보고 버그의 재발을 막는 더
+    // 견고한 방식 — `wireProviderModelSelect()`가 호출되는 시점에
+    // 이미 올바른 provider가 선택돼 있어야 모델 목록을 제대로 만든다).
+    '<select id="conv-provider">' +
+    '<option value=""' + (!conv.llm_provider ? " selected" : "") + '>provider 자동 판별</option>' +
+    '<option value="anthropic"' + (conv.llm_provider === "anthropic" ? " selected" : "") + '>Anthropic</option>' +
+    '<option value="openai"' + (conv.llm_provider === "openai" ? " selected" : "") + '>OpenAI</option>' +
+    '<option value="ollama"' + (conv.llm_provider === "ollama" ? " selected" : "") + '>Ollama(로컬)</option>' +
+    '</select>' +
     modelSelectHtml("conv-model") +
+    // "AI 에이전트 관리"처럼 매 변경마다 자동저장하지 않고 명시적
+    // 버튼으로 한 번에 저장한다 — provider만 바꿔도(모델을 아직 안
+    // 고른 상태) 즉시 저장되면 방금까지 고른 모델이 null로 덮어써지는
+    // 문제가 있었다(실사용 확인).
+    '<button class="small" id="conv-save-model-btn">모델 설정 저장</button>' +
     '<label><input type="checkbox" id="conv-auto-reply"' + (conv.ai_auto_reply ? " checked" : "") + '> AI 자동응답</label>' +
     '<button class="small" id="conv-promote-btn">정식 업무 요청으로 전환</button>' +
     '</div>' +
-    '<p class="muted">AI 자동응답이 켜져 있으면 멘션 없는 메시지에도 매번 LLM 호출이 발생합니다(비용 발생). provider/model을 바꾸면 바로 저장됩니다.</p>' +
+    '<p class="muted">AI 자동응답이 켜져 있으면 멘션 없는 메시지에도 매번 LLM 호출이 발생합니다(비용 발생). provider/model을 고른 뒤 "모델 설정 저장"을 눌러야 반영됩니다.</p>' +
     '<h4>참가자</h4>' +
     (participantRows ? '<ul>' + participantRows + '</ul>' : '<p class="muted">참가자가 없습니다.</p>') +
     '<div style="position:relative;margin-bottom:0.75rem">' +
@@ -859,17 +872,20 @@ async function renderConversationDetail(conversationId, containerId) {
     '</form>' +
     '</section>';
 
+  // 사용자 보고(2026-10-08, "대화 모델 선택시 provider 후 모델
+  // 레지스트리에 등록된 모델 리스트 제공 안됨") — `wireProviderModelSelect()`
+  // 의 초기 `rebuildOptions()`는 호출 시점의 `providerSelect.value`를
+  // 그대로 쓴다. provider select의 `selected` 속성을 마크업에서 이미
+  // 심어뒀으므로(위) 이 시점엔 `providerSelect.value`가 올바르다 —
+  // JS로 뒤늦게 `.value =`를 대입하면 모델 목록이 빈 문자열(기본
+  // 옵션) 기준으로 만들어져 항상 비어 보이는 게 원래 버그였다.
   wireProviderModelSelect("conv-provider", "conv-model", modelsByProvider, conv.llm_model);
-  if (conv.llm_provider) document.getElementById("conv-provider").value = conv.llm_provider;
 
   const mentionInput = document.getElementById("conv-message-input");
   const mentionDropdown = document.getElementById("conv-mention-dropdown");
   setupMentionAutocomplete(mentionInput, mentionDropdown, participants);
 
-  document.getElementById("conv-provider").addEventListener("change", () => _saveConversationModel(conversationId));
-  document.getElementById("conv-model").addEventListener("change", () => _saveConversationModel(conversationId));
-  const customModelInput = document.getElementById("conv-model-custom");
-  if (customModelInput) customModelInput.addEventListener("change", () => _saveConversationModel(conversationId));
+  document.getElementById("conv-save-model-btn").addEventListener("click", () => _saveConversationModel(conversationId));
 
   document.getElementById("conv-auto-reply").addEventListener("change", async (ev) => {
     try {

@@ -4235,3 +4235,49 @@ Ollama)·조직 전체 검색으로 Agent/Team 초대·`@` 멘션 자동완성(�
 CrewAI, 워커별 메시지 분리 확인)·skill 그라운딩 채팅·대화→Brief
 승격·Task 워크스페이스 임베드("대화 시작" 버튼 → 인라인 임베드)까지
 전부 콘솔 에러 0건으로 확인.
+
+## 81. 대화 모델 선택 UI 버그 — "provider 선택 후 모델 레지스트리
+목록이 안 뜬다"(사용자 보고, 2026-10-08) — §80 배포 직후 실사용에서
+바로 발견된 회귀.
+
+**원인**: `wireProviderModelSelect("conv-provider", "conv-model",
+modelsByProvider, conv.llm_model)`를 호출하기 *전에* provider select
+를 마크업에 `selected` 없이 단순 옵션 목록으로만 그려두고, 호출
+*후에* `document.getElementById("conv-provider").value = conv.
+llm_provider`로 뒤늦게 값을 대입했다. 그런데 `wireProviderModelSelect`
+내부의 초기 `rebuildOptions(initialValue)`는 호출되는 **그 순간의**
+`providerSelect.value`를 읽어 `modelsByProvider[provider.value]`로
+모델 목록을 만든다 — 그 시점엔 아직 빈 문자열(기본 옵션)이라
+`modelsByProvider[""]`(undefined → `[]`)로 모델 목록이 항상 비어
+버렸다. 이미 저장된 provider+model이 있는 대화를 다시 열 때마다
+재현됐다(Agent/Team 멘션 트리거 자체는 멀쩡했고 순수 UI 조작 버그).
+
+**고친 방식 — 기존 "AI 에이전트 관리" 화면의 관례를 그대로 따름**:
+그 화면의 `provider-{agent_id}` select는 처음부터 마크업에서
+`<option value="..." ` + `(p === a.llm_provider ? " selected" :
+"") + ...>`로 올바른 provider를 미리 심어둔다 — JS로 사후에 `.value
+=`를 대입하지 않는다. 대화 쪽도 같은 방식으로 바꿔(`conv.llm_provider`
+를 마크업의 `selected` 속성에 직접 반영) `wireProviderModelSelect`가
+호출되는 시점에 이미 올바른 provider가 선택돼 있게 했다 — 코드
+재배치(실행 순서만 바꾸는 미봉책)가 아니라 애초에 한 곳(마크업)에서만
+provider를 결정하도록 설계를 통일했다.
+
+**부수적으로 같이 고친 문제**: 원래 provider/model select의 모든
+`change` 이벤트마다 즉시 `PATCH .../model`을 호출해 "자동저장"했다
+— 그런데 provider만 바꿔도(아직 새 모델을 고르기 전) 그 순간의 모델
+값(보통 빈 문자열)으로 즉시 저장돼, **방금 전에 이미 선택해둔 모델이
+조용히 null로 덮어써지는** 2차 문제가 있었다(라이브 테스트 중 자체
+발견 — 사용자가 명시적으로 보고한 범위는 아니었지만 같은 코드
+경로의 같은 근본 원인). "AI 에이전트 관리" 화면이 애초에 자동저장이
+아니라 "모델 설정" 버튼으로 명시적으로 커밋하는 방식이었다는 걸
+다시 확인하고, 대화 쪽도 `change` 리스너 3개(provider/model/커스텀
+입력)를 전부 지우고 **"모델 설정 저장" 버튼 하나**로 통일했다 —
+provider/model을 자유롭게 들여다보다가 의도치 않게 저장되는 일이
+없어진다.
+
+**검증**: 실서버에서 (1) 대화 재오픈 시 등록된 모델 목록이 제대로
+뜨는지, (2) 저장 버튼을 안 누르고 provider만 건드렸을 때 서버 값이
+그대로 유지되는지, (3) "모델 설정 저장" 버튼이 provider+model을
+한 번에 올바르게 커밋하는지 세 가지를 curl+Playwright로 직접
+재현·확인했다. 순수 프론트엔드 변경이라 백엔드 로직·테스트는 영향
+없음 — 전체 스위트 320건 그대로 통과.
