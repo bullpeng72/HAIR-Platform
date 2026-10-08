@@ -1390,27 +1390,6 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
 
         return {"id": result["id"], "triggered_jobs": triggered_jobs}
 
-    @app.post("/api/conversations/{conversation_id}/promote-to-brief", status_code=201)
-    def promote_conversation_to_brief_endpoint(
-        conversation_id: int, user: sqlite3.Row = Depends(get_current_user)
-    ):
-        """"기존 방식과 공존" — 대화가 무거워지면 정식 업무 요청(Brief)
-        으로 전환한다."""
-        try:
-            return conversations.promote_to_brief(conn, conversation_id, user["id"])
-        except ValueError as exc:
-            if str(exc) == "conversation_not_found":
-                raise HTTPException(
-                    status_code=404, detail="대화를 찾을 수 없습니다"
-                ) from None
-            raise HTTPException(
-                status_code=400, detail="승격할 메시지가 없습니다"
-            ) from None
-        except PermissionError:
-            raise HTTPException(
-                status_code=403, detail="이 대화의 참가자만 승격할 수 있습니다"
-            ) from None
-
     @app.get("/api/tasks/{task_id}/deliverables")
     def list_task_deliverables(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)

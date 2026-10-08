@@ -478,33 +478,6 @@ def test_gc_linked_conversation_uses_task_skills_for_default_ai(client_and_conn)
         assert "데이터 분석" in system_prompt
 
 
-# ---------- 기존 방식과 공존: Brief 승격 ----------
-
-
-def test_gc_promote_to_brief_creates_brief_from_transcript(client_and_conn):
-    client, conn = client_and_conn
-    _login(client, "member1", "memberpass")
-    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
-    client.patch(f"/api/conversations/{conv_id}/ai-auto-reply", json={"enabled": False})
-    client.post(f"/api/conversations/{conv_id}/messages", json={"content": "이 프로젝트 하자"})
-
-    resp = client.post(f"/api/conversations/{conv_id}/promote-to-brief")
-    assert resp.status_code == 201, resp.text
-    brief_id = resp.json()["brief_id"]
-
-    brief_row = conn.execute("SELECT * FROM briefs WHERE id = ?", (brief_id,)).fetchone()
-    assert brief_row is not None
-    assert "이 프로젝트 하자" in brief_row["raw_text"]
-
-
-def test_gc_promote_empty_conversation_rejected(client_and_conn):
-    client, conn = client_and_conn
-    _login(client, "member1", "memberpass")
-    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
-    resp = client.post(f"/api/conversations/{conv_id}/promote-to-brief")
-    assert resp.status_code == 400, resp.text
-
-
 # ---------- 대화 맥락(멀티턴) ----------
 
 

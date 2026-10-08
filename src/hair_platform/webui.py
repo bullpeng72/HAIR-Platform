@@ -722,6 +722,24 @@ function _stopConversationPolling() {
   }
 }
 
+// 사용자 보고(2026-10-08, "응답을 기다리는 중…으로 나오고 대화에
+// 모델의 응답이 표시되지 않음") — 원래는 메시지를 보낸 뒤 "응답을
+// 기다리는 중…" 문구만 한 번 띄우고 끝이라, 실제로 응답이 도착해도
+// (Team 멘션처럼 CrewAI가 몇 분씩 걸리는 경우 특히, §80 실측 — 약
+// 6분) 그 문구가 그대로 남아 있어 "멈췄다/안 된다"로 오인하게 했다.
+// Task 워크스페이스의 `pollExecutionJob()`과 같은 패턴을 대화 쪽에도
+// 적용해 완료/실패를 실제로 확인하고 상태 문구를 갱신한다.
+async function pollConversationJob(conversationId, jobId, intervalMs, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 400000); // Team 멘션(CrewAI)은 수 분 걸릴 수 있음
+  while (Date.now() < deadline) {
+    const jobs = await api("GET", "/api/conversations/" + conversationId + "/jobs");
+    const job = jobs.find(j => j.id === jobId);
+    if (job && job.status !== "running") return job;
+    await new Promise(r => setTimeout(r, intervalMs || 2000));
+  }
+  throw new Error("응답 완료 확인 시간이 초과됐습니다 — 잠시 후 새로고침해 주세요.");
+}
+
 async function renderConversations(content) {
   _stopConversationPolling();
   const list = await api("GET", "/api/conversations");
@@ -897,10 +915,30 @@ async function renderConversationDetail(conversationId, containerId) {
   });
 
   document.getElementById("conv-promote-btn").addEventListener("click", async () => {
-    try {
-      const result = await api("POST", "/api/conversations/" + conversationId + "/promote-to-brief", {});
-      showMsg("global-msg", "정식 업무 요청(#" + result.brief_id + ")으로 전환했습니다 — '업무 요청' 탭에서 확인하세요.", "ok");
-    } catch (e) { showMsg("global-msg", e.message, "error"); }
+    // 사용자 보고(2026-10-08, "'정식 업무 요청으로 전환'시 모든 대화
+    // 내용이 업무 요청 목록 '내용'으로 전달되고 있어, 이 방식을
+    // 개선해줘") — 원래는 대화 전체를 raw_text로 그대로 넘겨 Brief를
+    // **자동 생성**했다. 사람이 걸러낼 기회 없이 잡담·중복·주제 이탈
+    // 메시지까지 그대로 정식 업무 요청의 "내용"이 돼버리는 게 문제였다.
+    // "이걸 결과물로 제출"(F15 Phase 3)과 같은 원칙으로 바꾼다 — 자동
+    // 생성 대신 기존 "업무 요청" 폼의 textarea에 미리 채워만 주고,
+    // 사람이 다듬은 뒤 그 폼의 기존 "제출" 버튼을 직접 눌러야 실제
+    // Brief가 된다(새 제출 경로를 만들지 않는다).
+    if (!messages.length) {
+      showMsg("global-msg", "전환할 메시지가 없습니다.", "error");
+      return;
+    }
+    const transcript = messages.map(m =>
+      (m.author_type === "agent" ? "AI" : "사용자") + ": " + m.content
+    ).join("\\n");
+    await selectTab("briefs");
+    const textarea = document.getElementById("brief-text");
+    if (textarea) {
+      textarea.value = transcript;
+      textarea.scrollIntoView({ behavior: "smooth", block: "center" });
+      textarea.focus();
+    }
+    showMsg("global-msg", "대화 내용을 업무 요청 작성란에 채웠습니다 — 내용을 다듬은 뒤 \\"제출\\"을 눌러주세요.", "ok");
   });
 
   // 참가자 검색-초대: 입력마다 조직 전체에서 검색(디바운스)하고,
@@ -961,7 +999,23 @@ async function renderConversationDetail(conversationId, containerId) {
       document.getElementById("conv-skill-select").value = "";
       await refreshConversationMessages(conversationId, participants, conv.llm_model);
       if (result.triggered_jobs && result.triggered_jobs.length) {
-        showMsg("global-msg", "응답을 기다리는 중…", "ok");
+        showMsg("global-msg", "응답을 기다리는 중…(Agent/Team 호출은 몇 분 걸릴 수 있습니다)", "ok");
+        Promise.all(
+          result.triggered_jobs.map(j => pollConversationJob(conversationId, j.job_id))
+        ).then((jobs) => {
+          refreshConversationMessages(conversationId, participants, conv.llm_model);
+          const failed = jobs.filter(j => j.status === "failed");
+          showMsg(
+            "global-msg",
+            failed.length
+              ? "일부 응답이 실패했습니다: " + failed.map(j => j.error).join(", ")
+              : "응답이 도착했습니다.",
+            failed.length ? "error" : "ok"
+          );
+        }).catch((e) => {
+          refreshConversationMessages(conversationId, participants, conv.llm_model);
+          showMsg("global-msg", e.message, "error");
+        });
       }
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
