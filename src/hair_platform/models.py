@@ -231,6 +231,31 @@ class TaskParticipantInvite(BaseModel):
     participant_id: int
 
 
+TaskStatus = Literal["backlog", "queued", "in_progress", "done"]
+TaskPriority = Literal["low", "medium", "high", "urgent"]
+
+
+class TaskStatusUpdate(BaseModel):
+    """ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 할 일 보드
+    칸반 상태."""
+
+    status: TaskStatus
+
+
+class TaskPriorityUpdate(BaseModel):
+    """ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4)."""
+
+    priority: TaskPriority
+
+
+class TaskDependencyCreate(BaseModel):
+    """ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — "이 task는
+    `depends_on_task_id`가 끝나야 시작할 수 있다". 순환 검사는
+    `deliverables.add_task_dependency()`가 한다."""
+
+    depends_on_task_id: int
+
+
 class AssistRequest(BaseModel):
     """협업 워크스페이스 "LLM으로 도와줘" — `provider`/`model`은 매니저/관리자만
     채울 수 있다(팀원이 채우면 app.py가 400으로 거부, §3 RBAC 결정)."""

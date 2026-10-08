@@ -1291,6 +1291,220 @@ def update_task_notes(
     return detail
 
 
+def update_task_status(
+    conn: sqlite3.Connection, task_id: int, actor_id: int, status: str
+) -> dict:
+    """`PATCH /api/tasks/{task_id}/status`(F16, Phase 4) — 할 일 보드
+    칸반 상태 이동. `update_task_notes()`와 같은 참가자 전용 판정(admin/
+    manager도 이 task의 참가자가 아니면 못 바꾼다 — F17 때 정한 관례를
+    그대로 따른다, 조직도 감독 권한과 "이 업무를 직접 진행 중인지"는
+    별개 개념)."""
+    task = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    if task_participant_relationship(conn, task_id, actor_id) is None:
+        raise PermissionError("not_a_participant")
+    old_status = task["status"]
+    conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (status, task_id))
+    audit.record(
+        conn,
+        actor_id,
+        "task_status_updated",
+        "tasks",
+        task_id,
+        before={"status": old_status},
+        after={"status": status},
+    )
+    conn.commit()
+    detail = get_task_detail(conn, task_id)
+    assert detail is not None
+    return detail
+
+
+def update_task_priority(
+    conn: sqlite3.Connection, task_id: int, actor_id: int, priority: str
+) -> dict:
+    """`PATCH /api/tasks/{task_id}/priority`(F16, Phase 4) — `update_task_
+    status()`와 같은 참가자 전용 판정."""
+    task = conn.execute(
+        "SELECT priority FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    if task_participant_relationship(conn, task_id, actor_id) is None:
+        raise PermissionError("not_a_participant")
+    old_priority = task["priority"]
+    conn.execute("UPDATE tasks SET priority = ? WHERE id = ?", (priority, task_id))
+    audit.record(
+        conn,
+        actor_id,
+        "task_priority_updated",
+        "tasks",
+        task_id,
+        before={"priority": old_priority},
+        after={"priority": priority},
+    )
+    conn.commit()
+    detail = get_task_detail(conn, task_id)
+    assert detail is not None
+    return detail
+
+
+def _would_create_cycle(
+    conn: sqlite3.Connection, task_id: int, depends_on_task_id: int
+) -> bool:
+    """`task_id`가 `depends_on_task_id`에 의존하는 edge를 추가하면 순환이
+    생기는지 DFS로 검사한다. `depends_on_task_id`에서 출발해 기존
+    "의존한다" edge(`task_id`열 → `depends_on_task_id`열 방향)를 따라가다
+    `task_id`에 닿으면 — 즉 `depends_on_task_id`가 이미 간접적으로
+    `task_id`에 의존하고 있으면 — 거기에 "`task_id`가 `depends_on_
+    task_id`에 의존한다"는 edge까지 더하는 순간 고리가 닫힌다. Task
+    개수가 많지 않은 전제라 인덱스 없는 순수 DFS로 충분하다(설계 문서
+    §2 F16 그대로)."""
+    if task_id == depends_on_task_id:
+        return True
+    visited: set[int] = set()
+    stack = [depends_on_task_id]
+    while stack:
+        current = stack.pop()
+        if current == task_id:
+            return True
+        if current in visited:
+            continue
+        visited.add(current)
+        rows = conn.execute(
+            "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?",
+            (current,),
+        ).fetchall()
+        stack.extend(r["depends_on_task_id"] for r in rows)
+    return False
+
+
+def add_task_dependency(
+    conn: sqlite3.Connection, task_id: int, actor_id: int, depends_on_task_id: int
+) -> dict:
+    """`POST /api/tasks/{task_id}/dependencies`(F16, Phase 4) —
+    참가자 전용(위와 같은 관례). 자기참조는 DB CHECK로도 막혀 있지만
+    (`db.py`), 더 명확한 에러 메시지를 위해 여기서도 먼저 본다. 간접
+    순환은 `_would_create_cycle()`로 애플리케이션 레벨에서 검사한다
+    (DB 제약만으로는 못 막는다)."""
+    task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    if task_participant_relationship(conn, task_id, actor_id) is None:
+        raise PermissionError("not_a_participant")
+    dep_task = conn.execute(
+        "SELECT id FROM tasks WHERE id = ?", (depends_on_task_id,)
+    ).fetchone()
+    if dep_task is None:
+        raise ValueError("depends_on_task_not_found")
+    if task_id == depends_on_task_id:
+        raise ValueError("self_dependency")
+    if _would_create_cycle(conn, task_id, depends_on_task_id):
+        raise ValueError("cycle_detected")
+    try:
+        cur = conn.execute(
+            "INSERT INTO task_dependencies (task_id, depends_on_task_id) "
+            "VALUES (?, ?)",
+            (task_id, depends_on_task_id),
+        )
+    except sqlite3.IntegrityError:
+        raise ValueError("already_exists") from None
+    dependency_id = cur.lastrowid
+    assert dependency_id is not None
+    audit.record(
+        conn,
+        actor_id,
+        "task_dependency_added",
+        "task_dependencies",
+        dependency_id,
+        after={"task_id": task_id, "depends_on_task_id": depends_on_task_id},
+    )
+    conn.commit()
+    return {
+        "id": dependency_id,
+        "task_id": task_id,
+        "depends_on_task_id": depends_on_task_id,
+    }
+
+
+def remove_task_dependency(
+    conn: sqlite3.Connection, task_id: int, actor_id: int, depends_on_task_id: int
+) -> None:
+    """`DELETE /api/tasks/{task_id}/dependencies/{depends_on_task_id}`
+    (F16, Phase 4) — 설계 문서엔 명시되지 않았지만, 잘못 추가한 의존
+    관계를 되돌릴 방법이 전혀 없으면 이 기능 자체가 위험해진다(한 번
+    실수하면 영구히 그 task가 막힌 것처럼 보임) — POST의 자연스러운
+    대칭으로 추가했다."""
+    if task_participant_relationship(conn, task_id, actor_id) is None:
+        raise PermissionError("not_a_participant")
+    row = conn.execute(
+        "SELECT id FROM task_dependencies WHERE task_id = ? "
+        "AND depends_on_task_id = ?",
+        (task_id, depends_on_task_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("dependency_not_found")
+    conn.execute("DELETE FROM task_dependencies WHERE id = ?", (row["id"],))
+    audit.record(
+        conn,
+        actor_id,
+        "task_dependency_removed",
+        "task_dependencies",
+        row["id"],
+        before={"task_id": task_id, "depends_on_task_id": depends_on_task_id},
+    )
+    conn.commit()
+
+
+def task_dependency_graph(conn: sqlite3.Connection, task_id: int) -> dict:
+    """`GET /api/tasks/{task_id}/dependencies`(F16, Phase 4) — **사용자
+    결정**(2026-10-08, "Riido 수준의 그래프 시각화로"): 이 task 하나의
+    직접 선행/후행 목록이 아니라, 이 task가 속한 의존관계 그래프의
+    **연결된 컴포넌트 전체**(양방향 BFS/DFS)를 반환한다 — 그래야
+    화면에서 "이 작업이 전체 흐름의 어디쯤인지" 한눈에 보이는 그래프를
+    그릴 수 있다(Riido의 "작업 연결 시각화"가 프로젝트 단위로 보여주는
+    것과 같은 이유)."""
+    task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    visited = {task_id}
+    stack = [task_id]
+    edge_set: set[tuple[int, int]] = set()
+    while stack:
+        current = stack.pop()
+        for row in conn.execute(
+            "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?",
+            (current,),
+        ).fetchall():
+            edge_set.add((current, row["depends_on_task_id"]))
+            if row["depends_on_task_id"] not in visited:
+                visited.add(row["depends_on_task_id"])
+                stack.append(row["depends_on_task_id"])
+        for row in conn.execute(
+            "SELECT task_id FROM task_dependencies WHERE depends_on_task_id = ?",
+            (current,),
+        ).fetchall():
+            edge_set.add((row["task_id"], current))
+            if row["task_id"] not in visited:
+                visited.add(row["task_id"])
+                stack.append(row["task_id"])
+
+    nodes = []
+    for node_id in visited:
+        row = conn.execute(
+            "SELECT id, role_name, status, priority FROM tasks WHERE id = ?",
+            (node_id,),
+        ).fetchone()
+        nodes.append(dict(row))
+    return {
+        "nodes": nodes,
+        "edges": [
+            {"task_id": a, "depends_on_task_id": b} for a, b in sorted(edge_set)
+        ],
+    }
+
+
 _ACTIVITY_SUBQUERIES = """
 SELECT al.id, al.actor_id, al.action, al.subject_type, al.subject_id,
        al.before_value, al.after_value, al.created_at
@@ -1350,6 +1564,17 @@ SELECT al.id, al.actor_id, al.action, al.subject_type, al.subject_id,
 FROM audit_log al
 WHERE al.subject_type = 'tasks' AND al.subject_id = ?
 
+UNION ALL
+
+SELECT al.id, al.actor_id, al.action, al.subject_type, al.subject_id,
+       al.before_value, al.after_value, al.created_at
+FROM audit_log al
+WHERE al.subject_type = 'task_dependencies'
+  AND al.subject_id IN (
+      SELECT id FROM task_dependencies
+      WHERE task_id = ? OR depends_on_task_id = ?
+  )
+
 ORDER BY created_at DESC, id DESC
 """
 
@@ -1362,22 +1587,25 @@ def task_activity(conn: sqlite3.Connection, task_id: int) -> list[dict]:
 
     `audit_log`는 엔티티별로 제각각인 `subject_type`을 쓰므로(§
     `audit.record()` 호출부 전수조사로 확정: 'assignment'/'deliverables'/
-    'deliverable_comments'/'agent_execution_jobs'/'approval'/'tasks'),
-    task_id로 되짚어가는 경로가 엔티티마다 다르다 — `UNION ALL`로 전부
-    모은다. 한 가지 예외: `team_crew_execution_started`(`deliverables.
-    start_team_crew_execution()`)는 `subject_id=None`으로 기록되고 대신
-    `after_value` JSON에 `task_id`가 박혀 있다 — `json_extract()`로 그
-    경우만 따로 짚는다(SQLite 3.38+ 내장 함수, 이 환경에서 동작 확인됨).
-    `approval`은 `subject_id`가 approvals.id라 `approvals.subject_type`
+    'deliverable_comments'/'agent_execution_jobs'/'approval'/'tasks'/
+    'task_dependencies'(F16, Phase 4 추가)), task_id로 되짚어가는 경로가
+    엔티티마다 다르다 — `UNION ALL`로 전부 모은다. 한 가지 예외:
+    `team_crew_execution_started`(`deliverables.start_team_crew_
+    execution()`)는 `subject_id=None`으로 기록되고 대신 `after_value`
+    JSON에 `task_id`가 박혀 있다 — `json_extract()`로 그 경우만 따로
+    짚는다(SQLite 3.38+ 내장 함수, 이 환경에서 동작 확인됨). `approval`
+    은 `subject_id`가 approvals.id라 `approvals.subject_type`
     ('assignment' 또는 'deliverable')으로 한 번 더 분기해야 실제
-    assignment/deliverable까지 거쳐 task_id에 닿는다."""
+    assignment/deliverable까지 거쳐 task_id에 닿는다. `task_dependencies`
+    는 이 task가 `task_id`·`depends_on_task_id` 어느 쪽이든 걸리면
+    포함한다(선행 작업이 추가/제거돼도 이 task의 활동으로 본다)."""
     task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
 
     rows = conn.execute(
         _ACTIVITY_SUBQUERIES,
-        (task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id),
+        (task_id,) * 10,
     ).fetchall()
     result = []
     for row in rows:

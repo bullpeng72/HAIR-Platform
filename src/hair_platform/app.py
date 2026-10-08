@@ -89,8 +89,11 @@ from hair_platform.models import (
     PerformanceScoreRequest,
     SkillPoolCreate,
     TaskDecomposition,
+    TaskDependencyCreate,
     TaskNotesUpdate,
     TaskParticipantInvite,
+    TaskPriorityUpdate,
+    TaskStatusUpdate,
     TeamActiveUpdate,
     TeamCreate,
     TeamCrewExecuteRequest,
@@ -627,6 +630,8 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "required_skills": json.loads(row["required_skills"]),
                 "headcount": row["headcount"],
                 "notes": row["notes"],
+                "status": row["status"],
+                "priority": row["priority"],
                 **deliverables.task_completion_summary(conn, row["id"]),
             }
             for row in rows
@@ -925,6 +930,135 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             raise HTTPException(
                 status_code=403,
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+
+    @app.patch("/api/tasks/{task_id}/status")
+    def update_task_status_endpoint(
+        task_id: int,
+        payload: TaskStatusUpdate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 할 일
+        보드 칸반 상태 이동. `update_task_notes_endpoint()`와 같은
+        참가자 전용 판정."""
+        try:
+            return deliverables.update_task_status(
+                conn, task_id, user["id"], payload.status
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+
+    @app.patch("/api/tasks/{task_id}/priority")
+    def update_task_priority_endpoint(
+        task_id: int,
+        payload: TaskPriorityUpdate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """F16(2026-10-08, Phase 4)."""
+        try:
+            return deliverables.update_task_priority(
+                conn, task_id, user["id"], payload.priority
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+
+    @app.post("/api/tasks/{task_id}/dependencies", status_code=201)
+    def add_task_dependency_endpoint(
+        task_id: int,
+        payload: TaskDependencyCreate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """F16(2026-10-08, Phase 4) — 선행 작업 추가. 자기참조·순환은
+        `deliverables.add_task_dependency()`가 검사한다."""
+        try:
+            return deliverables.add_task_dependency(
+                conn, task_id, user["id"], payload.depends_on_task_id
+            )
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+        except ValueError as exc:
+            reason = str(exc)
+            if reason == "task_not_found":
+                raise HTTPException(
+                    status_code=404, detail="할 일을 찾을 수 없습니다"
+                ) from None
+            if reason == "depends_on_task_not_found":
+                raise HTTPException(
+                    status_code=404, detail="선행 작업을 찾을 수 없습니다"
+                ) from None
+            if reason == "self_dependency":
+                raise HTTPException(
+                    status_code=400, detail="자기 자신을 선행 작업으로 지정할 수 없습니다"
+                ) from None
+            if reason == "cycle_detected":
+                raise HTTPException(
+                    status_code=409, detail="이 의존관계를 추가하면 순환이 생깁니다"
+                ) from None
+            raise HTTPException(
+                status_code=409, detail="이미 등록된 의존관계입니다"
+            ) from None
+
+    @app.delete("/api/tasks/{task_id}/dependencies/{depends_on_task_id}")
+    def remove_task_dependency_endpoint(
+        task_id: int,
+        depends_on_task_id: int,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """F16(2026-10-08, Phase 4) — 설계 문서엔 없지만 POST의 자연스러운
+        대칭으로 추가(§2 `remove_task_dependency()` 독스트링 참고)."""
+        try:
+            deliverables.remove_task_dependency(
+                conn, task_id, user["id"], depends_on_task_id
+            )
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="등록된 의존관계를 찾을 수 없습니다"
+            ) from None
+        return {"task_id": task_id, "depends_on_task_id": depends_on_task_id, "deleted": True}
+
+    @app.get("/api/tasks/{task_id}/dependencies")
+    def get_task_dependencies_endpoint(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """F16(2026-10-08, Phase 4) — **사용자 결정**: 1차 "선행 작업
+        목록"이 아니라 Riido 수준의 그래프 시각화로 바로 간다. 이
+        엔드포인트는 그 그래프가 그릴 노드/엣지(연결된 컴포넌트 전체)를
+        반환한다(`deliverables.task_dependency_graph()`)."""
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        try:
+            return deliverables.task_dependency_graph(conn, task_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
             ) from None
 
     @app.get("/api/tasks/{task_id}/activity")
@@ -2186,6 +2320,23 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         Agent 평균 Gate 점수·대기 승인 건수·비용 추이를 한 번에 담는다.
         F10/F13과 같은 이유로 Admin·매니저 전용이다."""
         return dashboard.summary(conn, user["id"], user["role"])
+
+    @app.get("/api/dashboard/workload")
+    def get_dashboard_workload(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """ASANA_PARITY_DESIGN_PLAN.md F18(2026-10-08, Phase 4) — 사람/
+        Agent별 진행 중 Task 수. `GET /api/dashboard`에도 포함돼 있지만
+        (요약 화면용), 설계 문서가 별도 엔드포인트로 명시해 그대로 둔다."""
+        return dashboard.workload(conn)
+
+    @app.get("/api/dashboard/bottlenecks")
+    def get_dashboard_bottlenecks(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """F18(2026-10-08, Phase 4) — "주의 필요" Task 목록(막힌 작업 +
+        2회 이상 반려된 작업)."""
+        return dashboard.bottlenecks(conn)
 
     @app.get("/api/fairness-report")
     def get_fairness_report(

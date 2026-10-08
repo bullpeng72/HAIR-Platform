@@ -93,11 +93,82 @@ def cost_trend(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
     return trend
 
 
+def workload(conn: sqlite3.Connection) -> list[dict]:
+    """ASANA_PARITY_DESIGN_PLAN.md F18(2026-10-08, Phase 4) — `GET
+    /api/dashboard/workload`. 사람/Agent별 **진행 중**(F16 `tasks.status
+    = 'in_progress'`) Task 수. 새 집계 테이블 없이 confirmed 배정 +
+    F16 상태만으로 계산한다(이 파일 서두의 "이미 있는 데이터를 모아
+    보여줄 뿐" 원칙 그대로)."""
+    rows = conn.execute(
+        """
+        SELECT a.resource_type, a.resource_id,
+               COALESCE(hp.name, ap.role_name) AS name,
+               COUNT(*) AS in_progress_count
+        FROM assignments a
+        JOIN tasks t ON t.id = a.task_id
+        LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
+        LEFT JOIN agent_pool ap ON ap.id = a.resource_id AND a.resource_type = 'agent'
+        WHERE a.status = 'confirmed' AND t.status = 'in_progress'
+          AND a.resource_type IN ('human', 'agent')
+        GROUP BY a.resource_type, a.resource_id
+        ORDER BY in_progress_count DESC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def bottlenecks(conn: sqlite3.Connection) -> list[dict]:
+    """ASANA_PARITY_DESIGN_PLAN.md F18(2026-10-08, Phase 4) — `GET
+    /api/dashboard/bottlenecks`("주의 필요" 목록).
+
+    설계 문서가 제안한 "마감 임박"은 이 스키마에 마감일 개념 자체가
+    없어(F16도 상태/우선순위까지만 추가했다) 적용할 데이터가 없다 —
+    대신 실제로 계산 가능한 두 신호로 좁혔다: (1) F16 의존관계상 아직
+    안 끝난 선행 작업에 막혀 있는 task, (2) 결과물이 2회 이상 반려된
+    task. `reason`이 둘 다 해당하면 `"blocked+rejected_twice"`로
+    합쳐 하나의 행으로 낸다(같은 task가 목록에 중복으로 안 뜨게)."""
+    blocked = conn.execute(
+        """
+        SELECT DISTINCT t.id, t.role_name, t.status, t.priority
+        FROM tasks t
+        JOIN task_dependencies td ON td.task_id = t.id
+        JOIN tasks dep ON dep.id = td.depends_on_task_id
+        WHERE t.status != 'done' AND dep.status != 'done'
+        """
+    ).fetchall()
+    rejected = conn.execute(
+        """
+        SELECT t.id, t.role_name, t.status, t.priority, COUNT(*) AS rejected_count
+        FROM tasks t
+        JOIN deliverables d ON d.task_id = t.id
+        WHERE d.status = 'rejected'
+        GROUP BY t.id
+        HAVING COUNT(*) >= 2
+        """
+    ).fetchall()
+    result: dict[int, dict] = {}
+    for row in blocked:
+        entry = dict(row)
+        entry["reasons"] = ["blocked"]
+        result[row["id"]] = entry
+    for row in rejected:
+        if row["id"] in result:
+            result[row["id"]]["reasons"].append("rejected_twice")
+            result[row["id"]]["rejected_count"] = row["rejected_count"]
+        else:
+            entry = dict(row)
+            entry["reasons"] = ["rejected_twice"]
+            result[row["id"]] = entry
+    return list(result.values())
+
+
 def summary(conn: sqlite3.Connection, user_id: int, role: str) -> dict:
-    """`GET /api/dashboard` — 한 화면에 필요한 3종을 한 번에 담는다."""
+    """`GET /api/dashboard` — 한 화면에 필요한 항목을 한 번에 담는다."""
     return {
         "team_gate_scores": team_average_gate_scores(conn),
         "pending_approval_count": len(approvals.list_inbox(conn, user_id, role)),
         "cost_trend": cost_trend(conn),
         "cost_snapshot": cost.report(conn),
+        "workload": workload(conn),
+        "bottlenecks": bottlenecks(conn),
     }

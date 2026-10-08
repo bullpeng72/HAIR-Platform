@@ -339,6 +339,10 @@ const LABELS = {
   available: "가능", unavailable: "불가", offboarded: "오프보딩됨",
   active: "활성", pending_onboarding: "온보딩 대기", deprecated: "비활성화됨",
   draft: "초안", pending_review: "리뷰 대기", revised: "수정됨",
+  // ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 할 일 보드 상태/우선순위.
+  backlog: "백로그", queued: "대기", in_progress: "진행중", done: "완료",
+  low: "낮음", medium: "보통", high: "높음", urgent: "긴급",
+  task_dependencies: "의존관계", tasks: "업무",
 };
 function label(v) { return LABELS[v] || v; }
 
@@ -575,6 +579,7 @@ let ME = null;
 const TABS = [
   { id: "inbox", label: "인박스", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderInbox },
   { id: "mywork", label: "내 업무", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderMyWork },
+  { id: "board", label: "할 일 보드", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBoard },
   { id: "briefs", label: "업무 요청", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBriefs },
   { id: "approvals", label: "결재", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderApprovals },
   { id: "performance", label: "성과 리뷰", group: "user", roles: ["admin", "manager", "member"], render: renderPerformance },
@@ -768,6 +773,59 @@ async function renderMyWork(content) {
   });
 }
 
+// ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — "할 일 보드"
+// 4칼럼 칸반(backlog/queued/in_progress/done). 드래그 없이 업무를 열어
+// select로 상태를 바꾸는 식으로 단순화했다(설계 문서 UI 설계 그대로).
+// "내 업무"와 같은 데이터(참가 중인 task)를 쓴다 — 전체 조직의 모든
+// task를 한 보드에 보여주는 것은 범위 밖(그건 기존 "업무 요청" 탭이
+// 브리프별로 이미 하고 있다).
+async function renderBoard(content) {
+  content.innerHTML = '<section class="card"><h2>할 일 보드</h2><p class="muted">불러오는 중…</p></section>';
+  const rows = await api("GET", "/api/my-work");
+  const details = await Promise.all(
+    rows.map(r => api("GET", "/api/tasks/" + r.task_id).catch(() => null))
+  );
+  const tasks = rows
+    .map((r, i) => Object.assign({}, r, details[i]))
+    .filter(t => t.status !== undefined);
+
+  const STATUS_COLUMNS = [
+    { key: "backlog", label: "백로그" },
+    { key: "queued", label: "대기" },
+    { key: "in_progress", label: "진행중" },
+    { key: "done", label: "완료" },
+  ];
+  const PRIORITY_BADGE = { urgent: "gate-warn", high: "gate-warn", medium: "gate-ok", low: "gate-ok" };
+  const columnsHtml = STATUS_COLUMNS.map(col => {
+    const colTasks = tasks.filter(t => t.status === col.key);
+    const cards = colTasks.map(t =>
+      '<div class="deliverable-card">' +
+      '<div><strong>' + esc(t.role_name) + '</strong></div>' +
+      '<div><span class="gate-badge ' + (PRIORITY_BADGE[t.priority] || "") + '">' + esc(label(t.priority)) + '</span></div>' +
+      '<div class="actions"><button class="small" data-board-open="' + t.task_id + '">열기</button></div>' +
+      '</div>'
+    ).join("");
+    return '<div class="card" style="flex:1;min-width:200px">' +
+      '<h4>' + esc(col.label) + ' (' + colTasks.length + ')</h4>' +
+      (cards || '<p class="muted">없음</p>') +
+      '</div>';
+  }).join("");
+
+  content.innerHTML =
+    '<section class="card"><h2>할 일 보드</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>"내 업무"에 뜨는, 내가 참가 중인 업무만 보여줍니다(조직 전체 업무는 "업무 요청" 탭에서 브리프별로 확인하세요).</li>' +
+    '<li>카드의 "열기"로 워크스페이스를 펼쳐 상태/우선순위를 바꾸면 이 보드에도 반영됩니다(새로고침 필요).</li>' +
+    '</ul>' +
+    '<div class="inline" style="align-items:flex-start;flex-wrap:wrap">' + columnsHtml + '</div>' +
+    '<div id="board-detail"></div>' +
+    '</section>';
+
+  content.querySelectorAll("[data-board-open]").forEach(btn => {
+    btn.onclick = () => renderCollabWorkspace(Number(btn.dataset.boardOpen), "board-detail");
+  });
+}
+
 /* Phase 4 — execute-agent는 202+job_id만 즉시 돌려준다(사용자 요청,
    2026-09-28, "Phase 4 진행해줘"). 실제 완료는 여기서 폴링으로 확인한다
    (실시간 WebSocket은 COLLABORATION_PLATFORM_PLAN.md §6에서 1차 범위 밖으로
@@ -783,6 +841,86 @@ async function pollExecutionJob(taskId, jobId, intervalMs, timeoutMs) {
   throw new Error("실행 완료 확인 시간이 초과됐습니다 — 잠시 후 새로고침해 주세요.");
 }
 
+// ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — **사용자 결정**:
+// 선행 작업 "목록"이 아니라 Riido 수준의 그래프 시각화로 바로 간다.
+// 외부 그래프 라이브러리 없이(이 프로젝트 전체가 CDN 의존 없는 순수
+// vanilla JS 단일 파일이라는 기존 관례 그대로 유지) 순수 SVG로 그린다
+// — depth(의존 사슬 길이)별로 열을 나눠 왼쪽에서 오른쪽으로 흐르게
+// 배치하는 가장 단순한 레이어 레이아웃(순환이 없는 DAG라는 서버
+// 보장 덕에 depth가 항상 유한하게 정의된다).
+function _dependencyGraphDepths(nodes, edges) {
+  const dependsOn = {};
+  nodes.forEach(n => { dependsOn[n.id] = []; });
+  edges.forEach(e => {
+    if (dependsOn[e.task_id]) dependsOn[e.task_id].push(e.depends_on_task_id);
+  });
+  const depth = {};
+  function compute(id, seen) {
+    if (depth[id] !== undefined) return depth[id];
+    if (seen.has(id)) return 0; // 서버가 순환을 막지만 방어적으로 무한루프만 피한다
+    seen.add(id);
+    const deps = dependsOn[id] || [];
+    const d = deps.length ? 1 + Math.max(...deps.map(dep => compute(dep, seen))) : 0;
+    depth[id] = d;
+    return d;
+  }
+  nodes.forEach(n => compute(n.id, new Set()));
+  return depth;
+}
+
+function renderDependencyGraphSvg(graph, currentTaskId) {
+  const { nodes, edges } = graph;
+  if (!nodes.length) return '<p class="muted">연결된 의존관계가 없습니다.</p>';
+  const depth = _dependencyGraphDepths(nodes, edges);
+  const columns = {};
+  nodes.forEach(n => {
+    const d = depth[n.id];
+    (columns[d] = columns[d] || []).push(n);
+  });
+  const colWidth = 170, rowHeight = 56, nodeW = 150, nodeH = 42, padding = 16;
+  const pos = {};
+  Object.keys(columns).forEach(d => {
+    columns[d].forEach((n, i) => {
+      pos[n.id] = { x: padding + Number(d) * colWidth, y: padding + i * rowHeight };
+    });
+  });
+  const maxDepth = Math.max(...Object.values(depth));
+  const maxRows = Math.max(...Object.values(columns).map(c => c.length));
+  const width = padding * 2 + (maxDepth + 1) * colWidth - (colWidth - nodeW);
+  const height = padding * 2 + maxRows * rowHeight - (rowHeight - nodeH);
+  const priorityColor = { low: "#9aa0a6", medium: "#4a90d9", high: "#e0a030", urgent: "#d9534f" };
+
+  const edgesSvg = edges.map(e => {
+    const from = pos[e.depends_on_task_id], to = pos[e.task_id];
+    if (!from || !to) return "";
+    const x1 = from.x + nodeW, y1 = from.y + nodeH / 2;
+    const x2 = to.x, y2 = to.y + nodeH / 2;
+    return '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 +
+      '" stroke="#aaa" stroke-width="1.5" marker-end="url(#dep-arrow)"/>';
+  }).join("");
+
+  const nodesSvg = nodes.map(n => {
+    const p = pos[n.id];
+    const isCurrent = n.id === currentTaskId;
+    const label20 = n.role_name.length > 16 ? n.role_name.slice(0, 15) + "…" : n.role_name;
+    return '<g data-graph-node="' + n.id + '" style="cursor:pointer">' +
+      '<rect x="' + p.x + '" y="' + p.y + '" width="' + nodeW + '" height="' + nodeH +
+      '" rx="6" fill="' + (isCurrent ? "#eef6ff" : "#fff") + '" stroke="' +
+      (priorityColor[n.priority] || "#999") + '" stroke-width="' + (isCurrent ? 3 : 1.5) + '"/>' +
+      '<text x="' + (p.x + nodeW / 2) + '" y="' + (p.y + 17) +
+      '" text-anchor="middle" font-size="11" font-weight="bold">' + esc(label20) + '</text>' +
+      '<text x="' + (p.x + nodeW / 2) + '" y="' + (p.y + 32) +
+      '" text-anchor="middle" font-size="10" fill="#666">' +
+      esc(label(n.status)) + " · " + esc(label(n.priority)) + '</text>' +
+      '</g>';
+  }).join("");
+
+  return '<svg width="' + width + '" height="' + height + '" style="max-width:100%">' +
+    '<defs><marker id="dep-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" ' +
+    'markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#aaa"/></marker></defs>' +
+    edgesSvg + nodesSvg + '</svg>';
+}
+
 // containerId: 사용자 요청(2026-10-06, "팀 구성과 협업 프로세스를 하나의
 // 화면으로 합치는 방안" → 옵션 C 채택)으로 일반화했다 — 원래 "내 업무"
 // 탭의 #mywork-detail에만 그릴 수 있었는데, "업무 요청" 탭의 할 일 상세
@@ -794,16 +932,17 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   detail.innerHTML = '<p class="muted">불러오는 중…</p>';
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = isSupervisor ? await fetchModelsByProvider() : {};
-  let items, jobs, permission, confirmedAgents, confirmedTeams, taskDetail, activity, participants;
+  let items, jobs, permission, confirmedAgents, confirmedTeams, taskDetail, activity, participants, depGraph;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
     jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
     // ASANA_PARITY_DESIGN_PLAN.md F17(메모)/F19(통합 활동 타임라인)/
-    // F15(참가자 초대, Phase 2), 2026-10-08 — 전부 워크스페이스를 열 때
-    // 같이 불러온다.
+    // F15(참가자 초대, Phase 2)/F16(상태·우선순위·의존관계, Phase 4),
+    // 2026-10-08 — 전부 워크스페이스를 열 때 같이 불러온다.
     taskDetail = await api("GET", "/api/tasks/" + taskId);
     activity = await api("GET", "/api/tasks/" + taskId + "/activity");
     participants = await api("GET", "/api/tasks/" + taskId + "/participants");
+    depGraph = await api("GET", "/api/tasks/" + taskId + "/dependencies");
     // 사용자가 스크린샷으로 보고한 갭(2026-09-29) — 참가자기만 하면
     // 무조건 실행 버튼을 보여줘, human assignee가 눌러야만 "권한이
     // 없습니다" 403으로 뒤늦게 알게 됐다. 버튼을 그리기 전에 먼저 확인한다.
@@ -1066,6 +1205,52 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '</form>' +
     '</section>';
 
+  // ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 상태/우선순위는
+  // select 변경 즉시 저장(드래그 없이 UI를 단순화하는 설계 의도를
+  // select onchange로 구현 — "버튼"이 아니라 "select"지만 드래그앤드롭을
+  // 피한다는 본질은 같다).
+  const STATUS_OPTIONS = ["backlog", "queued", "in_progress", "done"];
+  const PRIORITY_OPTIONS = ["low", "medium", "high", "urgent"];
+  const statusPriorityBar =
+    '<div class="inline" style="margin:0.25rem 0 0.75rem">' +
+    '<label>상태 <select id="ws-status-select">' +
+    STATUS_OPTIONS.map(s => '<option value="' + s + '"' +
+      (s === taskDetail.status ? " selected" : "") + '>' + esc(label(s)) + '</option>').join("") +
+    '</select></label>' +
+    '<label>우선순위 <select id="ws-priority-select">' +
+    PRIORITY_OPTIONS.map(p => '<option value="' + p + '"' +
+      (p === taskDetail.priority ? " selected" : "") + '>' + esc(label(p)) + '</option>').join("") +
+    '</select></label>' +
+    '</div>';
+
+  // F16 — 의존관계 그래프(사용자 결정: Riido 수준 시각화). 제거는
+  // SVG 안에서 처리하기보다(클릭 판별이 번거롭다) 그래프 아래 평범한
+  // 목록에 "제거" 버튼을 둬서 접근성·구현 단순성을 둘 다 잡는다 —
+  // 이 task가 의존하는 쪽(`e.task_id === taskId`)만 여기서 지울 수
+  // 있다(다른 task가 이 task에 의존하는 edge는 그 task 화면에서 지운다).
+  const dependencyListRows = depGraph.edges.map(e => {
+    const fromNode = depGraph.nodes.find(n => n.id === e.task_id);
+    const toNode = depGraph.nodes.find(n => n.id === e.depends_on_task_id);
+    return '<li>' + esc(fromNode ? fromNode.role_name : "#" + e.task_id) +
+      ' → ' + esc(toNode ? toNode.role_name : "#" + e.depends_on_task_id) +
+      ' <span class="muted">완료를 기다림</span>' +
+      (e.task_id === taskId
+        ? ' <button class="small danger" data-remove-dependency="' + e.depends_on_task_id + '">제거</button>'
+        : '')
+      + '</li>';
+  }).join("");
+  const dependencySection =
+    '<section class="card">' +
+    '<h4>의존관계</h4>' +
+    '<p class="muted">이 업무와 연결된 선행/후행 작업을 그래프로 보여줍니다 — 테두리 색은 우선순위(빨강=긴급·주황=높음·파랑=보통·회색=낮음), 네모를 클릭하면 그 업무로 이동합니다.</p>' +
+    '<div style="overflow-x:auto">' + renderDependencyGraphSvg(depGraph, taskId) + '</div>' +
+    (dependencyListRows ? '<ul>' + dependencyListRows + '</ul>' : '') +
+    '<form class="inline" id="ws-dependency-form">' +
+    '<input type="number" id="ws-dependency-input" placeholder="선행 작업 ID" style="width:9rem" required>' +
+    '<button class="small" type="submit">선행 작업 추가</button>' +
+    '</form>' +
+    '</section>';
+
   // 사용자 요청(2026-09-29, "UI/UX를 개선해줘") — 원래 textarea·provider/
   // model·"LLM으로 도와줘"·"결과물 제출"이 한 줄(.inline flex-wrap)에 전부
   // 뒤섞여 있어 좁은 화면에서 텍스트가 select 옆에 끼어 줄바꿈이 어색했다.
@@ -1073,9 +1258,11 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 서로 다른 카드로 나눠 두 행동의 성격이 다르다는 걸 시각적으로 구분한다.
   detail.innerHTML =
     '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
+    statusPriorityBar +
     finalResultCard +
     notesCard +
     participantsCard +
+    dependencySection +
     '<h4 class="muted">진행 이력(중간 과정 포함)</h4>' +
     '<div id="workspace-timeline">' + timeline + '</div>' +
     activitySection +
@@ -1163,6 +1350,54 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       showMsg("global-msg", "참가자를 초대했습니다.", "ok");
       renderCollabWorkspace(taskId, containerId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  document.getElementById("ws-status-select").addEventListener("change", async (ev) => {
+    try {
+      await api("PATCH", "/api/tasks/" + taskId + "/status", { status: ev.target.value });
+      showMsg("global-msg", "상태를 변경했습니다.", "ok");
+      renderCollabWorkspace(taskId, containerId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  document.getElementById("ws-priority-select").addEventListener("change", async (ev) => {
+    try {
+      await api("PATCH", "/api/tasks/" + taskId + "/priority", { priority: ev.target.value });
+      showMsg("global-msg", "우선순위를 변경했습니다.", "ok");
+      renderCollabWorkspace(taskId, containerId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  document.getElementById("ws-dependency-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const dependsOnId = Number(document.getElementById("ws-dependency-input").value);
+    try {
+      await api("POST", "/api/tasks/" + taskId + "/dependencies", {
+        depends_on_task_id: dependsOnId,
+      });
+      showMsg("global-msg", "선행 작업을 추가했습니다.", "ok");
+      renderCollabWorkspace(taskId, containerId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  detail.querySelectorAll("[data-graph-node]").forEach(node => {
+    node.addEventListener("click", () => {
+      const targetId = Number(node.dataset.graphNode);
+      if (targetId !== taskId) renderCollabWorkspace(targetId, containerId);
+    });
+  });
+
+  detail.querySelectorAll("[data-remove-dependency]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(
+          "DELETE",
+          "/api/tasks/" + taskId + "/dependencies/" + btn.dataset.removeDependency
+        );
+        showMsg("global-msg", "선행 작업을 제거했습니다.", "ok");
+        renderCollabWorkspace(taskId, containerId);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
   });
 
   document.getElementById("ws-submit-form").addEventListener("submit", async (ev) => {
@@ -1298,7 +1533,7 @@ async function refreshComments(deliverableId) {
     // 승격하려면 사람이 명시적으로 "이걸 결과물로 제출"을 눌러야 한다.
     // **새 엔드포인트를 만들지 않는다** — 버튼은 그 댓글 내용을 기존
     // "결과물 작성" textarea(#ws-content)에 채워 넣기만 하고, 실제
-    // 제출은 기존 `ws-submit-form`(→ 기존 F7 결재 체인)을 그대로 탄다.
+    // 제출은 기존 `ws-submit-form`(→ 기존 결재 체인)을 그대로 탄다.
     box.innerHTML = comments.map(c =>
       '<div class="' + (c.author_type === "agent" ? "chat-agent" : "muted") + '">↳ ' +
       (c.author_type === "agent" ? '<span class="gate-badge gate-ok">AI 에이전트</span> ' : '') +
@@ -3007,12 +3242,31 @@ async function renderDashboard(content) {
     esc(t.created_at), esc(label(t.subject_type)), t.subject_id, t.cost_estimate,
   ]);
 
+  // ASANA_PARITY_DESIGN_PLAN.md F18(2026-10-08, Phase 4) — "팀 부하" 바
+  // 차트(진행 중 Task 수를 막대 길이로 표현, 외부 차트 라이브러리 없이
+  // div width%로 충분)와 "주의 필요" 목록.
+  const maxWorkload = Math.max(1, ...d.workload.map(w => w.in_progress_count));
+  const workloadRows = d.workload.map(w =>
+    '<div class="stat-row"><span>' + esc(label(w.resource_type)) + " " + esc(w.name || "#" + w.resource_id) + '</span>' +
+    '<span style="flex:1;margin:0 0.5rem;background:#eee;border-radius:3px">' +
+    '<span style="display:block;height:0.8em;background:#4a90d9;border-radius:3px;width:' +
+    Math.round((w.in_progress_count / maxWorkload) * 100) + '%"></span></span>' +
+    '<span>' + w.in_progress_count + '</span></div>'
+  ).join("") || '<p class="muted">진행 중인 업무가 없습니다.</p>';
+
+  const bottleneckRows = d.bottlenecks.map(b =>
+    '<li>#' + b.id + " " + esc(b.role_name) + " — " +
+    esc(b.reasons.map(r => ({ blocked: "선행 작업 미완료로 대기 중", rejected_twice: "결과물 2회 이상 반려" })[r] || r).join(", ")) +
+    '</li>'
+  ).join("") || '<p class="muted">주의가 필요한 업무가 없습니다.</p>';
+
   content.innerHTML =
     '<section class="card"><h2>매니저 대시보드</h2>' +
     '<ul class="muted help-list">' +
-    '<li>팀 전체 Agent Gate 점수 평균·대기 승인 건수·비용 변경 이력을 한 화면에 모았습니다.</li>' +
+    '<li>팀 전체 Agent Gate 점수 평균·대기 승인 건수·비용 변경 이력·팀 부하·주의 필요 업무를 한 화면에 모았습니다.</li>' +
     '<li>Gate 점수는 실제로 측정된 산출물이 있을 때만 값이 나옵니다(not_measured는 평균에서 제외).</li>' +
     '<li>비용 추이는 "AI 에이전트 관리"·"사람 인력 관리" 탭에서 단가를 바꿀 때마다 남는 감사로그 이력이라, 지금까지 아무도 단가를 바꾼 적이 없으면 비어 있습니다.</li>' +
+    '<li>"주의 필요"는 마감일 개념이 이 플랫폼에 없어 "선행 작업 미완료로 막힘"·"결과물 2회 이상 반려"만 신호로 씁니다.</li>' +
     '</ul>' +
     '<div class="dashboard-grid">' +
     '<div class="card"><h3>팀 Agent 평균 Gate 점수(표본 ' + gs.sample_count + '건)</h3>' + gateRow +
@@ -3020,6 +3274,8 @@ async function renderDashboard(content) {
     '<div class="card"><h3>대기 승인 건수</h3><p style="font-size:2em;margin:0">' + d.pending_approval_count + '</p></div>' +
     '<div class="card"><h3>현재 비용 스냅샷</h3><p style="font-size:2em;margin:0">' + d.cost_snapshot.total_cost + '</p></div>' +
     '</div>' +
+    '<h3>팀 부하(진행 중인 업무 수)</h3>' + workloadRows +
+    '<h3>주의 필요(' + d.bottlenecks.length + '건)</h3><ul>' + bottleneckRows + '</ul>' +
     '<h3>비용 변경 이력(최근 ' + d.cost_trend.length + '건)</h3>' +
     table(["시각", "대상 종류", "대상 ID", "변경된 단가"], trendRows) +
     '</section>';

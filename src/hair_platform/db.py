@@ -68,7 +68,24 @@ CREATE TABLE IF NOT EXISTS tasks (
     role_name TEXT NOT NULL,
     required_skills TEXT NOT NULL DEFAULT '[]',
     headcount INTEGER NOT NULL DEFAULT 1,
-    notes TEXT NOT NULL DEFAULT ''
+    notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('backlog', 'queued', 'in_progress', 'done')),
+    priority TEXT NOT NULL DEFAULT 'medium'
+        CHECK (priority IN ('low', 'medium', 'high', 'urgent'))
+);
+
+-- ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — Task 간
+-- 선행관계. `CHECK (task_id != depends_on_task_id)`로 자기참조만 DB
+-- 레벨에서 막는다 — 간접 순환(A→B→C→A)까지는 CHECK로 못 막으므로
+-- 추가 시점에 애플리케이션에서 DFS로 검사한다(deliverables.py
+-- `_would_create_cycle()`, task 개수가 적어 성능 문제 없음).
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    depends_on_task_id INTEGER NOT NULL REFERENCES tasks(id),
+    CHECK (task_id != depends_on_task_id),
+    UNIQUE(task_id, depends_on_task_id)
 );
 
 CREATE TABLE IF NOT EXISTS approvals (
@@ -429,6 +446,25 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "agent_execution_jobs",
         "source_comment_id",
         "INTEGER REFERENCES deliverable_comments(id)",
+    )
+
+    # ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 작업 구조
+    # 심화(상태/우선순위). `task_dependencies`는 새 테이블이라
+    # `_ensure_column()` 불필요 — SCHEMA의 `CREATE TABLE IF NOT EXISTS`
+    # 만으로 기존 DB에도 안전하게 추가된다.
+    _ensure_column(
+        conn,
+        "tasks",
+        "status",
+        "TEXT NOT NULL DEFAULT 'queued' "
+        "CHECK (status IN ('backlog', 'queued', 'in_progress', 'done'))",
+    )
+    _ensure_column(
+        conn,
+        "tasks",
+        "priority",
+        "TEXT NOT NULL DEFAULT 'medium' "
+        "CHECK (priority IN ('low', 'medium', 'high', 'urgent'))",
     )
 
 

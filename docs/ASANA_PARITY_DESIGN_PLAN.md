@@ -272,6 +272,17 @@ DEFAULT ''`. (버전 이력까지 필요하면 별도 `task_notes` 테이블로
   검증이 핵심). 실서버에서 **실제 로컬 Ollama(qwen3-coder:latest, 무료)
   Agent**를 초대해 멘션으로 호출, 진짜 응답이 댓글로 돌아오고
   deliverable은 하나도 안 늘어난 것까지 라이브로 확인(비용 0원).
-- [ ] Phase 4 — F16(상태/우선순위/의존관계 + 할 일 보드 + **그래프
-  시각화**), F18(운영 가시성)
+- [x] Phase 4 — F16+F18 — 완료(2026-10-08). `tasks.status`/`priority` +
+  `task_dependencies` 테이블(자기참조는 CHECK, 간접 순환은 `_would_
+  create_cycle()` DFS로 차단) + `PATCH .../status`·`/priority`·
+  `POST/DELETE/GET .../dependencies`. **그래프 시각화는 외부 라이브러리
+  없이 순수 SVG**로 구현(depth 기반 레이어 레이아웃, 우선순위별 테두리
+  색, 노드 클릭 시 그 업무로 이동) — "할 일 보드" 탭(4칼럼 칸반, select
+  기반 상태 이동)도 함께 구현. F18은 `GET /api/dashboard/workload`·
+  `/bottlenecks`(새 계측 없음 — 마감일 개념이 없어 "마감 임박"은 범위
+  밖, 대신 "선행 작업 막힘"+"결과물 2회 이상 반려"로 "주의 필요" 구현)
+  를 대시보드에 바 차트/목록 위젯으로 추가. 신규 테스트 14건(`tests/
+  unit/test_phase29_asana_parity_phase4.py`). 실서버 라이브 검증 중
+  `workload()`가 team 배정을 집계 못 하는 비대칭 갭을 발견해
+  `docs/LIMITS.md` §77에 정직하게 기록(다음 리뷰 과제로 남김).
 - [ ] Phase 5 — F20(온보딩/탭 재구성)
