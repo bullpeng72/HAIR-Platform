@@ -50,6 +50,9 @@ INDEX_HTML = """<!DOCTYPE html>
   .deliverable-card + .deliverable-card { margin-top: 0; }
   .deliverable-card.chat-human { margin-right: 12%; border-left: 3px solid #2563eb; }
   .deliverable-card.chat-agent { margin-left: 12%; border-left: 3px solid #7c3aed; background: #f5f3ff; }
+  .mention-dropdown { position: absolute; z-index: 20; top: 100%; left: 0; width: 100%; max-height: 10rem; overflow-y: auto; margin: 2px 0 0; padding: 0.2rem 0; list-style: none; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .mention-dropdown li { padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
+  .mention-dropdown li:hover, .mention-dropdown li.active { background: #eef6ff; }
   .gate-badge { display: inline-block; padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.85em; }
   .gate-badge.gate-ok { background: #dcfce7; color: #166534; }
   .gate-badge.gate-warn { background: #fef3c7; color: #92400e; }
@@ -1073,7 +1076,16 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     submitAction +
     '<div id="comments-' + d.id + '"></div>' +
     '<form class="inline" data-comment-form="' + d.id + '">' +
-    '<input placeholder="댓글(@Agent이름으로 호출 가능)" id="comment-input-' + d.id + '" style="flex:1">' +
+    // ASANA_PARITY_DESIGN_PLAN.md F15 UI 설계(2026-10-08) — "댓글
+    // 입력창에 @ 입력 시 참가자 목록 자동완성 드롭다운"을 그대로
+    // 구현한다(1차 구현 땐 정적 힌트 텍스트로만 대체했었다 — 라이브
+    // 감사에서 실제 누락으로 확인돼 보완). input을 relative 컨테이너로
+    // 감싸고 그 아래 절대 위치 드롭다운 <ul>을 둔다.
+    '<div class="mention-wrap" style="position:relative;flex:1">' +
+    '<input placeholder="댓글(@참가자이름으로 호출/멘션 가능)" id="comment-input-' + d.id +
+    '" style="width:100%;box-sizing:border-box" autocomplete="off">' +
+    '<ul class="mention-dropdown" id="mention-dropdown-' + d.id + '" style="display:none"></ul>' +
+    '</div>' +
     '<button class="small" type="submit">댓글</button></form>' +
     '</div>';
   }).join("") + jobCard;
@@ -1324,7 +1336,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   if (isSupervisor && confirmedTeams.length) {
     wireProviderModelSelect("ws-team-crew-provider", "ws-team-crew-model", modelsByProvider);
   }
-  items.forEach(d => loadDeliverableComments(d.id, taskId, containerId));
+  items.forEach(d => loadDeliverableComments(d.id, taskId, containerId, participants));
 
   detail.querySelectorAll("[data-decide-deliverable]").forEach(btn => {
     btn.onclick = async () => {
@@ -1580,8 +1592,72 @@ async function refreshComments(deliverableId) {
   }
 }
 
-async function loadDeliverableComments(deliverableId, taskId, containerId) {
+// ASANA_PARITY_DESIGN_PLAN.md F15 UI 설계(2026-10-08) — "@" 입력 시
+// 참가자 목록 자동완성 드롭다운. 1차 구현 때는 정적 힌트 텍스트로만
+// 대체했는데, 실제 누락으로 확인돼("HAIR-Platform... 구현에 누락
+// 부분이 없는지 확인해줘") 보완한다. 외부 라이브러리 없이 순수 JS로
+// 커서 위치 기준 마지막 "@" 뒤 텍스트를 쿼리 삼아 필터링한다.
+function setupMentionAutocomplete(inputEl, dropdownEl, participants) {
+  const candidates = participants
+    .filter(p => p.display_name)
+    .map(p => ({ name: p.display_name, type: p.participant_type }));
+  if (!candidates.length) return;
+
+  function closeDropdown() {
+    dropdownEl.style.display = "none";
+    dropdownEl.innerHTML = "";
+  }
+
+  function insertMention(name) {
+    const val = inputEl.value;
+    const cursor = inputEl.selectionStart;
+    const atIndex = val.lastIndexOf("@", cursor - 1);
+    if (atIndex === -1) return;
+    const before = val.slice(0, atIndex);
+    const after = val.slice(cursor);
+    const insertedPrefix = before + "@" + name + " ";
+    inputEl.value = insertedPrefix + after;
+    inputEl.setSelectionRange(insertedPrefix.length, insertedPrefix.length);
+    closeDropdown();
+    inputEl.focus();
+  }
+
+  inputEl.addEventListener("input", () => {
+    const val = inputEl.value;
+    const cursor = inputEl.selectionStart;
+    const atIndex = val.lastIndexOf("@", cursor - 1);
+    if (atIndex === -1) { closeDropdown(); return; }
+    const query = val.slice(atIndex + 1, cursor);
+    if (/\s/.test(query)) { closeDropdown(); return; } // @뒤 공백이면 이미 끝난 멘션
+    const matches = candidates.filter(c => c.name.includes(query));
+    if (!matches.length) { closeDropdown(); return; }
+    dropdownEl.innerHTML = matches.map(c =>
+      "<li data-mention-name=\\"" + escAttr(c.name) + "\\">" +
+      esc(c.name) + (c.type === "agent" ? ' <span class="muted">(AI)</span>' : "") + "</li>"
+    ).join("");
+    dropdownEl.style.display = "block";
+  });
+
+  // blur가 드롭다운 클릭보다 먼저 발생해 클릭이 씹히는 것을 막기 위해
+  // mousedown(클릭보다 먼저 발생)에서 선택을 처리하고, blur는 약간
+  // 지연 후 닫는다.
+  inputEl.addEventListener("blur", () => setTimeout(closeDropdown, 150));
+  dropdownEl.addEventListener("mousedown", (ev) => {
+    const li = ev.target.closest("[data-mention-name]");
+    if (li) {
+      ev.preventDefault();
+      insertMention(li.dataset.mentionName);
+    }
+  });
+}
+
+async function loadDeliverableComments(deliverableId, taskId, containerId, participants) {
   await refreshComments(deliverableId);
+  const mentionInput = document.getElementById("comment-input-" + deliverableId);
+  const mentionDropdown = document.getElementById("mention-dropdown-" + deliverableId);
+  if (mentionInput && mentionDropdown && participants) {
+    setupMentionAutocomplete(mentionInput, mentionDropdown, participants);
+  }
   // F15 Phase 3 — "이걸 결과물로 제출" 버튼은 `refreshComments()`가
   // `box.innerHTML`을 매번 통째로 새로 그리므로, 그 자식 버튼에 직접
   // 리스너를 매번 새로 붙이면 §73 이전에 겪었던 "리스너 누적" 버그가
