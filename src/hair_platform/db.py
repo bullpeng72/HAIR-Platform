@@ -233,6 +233,25 @@ CREATE INDEX IF NOT EXISTS idx_deliverables_task_id ON deliverables(task_id);
 CREATE INDEX IF NOT EXISTS idx_deliverable_comments_deliverable_id
     ON deliverable_comments(deliverable_id);
 
+-- ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, 사용자 요청 "ASANA 모방
+-- 수준의 기능 및 UI 제공을 위한 기획 및 설계안을 제안해줘" → "Phase
+-- 1→5 순서로" 진행 지시, Phase 2) — "초대"는 결재가 필요 없는 가벼운
+-- 멤버십이다. `assignments`(결재 필요, 작업 책임 발생)와 명확히
+-- 분리한다. `participant_id`는 `participant_type='human'`이면
+-- `human_pool.id`가 아니라 **`users.id`**다(`deliverable_comments.
+-- author_id`/`audit_log.actor_id` 관례와 통일 — 초대는 human_pool
+-- 리소스 매칭이 아니라 "이 로그인 계정을 대화에 부른다"는 개념이라
+-- human_pool을 거칠 이유가 없다). `'agent'`면 `agent_pool.id`.
+CREATE TABLE IF NOT EXISTS task_participants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    participant_type TEXT NOT NULL CHECK (participant_type IN ('human', 'agent')),
+    participant_id INTEGER NOT NULL,
+    invited_by INTEGER NOT NULL REFERENCES users(id),
+    invited_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(task_id, participant_type, participant_id)
+);
+
 CREATE TABLE IF NOT EXISTS agent_evaluations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     deliverable_id INTEGER NOT NULL REFERENCES deliverables(id),
@@ -399,6 +418,18 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 댓글)와 달리, 결과물이 아직 없는 단계에서도 Task 참가자들이 맥락/
     # 의사결정을 적어둘 수 있는 곳이 없었다.
     _ensure_column(conn, "tasks", "notes", "TEXT NOT NULL DEFAULT ''")
+
+    # ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) — 댓글
+    # `@멘션`으로 트리거된 Agent 실행을 "AI 에이전트 실행" 버튼으로
+    # 트리거된 것과 구분하기 위한 출처 표시. NULL이면 기존 경로(버튼),
+    # 값이 있으면 그 댓글이 트리거했다는 뜻 — 어느 쪽이든 같은
+    # `agent_execution_jobs` 테이블·폴링 UI를 그대로 재사용한다.
+    _ensure_column(
+        conn,
+        "agent_execution_jobs",
+        "source_comment_id",
+        "INTEGER REFERENCES deliverable_comments(id)",
+    )
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:

@@ -245,9 +245,33 @@ DEFAULT ''`. (버전 이력까지 필요하면 별도 `task_notes` 테이블로
   전체 스위트 그대로 통과), 실서버(port 8000, 실제 hair.db)에 라이브
   배포해 Playwright로 검증 — 메모 저장/조회, task별로 활동이 섞이지
   않는지, 비참가자 403까지 전부 실측 확인.
-- [ ] Phase 2 — F15 초대(결재 없는 가벼운 참가자 추가)
-- [ ] Phase 3 — F15 댓글 `@멘션` 트리거(단, 결과는 항상 댓글로만 —
-  위 결정 1 반영, "결과물로 제출" 버튼으로 사람이 명시적으로 승격)
+- [x] Phase 2 — F15 초대(결재 없는 가벼운 참가자 추가) — 완료(2026-10-08).
+  `task_participants` 테이블(새 테이블이라 `_ensure_column()` 불필요) +
+  `POST/GET /api/tasks/{id}/participants`(초대 자체는 admin/manager 또는
+  이미 댓글 가능한 사람만 — 완전한 외부인의 무단 초대는 막음) +
+  `can_comment_on_task()`(정식 참가자 판정 OR 초대 여부, `create_comment()`
+  /댓글 조회에 적용 — 결과물 작성·실행 트리거는 여전히 기존의 엄격한
+  `task_participant_relationship()`만 통과). 참가자 ID는 `human_pool.id`가
+  아니라 `users.id`/`agent_pool.id`(초대는 리소스 매칭이 아니라 "이
+  계정을 대화에 부른다"는 개념이라 human_pool을 거치지 않음). webui.py에
+  "참가자" 카드(목록 + 초대 폼) 추가. 신규 테스트 8건(`tests/unit/
+  test_phase27_asana_parity_phase2.py`, "초대된 사람이 댓글은 가능하되
+  결과물 작성은 여전히 금지"되는 경계를 명시적으로 확인). 실서버 라이브
+  배포 + Playwright로 참가자 카드 렌더링·초대 플로우 실측 확인.
+- [x] Phase 3 — F15 댓글 `@멘션` 트리거 — 완료(2026-10-08). 댓글 본문에
+  `@역할명`이 있고 그 Agent가 `task_participants`에 초대돼 있으면
+  `create_comment()` 직후 `BackgroundTasks`로 가볍게 실행(결재·Gate·
+  deliverable 생성 전부 생략 — `agent_execution_jobs.source_comment_id`
+  로 "버튼 실행"과 구분). 응답은 **항상** 같은 댓글 스레드에
+  `author_type='agent'`로만 남는다(결정 1-(a) 그대로 구현 — `deliverables`
+  테이블엔 아무 행도 안 생김을 테스트로 직접 확인). "이걸 결과물로
+  제출"은 **새 엔드포인트 없이** 구현했다 — 버튼이 그 댓글 내용을 기존
+  "결과물 작성" textarea에 채워 넣기만 하고, 실제 제출은 기존
+  `ws-submit-form`(기존 F7 체인)을 그대로 탄다. 신규 테스트 6건
+  (`tests/unit/test_phase28_asana_parity_phase3.py` — 뒷문 차단
+  검증이 핵심). 실서버에서 **실제 로컬 Ollama(qwen3-coder:latest, 무료)
+  Agent**를 초대해 멘션으로 호출, 진짜 응답이 댓글로 돌아오고
+  deliverable은 하나도 안 늘어난 것까지 라이브로 확인(비용 0원).
 - [ ] Phase 4 — F16(상태/우선순위/의존관계 + 할 일 보드 + **그래프
   시각화**), F18(운영 가시성)
 - [ ] Phase 5 — F20(온보딩/탭 재구성)

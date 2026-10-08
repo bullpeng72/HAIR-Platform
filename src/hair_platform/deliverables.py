@@ -129,6 +129,115 @@ def task_participant_relationship(
     return None
 
 
+def can_comment_on_task(conn: sqlite3.Connection, task_id: int, actor_id: int) -> bool:
+    """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2) — 댓글
+    작성·열람 권한은 `task_participant_relationship()`보다 넓다: 결재
+    없이 "초대"만 된 사람도 댓글은 달 수 있다(결과물 작성·실행 트리거는
+    여전히 기존 참가자 판정만 통과시킨다 — F15 설계 §1 "초대만으로
+    작성자 자격이 생기진 않는다" 원칙 유지, `task_participant_
+    relationship()` 자체는 손대지 않는다). Agent 초대는 이 함수의
+    대상이 아니다(Agent는 댓글을 사람처럼 "달 수 있는지" 판정받는
+    주체가 아니라 Phase 3에서 트리거되는 쪽이다)."""
+    if task_participant_relationship(conn, task_id, actor_id) is not None:
+        return True
+    row = conn.execute(
+        "SELECT 1 FROM task_participants WHERE task_id = ? "
+        "AND participant_type = 'human' AND participant_id = ?",
+        (task_id, actor_id),
+    ).fetchone()
+    return row is not None
+
+
+def invite_participant(
+    conn: sqlite3.Connection,
+    task_id: int,
+    actor_id: int,
+    participant_type: str,
+    participant_id: int,
+) -> dict:
+    """`POST /api/tasks/{task_id}/participants`(F15, Phase 2) — 결재가
+    필요 없는 가벼운 초대. 누가 초대할 수 있는지(admin/manager 또는
+    기존 참가자)는 RBAC role 분기라 `app.py` 라우트에서 판정한다(이
+    파일의 기존 관례 — 참가자 전용 판정은 여기, role 분기는 라우트)."""
+    task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    if participant_type == "agent":
+        found = conn.execute(
+            "SELECT id FROM agent_pool WHERE id = ?", (participant_id,)
+        ).fetchone()
+        if found is None:
+            raise ValueError("agent_not_found")
+    else:
+        found = conn.execute(
+            "SELECT id FROM users WHERE id = ?", (participant_id,)
+        ).fetchone()
+        if found is None:
+            raise ValueError("user_not_found")
+    try:
+        cur = conn.execute(
+            "INSERT INTO task_participants (task_id, participant_type, "
+            "participant_id, invited_by) VALUES (?, ?, ?, ?)",
+            (task_id, participant_type, participant_id, actor_id),
+        )
+    except sqlite3.IntegrityError:
+        raise ValueError("already_invited") from None
+    participant_row_id = cur.lastrowid
+    assert participant_row_id is not None
+    audit.record(
+        conn,
+        actor_id,
+        "task_participant_invited",
+        "task_participants",
+        participant_row_id,
+        after={
+            "task_id": task_id,
+            "participant_type": participant_type,
+            "participant_id": participant_id,
+        },
+    )
+    conn.commit()
+    return {
+        "id": participant_row_id,
+        "task_id": task_id,
+        "participant_type": participant_type,
+        "participant_id": participant_id,
+        "invited_by": actor_id,
+    }
+
+
+def list_participants(conn: sqlite3.Connection, task_id: int) -> list[dict]:
+    """`GET /api/tasks/{task_id}/participants`(F15, Phase 2).
+
+    `display_name`(Phase 3 추가) — Agent는 `agent_pool.role_name`(댓글
+    `@멘션`에 실제로 써야 하는 정확한 문자열, `detect_mentioned_agents()`
+    와 일치해야 하므로 그대로 노출), 사람은 `users.username`. `GET
+    /api/agent-pool`은 admin/manager 전용이라 일반 참가자는 멘션 대상의
+    정확한 이름을 알 방법이 이것뿐이다 — 참가자 카드에서 그대로
+    보여주기 위해 여기서 조인해 내려준다."""
+    rows = conn.execute(
+        "SELECT * FROM task_participants WHERE task_id = ? "
+        "ORDER BY invited_at ASC, id ASC",
+        (task_id,),
+    ).fetchall()
+    result = []
+    for row in rows:
+        entry = dict(row)
+        if entry["participant_type"] == "agent":
+            agent = conn.execute(
+                "SELECT role_name FROM agent_pool WHERE id = ?",
+                (entry["participant_id"],),
+            ).fetchone()
+            entry["display_name"] = agent["role_name"] if agent else None
+        else:
+            user = conn.execute(
+                "SELECT username FROM users WHERE id = ?", (entry["participant_id"],)
+            ).fetchone()
+            entry["display_name"] = user["username"] if user else None
+        result.append(entry)
+    return result
+
+
 def task_completion_summary(conn: sqlite3.Connection, task_id: int) -> dict:
     """업무 하나의 결과물 진행 상태를 한 줄로 요약한다 — 사용자 요청
     (2026-09-29, "각 업무의 결과물을 어떻게 확인하는지... 분석하고
@@ -382,12 +491,45 @@ def list_comments(conn: sqlite3.Connection, deliverable_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def detect_mentioned_agents(
+    conn: sqlite3.Connection, task_id: int, content: str
+) -> list[dict]:
+    """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) — 댓글 본문에
+    `@에이전트이름`이 있는지 찾는다. "이름"은 `agent_pool.role_name`이고,
+    이 task에 **초대된(task_participants) Agent만** 대상이다(배정
+    여부와 무관 — 가벼운 호출이 F15의 핵심). 한국어 텍스트엔 영어
+    `\\b` 같은 단어 경계가 없어 정규식 토큰화 대신 "@역할명" 부분
+    문자열 포함 여부로 단순하게 판정한다(역할명에 공백이 있어도
+    문제없다)."""
+    rows = conn.execute(
+        """
+        SELECT ap.id, ap.role_name FROM task_participants tp
+        JOIN agent_pool ap ON ap.id = tp.participant_id
+        WHERE tp.task_id = ? AND tp.participant_type = 'agent'
+        """,
+        (task_id,),
+    ).fetchall()
+    return [dict(r) for r in rows if ("@" + r["role_name"]) in content]
+
+
 def create_comment(
     conn: sqlite3.Connection, deliverable_id: int, actor_id: int, content: str
-) -> int:
+) -> dict:
     """`POST /api/deliverables/{id}/comments`(§2-4) — 부모 task 기준으로
     참가자 판정(§2-2)을 재사용한다. Phase 1에서는 항상 author_type='human'
-    (Agent가 댓글을 남기는 경로는 없음)."""
+    (Agent가 댓글을 남기는 경로는 없음).
+
+    ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2) — 판정을
+    `task_participant_relationship()`(결재 거친 정식 참가자만)에서
+    `can_comment_on_task()`(정식 참가자 **또는** 초대만 된 사람)로
+    넓혔다. 결과물 작성·실행 트리거는 여전히 다른 함수들이 기존의
+    엄격한 판정을 그대로 쓴다 — 댓글만 문턱을 낮춘다.
+
+    **반환 타입 변경(2026-10-08, Phase 3)**: `int`(comment_id)에서
+    `dict`로 바꿨다 — `app.py`가 `@멘션`된 Agent가 있으면 댓글 저장
+    *직후* `BackgroundTasks`로 트리거해야 하는데, 그러려면 이 함수가
+    댓글을 만들면서 이미 계산한 `task_id`·멘션 목록을 그대로 돌려줘야
+    호출부가 또 같은 조회를 반복하지 않는다."""
     d = conn.execute(
         "SELECT task_id FROM deliverables WHERE id = ?", (deliverable_id,)
     ).fetchone()
@@ -395,7 +537,7 @@ def create_comment(
         raise ValueError("deliverable_not_found")
     if not content or not content.strip():
         raise ValueError("empty_content")
-    if task_participant_relationship(conn, d["task_id"], actor_id) is None:
+    if not can_comment_on_task(conn, d["task_id"], actor_id):
         raise PermissionError("not_a_participant")
 
     cur = conn.execute(
@@ -413,8 +555,119 @@ def create_comment(
         comment_id,
         after={"deliverable_id": deliverable_id},
     )
+    mentioned_agents = detect_mentioned_agents(conn, d["task_id"], content)
     conn.commit()
-    return comment_id
+    return {
+        "id": comment_id,
+        "task_id": d["task_id"],
+        "deliverable_id": deliverable_id,
+        "mentioned_agents": mentioned_agents,
+    }
+
+
+def start_comment_triggered_execution(
+    conn: sqlite3.Connection,
+    task_id: int,
+    comment_id: int,
+    agent_id: int,
+    actor_id: int,
+    prompt: str,
+) -> int:
+    """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) — 댓글
+    `@멘션`으로 가볍게 Agent를 불러 물어본다. `start_agent_execution()`
+    과 달리 confirmed 배정도, Gate 평가도, 결재 체인도 거치지 않는다
+    — **사용자 결정(a)**: 결과는 항상 댓글로만 남고, 정식 결과물로
+    승격하려면 사람이 별도로 "결과물로 제출"을 눌러야 한다(F7 우회
+    뒷문을 막기 위한 구조적 선택, 설계 §5 리스크 참고).
+
+    `agent_already_running` 가드는 `start_agent_execution()`과 같은
+    이유로 재사용한다 — 버튼 실행이든 댓글 트리거든 같은
+    `agent_execution_jobs` 테이블을 공유하므로, 버튼으로 실행 중일 때
+    댓글 멘션이 겹치는 것도(또는 그 반대도) 막아야 이중 LLM 호출을
+    피한다."""
+    already_running = conn.execute(
+        "SELECT id FROM agent_execution_jobs WHERE task_id = ? AND status = 'running'",
+        (task_id,),
+    ).fetchone()
+    if already_running is not None:
+        raise LookupError("agent_already_running")
+
+    cur = conn.execute(
+        "INSERT INTO agent_execution_jobs (task_id, requested_by, status, "
+        "source_comment_id) VALUES (?, ?, 'running', ?)",
+        (task_id, actor_id, comment_id),
+    )
+    job_id = cur.lastrowid
+    assert job_id is not None
+    audit.record(
+        conn,
+        actor_id,
+        "comment_triggered_execution_started",
+        "agent_execution_jobs",
+        job_id,
+        after={"task_id": task_id, "agent_id": agent_id, "comment_id": comment_id},
+    )
+    conn.commit()
+    return job_id
+
+
+def run_comment_triggered_execution_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    deliverable_id: int,
+    agent_id: int,
+    actor_id: int,
+    prompt: str,
+) -> None:
+    """`start_comment_triggered_execution()`이 반환한 job을 실제로
+    실행한다(`app.py`가 `BackgroundTasks`로 등록 — `run_agent_execution_
+    job()`과 같은 이유로 실패까지 전부 job 행에 기록한다, 예외를 던져도
+    받아줄 호출자가 없다). 성공하면 **같은 deliverable의 댓글 스레드에
+    `author_type='agent'`로 응답만 남긴다** — deliverable·Gate 평가·
+    결재 체인은 전혀 만들지 않는다(사용자 결정 a)."""
+    try:
+        output = agent_runtime.execute_agent(conn, agent_id, actor_id, prompt)
+        cur = conn.execute(
+            "INSERT INTO deliverable_comments (deliverable_id, author_type, "
+            "author_id, content) VALUES (?, 'agent', ?, ?)",
+            (deliverable_id, agent_id, output),
+        )
+        reply_comment_id = cur.lastrowid
+        conn.execute(
+            "UPDATE agent_execution_jobs SET status = 'succeeded', "
+            "finished_at = datetime('now') WHERE id = ?",
+            (job_id,),
+        )
+        audit.record(
+            conn,
+            actor_id,
+            "deliverable_comment_created",
+            "deliverable_comments",
+            reply_comment_id,
+            after={
+                "deliverable_id": deliverable_id,
+                "author_type": "agent",
+                "agent_id": agent_id,
+            },
+        )
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
+        conn.rollback()
+        friendly_error = _friendly_execution_error(exc)
+        conn.execute(
+            "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "
+            "finished_at = datetime('now') WHERE id = ?",
+            (friendly_error, job_id),
+        )
+        audit.record(
+            conn,
+            actor_id,
+            "comment_triggered_execution_failed",
+            "agent_execution_jobs",
+            job_id,
+            after={"agent_id": agent_id, "error": friendly_error},
+        )
+        conn.commit()
 
 
 def record_decision_comment(

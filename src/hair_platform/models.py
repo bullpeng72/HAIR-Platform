@@ -221,6 +221,16 @@ class TaskNotesUpdate(BaseModel):
     notes: str
 
 
+class TaskParticipantInvite(BaseModel):
+    """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2) — 결재가
+    필요 없는 가벼운 참가자 초대. `participant_id`는 `participant_type=
+    'human'`이면 `users.id`(human_pool.id 아님 — db.py의 task_participants
+    테이블 주석 참고), `'agent'`면 `agent_pool.id`."""
+
+    participant_type: Literal["human", "agent"]
+    participant_id: int
+
+
 class AssistRequest(BaseModel):
     """협업 워크스페이스 "LLM으로 도와줘" — `provider`/`model`은 매니저/관리자만
     채울 수 있다(팀원이 채우면 app.py가 400으로 거부, §3 RBAC 결정)."""

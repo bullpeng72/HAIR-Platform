@@ -90,6 +90,7 @@ from hair_platform.models import (
     SkillPoolCreate,
     TaskDecomposition,
     TaskNotesUpdate,
+    TaskParticipantInvite,
     TeamActiveUpdate,
     TeamCreate,
     TeamCrewExecuteRequest,
@@ -947,6 +948,63 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 status_code=404, detail="할 일을 찾을 수 없습니다"
             ) from None
 
+    @app.post("/api/tasks/{task_id}/participants", status_code=201)
+    def invite_task_participant_endpoint(
+        task_id: int,
+        payload: TaskParticipantInvite,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2) — 결재
+        불필요한 가벼운 초대. admin/manager는 항상 가능하고, 그 외엔
+        이 task에 이미 댓글을 달 수 있는 사람(정식 참가자 또는 이미
+        초대된 사람)만 — "초대의 초대"는 허용하되 완전한 외부인이
+        마음대로 사람/Agent를 끌어들이진 못하게 한다."""
+        if user["role"] not in ("admin", "manager") and not (
+            deliverables.can_comment_on_task(conn, task_id, user["id"])
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무에 참가자를 초대할 권한이 없습니다",
+            )
+        try:
+            return deliverables.invite_participant(
+                conn,
+                task_id,
+                user["id"],
+                payload.participant_type,
+                payload.participant_id,
+            )
+        except ValueError as exc:
+            if str(exc) == "task_not_found":
+                raise HTTPException(
+                    status_code=404, detail="할 일을 찾을 수 없습니다"
+                ) from None
+            if str(exc) == "agent_not_found":
+                raise HTTPException(
+                    status_code=404, detail="Agent를 찾을 수 없습니다"
+                ) from None
+            if str(exc) == "user_not_found":
+                raise HTTPException(
+                    status_code=404, detail="사용자를 찾을 수 없습니다"
+                ) from None
+            raise HTTPException(
+                status_code=409, detail="이미 초대된 참가자입니다"
+            ) from None
+
+    @app.get("/api/tasks/{task_id}/participants")
+    def list_task_participants_endpoint(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """F15, Phase 2 — 초대된 참가자 목록."""
+        if user["role"] not in ("admin", "manager") and not (
+            deliverables.can_comment_on_task(conn, task_id, user["id"])
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return deliverables.list_participants(conn, task_id)
+
     @app.get("/api/tasks/{task_id}/deliverables")
     def list_task_deliverables(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)
@@ -1022,15 +1080,16 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     def get_deliverable_comments(
         deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
     ):
-        """§2-4."""
+        """§2-4. F15(2026-10-08, Phase 2) — 초대만 된 사람도 자신이
+        초대된 댓글 스레드는 읽을 수 있어야 하므로
+        `can_comment_on_task()`(쓰기 판정과 동일)로 열람 권한도 넓힌다."""
         d = conn.execute(
             "SELECT task_id FROM deliverables WHERE id = ?", (deliverable_id,)
         ).fetchone()
         if d is None:
             raise HTTPException(status_code=404, detail="결과물을 찾을 수 없습니다")
-        if user["role"] not in ("admin", "manager") and (
-            deliverables.task_participant_relationship(conn, d["task_id"], user["id"])
-            is None
+        if user["role"] not in ("admin", "manager") and not (
+            deliverables.can_comment_on_task(conn, d["task_id"], user["id"])
         ):
             raise HTTPException(
                 status_code=403,
@@ -1042,11 +1101,18 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     def create_deliverable_comment(
         deliverable_id: int,
         payload: DeliverableCommentCreate,
+        background_tasks: BackgroundTasks,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """§2-4."""
+        """§2-4. ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) —
+        댓글에 `@에이전트이름`이 있고 그 Agent가 이 task에 초대돼 있으면,
+        댓글 저장 직후 가볍게 그 Agent를 실행한다(결재·Gate 없음 —
+        사용자 결정 a, 결과는 항상 댓글로만 남는다). 이미 다른 실행이
+        진행 중이면(버튼이든 다른 멘션이든) 조용히 건너뛰고
+        `triggered: false`로 알린다 — 댓글 자체는 멘션 트리거 성패와
+        무관하게 항상 저장돼야 한다."""
         try:
-            comment_id = deliverables.create_comment(
+            result = deliverables.create_comment(
                 conn, deliverable_id, user["id"], payload.content
             )
         except ValueError as exc:
@@ -1062,7 +1128,38 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 status_code=403,
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
             ) from None
-        return {"id": comment_id}
+
+        triggered_jobs = []
+        skipped_agent_ids = []
+        for agent in result["mentioned_agents"]:
+            try:
+                job_id = deliverables.start_comment_triggered_execution(
+                    conn,
+                    result["task_id"],
+                    result["id"],
+                    agent["id"],
+                    user["id"],
+                    payload.content,
+                )
+            except LookupError:
+                skipped_agent_ids.append(agent["id"])
+                continue
+            background_tasks.add_task(
+                deliverables.run_comment_triggered_execution_job,
+                conn,
+                job_id,
+                deliverable_id,
+                agent["id"],
+                user["id"],
+                payload.content,
+            )
+            triggered_jobs.append({"agent_id": agent["id"], "job_id": job_id})
+
+        return {
+            "id": result["id"],
+            "triggered_jobs": triggered_jobs,
+            "skipped_agent_ids": skipped_agent_ids,
+        }
 
     @app.post("/api/tasks/{task_id}/assist")
     def assist_task(

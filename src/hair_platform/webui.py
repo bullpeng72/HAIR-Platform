@@ -794,14 +794,16 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   detail.innerHTML = '<p class="muted">불러오는 중…</p>';
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = isSupervisor ? await fetchModelsByProvider() : {};
-  let items, jobs, permission, confirmedAgents, confirmedTeams, taskDetail, activity;
+  let items, jobs, permission, confirmedAgents, confirmedTeams, taskDetail, activity, participants;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
     jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
-    // ASANA_PARITY_DESIGN_PLAN.md F17(메모)/F19(통합 활동 타임라인),
-    // 2026-10-08 — 둘 다 이 워크스페이스를 열 때 같이 불러온다.
+    // ASANA_PARITY_DESIGN_PLAN.md F17(메모)/F19(통합 활동 타임라인)/
+    // F15(참가자 초대, Phase 2), 2026-10-08 — 전부 워크스페이스를 열 때
+    // 같이 불러온다.
     taskDetail = await api("GET", "/api/tasks/" + taskId);
     activity = await api("GET", "/api/tasks/" + taskId + "/activity");
+    participants = await api("GET", "/api/tasks/" + taskId + "/participants");
     // 사용자가 스크린샷으로 보고한 갭(2026-09-29) — 참가자기만 하면
     // 무조건 실행 버튼을 보여줘, human assignee가 눌러야만 "권한이
     // 없습니다" 403으로 뒤늦게 알게 됐다. 버튼을 그리기 전에 먼저 확인한다.
@@ -901,7 +903,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     submitAction +
     '<div id="comments-' + d.id + '"></div>' +
     '<form class="inline" data-comment-form="' + d.id + '">' +
-    '<input placeholder="댓글" id="comment-input-' + d.id + '" style="flex:1">' +
+    '<input placeholder="댓글(@Agent이름으로 호출 가능)" id="comment-input-' + d.id + '" style="flex:1">' +
     '<button class="small" type="submit">댓글</button></form>' +
     '</div>';
   }).join("") + jobCard;
@@ -1036,6 +1038,34 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       : '<p class="muted">아직 기록된 활동이 없습니다.</p>') +
     '</details>';
 
+  // ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2+3) — 결재 없는
+  // 가벼운 초대. `display_name`(Phase 3 추가, `list_participants()`가
+  // agent_pool/users를 조인해 내려줌)을 보여줘야 참가자가 댓글에
+  // "@정확한이름"을 쓸 수 있다(멘션은 role_name 완전일치 — `detect_
+  // mentioned_agents()` 참고).
+  const invitedAgentNames = participants
+    .filter(p => p.participant_type === "agent" && p.display_name)
+    .map(p => p.display_name);
+  const participantRows = participants.map(p =>
+    '<li>' + esc(label(p.participant_type)) + ' ' +
+    (p.display_name ? esc(p.display_name) : '#' + esc(p.participant_id)) +
+    ' <span class="muted">(초대: 사용자 #' + esc(p.invited_by) + ', ' + esc(p.invited_at) + ')</span></li>'
+  ).join("");
+  const participantsCard =
+    '<section class="card">' +
+    '<h4>참가자</h4>' +
+    '<p class="muted">초대된 사람/Agent는 결재 없이도 이 업무의 댓글을 읽고 달 수 있습니다(결과물 작성·AI 실행 권한은 별개 — 정식 배정이 있어야 합니다). 댓글에 "@Agent이름"을 쓰면 그 Agent를 가볍게 호출합니다(결과는 댓글로만 남고, 결과물로 쓰려면 별도로 제출해야 합니다).</p>' +
+    (participantRows ? '<ul>' + participantRows + '</ul>' : '<p class="muted">아직 초대된 참가자가 없습니다.</p>') +
+    (invitedAgentNames.length
+      ? '<p class="muted">멘션 가능: ' + invitedAgentNames.map(n => '@' + esc(n)).join(", ") + '</p>'
+      : '') +
+    '<form class="inline" id="ws-invite-form">' +
+    '<select id="ws-invite-type"><option value="human">사람(사용자 ID)</option><option value="agent">Agent(Agent ID)</option></select>' +
+    '<input type="number" id="ws-invite-id" placeholder="ID" style="width:6rem" required>' +
+    '<button class="small" type="submit">초대</button>' +
+    '</form>' +
+    '</section>';
+
   // 사용자 요청(2026-09-29, "UI/UX를 개선해줘") — 원래 textarea·provider/
   // model·"LLM으로 도와줘"·"결과물 제출"이 한 줄(.inline flex-wrap)에 전부
   // 뒤섞여 있어 좁은 화면에서 텍스트가 select 옆에 끼어 줄바꿈이 어색했다.
@@ -1045,6 +1075,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
     finalResultCard +
     notesCard +
+    participantsCard +
     '<h4 class="muted">진행 이력(중간 과정 포함)</h4>' +
     '<div id="workspace-timeline">' + timeline + '</div>' +
     activitySection +
@@ -1075,7 +1106,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   if (isSupervisor && confirmedTeams.length) {
     wireProviderModelSelect("ws-team-crew-provider", "ws-team-crew-model", modelsByProvider);
   }
-  items.forEach(d => loadDeliverableComments(d.id));
+  items.forEach(d => loadDeliverableComments(d.id, taskId, containerId));
 
   detail.querySelectorAll("[data-decide-deliverable]").forEach(btn => {
     btn.onclick = async () => {
@@ -1116,6 +1147,20 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     try {
       await api("PATCH", "/api/tasks/" + taskId + "/notes", { notes: notesVal });
       showMsg("global-msg", "메모를 저장했습니다.", "ok");
+      renderCollabWorkspace(taskId, containerId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  document.getElementById("ws-invite-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const participantType = document.getElementById("ws-invite-type").value;
+    const participantId = Number(document.getElementById("ws-invite-id").value);
+    try {
+      await api("POST", "/api/tasks/" + taskId + "/participants", {
+        participant_type: participantType,
+        participant_id: participantId,
+      });
+      showMsg("global-msg", "참가자를 초대했습니다.", "ok");
       renderCollabWorkspace(taskId, containerId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
@@ -1246,14 +1291,49 @@ async function refreshComments(deliverableId) {
   if (!box) return;
   try {
     const comments = await api("GET", "/api/deliverables/" + deliverableId + "/comments");
-    box.innerHTML = comments.map(c => '<div class="muted">↳ ' + esc(c.content) + '</div>').join("");
+    // ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) — Agent가
+    // `@멘션` 트리거로 남긴 응답 댓글을 사람 댓글과 시각적으로 구분한다
+    // (배경색 + "AI 에이전트" 배지, 설계 문서 UI 설계 그대로). 사용자
+    // 결정(a) — 댓글 트리거 결과는 항상 댓글로만 남고, deliverable로
+    // 승격하려면 사람이 명시적으로 "이걸 결과물로 제출"을 눌러야 한다.
+    // **새 엔드포인트를 만들지 않는다** — 버튼은 그 댓글 내용을 기존
+    // "결과물 작성" textarea(#ws-content)에 채워 넣기만 하고, 실제
+    // 제출은 기존 `ws-submit-form`(→ 기존 F7 결재 체인)을 그대로 탄다.
+    box.innerHTML = comments.map(c =>
+      '<div class="' + (c.author_type === "agent" ? "chat-agent" : "muted") + '">↳ ' +
+      (c.author_type === "agent" ? '<span class="gate-badge gate-ok">AI 에이전트</span> ' : '') +
+      esc(c.content) +
+      (c.author_type === "agent"
+        ? ' <button class="small" data-promote-comment="' + c.id +
+          '" data-promote-content="' + escAttr(c.content) + '">이걸 결과물로 제출</button>'
+        : '') +
+      '</div>'
+    ).join("");
   } catch (e) {
     // 참가자가 아니면 403 — 조용히 무시(타임라인 자체는 이미 조회 권한 확인됨).
   }
 }
 
-async function loadDeliverableComments(deliverableId) {
+async function loadDeliverableComments(deliverableId, taskId, containerId) {
   await refreshComments(deliverableId);
+  // F15 Phase 3 — "이걸 결과물로 제출" 버튼은 `refreshComments()`가
+  // `box.innerHTML`을 매번 통째로 새로 그리므로, 그 자식 버튼에 직접
+  // 리스너를 매번 새로 붙이면 §73 이전에 겪었던 "리스너 누적" 버그가
+  // 똑같이 재발한다 — 부모 `box`(innerHTML 교체에도 노드 자체는 안
+  // 바뀜)에 한 번만 위임 바인딩한다.
+  const box = document.getElementById("comments-" + deliverableId);
+  if (box) {
+    box.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-promote-comment]");
+      if (!btn) return;
+      const contentArea = document.getElementById("ws-content");
+      if (!contentArea) return;
+      contentArea.value = btn.dataset.promoteContent;
+      contentArea.scrollIntoView({ behavior: "smooth", block: "center" });
+      contentArea.focus();
+      showMsg("global-msg", "결과물 작성란에 채웠습니다 — 확인 후 \\"결과물 제출\\"을 눌러주세요.", "ok");
+    });
+  }
   const form = document.querySelector('[data-comment-form="' + deliverableId + '"]');
   if (form) {
     form.addEventListener("submit", async (ev) => {
@@ -1262,9 +1342,23 @@ async function loadDeliverableComments(deliverableId) {
       const val = input.value.trim();
       if (!val) return;
       try {
-        await api("POST", "/api/deliverables/" + deliverableId + "/comments", { content: val });
+        const result = await api(
+          "POST", "/api/deliverables/" + deliverableId + "/comments", { content: val }
+        );
         input.value = "";
         await refreshComments(deliverableId);
+        // F15 Phase 3 — @멘션이 트리거됐으면 백그라운드 완료를 폴링해
+        // 응답이 오는 대로 댓글 목록을 다시 갱신한다(기존 "AI 에이전트
+        // 실행" 버튼의 pollExecutionJob() 패턴 재사용).
+        if (result.triggered_jobs && result.triggered_jobs.length) {
+          showMsg("global-msg", "Agent에게 알렸습니다 — 응답을 기다리는 중…", "ok");
+          Promise.all(result.triggered_jobs.map(j => pollExecutionJob(taskId, j.job_id)))
+            .then(() => refreshComments(deliverableId))
+            .catch(() => refreshComments(deliverableId));
+        }
+        if (result.skipped_agent_ids && result.skipped_agent_ids.length) {
+          showMsg("global-msg", "다른 실행이 진행 중이라 일부 Agent는 호출하지 못했습니다 — 완료 후 다시 멘션해 주세요.", "error");
+        }
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     });
   }
