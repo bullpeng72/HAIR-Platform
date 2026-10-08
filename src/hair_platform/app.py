@@ -38,6 +38,7 @@ from hair_platform import (
     agent_runtime,
     assignments,
     audit,
+    conversations,
     cost,
     crew_runtime,
     dashboard,
@@ -73,6 +74,11 @@ from hair_platform.models import (
     AssistRequest,
     BriefSubmission,
     ConsentRequest,
+    ConversationAutoReplyUpdate,
+    ConversationCreate,
+    ConversationMessageCreate,
+    ConversationModelUpdate,
+    ConversationParticipantInvite,
     CostUpdateRequest,
     CrewRunRequest,
     DeliverableCommentCreate,
@@ -1138,6 +1144,272 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
             )
         return deliverables.list_participants(conn, task_id)
+
+    # ---------- 대화 중심 작업공간(Conversational Workspace, §9,
+    # 2026-10-08, 사용자 요청 "로그인하면 기본적으로 대화창이 주어지고
+    # ... 사람이나 에이전트(에이전트 그룹)를 호출하거나 skill을 사용
+    # 하여 업무를 수행") ----------
+
+    @app.post("/api/conversations", status_code=201)
+    def create_conversation_endpoint(
+        payload: ConversationCreate, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        try:
+            return conversations.create_conversation(
+                conn, user["id"], payload.title, payload.linked_task_id
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="연결할 업무를 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 참가자만 이 업무에 대화를 연결할 수 있습니다",
+            ) from None
+
+    @app.get("/api/conversations")
+    def list_conversations_endpoint(user: sqlite3.Row = Depends(get_current_user)):
+        return conversations.list_conversations_for_user(conn, user["id"])
+
+    @app.get("/api/conversations/mentionable")
+    def search_mentionable_endpoint(
+        q: str = "", user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """사용자 결정(4) — 미초대 대상 검색 범위는 조직 전체. 누구나
+        접근 가능(초대 자체가 admin/manager 전용이 아니므로 검색도
+        마찬가지)."""
+        return conversations.search_mentionable(conn, q)
+
+    @app.get("/api/conversations/{conversation_id}")
+    def get_conversation_endpoint(
+        conversation_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        conv = conversations.get_conversation(conn, conversation_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="대화를 찾을 수 없습니다")
+        if not conversations.is_participant(conn, conversation_id, user["id"]):
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 볼 수 있습니다"
+            )
+        return conv
+
+    @app.patch("/api/conversations/{conversation_id}/model")
+    def update_conversation_model_endpoint(
+        conversation_id: int,
+        payload: ConversationModelUpdate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        try:
+            return conversations.update_model_settings(
+                conn, conversation_id, user["id"], payload.provider, payload.model
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="대화를 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 볼 수 있습니다"
+            ) from None
+
+    @app.patch("/api/conversations/{conversation_id}/ai-auto-reply")
+    def update_conversation_auto_reply_endpoint(
+        conversation_id: int,
+        payload: ConversationAutoReplyUpdate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        try:
+            return conversations.update_auto_reply(
+                conn, conversation_id, user["id"], payload.enabled
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="대화를 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 볼 수 있습니다"
+            ) from None
+
+    @app.post("/api/conversations/{conversation_id}/participants", status_code=201)
+    def invite_conversation_participant_endpoint(
+        conversation_id: int,
+        payload: ConversationParticipantInvite,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        try:
+            return conversations.invite_participant(
+                conn,
+                conversation_id,
+                user["id"],
+                payload.participant_type,
+                payload.participant_id,
+            )
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 초대할 수 있습니다"
+            ) from None
+        except ValueError as exc:
+            reason = str(exc)
+            if reason == "conversation_not_found":
+                raise HTTPException(
+                    status_code=404, detail="대화를 찾을 수 없습니다"
+                ) from None
+            if reason == "agent_not_found":
+                raise HTTPException(
+                    status_code=404, detail="Agent를 찾을 수 없습니다"
+                ) from None
+            if reason == "team_not_found":
+                raise HTTPException(
+                    status_code=404, detail="팀을 찾을 수 없습니다"
+                ) from None
+            if reason == "user_not_found":
+                raise HTTPException(
+                    status_code=404, detail="사용자를 찾을 수 없습니다"
+                ) from None
+            raise HTTPException(
+                status_code=409, detail="이미 초대된 참가자입니다"
+            ) from None
+
+    @app.get("/api/conversations/{conversation_id}/participants")
+    def list_conversation_participants_endpoint(
+        conversation_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        if not conversations.is_participant(conn, conversation_id, user["id"]):
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 볼 수 있습니다"
+            )
+        return conversations.list_participants(conn, conversation_id)
+
+    @app.get("/api/conversations/{conversation_id}/jobs")
+    def list_conversation_jobs_endpoint(
+        conversation_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        if not conversations.is_participant(conn, conversation_id, user["id"]):
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 볼 수 있습니다"
+            )
+        return conversations.list_jobs(conn, conversation_id)
+
+    @app.get("/api/conversations/{conversation_id}/messages")
+    def list_conversation_messages_endpoint(
+        conversation_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        if not conversations.is_participant(conn, conversation_id, user["id"]):
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 볼 수 있습니다"
+            )
+        return conversations.list_messages(conn, conversation_id)
+
+    @app.post("/api/conversations/{conversation_id}/messages", status_code=201)
+    def create_conversation_message_endpoint(
+        conversation_id: int,
+        payload: ConversationMessageCreate,
+        background_tasks: BackgroundTasks,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """세 가지 트리거를 전부 여기서 오케스트레이션한다(각자 독립
+        job이라 "이미 실행 중" 가드 없이 동시에 돌 수 있다 — 실제 그룹
+        채팅에서 여러 봇이 동시에 응답하는 것과 같은 모델): (1) 멘션된
+        Agent마다 `run_agent_mention_job`, (2) 멘션된 Team마다
+        `run_team_mention_job`, (3) `skill`이 명시됐거나(명시적 요청이라
+        항상 트리거) 멘션이 하나도 없고 `ai_auto_reply=1`이면
+        `run_default_ai_job`(멘션이 있으면 기본 AI는 끼어들지 않는다 —
+        응답 중복 방지)."""
+        try:
+            result = conversations.create_message(
+                conn, conversation_id, user["id"], payload.content, payload.skill
+            )
+        except ValueError as exc:
+            if str(exc) == "conversation_not_found":
+                raise HTTPException(
+                    status_code=404, detail="대화를 찾을 수 없습니다"
+                ) from None
+            if str(exc) == "skill_not_found":
+                raise HTTPException(
+                    status_code=404, detail="스킬을 찾을 수 없습니다"
+                ) from None
+            raise HTTPException(
+                status_code=400, detail="내용을 입력해야 합니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 메시지를 보낼 수 있습니다"
+            ) from None
+
+        triggered_jobs = []
+        for agent in result["mentioned_agents"]:
+            job_id = conversations.start_agent_mention_job(
+                conn, conversation_id, agent["id"], user["id"]
+            )
+            background_tasks.add_task(
+                conversations.run_agent_mention_job,
+                conn,
+                job_id,
+                conversation_id,
+                agent["id"],
+                user["id"],
+            )
+            triggered_jobs.append(
+                {"trigger_type": "agent_mention", "job_id": job_id, "agent_id": agent["id"]}
+            )
+        for team in result["mentioned_teams"]:
+            job_id = conversations.start_team_mention_job(
+                conn, conversation_id, team["id"], user["id"]
+            )
+            background_tasks.add_task(
+                conversations.run_team_mention_job,
+                conn,
+                job_id,
+                conversation_id,
+                team["id"],
+                user["id"],
+            )
+            triggered_jobs.append(
+                {"trigger_type": "team_mention", "job_id": job_id, "team_id": team["id"]}
+            )
+        if result["skill"] or (not result["has_mentions"] and result["ai_auto_reply"]):
+            job_id = conversations.start_default_ai_job(
+                conn, conversation_id, user["id"], result["skill"]
+            )
+            background_tasks.add_task(
+                conversations.run_default_ai_job,
+                conn,
+                job_id,
+                conversation_id,
+                user["id"],
+                result["skill"],
+            )
+            triggered_jobs.append(
+                {
+                    "trigger_type": "skill" if result["skill"] else "auto_reply",
+                    "job_id": job_id,
+                }
+            )
+
+        return {"id": result["id"], "triggered_jobs": triggered_jobs}
+
+    @app.post("/api/conversations/{conversation_id}/promote-to-brief", status_code=201)
+    def promote_conversation_to_brief_endpoint(
+        conversation_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """"기존 방식과 공존" — 대화가 무거워지면 정식 업무 요청(Brief)
+        으로 전환한다."""
+        try:
+            return conversations.promote_to_brief(conn, conversation_id, user["id"])
+        except ValueError as exc:
+            if str(exc) == "conversation_not_found":
+                raise HTTPException(
+                    status_code=404, detail="대화를 찾을 수 없습니다"
+                ) from None
+            raise HTTPException(
+                status_code=400, detail="승격할 메시지가 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 승격할 수 있습니다"
+            ) from None
 
     @app.get("/api/tasks/{task_id}/deliverables")
     def list_task_deliverables(

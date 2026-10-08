@@ -581,3 +581,50 @@ F21-2(대화 맥락 포함)·F21-4(경량 폴링)는 이번 확장에도 그대�
    중)는 기본 꺼짐** — 용도가 다르다는 전제.
 
 이 중 방향을 확인해주면 그 범위부터 실제 코드로 구현한다.
+
+### 9-8. 결정 및 구현 현황(2026-10-08)
+
+**사용자 결정**(위 6개 열린 질문 전부): (1) 1인당 대화 여러 개 허용.
+(2) Team 호출 시 워커 Agent별 메시지를 각각 올림. (3) skill은
+"사용자가 조회해 대화창에서 모델에 일을 시킬 수 있음" — 메시지에
+명시적으로 붙여 그라운딩(설계 가정 (a) 그대로). (4) 미초대 대상
+검색 범위는 **조직 전체**. (6) `ai_auto_reply` 기본값은 **켜짐(1)**
+(추천안의 "Task 종속은 기본 꺼짐" 차등 적용 없이 균일하게 켜짐).
+**로드맵은 9-6 표 전체를 한 번에 진행.**
+
+- [x] **전체(1-5단계) 완료**(2026-10-08). `conversations`/
+  `conversation_participants`(human/agent/**team**)/`conversation_messages`
+  /`conversation_jobs` 4개 테이블 신설. `src/hair_platform/
+  conversations.py` 신규 모듈(생성/참가자/메시지/멘션 감지/대화
+  맥락/3가지 트리거/Brief 승격). API 9개 엔드포인트.
+  - **기본 AI**: `llm.call_llm()` 직접 호출(agent_pool 경유 없음),
+    대화 자체의 `llm_provider`/`llm_model` 사용. 멘션 있으면 끼어들지
+    않는다.
+  - **Agent 멘션**: `agent_runtime.execute_agent()` 직접 호출
+    (confirmed 배정 불필요 — F15 Phase 3와 같은 패턴), 그 Agent
+    자신의 저장된 모델 사용.
+  - **Team 멘션**: `crew_runtime.run_crew_for_team()`이 아니라 그
+    내부의 저수준 `run_crew()`를 직접 호출(Task/confirmed 배정 불필요)
+    — 사용자 결정대로 워커 Agent별 메시지를 각각 올림.
+  - **skill 사용**: `deliverables.skill_grounded_system_prompt()`를
+    공개 함수로 승격해 재사용(기존 `assist()`의 private 헬퍼였음).
+  - **대화 맥락**: `_build_transcript()`로 최근 10건을 모든 응답
+    경로(기본 AI/Agent 멘션/Team 멘션)가 공유.
+  - **Task 워크스페이스 임베드**(F21-1 흡수): `linked_task_id`가
+    채워진 대화를 협업 워크스페이스 안에 그대로 재사용 — 결과물
+    0건이어도 "대화 시작" 버튼으로 바로 쓸 수 있다(F15 때 발견한
+    구조적 한계의 해소).
+  - "기존 방식과 공존": `POST .../promote-to-brief`로 대화 전체를
+    transcript 삼아 정식 Brief로 전환.
+  - 신규 테스트 21건(`tests/unit/test_phase31_conversational_
+    workspace.py`).
+  - **실서버 라이브 검증 중 발견해 즉시 고친 버그**: `@` 멘션
+    자동완성 드롭다운이 이름에 공백이 있는 참가자(예: "게임 AI팀")를
+    끝까지 타이핑하면 중간 공백에서 영구히 닫혀버리는 버그 —
+    "공백이면 멘션 끝"이라는 원래 판정이 다중 단어 한국어 이름과
+    근본적으로 안 맞았다. 공백 여부 대신 "후보 이름에 여전히 포함되는
+    동안만 열어둔다"로 바꿔 해결(`docs/LIMITS.md` §80 참고).
+  - 실서버에서 **실제 로컬 Ollama 모델**로 기본 AI 자동응답·특정
+    Agent 멘션·Team 멘션(2-Agent CrewAI, 워커별 메시지 분리 확인)·
+    skill 그라운딩·Brief 승격·Task 임베드까지 전부 실측 확인(비용
+    거의 0원 — 로컬 모델만 사용).

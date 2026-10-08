@@ -269,6 +269,81 @@ CREATE TABLE IF NOT EXISTS task_participants (
     UNIQUE(task_id, participant_type, participant_id)
 );
 
+-- ASANA_PARITY_DESIGN_PLAN.md §9(2026-10-08, 사용자 요청 "로그인하면
+-- 기본적으로 대화창이 주어지고... 사람이나 에이전트(에이전트 그룹)를
+-- 호출하거나 skill을 사용하여 업무를 수행하는 방식으로 UX를 개선") —
+-- "대화"는 Task가 있어야만 존재하는 게 아니다. linked_task_id가
+-- 채워지면 그 Task 전용 대화(F21-1이 원래 노리던 것), NULL이면
+-- 로그인 직후 바로 쓰는 독립된 "내 대화"다 — 하나의 모델로 둘 다
+-- 표현한다. llm_provider/llm_model은 agent_pool과 같은 관례로 NULL=
+-- 플랫폼 기본값(`llm.resolve_provider_and_model()`), ai_auto_reply
+-- (사용자 결정: 기본 켜짐)는 멘션 없는 평범한 메시지에도 이 설정으로
+-- 자동 응답할지를 결정한다.
+CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    title TEXT NOT NULL DEFAULT '',
+    linked_task_id INTEGER REFERENCES tasks(id),
+    llm_provider TEXT,
+    llm_model TEXT,
+    ai_auto_reply INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- task_participants(F15)와 같은 모양이지만 'team'(에이전트 그룹)을
+-- participant_type에 추가한다 — "에이전트 그룹 호출"을 표현하려면
+-- 꼭 필요하다.
+CREATE TABLE IF NOT EXISTS conversation_participants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    participant_type TEXT NOT NULL CHECK (participant_type IN ('human', 'agent', 'team')),
+    participant_id INTEGER NOT NULL,
+    invited_by INTEGER NOT NULL REFERENCES users(id),
+    invited_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(conversation_id, participant_type, participant_id)
+);
+
+-- used_skill(사용자 결정: "사용자가 skill을 조회해 대화창에서 모델에
+-- 일을 시킬 수 있음")은 이 메시지가 어떤 스킬로 그라운딩된 요청이었는지
+-- 화면에 보여주기 위한 출처 표시일 뿐, FK가 아니다(skill_pool에서
+-- 지워져도 과거 메시지 기록은 그대로 남아야 한다).
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    author_type TEXT NOT NULL CHECK (author_type IN ('human', 'agent')),
+    author_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    used_skill TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- agent_execution_jobs(Task 전용)와 같은 역할이지만 대화는 Task와
+-- 무관하게 여러 멘션(Agent 여러 명 + Team 여러 개 + 기본 AI)이 동시에
+-- 트리거될 수 있어 "task당 1개만 running" 같은 가드를 두지 않는다 —
+-- 각 트리거가 독립된 job 행을 갖고 병렬로 끝난다(실제 그룹 채팅에서
+-- 여러 봇이 동시에 응답하는 것과 같은 모델).
+CREATE TABLE IF NOT EXISTS conversation_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    trigger_type TEXT NOT NULL CHECK (
+        trigger_type IN ('auto_reply', 'skill', 'agent_mention', 'team_mention')
+    ),
+    agent_id INTEGER REFERENCES agent_pool(id),
+    team_id INTEGER REFERENCES teams(id),
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'succeeded', 'failed')),
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_conversation_id
+    ON conversation_participants(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id
+    ON conversation_messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_jobs_conversation_id
+    ON conversation_jobs(conversation_id);
+
 CREATE TABLE IF NOT EXISTS agent_evaluations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     deliverable_id INTEGER NOT NULL REFERENCES deliverables(id),

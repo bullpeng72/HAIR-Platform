@@ -462,3 +462,38 @@ class ModelRegistryCreate(BaseModel):
 
 class ModelActiveUpdate(BaseModel):
     is_active: bool
+
+
+class ConversationCreate(BaseModel):
+    """ASANA_PARITY_DESIGN_PLAN.md §9(2026-10-08) — 로그인 직후 바로
+    쓸 수 있는 독립 대화, 또는 특정 Task에 종속된 대화. `linked_task_id`
+    를 주면 후자(생성자가 그 Task 참가자여야 함 — `app.py`가 확인)."""
+
+    title: str = ""
+    linked_task_id: int | None = None
+
+
+class ConversationParticipantInvite(BaseModel):
+    """`participant_id`는 `participant_type='human'`이면 `users.id`,
+    `'agent'`면 `agent_pool.id`, `'team'`이면 `teams.id`."""
+
+    participant_type: Literal["human", "agent", "team"]
+    participant_id: int
+
+
+class ConversationMessageCreate(BaseModel):
+    """`skill`(선택, 사용자 결정 "skill을 조회해 대화창에서 모델에 일을
+    시킬 수 있음")을 주면 `skill_pool`의 그 스킬로 그라운딩된 응답을
+    명시적으로 요청한다 — `ai_auto_reply` 설정과 무관하게 항상 응답."""
+
+    content: str
+    skill: str | None = None
+
+
+class ConversationModelUpdate(BaseModel):
+    provider: LlmProvider | None = None
+    model: str | None = None
+
+
+class ConversationAutoReplyUpdate(BaseModel):
+    enabled: bool

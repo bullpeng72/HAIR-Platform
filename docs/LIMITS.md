@@ -4162,3 +4162,76 @@ Agent 참가자 모두 후보에 포함하고 Agent는 "(AI)" 배지로 구분�
 
 **참가자 UI가 "아바타 행"이 아니라 텍스트 목록인 것**은 순수
 코스메틱(기능 차이 없음)이라 기록만 남기고 넘어간다.
+
+## 80. 대화 중심 작업공간(Conversational Workspace) 구현 — `docs/
+ASANA_PARITY_DESIGN_PLAN.md` §9 전체(2026-10-08, 사용자 요청 "현재
+방식의 업무 처리는... 유연성이나 Agility가 부족해. 로그인하면
+기본적으로 대화창이 주어지고... 사람이나 에이전트(에이전트 그룹)를
+호출하거나 skill을 사용하여 업무를 수행" → "1인당 대화 여러 개, Team
+은 워커별 메시지 각각, skill은 조회해서 일을 시킴, 멘션 검색은 조직
+전체, ai_auto_reply 기본 켜짐, 로드맵은 전체"로 전부 결정).
+
+F15(Task 참가자 초대+댓글 @멘션)가 "Task가 있어야만" 쓸 수 있던
+구조를 깨고, 로그인 직후 바로 쓸 수 있는 독립 엔티티로 확장한
+가장 큰 단일 기능 추가다 — 신규 테이블 4개, 신규 모듈
+(`conversations.py`) 1개, API 9개, 테스트 21건.
+
+**세 가지 응답 경로가 서로 다른 모델 "정체성"을 쓰는 설계가 핵심**:
+기본 AI(대화 자체의 `llm_provider`/`llm_model`, agent_pool 미경유,
+`llm.call_llm()` 직접 호출) / 특정 Agent 멘션(그 Agent 자신의 저장된
+모델, `agent_runtime.execute_agent()` 직접 호출) / Team 멘션(팀
+멤버들 각자의 모델로 CrewAI 실행, `crew_runtime.run_crew()` 직접
+호출). 셋 다 F15 Phase 3가 확립한 패턴 — "confirmed 배정을 요구하는
+무거운 함수 대신, 그 함수가 내부적으로 쓰는 저수준 함수를 직접
+호출해 배정/승인 절차를 건너뛴다" — 를 그대로 반복 적용했다. 이미
+검증된 패턴을 세 번째로 재사용한 것이라 설계 리스크가 낮았다.
+
+**`run_crew_for_team()`을 못 쓰고 `run_crew()`로 내려간 이유(실제
+코드 추적으로 확인)**: `run_crew_for_team()`은 호출 즉시 `SELECT ...
+FROM assignments WHERE task_id = ? AND resource_type = 'team' AND
+status = 'confirmed'`를 확인하고 없으면 `ValueError`를 던진다
+(`crew_runtime.py:640` 부근) — 대화는 애초에 Task/배정 개념이 없을
+수 있어(독립 대화) 이 체크를 통과할 수 없다. 그 함수의 마지막 줄이
+`return run_crew(conn, agent_ids, task_descriptions, actor_id, ...)`
+였다는 것을 확인하고, 그 `run_crew()`를 대화 쪽에서 직접 호출하도록
+설계했다 — `task_descriptions`는 Task의 `role_name` 대신 대화
+transcript로 채운다.
+
+**`skill_grounded_system_prompt()`를 public으로 승격**: 원래
+`deliverables.py`의 `_skill_grounded_system_prompt()`(private, 밑줄
+접두사)였다 — 유일한 호출자가 `assist()` 하나뿐이라 모듈 내부
+구현처럼 보였지만, 설계 문서가 이번 기능에서도 "새 그라운딩
+메커니즘을 만들지 않는다"고 명시했으므로 모듈 경계를 넘어 재사용
+해야 했다. 밑줄을 떼고 `conversations.py`에서 `deliverables.
+skill_grounded_system_prompt(...)`로 직접 호출한다 — 중복 구현을
+피하려고 작은 API 경계 변경을 감수한 사례.
+
+**실서버 라이브 검증 중 실제로 발견한 버그 — `@` 멘션 자동완성이
+공백 있는 이름에서 깨짐**: `setupMentionAutocomplete()`(F15 Phase 1
+완결성 감사 때 추가, §79)의 원래 판정은 "`@` 뒤 텍스트에 공백이
+있으면 멘션이 이미 끝난 것"이었다 — Task 참가자는 대부분 한 단어
+Agent 이름이라 이 가정이 안 드러났는데, 대화의 Team 참가자 이름
+("게임 AI팀" 같은 다중 단어 한국어 이름)을 실제로 끝까지 타이핑해
+보니 중간 공백에서 드롭다운이 영구히 닫혀 버렸다(재현: `@게임 AI팀`
+타이핑 → "게임 " 뒤 공백에서 닫힘 → 이후 어떤 글자를 쳐도 다시 안
+열림). 공백 여부로 판단하는 대신 "쿼리가 후보 이름에 여전히 부분
+문자열로 남아있는 동안만 연다"로 바꿔 해결 — 후보와 아예 갈라지면
+기존 `matches.length` 검사가 자연스럽게 닫으므로 로직이 더 단순해
+지기까지 했다. 이 버그는 **라이브로 실제 타이핑을 재현하지 않았다면
+못 잡았을 것**이다(단위 테스트는 완성된 멘션 텍스트를 한 번에
+POST하는 방식이라 "타이핑 도중 드롭다운이 닫히는지"는 검증 범위
+밖이었다) — 실서버+Playwright 실측 검증의 가치를 다시 보여준 사례.
+
+**검증**: `tests/unit/test_phase31_conversational_workspace.py` 21건
+(생성/권한/기본 AI 자동응답 on-off/모델 설정 반영/Agent 멘션+미초대
+무트리거+실패 기록/Team 멘션 워커별 메시지+매니저 산출물 없음 스킵/
+skill 그라운딩+미등록 스킬 거부/조직 전체 멘션 검색/임의 참가자 초대
+허용/Task 종속 대화의 스킬 그라운딩/Brief 승격+빈 대화 거부/멀티턴
+맥락 포함까지) — 전체 스위트 320건(299+21) 통과. 실서버(port 8000,
+실제 hair.db)에 재배포해 Playwright로 전체 플로우 실측: 로그인 직후
+"대화" 탭 랜딜·모델 설정·평범한 메시지의 기본 AI 자동응답(실제 로컬
+Ollama)·조직 전체 검색으로 Agent/Team 초대·`@` 멘션 자동완성(버그
+수정 후)·특정 Agent 멘션 트리거(실제 응답)·Team 멘션 트리거(2-Agent
+CrewAI, 워커별 메시지 분리 확인)·skill 그라운딩 채팅·대화→Brief
+승격·Task 워크스페이스 임베드("대화 시작" 버튼 → 인라인 임베드)까지
+전부 콘솔 에러 0건으로 확인.

@@ -576,6 +576,7 @@ let ME = null;
    프로세스 순서(배정 → Agent/사람 준비 → Pool 표준화 → 계정 관리)를
    그대로 따른다. */
 const TABS = [
+  { id: "conversations", label: "대화", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderConversations },
   { id: "inbox", label: "인박스", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderInbox },
   { id: "mywork", label: "내 업무", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderMyWork },
   { id: "board", label: "할 일 보드", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBoard },
@@ -666,6 +667,10 @@ function buildNav() {
 let currentTab = null;
 
 async function selectTab(id) {
+  // ASANA_PARITY_DESIGN_PLAN.md §9-6 "경량 폴링" — 대화 화면을 벗어나면
+  // 어느 쪽에서 열었든(독립 "대화" 탭/Task 워크스페이스 임베드) 반드시
+  // 멈춘다(단일 전역 타이머라 여기 한 곳에서만 끊어도 충분하다).
+  _stopConversationPolling();
   currentTab = id;
   for (const btn of document.querySelectorAll("#tabs button")) {
     btn.classList.toggle("active", btn.dataset.tab === id);
@@ -702,6 +707,300 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
   await api("POST", "/logout");
   await boot();
 });
+
+/* ---------- 대화 중심 작업공간(Conversational Workspace, §9,
+   2026-10-08, 사용자 요청 "로그인하면 기본적으로 대화창이 주어지고...
+   사람이나 에이전트(에이전트 그룹)를 호출하거나 skill을 사용하여
+   업무를 수행"). TABS 배열 맨 앞(로그인 직후 첫 화면)에 둔다. ---------- */
+
+let _conversationPollTimer = null;
+
+function _stopConversationPolling() {
+  if (_conversationPollTimer) {
+    clearInterval(_conversationPollTimer);
+    _conversationPollTimer = null;
+  }
+}
+
+async function renderConversations(content) {
+  _stopConversationPolling();
+  const list = await api("GET", "/api/conversations");
+  content.innerHTML =
+    '<section class="card"><h2>대화</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>로그인하면 바로 쓸 수 있는 대화 공간입니다 — 사람·Agent·Agent 그룹(Team)을 불러 대화하듯 업무를 처리하세요.</li>' +
+    '<li>대화가 무거워지면 "정식 업무 요청으로 전환" 버튼으로 기존 업무 요청(Brief) 흐름에 올릴 수 있습니다 — 가벼운 대화와 정식 절차가 공존합니다.</li>' +
+    '</ul>' +
+    '<form class="inline" id="new-conversation-form">' +
+    '<input id="new-conversation-title" placeholder="새 대화 제목(선택)" style="flex:1">' +
+    '<button class="primary" type="submit">새 대화 시작</button>' +
+    '</form>' +
+    table(["ID", "제목", "시작일", "동작"], list.map(c => [
+      c.id,
+      esc(c.title || "(제목 없음)") + (c.linked_task_id ? ' <span class="muted">(업무 #' + c.linked_task_id + ')</span>' : ''),
+      esc(c.created_at),
+      '<button class="small" data-open-conversation="' + c.id + '">열기</button>',
+    ])) +
+    '<div id="conversation-detail"></div>' +
+    '</section>';
+
+  document.getElementById("new-conversation-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const title = document.getElementById("new-conversation-title").value.trim();
+    try {
+      const conv = await api("POST", "/api/conversations", { title });
+      showMsg("global-msg", "새 대화를 시작했습니다.", "ok");
+      await renderConversations(content);
+      renderConversationDetail(conv.id, "conversation-detail");
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  content.querySelectorAll("[data-open-conversation]").forEach(btn => {
+    btn.onclick = () => renderConversationDetail(Number(btn.dataset.openConversation), "conversation-detail");
+  });
+}
+
+async function refreshConversationMessages(conversationId, participants, llmModel) {
+  const box = document.getElementById("conv-messages");
+  if (!box) return;
+  try {
+    const messages = await api("GET", "/api/conversations/" + conversationId + "/messages");
+    box.innerHTML = messages.length ? messages.map(m => _renderConversationMessage(m, participants, llmModel)).join("")
+      : '<p class="muted">아직 메시지가 없습니다 — 아래에 메시지를 입력해 보세요.</p>';
+  } catch (e) {
+    // 참가자가 아니게 됐으면(제거됨) 403 — 조용히 무시.
+  }
+}
+
+function _conversationAuthorLabel(authorType, authorId, participants, llmModel) {
+  if (authorType === "human") return "사용자 #" + authorId;
+  if (authorId === conversationsDefaultAiAuthorId) {
+    return "AI" + (llmModel ? "(" + esc(llmModel) + ")" : "");
+  }
+  const p = participants.find(p => p.participant_type === "agent" && p.participant_id === authorId);
+  return p ? esc(p.display_name) + " (AI)" : "AI 에이전트 #" + authorId;
+}
+
+// `conversation_messages.author_id`의 예약 sentinel — 실존 agent_pool
+// 행이 없는 "대화 자체의 기본 AI"를 가리킨다(`conversations.py`의
+// `DEFAULT_AI_AUTHOR_ID`와 반드시 같은 값이어야 한다 — agent_pool.id
+// 는 AUTOINCREMENT라 0이 될 수 없어 안전한 sentinel이다).
+const conversationsDefaultAiAuthorId = 0;
+
+function _renderConversationMessage(m, participants, llmModel) {
+  const side = m.author_type === "agent" ? "chat-agent" : "chat-human";
+  const who = _conversationAuthorLabel(m.author_type, m.author_id, participants, llmModel);
+  const skillBadge = m.used_skill
+    ? ' <span class="gate-badge gate-ok">스킬: ' + esc(m.used_skill) + '</span>'
+    : '';
+  return '<div class="deliverable-card ' + side + '">' +
+    '<div class="muted">' + who + skillBadge + ' · ' + esc(m.created_at) + '</div>' +
+    '<div>' + renderContent(m.content) + '</div>' +
+    '</div>';
+}
+
+async function renderConversationDetail(conversationId, containerId) {
+  _stopConversationPolling();
+  const detail = document.getElementById(containerId);
+  if (!detail) return;
+  detail.dataset.conversationId = String(conversationId);
+  detail.innerHTML = '<p class="muted">불러오는 중…</p>';
+
+  const modelsByProvider = await fetchModelsByProvider();
+  let conv, participants, messages, skillNames;
+  try {
+    conv = await api("GET", "/api/conversations/" + conversationId);
+    participants = await api("GET", "/api/conversations/" + conversationId + "/participants");
+    messages = await api("GET", "/api/conversations/" + conversationId + "/messages");
+    skillNames = await api("GET", "/api/skill-pool/names");
+  } catch (e) {
+    detail.innerHTML = "";
+    showMsg("global-msg", e.message, "error");
+    return;
+  }
+
+  const participantRows = participants.map(p =>
+    '<li>' + esc(label(p.participant_type)) + ' ' + esc(p.display_name || ("#" + p.participant_id)) + '</li>'
+  ).join("");
+
+  const messageCards = messages.map(m => _renderConversationMessage(m, participants, conv.llm_model)).join("");
+
+  detail.innerHTML =
+    '<section class="card">' +
+    '<h3>' + esc(conv.title || "(제목 없음)") +
+    (conv.linked_task_id ? ' <span class="muted">업무 #' + conv.linked_task_id + ' 전용 대화</span>' : '') +
+    '</h3>' +
+    '<div class="inline">' +
+    '<select id="conv-provider"><option value="">provider 자동 판별</option>' +
+    '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
+    '<option value="ollama">Ollama(로컬)</option></select>' +
+    modelSelectHtml("conv-model") +
+    '<label><input type="checkbox" id="conv-auto-reply"' + (conv.ai_auto_reply ? " checked" : "") + '> AI 자동응답</label>' +
+    '<button class="small" id="conv-promote-btn">정식 업무 요청으로 전환</button>' +
+    '</div>' +
+    '<p class="muted">AI 자동응답이 켜져 있으면 멘션 없는 메시지에도 매번 LLM 호출이 발생합니다(비용 발생). provider/model을 바꾸면 바로 저장됩니다.</p>' +
+    '<h4>참가자</h4>' +
+    (participantRows ? '<ul>' + participantRows + '</ul>' : '<p class="muted">참가자가 없습니다.</p>') +
+    '<div style="position:relative;margin-bottom:0.75rem">' +
+    '<input id="conv-invite-input" placeholder="이름으로 검색해 초대(사람·Agent·Team, 조직 전체 검색)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
+    '<ul class="mention-dropdown" id="conv-invite-dropdown" style="display:none"></ul>' +
+    '</div>' +
+    '<h4>대화</h4>' +
+    '<div id="conv-messages">' + (messageCards || '<p class="muted">아직 메시지가 없습니다 — 아래에 메시지를 입력해 보세요.</p>') + '</div>' +
+    '<form class="inline" id="conv-message-form" style="margin-top:0.5rem;flex-wrap:wrap">' +
+    '<select id="conv-skill-select"><option value="">스킬 선택 안 함</option>' +
+    skillNames.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join("") +
+    '</select>' +
+    '<div class="mention-wrap" style="position:relative;flex:1;min-width:200px">' +
+    '<input id="conv-message-input" placeholder="메시지(@참가자이름으로 호출 가능)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
+    '<ul class="mention-dropdown" id="conv-mention-dropdown" style="display:none"></ul>' +
+    '</div>' +
+    '<button class="primary" type="submit">전송</button>' +
+    '</form>' +
+    '</section>';
+
+  wireProviderModelSelect("conv-provider", "conv-model", modelsByProvider, conv.llm_model);
+  if (conv.llm_provider) document.getElementById("conv-provider").value = conv.llm_provider;
+
+  const mentionInput = document.getElementById("conv-message-input");
+  const mentionDropdown = document.getElementById("conv-mention-dropdown");
+  setupMentionAutocomplete(mentionInput, mentionDropdown, participants);
+
+  document.getElementById("conv-provider").addEventListener("change", () => _saveConversationModel(conversationId));
+  document.getElementById("conv-model").addEventListener("change", () => _saveConversationModel(conversationId));
+  const customModelInput = document.getElementById("conv-model-custom");
+  if (customModelInput) customModelInput.addEventListener("change", () => _saveConversationModel(conversationId));
+
+  document.getElementById("conv-auto-reply").addEventListener("change", async (ev) => {
+    try {
+      await api("PATCH", "/api/conversations/" + conversationId + "/ai-auto-reply", {
+        enabled: ev.target.checked,
+      });
+      showMsg("global-msg", "자동응답 설정을 저장했습니다.", "ok");
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  document.getElementById("conv-promote-btn").addEventListener("click", async () => {
+    try {
+      const result = await api("POST", "/api/conversations/" + conversationId + "/promote-to-brief", {});
+      showMsg("global-msg", "정식 업무 요청(#" + result.brief_id + ")으로 전환했습니다 — '업무 요청' 탭에서 확인하세요.", "ok");
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  // 참가자 검색-초대: 입력마다 조직 전체에서 검색(디바운스)하고,
+  // 후보를 클릭하면 바로 초대한다(사용자 결정 4 — 검색 범위는 조직
+  // 전체, 같은 Brief/Task로 좁히지 않는다).
+  const inviteInput = document.getElementById("conv-invite-input");
+  const inviteDropdown = document.getElementById("conv-invite-dropdown");
+  let inviteDebounce = null;
+  inviteInput.addEventListener("input", () => {
+    clearTimeout(inviteDebounce);
+    const q = inviteInput.value.trim();
+    if (!q) { inviteDropdown.style.display = "none"; inviteDropdown.innerHTML = ""; return; }
+    inviteDebounce = setTimeout(async () => {
+      let results;
+      try {
+        results = await api("GET", qs("/api/conversations/mentionable", { q }));
+      } catch (e) { return; }
+      const items = [
+        ...results.humans.map(h => ({ type: "human", id: h.id, name: h.username })),
+        ...results.agents.map(a => ({ type: "agent", id: a.id, name: a.role_name })),
+        ...results.teams.map(t => ({ type: "team", id: t.id, name: t.name })),
+      ];
+      if (!items.length) { inviteDropdown.style.display = "none"; inviteDropdown.innerHTML = ""; return; }
+      const TYPE_LABEL = { human: "사람", agent: "AI 에이전트", team: "팀" };
+      inviteDropdown.innerHTML = items.map(it =>
+        '<li data-invite-type="' + it.type + '" data-invite-id="' + it.id + '">' +
+        esc(it.name) + ' <span class="muted">(' + TYPE_LABEL[it.type] + ')</span></li>'
+      ).join("");
+      inviteDropdown.style.display = "block";
+    }, 250);
+  });
+  inviteInput.addEventListener("blur", () => setTimeout(() => { inviteDropdown.style.display = "none"; }, 150));
+  inviteDropdown.addEventListener("mousedown", async (ev) => {
+    const li = ev.target.closest("[data-invite-type]");
+    if (!li) return;
+    ev.preventDefault();
+    try {
+      await api("POST", "/api/conversations/" + conversationId + "/participants", {
+        participant_type: li.dataset.inviteType,
+        participant_id: Number(li.dataset.inviteId),
+      });
+      showMsg("global-msg", "초대했습니다.", "ok");
+      renderConversationDetail(conversationId, containerId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  document.getElementById("conv-message-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const input = document.getElementById("conv-message-input");
+    const content = input.value.trim();
+    if (!content) return;
+    const skill = document.getElementById("conv-skill-select").value || undefined;
+    try {
+      const payload = { content };
+      if (skill) payload.skill = skill;
+      const result = await api("POST", "/api/conversations/" + conversationId + "/messages", payload);
+      input.value = "";
+      document.getElementById("conv-skill-select").value = "";
+      await refreshConversationMessages(conversationId, participants, conv.llm_model);
+      if (result.triggered_jobs && result.triggered_jobs.length) {
+        showMsg("global-msg", "응답을 기다리는 중…", "ok");
+      }
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  // 경량 폴링(9-6 로드맵 "구 F21-4") — 이 대화를 보는 동안 주기적으로
+  // 새 메시지를 반영한다(다른 참가자/Agent/Team이 비동기로 남긴
+  // 메시지도 수동 새로고침 없이 보이게). 다른 화면으로 이동하면
+  // `_stopConversationPolling()`이 멈춘다.
+  _conversationPollTimer = setInterval(
+    () => refreshConversationMessages(conversationId, participants, conv.llm_model),
+    6000
+  );
+}
+
+async function _saveConversationModel(conversationId) {
+  const provider = document.getElementById("conv-provider").value || null;
+  const model = modelSelectValue("conv-model");
+  try {
+    await api("PATCH", "/api/conversations/" + conversationId + "/model", { provider, model });
+    showMsg("global-msg", "모델 설정을 저장했습니다.", "ok");
+  } catch (e) { showMsg("global-msg", e.message, "error"); }
+}
+
+// ASANA_PARITY_DESIGN_PLAN.md §9-5(F21-1 흡수) — 이 Task에 종속된
+// 대화(`linked_task_id`)가 이미 있으면 그대로 임베드하고, 없으면
+// "대화 시작" 버튼만 보여준다(결과물 작성 전에도 항상 쓸 수 있다 —
+// F15 때 발견한 구조적 한계의 직접적인 해소).
+async function _loadTaskConversation(taskId) {
+  const box = document.getElementById("ws-conversation-" + taskId);
+  if (!box) return;
+  let mine;
+  try {
+    mine = await api("GET", "/api/conversations");
+  } catch (e) {
+    box.innerHTML = "";
+    return;
+  }
+  const existing = mine.find(c => c.linked_task_id === taskId);
+  if (existing) {
+    box.innerHTML = '<div id="ws-conversation-detail-' + taskId + '"></div>';
+    renderConversationDetail(existing.id, "ws-conversation-detail-" + taskId);
+    return;
+  }
+  box.innerHTML =
+    '<section class="card"><h4>대화</h4>' +
+    '<p class="muted">이 업무에 대해 바로 대화를 시작할 수 있습니다 — 결과물이 아직 없어도 됩니다.</p>' +
+    '<button class="small" id="ws-start-conversation-btn-' + taskId + '">대화 시작</button>' +
+    '</section>';
+  document.getElementById("ws-start-conversation-btn-" + taskId).onclick = async () => {
+    try {
+      await api("POST", "/api/conversations", { title: "", linked_task_id: taskId });
+      await _loadTaskConversation(taskId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  };
+}
 
 /* ---------- 통합 인박스(Phase 5, 사용자 요청 2026-09-28) ---------- */
 
@@ -1304,6 +1603,12 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     statusPriorityBar +
     finalResultCard +
     notesCard +
+    // ASANA_PARITY_DESIGN_PLAN.md §9-5(2026-10-08, F21-1 흡수) — 이
+    // Task 전용 대화(`conversations.linked_task_id`)를 여기에
+    // 임베드한다. 결과물 유무와 무관하게 항상 노출(F15 때 발견한
+    // "결과물 0건이면 대화 자체가 불가능했던" 구조적 한계를 여기서
+    // 해소 — 대화는 더 이상 deliverable에 종속되지 않는다).
+    '<div id="ws-conversation-' + taskId + '"><p class="muted">대화를 불러오는 중…</p></div>' +
     participantsCard +
     dependencySection +
     '<h4 class="muted">진행 이력(중간 과정 포함)</h4>' +
@@ -1337,6 +1642,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     wireProviderModelSelect("ws-team-crew-provider", "ws-team-crew-model", modelsByProvider);
   }
   items.forEach(d => loadDeliverableComments(d.id, taskId, containerId, participants));
+  _loadTaskConversation(taskId);
 
   detail.querySelectorAll("[data-decide-deliverable]").forEach(btn => {
     btn.onclick = async () => {
@@ -1628,12 +1934,22 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants) {
     const atIndex = val.lastIndexOf("@", cursor - 1);
     if (atIndex === -1) { closeDropdown(); return; }
     const query = val.slice(atIndex + 1, cursor);
-    if (/\s/.test(query)) { closeDropdown(); return; } // @뒤 공백이면 이미 끝난 멘션
+    // 실측으로 발견한 버그(2026-10-08, §9 라이브 검증) — 원래 "@뒤에
+    // 공백이 있으면 멘션이 끝난 것"으로 보고 닫았는데, "게임 AI팀"처럼
+    // 이름 자체에 공백이 있는 참가자(흔한 한국어 Team/Agent 이름)를
+    // 끝까지 타이핑하면 중간 공백에서 드롭다운이 영구히 닫혀버렸다.
+    // 공백 여부로 판단하지 않고, 후보 이름에 그 쿼리가 부분 문자열로
+    // 남아있는 동안만 계속 열어둔다 — 후보와 전혀 안 맞게 갈라지면
+    // 아래 `matches.length` 검사가 자연스럽게 닫는다.
     const matches = candidates.filter(c => c.name.includes(query));
     if (!matches.length) { closeDropdown(); return; }
+    // ASANA_PARITY_DESIGN_PLAN.md §9(2026-10-08) — 대화에는 Team
+    // (에이전트 그룹) 참가자도 있어 Agent/Team 둘 다 배지로 구분한다
+    // (Task 참가자는 human/agent뿐이라 이전까진 "(AI)"만 있으면 됐다).
+    const MENTION_TYPE_BADGE = { agent: "(AI)", team: "(팀)" };
     dropdownEl.innerHTML = matches.map(c =>
       "<li data-mention-name=\\"" + escAttr(c.name) + "\\">" +
-      esc(c.name) + (c.type === "agent" ? ' <span class="muted">(AI)</span>' : "") + "</li>"
+      esc(c.name) + (MENTION_TYPE_BADGE[c.type] ? ' <span class="muted">' + MENTION_TYPE_BADGE[c.type] + '</span>' : "") + "</li>"
     ).join("");
     dropdownEl.style.display = "block";
   });

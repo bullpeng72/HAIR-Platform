@@ -9,8 +9,11 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 수준 기획, `docs/ASANA_PARITY_DESIGN_PLAN.md`) Phase 1-5 전부 완료
 (F17 메모·F19 활동 타임라인·F15 참가자 초대+댓글 `@멘션` 트리거·F16
 상태/우선순위/의존관계+Riido 수준 그래프 시각화·F18 운영 가시성·F20
-온보딩 간소화+탭 재구성), `pytest` 299건 통과, API 엔드포인트 96개.
-알려진 갭·미구현 범위는 전부 `docs/LIMITS.md`에 정직하게 기록돼
+온보딩 간소화+탭 재구성) + **대화 중심 작업공간**(§9, 로그인 직후
+독립 대화 + 기본 AI 자동응답/특정 Agent·Team 멘션/skill 그라운딩 +
+Task 종속 대화 흡수 + Brief 승격 공존), `pytest` 320건 통과, API
+엔드포인트 108개. 알려진 갭·미구현 범위는 전부 `docs/LIMITS.md`에
+정직하게 기록돼
 있다(가장 최신: §78).
 
 ## 핵심 기능
@@ -95,7 +98,7 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 299건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 320건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -197,10 +200,11 @@ src/hair_platform/
   deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)
   inbox.py           # 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고)
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이)
+  conversations.py   # 대화 중심 작업공간(§9) — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩, Brief 승격
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
   ADR.md             # 설계 결정 목록
-  LIMITS.md          # 알려진 갭(정직하게 기록, §78까지)
+  LIMITS.md          # 알려진 갭(정직하게 기록, §80까지)
   ROLE_TASK_CLASSIFICATION.md      # 관리자/사용자 고유·공통 업무 재분류(외부 사례 리서치)
   SCENARIOS.md                     # 대표 시나리오 워크스루(개발/일반업무/CS/Tool·Skill 활용)
   COLLABORATION_PLATFORM_PLAN.md   # 사람-AI 협업(결과물 전달/HITL/HOTL) 기획안 — 구현 완료
@@ -210,10 +214,10 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md       # 협업 워크스페이스 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
   COLLABORATION_UX_IMPROVEMENT_PROPOSAL.md  # 오픈소스/상용 Agent-Human 협업 사례 벤치마크 + 개선 제안 — 기획만
   HAIR_REDESIGN_PROPOSAL.md        # Asana AI Teammates·Riido 벤치마크 기반 재기획안 — 기획만
-  ASANA_PARITY_DESIGN_PLAN.md      # F15–F20 설계(Asana 모방 수준) — Phase 1-5 전부 구현 완료(§7)
+  ASANA_PARITY_DESIGN_PLAN.md      # F15–F20 설계 + §9 대화 중심 작업공간(conversations) — 전부 구현 완료(§7-§9)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 299건
+tests/unit/                            # 골든셋 320건
 ```
 
 ## 로드맵

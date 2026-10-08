@@ -724,7 +724,7 @@ _CONTENT_TYPE_INSTRUCTIONS = {
 }
 
 
-def _skill_grounded_system_prompt(
+def skill_grounded_system_prompt(
     conn: sqlite3.Connection, role_name: str, required_skills: list[str]
 ) -> str:
     """§4 — Agent의 skill_tags 매칭과 같은 조회 로직(`skill_pool WHERE name
@@ -768,7 +768,7 @@ def assist(
         raise PermissionError("not_a_participant")
 
     required_skills = json.loads(task["required_skills"])
-    system = _skill_grounded_system_prompt(conn, task["role_name"], required_skills)
+    system = skill_grounded_system_prompt(conn, task["role_name"], required_skills)
     resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
     prompt = draft_context or (
         f"'{task['role_name']}' 업무를 처음 시작합니다. 초안을 작성해 주세요."
