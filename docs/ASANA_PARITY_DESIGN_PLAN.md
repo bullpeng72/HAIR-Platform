@@ -329,7 +329,7 @@ messages`)"를 제안했다. **사용자가 이어서 더 근본적인 방향을
 (업무 성격에 따라 선택)하는 방향도 좋다." 이 절은 그 지시를 반영해
 **Task 종속 여부와 무관한, 로그인 시 바로 쓸 수 있는 독립된 "대화"
 엔티티**로 설계를 확장한다 — F21-1의 `task_messages`는 아래 설계의
-특수 케이스로 흡수되므로 별도로 만들지 않는다(9-4 참고).
+특수 케이스로 흡수되므로 별도로 만들지 않는다(9-5 참고).
 
 ### 9-1. 현재 상태 점검(확인) — 기존 구조의 한계
 
@@ -368,6 +368,16 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_by INTEGER NOT NULL REFERENCES users(id),
     title TEXT NOT NULL DEFAULT '',
     linked_task_id INTEGER REFERENCES tasks(id),
+    -- 9-3 "대화의 기본 AI" — NULL이면 llm.resolve_provider_and_model()이
+    -- 플랫폼 기본값으로 판별한다(agent_pool.llm_provider/llm_model과
+    -- 완전히 같은 관례). ai_auto_reply=1이면 멘션 없는 평범한 메시지
+    -- 에도 이 설정으로 자동 응답한다 — 컬럼 DEFAULT는 안전한 값(1)
+    -- 일 뿐이고, 실제 초기값은 POST /api/conversations 핸들러가
+    -- linked_task_id 유무로 분기해 명시적으로 넣는다(9-7 열린 질문 6
+    -- 추천안: 독립 대화는 1, Task 종속 대화는 0).
+    llm_provider TEXT,
+    llm_model TEXT,
+    ai_auto_reply INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -410,7 +420,7 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   그대로 재사용한다(세 함수 모두 이미 특정 task_id를 받는 구조라
   매개변수 교체 수준의 작업 — 중복 구현 아님).
 - `POST /api/conversations/{id}/promote-to-brief` — 대화를 정식
-  업무 요청(Brief)으로 승격(9-3 "공존" 경로). 기존 `POST /api/briefs`
+  업무 요청(Brief)으로 승격(9-4 "공존" 경로). 기존 `POST /api/briefs`
   를 그대로 호출 — 새 생성 로직을 만들지 않는다.
 
 **Agent 그룹(Team) 호출**: 멘션 대상이 `participant_type='team'`
@@ -420,13 +430,13 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 execution()`(확정 배정 필요) 대신 `agent_runtime.execute_agent()`
 (확정 불필요)를 썼던 것과 완전히 같은 패턴. 결과는 Gate 평가·
 `deliverables` 생성·F7 체인 없이, 참여 Agent별로(또는 매니저 조율
-결과 하나로 — 9-3 열린 질문 2) `conversation_messages`에
+결과 하나로 — 9-7 열린 질문 2) `conversation_messages`에
 `author_type='agent'`로만 쌓인다.
 
 **Skill 사용**: 기존 `assist()`/`_skill_grounded_system_prompt()`
 (Task 워크스페이스의 "LLM으로 도와줘")를 대화에도 그대로 노출한다
 — 메시지 작성 시 skill_pool에서 하나를 골라 "이 스킬로 보강된 AI
-응답"을 받는 보조 액션. 새 그라운딩 메커니즘을 만들지 않는다(9-3
+응답"을 받는 보조 액션. 새 그라운딩 메커니즘을 만들지 않는다(9-7
 열린 질문 3 — 사용자가 말한 "skill 사용"이 이 의미가 맞는지 확인
 필요).
 
@@ -439,13 +449,72 @@ execution()`(확정 배정 필요) 대신 `agent_runtime.execute_agent()`
   폼(F15 "참가자" 카드 확장 — human/agent/**team** 선택 가능하게)을
   그대로 재사용.
 - "정식 업무 요청으로 전환" 버튼 — 대화가 무거워지면 Brief로 승격
-  (9-3 "공존" 경로 1).
+  (9-4 "공존" 경로 1).
+- **대화 헤더에 provider/model 선택 드롭다운 + "AI 자동응답" on/off
+  토글**(9-3 참고) — 기존 `modelSelectHtml()`/`wireProviderModelSelect()`
+  재사용.
 - Task 워크스페이스의 "대화" 섹션(F21-1 당초 설계)은 `linked_task_id`
   가 채워진 대화 하나를 그 자리에 그대로 임베드하는 것으로 구현한다
   — **완전히 같은 컴포넌트**를 두 자리(독립 탭/Task 워크스페이스
   내부)에서 재사용.
 
-### 9-3. "기존 방식과 공존" — 두 경로의 연결 지점
+### 9-3. 대화의 기본 AI — LLM 모델 기반 채팅 동작(모델 설정 가능)
+
+**사용자 요청**: "해당 대화 세션이 LLM 모델 기반의 채팅창 기반으로
+동작하도록 기획 및 설계해줘(모델은 설정 가능)." 9-2까지의 설계는
+"특정 이름의 Agent/Team을 멘션해야 응답이 온다"는 F15식 모델이었다
+— 이것만으로는 대화창을 열자마자 뭔가를 물어볼 "기본 상대"가 없다
+(등록된 Agent를 먼저 알아야 멘션할 수 있음). 이 절은 **대화 자체에
+내장된, agent_pool 등록 없이 바로 쓸 수 있는 기본 AI**를 추가해
+진짜 "채팅창을 열면 바로 AI와 대화할 수 있는" 경험을 만든다.
+
+**핵심 메커니즘**:
+1. 멘션 감지(`detect_mentioned_agents()`를 일반화한 `conversation_id`
+   버전)가 **등록된 Agent/Team 이름 중 아무것도 못 찾았고**,
+   `conversations.ai_auto_reply = 1`이면 → 대화 자체의 `llm_provider`/
+   `llm_model`로 자동 응답한다. 특정 Agent/Team을 명시적으로 멘션한
+   경우엔 그 쪽만 응답하고 기본 AI는 끼어들지 않는다(응답 중복/소음
+   방지).
+2. 언제든 `@AI`(예약어)로 기본 AI를 명시적으로 부를 수도 있다 —
+   `ai_auto_reply=0`으로 꺼둔 상태(사람들끼리만 대화 중)에도 필요할
+   때 명시적으로는 부를 수 있게.
+3. **실행 로직은 agent_pool을 전혀 거치지 않는다** — 이미 있는
+   `llm.call_llm(provider, model, system, prompt)`(`llm.py:64`, Task
+   의 "LLM으로 도와줘"가 쓰는 `assist()`가 내부적으로 쓰는 바로 그
+   원시 함수)를 직접 호출한다. Gate 평가·CrewAI·agent_pool 온보딩
+   절차가 전혀 필요 없다 — "가벼움"이 핵심이므로 가장 가벼운 기존
+   경로를 그대로 재사용한다.
+4. **프롬프트에 대화 맥락을 포함한다**(9-6 로드맵의 "구 F21-2 대화
+   맥락 포함"을 기본 AI에도 그대로 적용) — 최근 N건(예: 10건)을 transcript로
+   이어붙인다. `linked_task_id`가 채워진 대화면 그 Task의
+   `required_skills`로 `_skill_grounded_system_prompt()`를 적용해
+   맥락 있는 답을 주고, 독립 대화면 일반 비서 역할의 기본 system
+   prompt를 쓴다.
+5. **응답은 `author_id` 실존 agent_pool 행이 없으므로 예약 sentinel
+   값(`0`)을 쓴다** — SQLite `AUTOINCREMENT`는 1부터 시작하므로
+   `agent_pool.id`가 0일 수 없어 안전하게 구분된다(`deliverable_
+   comments.author_id`처럼 이 컬럼도 원래 FK 없이 `author_type`으로
+   해석을 분기하는 다형 컬럼이라 새 관례를 깨지 않는다).
+
+**모델 설정(요청사항 "모델은 설정 가능")**:
+- `PATCH /api/conversations/{id}/model` — `{provider?, model?}`,
+  기존 `PATCH /api/agent-pool/{id}/model`과 동일한 모양.
+- `PATCH /api/conversations/{id}/ai-auto-reply` — `{enabled: bool}`.
+- UI: 대화 헤더에 provider(anthropic/openai/ollama)/model 드롭다운
+  (기존 `modelSelectHtml()`/`wireProviderModelSelect()` 그대로 재사용)
+  + "AI 자동응답" on/off 토글. 토글 옆에 "켜져 있으면 멘션 없는
+  메시지에도 매번 LLM 호출이 발생합니다(비용 발생)"라는 비용 고지
+  문구를 붙인다 — 이 플랫폼 전반의 "비용 발생" 라벨링 관례(F2 실행
+  버튼 등)를 그대로 따른다.
+- 기본 AI가 쓴 메시지는 기존 Agent 댓글 배지 스타일을 재사용하되
+  "AI 에이전트" 대신 "AI(provider/model명)"으로 표시해 지금 어떤
+  모델이 응답했는지 바로 보이게 한다.
+
+**리스크**: `ai_auto_reply=1`이 기본값이면 사람들끼리만 조용히
+얘기하고 싶은 대화에서도 매 메시지마다 비용이 발생한다 — 기본값을
+1로 할지 0으로 할지는 9-7 열린 질문에 추가(열린 질문 6).
+
+### 9-4. "기존 방식과 공존" — 두 경로의 연결 지점
 
 사용자가 "업무 성격에 따라 선택"을 언급했다 — 설계는 **강제 분기가
 아니라 승격 경로**로 구현한다(어느 쪽이 "맞는" 방식인지 시스템이
@@ -464,7 +533,7 @@ execution()`(확정 배정 필요) 대신 `agent_runtime.execute_agent()`
 자체는 어떤 경우에도 자동으로 Gate/승인을 우회해 정식 결과물이
 되지 않는다.
 
-### 9-4. F21-1(`task_messages`)과의 관계
+### 9-5. F21-1(`task_messages`)과의 관계
 
 1차안에서 제안했던 `task_messages` 테이블은 **별도로 만들지 않고
 `conversations`(+`linked_task_id`)로 흡수한다** — 두 테이블을 같이
@@ -476,17 +545,17 @@ task_id 기반)은 그대로 `conversation_id` 기준으로 옮겨 재사용한�
 F21-2(대화 맥락 포함)·F21-4(경량 폴링)는 이번 확장에도 그대로
 유효한 하위 과제로 유지한다 — 번호만 아래 로드맵에 재배치.
 
-### 9-5. 로드맵 제안
+### 9-6. 로드맵 제안
 
 | 단계 | 범위 |
 |---|---|
-| 1 | `conversations`/`conversation_participants`(human·agent만)/`conversation_messages` 스키마 + 기본 CRUD + 메시지 작성(멘션 없이 사람 참가자끼리 대화만) |
+| **1** | `conversations`(llm_provider/model/ai_auto_reply 포함)/`conversation_participants`(human·agent만)/`conversation_messages` 스키마 + 기본 CRUD + **기본 AI 자동응답(9-3)** — 멘션 없이도 메시지를 보내면 바로 LLM이 응답. 참가자 초대·Agent/Team 멘션보다 먼저 — "채팅창을 열면 즉시 AI와 대화 가능"이 가장 기초이자 가장 체감 효과가 큰 부분이라 1단계로 둔다 |
 | 2 | 단일 Agent 멘션 트리거(F15 Phase 3 로직 재사용) + Task 워크스페이스의 "대화" 섹션(linked_task_id 활용, F21-1 당초 목표 달성) |
 | 3 | Team(에이전트 그룹) 멘션 호출(`run_crew_for_team()` 재사용) |
 | 4 | "정식 업무 요청으로 전환" 승격 버튼, 로그인 랜딩을 "대화" 탭으로 |
-| 5 | 대화 맥락 포함(구 F21-2), 경량 폴링(구 F21-4), 미초대 대상 멘션 시 초대 플로우(구 F21-3) |
+| 5 | 대화 맥락 포함(구 F21-2 — 1단계 기본 AI에도 바로 적용 가능하면 앞당길 수 있음), 경량 폴링(구 F21-4), 미초대 대상 멘션 시 초대 플로우(구 F21-3) |
 
-### 9-6. 열린 질문
+### 9-7. 열린 질문
 
 1. **1인당 대화가 여러 개(주제별)인지, 기본 1개(항상 같은 방)인지**
    — Slack/Asana류는 여러 개가 일반적이라 "새 대화 시작" 허용을
@@ -501,7 +570,14 @@ F21-2(대화 맥락 포함)·F21-4(경량 폴링)는 이번 확장에도 그대�
    설계는 1차로 (a)를 가정했다.
 4. **미초대 대상 멘션 시 검색 범위** — 조직 전체 vs 같은 Brief/
    Task 범위로 좁힐지(구 F21-3).
-5. **로드맵 범위** — 9-5의 어디까지 이번에 진행할지(1단계만 먼저
+5. **로드맵 범위** — 9-6의 어디까지 이번에 진행할지(1단계만 먼저
    확인하고 싶을 수도 있다).
+6. **`ai_auto_reply` 기본값 — 켜짐(1)이 기본인지, 꺼짐(0)이 기본
+   인지(9-3)** — 켜짐 기본은 "열자마자 바로 대화"에 가장 가깝지만
+   사람들끼리만 조율하려던 대화에서도 매번 비용이 발생한다. 꺼짐
+   기본은 안전하지만 처음 켜는 방법을 알아야 해 "즉시성"이 떨어진다.
+   **추천: 독립 대화(linked_task_id NULL, 로그인 직후 쓰는 "내
+   대화")는 기본 켜짐, Task 종속 대화(이미 사람 참가자가 모여 일하는
+   중)는 기본 꺼짐** — 용도가 다르다는 전제.
 
 이 중 방향을 확인해주면 그 범위부터 실제 코드로 구현한다.
