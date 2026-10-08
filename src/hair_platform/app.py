@@ -89,6 +89,7 @@ from hair_platform.models import (
     PerformanceScoreRequest,
     SkillPoolCreate,
     TaskDecomposition,
+    TaskNotesUpdate,
     TeamActiveUpdate,
     TeamCreate,
     TeamCrewExecuteRequest,
@@ -624,6 +625,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "role_name": row["role_name"],
                 "required_skills": json.loads(row["required_skills"]),
                 "headcount": row["headcount"],
+                "notes": row["notes"],
                 **deliverables.task_completion_summary(conn, row["id"]),
             }
             for row in rows
@@ -882,6 +884,68 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         항목은 기존 조회 함수(`approvals.list_inbox`/`deliverables.
         list_my_work`)가 이미 강제하는 접근 범위를 그대로 물려받는다."""
         return inbox.get_inbox(conn, user["id"], user["role"])
+
+    @app.get("/api/tasks/{task_id}")
+    def get_task_endpoint(task_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        """ASANA_PARITY_DESIGN_PLAN.md F17/F19(2026-10-08) — Task 단건 조회.
+        지금까지 Task 단건 조회 엔드포인트가 없어 `notes`(F17) 등 새 필드를
+        확인하려면 `GET /api/briefs/{brief_id}/tasks` 전체를 받아 걸러내야
+        했다."""
+        detail = deliverables.get_task_detail(conn, task_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return detail
+
+    @app.patch("/api/tasks/{task_id}/notes")
+    def update_task_notes_endpoint(
+        task_id: int,
+        payload: TaskNotesUpdate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """F17 — Task 메모. 참가자 본인만 수정(결재 불필요한 가벼운
+        메모라 대리 작성 제한만 `create_comment()`와 동일하게 건다)."""
+        try:
+            return deliverables.update_task_notes(
+                conn, task_id, user["id"], payload.notes
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+
+    @app.get("/api/tasks/{task_id}/activity")
+    def get_task_activity_endpoint(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """F19 — 배정·결과물·댓글·Agent 실행·결재·Task 변경을 합친 통합
+        타임라인."""
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        try:
+            return deliverables.task_activity(conn, task_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
+            ) from None
 
     @app.get("/api/tasks/{task_id}/deliverables")
     def list_task_deliverables(

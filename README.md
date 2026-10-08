@@ -5,9 +5,10 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료, F1–F14/NF1–13 전부 구현, `pytest` 256건 통과,
-API 엔드포인트 83개. 알려진 갭·미구현 범위는 전부 `docs/LIMITS.md`에
-정직하게 기록돼 있다(가장 최신: §71).
+**상태**: Phase 0–6 완료, F1–F14/NF1–13 전부 구현, F15~ 확장(ASANA 모방
+수준 기획, `docs/ASANA_PARITY_DESIGN_PLAN.md`) Phase 1 진행 중, `pytest`
+267건 통과, API 엔드포인트 86개. 알려진 갭·미구현 범위는 전부
+`docs/LIMITS.md`에 정직하게 기록돼 있다(가장 최신: §74).
 
 ## 핵심 기능
 
@@ -91,7 +92,7 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 256건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 267건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
@@ -196,8 +197,7 @@ src/hair_platform/
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
   ADR.md             # 설계 결정 목록
-  LIMITS.md          # 알려진 갭(정직하게 기록, §71까지)
-  RETROSPECTIVE.md   # 기획 대비 실제 구현 비교
+  LIMITS.md          # 알려진 갭(정직하게 기록, §74까지)
   ROLE_TASK_CLASSIFICATION.md      # 관리자/사용자 고유·공통 업무 재분류(외부 사례 리서치)
   SCENARIOS.md                     # 대표 시나리오 워크스루(개발/일반업무/CS/Tool·Skill 활용)
   COLLABORATION_PLATFORM_PLAN.md   # 사람-AI 협업(결과물 전달/HITL/HOTL) 기획안 — 구현 완료
@@ -205,9 +205,12 @@ docs/
   MULTI_PARTY_TEAM_COLLABORATION_PLAN.md  # N명 사람+M개 Agent(또는 역할 기반 Agent 그룹) 팀 협업 기획안 — Phase 1-3 구현 완료, Phase 4-5는 미구현(§9)
   HAIR_ASSISTANT_PLAN.md           # HAIR 매뉴얼 기반 챗봇 도우미 기획안 — 미구현(기획만)
   PHASE1_DELIVERABLE_SPEC.md       # 협업 워크스페이스 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
+  COLLABORATION_UX_IMPROVEMENT_PROPOSAL.md  # 오픈소스/상용 Agent-Human 협업 사례 벤치마크 + 개선 제안 — 기획만
+  HAIR_REDESIGN_PROPOSAL.md        # Asana AI Teammates·Riido 벤치마크 기반 재기획안 — 기획만
+  ASANA_PARITY_DESIGN_PLAN.md      # F15–F20 설계(Asana 모방 수준) — Phase 1 구현 완료, Phase 2-5 진행 중(§7)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 256건
+tests/unit/                            # 골든셋 267건
 ```
 
 ## 로드맵

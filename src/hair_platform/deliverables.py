@@ -999,3 +999,141 @@ def reap_orphaned_execution_jobs(conn: sqlite3.Connection) -> int:
     if rows:
         conn.commit()
     return len(rows)
+
+
+def get_task_detail(conn: sqlite3.Connection, task_id: int) -> dict | None:
+    """ASANA_PARITY_DESIGN_PLAN.md F17/F19(2026-10-08) — `GET /api/tasks/
+    {task_id}`. 지금까지 Task 단건을 직접 조회하는 엔드포인트가 없었다
+    (`GET /api/briefs/{brief_id}/tasks`로 간접 조회만 가능 — `app.py`가
+    명시적 dict를 만들어 반환하는 곳이라 `notes` 같은 새 컬럼이 추가돼도
+    저절로 노출되지 않는다). 이 함수가 `SELECT *`로 `tasks`의 모든
+    컬럼(`notes` 포함)을 그대로 반환한다."""
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None:
+        return None
+    detail = dict(row)
+    detail["required_skills"] = json.loads(detail["required_skills"])
+    return detail
+
+
+def update_task_notes(
+    conn: sqlite3.Connection, task_id: int, actor_id: int, notes: str
+) -> dict:
+    """`PATCH /api/tasks/{task_id}/notes`(F17) — `create_comment()`와 같은
+    참가자 판정(`task_participant_relationship()`)을 재사용한다. 결재가
+    필요 없는 가벼운 메모라 승인 체인을 타지 않는다."""
+    task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    if task_participant_relationship(conn, task_id, actor_id) is None:
+        raise PermissionError("not_a_participant")
+
+    conn.execute("UPDATE tasks SET notes = ? WHERE id = ?", (notes, task_id))
+    audit.record(
+        conn, actor_id, "task_notes_updated", "tasks", task_id, after={"notes": notes}
+    )
+    conn.commit()
+    detail = get_task_detail(conn, task_id)
+    assert detail is not None
+    return detail
+
+
+_ACTIVITY_SUBQUERIES = """
+SELECT al.id, al.actor_id, al.action, al.subject_type, al.subject_id,
+       al.before_value, al.after_value, al.created_at
+FROM audit_log al
+WHERE al.subject_type = 'assignment'
+  AND al.subject_id IN (SELECT id FROM assignments WHERE task_id = ?)
+
+UNION ALL
+
+SELECT al.id, al.actor_id, al.action, al.subject_type, al.subject_id,
+       al.before_value, al.after_value, al.created_at
+FROM audit_log al
+WHERE al.subject_type = 'deliverables'
+  AND al.subject_id IN (SELECT id FROM deliverables WHERE task_id = ?)
+
+UNION ALL
+
+SELECT al.id, al.actor_id, al.action, al.subject_type, al.subject_id,
+       al.before_value, al.after_value, al.created_at
+FROM audit_log al
+WHERE al.subject_type = 'deliverable_comments'
+  AND al.subject_id IN (
+      SELECT dc.id FROM deliverable_comments dc
+      JOIN deliverables d ON d.id = dc.deliverable_id
+      WHERE d.task_id = ?
+  )
+
+UNION ALL
+
+SELECT al.id, al.actor_id, al.action, al.subject_type, al.subject_id,
+       al.before_value, al.after_value, al.created_at
+FROM audit_log al
+WHERE al.subject_type = 'agent_execution_jobs'
+  AND (
+    al.subject_id IN (SELECT id FROM agent_execution_jobs WHERE task_id = ?)
+    OR (al.subject_id IS NULL AND json_extract(al.after_value, '$.task_id') = ?)
+  )
+
+UNION ALL
+
+SELECT al.id, al.actor_id, al.action, al.subject_type, al.subject_id,
+       al.before_value, al.after_value, al.created_at
+FROM audit_log al
+WHERE al.subject_type = 'approval'
+  AND al.subject_id IN (
+      SELECT ap.id FROM approvals ap
+      WHERE (ap.subject_type = 'assignment'
+             AND ap.subject_id IN (SELECT id FROM assignments WHERE task_id = ?))
+         OR (ap.subject_type = 'deliverable'
+             AND ap.subject_id IN (SELECT id FROM deliverables WHERE task_id = ?))
+  )
+
+UNION ALL
+
+SELECT al.id, al.actor_id, al.action, al.subject_type, al.subject_id,
+       al.before_value, al.after_value, al.created_at
+FROM audit_log al
+WHERE al.subject_type = 'tasks' AND al.subject_id = ?
+
+ORDER BY created_at DESC, id DESC
+"""
+
+
+def task_activity(conn: sqlite3.Connection, task_id: int) -> list[dict]:
+    """`GET /api/tasks/{task_id}/activity`(F19) — 배정·결과물·댓글·Agent
+    실행·결재·Task 자체 변경을 한 타임라인으로 합친다. 지금까지는 이
+    흐름을 보려면 협업 워크스페이스 화면 여러 섹션(배정 이력, 결과물
+    목록, 댓글, 실행 Job, 결재)을 전부 직접 스캔해야 했다.
+
+    `audit_log`는 엔티티별로 제각각인 `subject_type`을 쓰므로(§
+    `audit.record()` 호출부 전수조사로 확정: 'assignment'/'deliverables'/
+    'deliverable_comments'/'agent_execution_jobs'/'approval'/'tasks'),
+    task_id로 되짚어가는 경로가 엔티티마다 다르다 — `UNION ALL`로 전부
+    모은다. 한 가지 예외: `team_crew_execution_started`(`deliverables.
+    start_team_crew_execution()`)는 `subject_id=None`으로 기록되고 대신
+    `after_value` JSON에 `task_id`가 박혀 있다 — `json_extract()`로 그
+    경우만 따로 짚는다(SQLite 3.38+ 내장 함수, 이 환경에서 동작 확인됨).
+    `approval`은 `subject_id`가 approvals.id라 `approvals.subject_type`
+    ('assignment' 또는 'deliverable')으로 한 번 더 분기해야 실제
+    assignment/deliverable까지 거쳐 task_id에 닿는다."""
+    task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+
+    rows = conn.execute(
+        _ACTIVITY_SUBQUERIES,
+        (task_id, task_id, task_id, task_id, task_id, task_id, task_id, task_id),
+    ).fetchall()
+    result = []
+    for row in rows:
+        entry = dict(row)
+        entry["before_value"] = (
+            json.loads(entry["before_value"]) if entry["before_value"] else None
+        )
+        entry["after_value"] = (
+            json.loads(entry["after_value"]) if entry["after_value"] else None
+        )
+        result.append(entry)
+    return result

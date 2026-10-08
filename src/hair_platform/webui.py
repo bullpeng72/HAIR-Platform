@@ -794,10 +794,14 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   detail.innerHTML = '<p class="muted">불러오는 중…</p>';
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = isSupervisor ? await fetchModelsByProvider() : {};
-  let items, jobs, permission, confirmedAgents, confirmedTeams;
+  let items, jobs, permission, confirmedAgents, confirmedTeams, taskDetail, activity;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
     jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
+    // ASANA_PARITY_DESIGN_PLAN.md F17(메모)/F19(통합 활동 타임라인),
+    // 2026-10-08 — 둘 다 이 워크스페이스를 열 때 같이 불러온다.
+    taskDetail = await api("GET", "/api/tasks/" + taskId);
+    activity = await api("GET", "/api/tasks/" + taskId + "/activity");
     // 사용자가 스크린샷으로 보고한 갭(2026-09-29) — 참가자기만 하면
     // 무조건 실행 버튼을 보여줘, human assignee가 눌러야만 "권한이
     // 없습니다" 403으로 뒤늦게 알게 됐다. 버튼을 그리기 전에 먼저 확인한다.
@@ -997,6 +1001,41 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         : '<p class="muted">팀의 온보딩된(active) Agent 멤버 전원이 CrewAI로 함께 실행되고, 각자의 산출물이 이 할 일의 결과물로 쌓입니다.</p>')
     : '';
 
+  // ASANA_PARITY_DESIGN_PLAN.md F17(2026-10-08) — 결과물이 아직 없는
+  // 단계에서도 참가자들이 맥락/의사결정을 적어두는 자유 텍스트 공간.
+  // 마크다운으로 렌더링(결과물 content_type='markdown'과 같은 렌더러
+  // 재사용)하고, 저장 버튼을 누르기 전까진 textarea 그대로 둔다(실시간
+  // 공동편집은 스코프 밖 — ADR 미결정 사항).
+  const notesCard =
+    '<section class="card">' +
+    '<h4>메모</h4>' +
+    (taskDetail.notes
+      ? '<div class="muted" id="ws-notes-view">' + renderContent(taskDetail.notes, "markdown") + '</div>'
+      : '<p class="muted" id="ws-notes-view">아직 메모가 없습니다.</p>') +
+    '<form id="ws-notes-form">' +
+    '<textarea id="ws-notes-input" rows="3" placeholder="이 업무에 대한 메모(마크다운)" ' +
+    'style="width:100%;box-sizing:border-box">' + esc(taskDetail.notes || "") + '</textarea>' +
+    '<div class="actions"><button class="small" type="submit">메모 저장</button></div>' +
+    '</form>' +
+    '</section>';
+
+  // F19 — 배정·결과물·댓글·Agent 실행·결재·Task 변경을 한 타임라인으로
+  // 합친 통합 활동 기록. 기본은 접혀 있다(평소엔 "진행 이력"만으로
+  // 충분하고, 이건 "누가 언제 뭘 했는지"를 감사하듯 들여다볼 때만 연다).
+  const activityRows = activity.map(a =>
+    '<tr><td>' + esc(a.created_at) + '</td>' +
+    '<td>사용자 #' + esc(a.actor_id) + '</td>' +
+    '<td>' + esc(a.action) + '</td>' +
+    '<td class="muted">' + esc(label(a.subject_type)) + (a.subject_id === null ? "" : " #" + esc(a.subject_id)) + '</td></tr>'
+  ).join("");
+  const activitySection =
+    '<details class="card"><summary>활동 타임라인(' + activity.length + '건)</summary>' +
+    (activity.length
+      ? '<table><thead><tr><th>시각</th><th>행위자</th><th>동작</th><th>대상</th></tr></thead>' +
+        '<tbody>' + activityRows + '</tbody></table>'
+      : '<p class="muted">아직 기록된 활동이 없습니다.</p>') +
+    '</details>';
+
   // 사용자 요청(2026-09-29, "UI/UX를 개선해줘") — 원래 textarea·provider/
   // model·"LLM으로 도와줘"·"결과물 제출"이 한 줄(.inline flex-wrap)에 전부
   // 뒤섞여 있어 좁은 화면에서 텍스트가 select 옆에 끼어 줄바꿈이 어색했다.
@@ -1005,8 +1044,10 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   detail.innerHTML =
     '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
     finalResultCard +
+    notesCard +
     '<h4 class="muted">진행 이력(중간 과정 포함)</h4>' +
     '<div id="workspace-timeline">' + timeline + '</div>' +
+    activitySection +
     '<section class="card">' +
     '<h4>결과물 작성</h4>' +
     '<form id="ws-submit-form">' +
@@ -1067,6 +1108,16 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         || (finalResult && String(finalResult.id) === btn.dataset.downloadDeliverable ? finalResult : null);
       if (d) downloadDeliverable(d.content, d.content_type, d.id);
     };
+  });
+
+  document.getElementById("ws-notes-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const notesVal = document.getElementById("ws-notes-input").value;
+    try {
+      await api("PATCH", "/api/tasks/" + taskId + "/notes", { notes: notesVal });
+      showMsg("global-msg", "메모를 저장했습니다.", "ok");
+      renderCollabWorkspace(taskId, containerId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
   document.getElementById("ws-submit-form").addEventListener("submit", async (ev) => {

@@ -213,6 +213,14 @@ class DeliverableCommentCreate(BaseModel):
     content: str
 
 
+class TaskNotesUpdate(BaseModel):
+    """ASANA_PARITY_DESIGN_PLAN.md F17(2026-10-08) — Task 메모. 결과물이
+    아직 없는 단계에서도 참가자들이 맥락/의사결정을 적어두는 자유 텍스트
+    공간이다(마크다운으로 렌더링)."""
+
+    notes: str
+
+
 class AssistRequest(BaseModel):
     """협업 워크스페이스 "LLM으로 도와줘" — `provider`/`model`은 매니저/관리자만
     채울 수 있다(팀원이 채우면 app.py가 400으로 거부, §3 RBAC 결정)."""

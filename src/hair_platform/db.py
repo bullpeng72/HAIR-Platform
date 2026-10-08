@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     brief_id INTEGER NOT NULL REFERENCES briefs(id),
     role_name TEXT NOT NULL,
     required_skills TEXT NOT NULL DEFAULT '[]',
-    headcount INTEGER NOT NULL DEFAULT 1
+    headcount INTEGER NOT NULL DEFAULT 1,
+    notes TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS approvals (
@@ -390,6 +391,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "TEXT NOT NULL DEFAULT 'text' "
         "CHECK (content_type IN ('text', 'markdown', 'html', 'code'))",
     )
+
+    # ASANA_PARITY_DESIGN_PLAN.md F17(2026-10-08, 사용자 요청 "ASANA 모방
+    # 수준의 기능 및 UI 제공을 위한 기획 및 설계안을 제안해줘" → Phase 1
+    # 승인) — Task 자체에 메모를 남길 수 있는 자유 텍스트 공간. 기존
+    # `deliverables.content`(결과물)나 `deliverable_comments`(결과물에 대한
+    # 댓글)와 달리, 결과물이 아직 없는 단계에서도 Task 참가자들이 맥락/
+    # 의사결정을 적어둘 수 있는 곳이 없었다.
+    _ensure_column(conn, "tasks", "notes", "TEXT NOT NULL DEFAULT ''")
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:

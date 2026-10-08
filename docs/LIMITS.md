@@ -3767,3 +3767,161 @@ description을 주고 CrewAI/모델이 Agent의 `role`만으로 알아서
 `run_crew_for_team()`이 Agent(팀 멤버)별 `role_label`을 프롬프트에
 명시적으로 반영하도록 설계를 바꿔야 하는데, 이는 이번 범위(초기화+
 시나리오 실행) 밖이라 코드는 건드리지 않고 사실만 기록한다.
+
+## 72. 시나리오 6 신설 — 신규 Agent 2개 + 멀티 provider(OpenAI+로컬
+    Ollama)로 "HAIR 업무 요청으로 게임 기획·개발" 라이브 실행 —
+    사용자 요청(2026-10-08, "HAIR-Platform 업무 요청으로 HAIR-Platform
+    으로 개발 가능한 수준의 게임 기획-개발 업무를 진행하는 시나리오를
+    작성하고 해당 시나리오를 수행해줘 — 새로운 에이전트 개발, openAI
+    및 Ollama 모델 활용")
+
+**배경**: 바로 앞 턴에서 사용자가 "게임 개발 과제가 '내 업무'에 안
+보인다"고 보고했다 — 확인해보니 Gatekeeper 게임은 HAIR의 브리프/
+할 일 체계를 거치지 않고 Claude Artifact로 직접 만든 것이라 애초에
+HAIR 쪽엔 그 "과제" 자체가 없었다(버그 아님). 사용자가 이어서 "게임
+기획·개발을 HAIR 업무 요청 그 자체로" 진행해 달라고 요청해, 실제로
+새 브리프→Task→Agent를 만들어 HAIR 파이프라인 안에서 게임을 기획·
+개발했다.
+
+**실행 환경 확인**: 이 머신에 로컬 Ollama 서버가 이미 떠 있고
+(`http://localhost:11434`), `qwen3-coder:latest`(30.5B, 코딩 전문)를
+포함해 실사용 가능한 모델이 여러 개 설치돼 있는 것을 `curl .../api/
+tags`로 먼저 확인했다 — `llm._call_ollama()`가 기본으로 보는 모델
+("llama3.1")은 이 환경에 없어서, 반드시 `model` 파라미터를 명시
+(`"qwen3-coder:latest"`)해야 했다.
+
+**한 것**: `docs/SCENARIOS.md`에 시나리오 6을 추가하고(신규 Agent
+2개, "게임 기획"=OpenAI/"게임 프로토타입 개발"=로컬 Ollama), 실제
+서버(포트 8000, 진짜 `hair.db`, 계정 비밀번호는 사용자가 이미
+`ms1005`로 재설정해둔 상태)에 1-9단계 전부를 실제 API 호출로 실행
+했다 — 브리프 제출→Task 분해→새 Agent 2개 생성(id 6·7)→온보딩→
+배정·승인→사람 입력→`execute-agent{"provider":"openai","model":
+"gpt-4o-mini"}`(기획)→`execute-agent{"provider":"ollama","model":
+"qwen3-coder:latest"}`(코드)→Gate A-G 채점→승인→"내 업무" 확인.
+
+**실제 결과**:
+- 기획(OpenAI, markdown, 1286자) — 장르/핵심 루프 4단계/화면 구성을
+  구체적으로 작성. Gate A 0.85 pass, D 0.638 warn, G 0.0 fail(창작
+  문서라 "근거 인용"을 요구하는 Gate G가 구조적으로 낮게 나오는
+  경향 — §24에서 이미 지적된 것과 일치, 새로운 문제 아님).
+- 코드(로컬 Ollama, code, 6464자) — 실제로 여는 완전한 HTML 문서
+  (인라인 CSS+JS, 상단 바·의뢰 리스트·버튼 이벤트 핸들러 포함)를
+  생성했다. Gate C 0.4 fail·D 0.0 fail·G 0.0 fail로 OpenAI 결과보다
+  전반적으로 낮다 — "실제로 동작하는 코드가 나왔는가"(사람이 직접
+  확인)와 "Gate 자동 채점 점수"가 다른 질문이라는 걸 정직하게
+  보여주는 결과다(로컬 모델이라고 코드 자체가 못 쓸 수준은 아니었지만,
+  자동 채점 기준에서는 확실히 더 낮게 나왔다).
+- 코드 산출물이 응답 전체를 ` ```html ` 펜스로 한 번 더 감싸고
+  있었는데, §71의 `stripOuterFence()`가 content_type="code"에도
+  동일하게 적용돼 펜스 없이 정상 렌더링되는 것을 확인했다 — 펜스의
+  언어 태그("html")와 content_type("code")이 서로 달라도 정규식이
+  언어 태그 자체를 구분하지 않으므로 문제없이 동작했다(실측으로
+  처음 검증).
+
+**검증**: 코드 변경 없음(순수 라이브 실행 + 문서화라 골든셋 256건
+그대로). Playwright로 두 워크스페이스를 열어 마크다운 기획서(제목/
+목록)와 구문 강조된 코드 블록이 각각 깨끗하게 렌더링되는 것, "내
+업무"에 두 할 일이 모두 "승인됨"으로 뜨는 것을 스크린샷으로 확인했다.
+
+## 73. 시나리오 7 신설 — 팀(복수 사람) + 신규 Crew 에이전트 그룹 +
+    게임 내장 AI 기능을 실제 서버·실제 로컬 Ollama로 라이브 실행 —
+    사용자 요청(2026-10-08, "게임의 기능에 openai나 ollama를 이용하는
+    AI 기능이 들어가도록 시나리오를 구성하고, 복수의 사람과 crewai
+    에이전트 그룹이 협업하는 업무가 되도록 기획하고 HAIR-Platform으로
+    실행해줘")
+
+**배경**: 시나리오 5(팀 Crew 그룹)와 시나리오 6(신규 Agent+멀티
+provider)을 합치면서, 산출물(게임) 자체가 런타임에 로컬 Ollama를
+호출하는 AI 기능을 내장해야 한다는 요구사항이 추가됐다. 사전에
+`curl -i -X OPTIONS http://localhost:11434/api/chat -H "Origin:
+..."`로 Ollama의 CORS 정책을 확인했더니 `localhost`/`127.0.0.1`
+계열 출처는 포트 무관하게 전부 허용하고(`http://example.com:9999`,
+`Origin: null`은 거부) — 브라우저에서 직접 호출하는 설계가 이
+머신에서는 실제로 가능하다는 걸 코드를 쓰기 전에 먼저 확인했다.
+
+**실행 중 실제로 막힌 지점(1) — 사람-계정 연결은 1:1**: pm_kim·
+park_member용 사람(`human_pool`) 레코드를 새로 만들어 연결하려다
+409("이미 다른 사람 인력(id=3)에 연결된 계정입니다")로 막혔다 — 시나리오
+5에서 이미 pm_kim=human_pool#3, park_member=human_pool#2로 연결돼
+있어서 충돌한 것이다. 한 로그인 계정은 `human_pool` 레코드
+**하나에만** 연결된다는 제약을 이번에 실측으로 처음 확인했다(API
+자체가 막아주므로 데이터 무결성 버그는 아니다 — 스크립트가 "항상
+새로 만든다"고 가정한 게 문제였다). 잘못 만든 레코드 2건은 `DELETE
+/api/human-pool/{id}`로 정리하고, 기존 레코드를 그대로 재사용해
+팀 멤버로 추가하는 것으로 해결했다.
+
+**실행 중 실제로 느낀 지점(2) — 로컬 30B 모델의 실행 시간**:
+`provider="ollama"`, `qwen3-coder:latest`(30.5B)로 Agent 2개를
+sequential 실행하니 약 6분 걸렸다 — 폴링 타임아웃을 200초로 잡았다가
+한 번 모자라서 더 긴 타임아웃(10분)으로 재시도해야 했다. OpenAI
+1회 호출(보통 수 초)과 대조적으로, 로컬 추론은 비용이 없는 대신
+시간이 든다는 트레이드오프를 체감했다.
+
+**실행 중 실제로 발견한 결과(3) — 이번엔 두 Agent가 실제로 달랐다**:
+시나리오 5·§71에서는 "팀 Agent 실행(Crew)"의 두 Agent가 완전히
+동일한 산출물을 냈는데, 이번엔 달랐다 — 다만 "서로 다른 전문성을
+발휘해서" 다른 게 아니라, 한쪽("게임 UI 개발" Agent)이 "AI 연동
+로직 개발자에게 요청한... 구현하였습니다"라는 문장만 쓰고 실제
+코드 없이 여는 ` ``` ` 펜스로 응답을 끝내버린(153자, Gate C 0.4
+fail·D 0.0 fail·G 0.0 fail) 반면, 다른 쪽("AI 연동 로직 개발"
+Agent)은 완전한 HTML 채팅 UI(CSS+JS 포함, 4556자)를 만들었다. admin
+이 전자는 **반려**("실제 코드 없이 설명만 있음 — 재작업 필요"),
+후자는 **승인**했다 — "애매하면 그냥 승인하지 않는다"는 이 프로젝트의
+리뷰 원칙을 실제 반려로 보여준 첫 사례다(그동안 라이브 시나리오는
+전부 승인으로만 끝났었다).
+
+**최종 검증(4) — AI가 만든 게임 안의 AI 기능이 실제로 동작하는가**:
+승인된 코드를 그대로 `.html` 파일로 저장해 로컬 정적 서버(포트
+5500)로 띄우고 Playwright로 열어, 입력창에 "너는 누구야? 한 문장으로
+답해줘"를 치고 전송 버튼을 눌렀다. **로컬 Ollama(exaone3.5:7.8b)가
+실제로 응답**("저는 LG AI Research에서 개발한 EXAONE 3.5입니다")
+했고 채팅 UI에 정확히 표시됐다(브라우저 콘솔 에러 0건). 정리하면
+3중으로 "실제로 동작하는가"를 확인한 셈이다 — ① HAIR가 실제 CrewAI로
+Agent를 실행했는가(예), ② 그 Agent가 만든 코드가 실제로 유효한
+HTML/JS인가(예), ③ 그 코드 안의 AI 호출이 실제 로컬 LLM 서버에
+도달해 진짜 응답을 받아오는가(예).
+
+**검증**: 코드 변경 없음(순수 라이브 실행 + 문서화라 골든셋 256건
+그대로). Playwright로 "내 업무"(pm_kim="team_leader", park_member=
+"team_member" 둘 다 확인), 워크스페이스, 그리고 생성된 게임을 각각
+실제로 열어 확인했다.
+
+## 74. `docs/ASANA_PARITY_DESIGN_PLAN.md` Phase 1 구현 — F17(Task 메모) +
+F19(통합 활동 타임라인) — 사용자 요청(2026-10-08, "HAIR-Platform이 갖고
+있는 장점을 살리면서 ASANA 모방 수준의 기능 및 UI 제공을 위한 기획 및
+설계안을 제안해줘" → 설계안 §6 열린 질문에 "Phase 1→5 순서로" 답) 첫
+실제 구현.
+
+**F17(메모)**: `tasks.notes TEXT NOT NULL DEFAULT ''`(`_ensure_column()`로
+기존 `hair.db`에도 안전하게 추가). `GET /api/tasks/{id}`(신규 — 지금까지
+Task 단건 조회 엔드포인트 자체가 없었다, `GET /api/briefs/{id}/tasks`
+간접 조회만 가능했음)·`PATCH /api/tasks/{id}/notes`(참가자 전용 —
+`deliverables.create_comment()`가 쓰던 `task_participant_relationship()`
+판정을 그대로 재사용, 결재 불필요). `GET /api/briefs/{brief_id}/tasks`도
+명시적 dict 구성이라(`SELECT *`/`dict(row)`가 아님) `notes` 필드를 거기도
+직접 추가해야 노출됐다 — Tier 2(content_type) 때와 달리 "컬럼만 추가하면
+자동으로 보인다"가 성립하지 않는 응답 모양이 여기 또 하나 있었다.
+
+**F19(통합 활동 타임라인)**: `GET /api/tasks/{id}/activity` —
+`audit_log.subject_type`이 엔티티마다 제각각이라(`assignment`/
+`deliverables`/`deliverable_comments`/`agent_execution_jobs`/`approval`/
+`tasks`, 전체 `audit.record()` 호출부 전수조사로 확정) task_id로
+되짚는 경로가 6갈래로 갈린다 — `UNION ALL`로 전부 합쳤다. 두 가지
+특이 케이스: (1) `approval`은 `subject_id`가 `approvals.id`라
+`approvals.subject_type`('assignment'/'deliverable')으로 한 번 더
+분기해야 실제 task_id에 닿는다. (2) `team_crew_execution_started`
+(`deliverables.start_team_crew_execution()`)는 `subject_id=None`으로
+기록되고 `after_value` JSON에 `task_id`가 박혀 있어
+`json_extract(after_value, '$.task_id')`로 따로 짚어야 한다(SQLite
+3.38+ 내장 함수 — `:memory:` DB로 사전에 동작 확인 후 적용).
+
+**검증**: `tests/unit/test_phase26_asana_parity_phase1.py` 11건 신설
+(403 비참가자 차단, task 간 활동 비누출, `agent_execution_jobs`/
+`approval`/`tasks` 등 전 경로의 activity 등장 확인 포함) — 전체
+스위트 267건(256+11) 통과. 실서버(port 8000, 실제 `hair.db`)에
+재배포해 `PRAGMA table_info(tasks)`로 마이그레이션 확인 후, 시나리오
+7(§73)이 남긴 실제 이력이 있는 task #13을 열어 curl+Playwright로
+교차 검증 — 메모 저장/조회, 활동 타임라인이 그 task의 배정·결과물
+2건·댓글·결재(승인 1건+반려 1건)·팀 Crew 실행 시작까지 전부 시각
+역순으로 올바르게 보여주는 것을 실측 확인했다(스크린샷으로 레이아웃도
+확인).
