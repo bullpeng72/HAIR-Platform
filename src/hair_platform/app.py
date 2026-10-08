@@ -2157,6 +2157,17 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             ) from exc
         return {"id": agent_id, "deleted": True}
 
+    @app.post("/api/demo/seed", status_code=201)
+    def seed_demo_data_endpoint(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """ASANA_PARITY_DESIGN_PLAN.md F20(2026-10-08, Phase 5) — "샘플로
+        체험하기". 기존 데이터 삭제 기능과 대칭되는 admin 전용 생성
+        기능이다. 몇 번을 눌러도 매번 새 샘플 Brief/Task/Human/Agent가
+        추가로 생긴다(중복 방지 로직 없음 — "초기화"가 아니라 "체험용
+        데이터 추가"가 목적이라 멱등일 필요가 없다)."""
+        return data_admin.seed_demo_data(conn, user["id"])
+
     @app.get("/api/audit-log")
     def get_audit_log(
         limit: int = 50,

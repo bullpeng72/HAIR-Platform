@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from hair_platform import audit
@@ -281,3 +282,73 @@ def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None
         after=None,
     )
     conn.commit()
+
+
+def seed_demo_data(conn: sqlite3.Connection, actor_id: int) -> dict:
+    """ASANA_PARITY_DESIGN_PLAN.md F20(2026-10-08, Phase 5) — `POST
+    /api/demo/seed`(admin 전용). 샘플 Brief 1건+Task 2건+Agent 1개+
+    Human 1명을 한 번에 만들어 신규 관리자가 빈 화면에서 뭘 해야 할지
+    막막해하지 않고 바로 체험할 수 있게 한다 — 이 파일 서두의 "데이터
+    삭제" 기능과 대칭되는 "생성" 기능이다(삭제만 있고 되돌릴 방법이
+    없으면 실수로 다 지운 뒤 처음부터 손으로 다시 만들어야 한다).
+
+    `approvals.create_approval_chain()`을 타지 않는 순수 시드 데이터라
+    confirmed 배정 없이 그대로 남는다 — 매칭·배정·승인 흐름 자체를
+    "체험"하는 게 이 기능의 목적이라, 전부 자동으로 확정해버리면
+    체험할 게 없어진다(일부러 결재 전 상태로 둔다)."""
+    cur = conn.execute(
+        "INSERT INTO briefs (submitted_by, raw_text, stub_roles, status) "
+        "VALUES (?, ?, '[]', 'submitted')",
+        (
+            actor_id,
+            "(샘플) 신규 랜딩 페이지 제작 프로젝트 — 체험용으로 자동 생성된 데이터입니다.",
+        ),
+    )
+    brief_id = cur.lastrowid
+    assert brief_id is not None
+
+    task_ids = []
+    for role_name, skills in (
+        ("프론트엔드 개발", ["HTML", "CSS", "JavaScript"]),
+        ("콘텐츠 카피라이팅", ["카피라이팅"]),
+    ):
+        cur = conn.execute(
+            "INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, ?, ?)",
+            (brief_id, role_name, json.dumps(skills, ensure_ascii=False)),
+        )
+        task_ids.append(cur.lastrowid)
+
+    cur = conn.execute(
+        "INSERT INTO human_pool (name, role, skill_tags, availability, cost_estimate) "
+        "VALUES (?, ?, ?, 'available', 50000)",
+        (
+            "(샘플) 체험용 디자이너",
+            "프론트엔드 개발",
+            json.dumps(["HTML", "CSS"], ensure_ascii=False),
+        ),
+    )
+    human_id = cur.lastrowid
+    assert human_id is not None
+
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, ?, 'active')",
+        ("(샘플) 체험용 카피 Agent", json.dumps(["카피라이팅"], ensure_ascii=False)),
+    )
+    agent_id = cur.lastrowid
+    assert agent_id is not None
+
+    audit.record(
+        conn,
+        actor_id,
+        "demo_data_seeded",
+        "briefs",
+        brief_id,
+        after={"task_ids": task_ids, "human_id": human_id, "agent_id": agent_id},
+    )
+    conn.commit()
+    return {
+        "brief_id": brief_id,
+        "task_ids": task_ids,
+        "human_id": human_id,
+        "agent_id": agent_id,
+    }

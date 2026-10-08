@@ -60,26 +60,30 @@ def _parse_tab_entries() -> list[dict]:
     return entries
 
 
-def test_gc73_html_shell_has_three_nav_groups_and_admin_badge_markup():
-    """"관리자 도구"는 실제로 11개 중 10개가 매니저도 접근 가능해 라벨이
-    오해를 줬고(직접 겪은 혼란), "인력 검색"/"조직도"는 역할과 무관한
-    순수 조회라 "내 업무"와 성격이 달랐다(`docs/ROLE_TASK_CLASSIFICATION.md`)
-    — 그룹을 셋으로 늘리고 admin 그룹 라벨을 "운영 관리"로 바꿨다."""
+def test_gc73_html_shell_has_two_nav_groups_and_admin_badge_markup():
+    """**Phase 29(ASANA_PARITY_DESIGN_PLAN.md F20, 2026-10-08, "Phase
+    1→5 순서로" 진행 지시의 마지막 단계)에서 갱신** — 원래 Phase 11은
+    "user"/"common"/"admin" 셋을 "내 업무"/"공용 조회"/"운영 관리"
+    3구역으로 그대로 렌더링했지만, F20 "탭 재구성"(설계 문서: "신규
+    사용자가 매일 보는 화면을 좁힌다")으로 렌더링 단계에서 "user"+
+    "common"을 "오늘 할 일" 하나로 합치고 "admin"을 "설정"으로
+    바꿨다. `TABS` 배열 자체의 `group` 값(user/common/admin, 아래
+    GC74-77)은 바뀌지 않았다 — 바뀐 건 `buildNav()`가 그 값들을
+    렌더링하는 방식뿐이다."""
     for marker in [
-        "내 업무",
-        "공용 조회",
-        "운영 관리",
+        "오늘 할 일",
+        "설정",
         "nav-group",
         "admin-group",
-        "common-group",
         "badge-adminonly",
     ]:
         assert marker in INDEX_HTML
-    # 옛 라벨이 실제 렌더링 호출로 되살아나지 않았는지 회귀 방지 — 코드
-    # 주석에는 "관리자 도구"가 남아 있어도 되지만(변경 이력 설명),
-    # addGroup() 호출부의 실제 라벨이어선 안 된다.
+    # 옛 3구역 라벨이 실제 렌더링 호출로 되살아나지 않았는지 회귀 방지.
     assert 'addGroup("관리자 도구"' not in INDEX_HTML
-    assert 'addGroup("운영 관리"' in INDEX_HTML
+    assert 'addGroup("운영 관리"' not in INDEX_HTML
+    assert 'addGroup("공용 조회"' not in INDEX_HTML
+    assert 'addGroup("오늘 할 일"' in INDEX_HTML
+    assert 'addGroup("설정"' in INDEX_HTML
 
 
 def test_gc74_every_tab_has_a_group_assigned():

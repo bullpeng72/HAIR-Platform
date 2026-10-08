@@ -37,16 +37,12 @@ INDEX_HTML = """<!DOCTYPE html>
   .nav-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; padding: 0.4rem 0.5rem; }
   .nav-group + .nav-group { border-top: 1px dashed #e2e4e8; }
   .nav-group.admin-group { background: #fff7ec; }
-  .nav-group.common-group { background: #eafaf7; }
   .nav-label { font-size: 0.72rem; font-weight: 600; color: #888; margin-right: 0.4rem; min-width: 72px; }
   .nav-group.admin-group .nav-label { color: #a15c00; }
-  .nav-group.common-group .nav-label { color: #0f766e; }
   nav button { background: none; border: 1px solid #ccc; padding: 0.35rem 0.7rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
   nav button.active { background: #14213d; color: #fff; border-color: #14213d; }
   .nav-group.admin-group button { border-color: #f0c98a; }
   .nav-group.admin-group button.active { background: #a15c00; border-color: #a15c00; }
-  .nav-group.common-group button { border-color: #99e2d6; }
-  .nav-group.common-group button.active { background: #0f766e; border-color: #0f766e; }
   .badge-adminonly { font-size: 0.65rem; background: #a15c00; color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
   main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
   section.card { background: #fff; border: 1px solid #e2e4e8; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
@@ -615,13 +611,26 @@ async function boot() {
   }
 }
 
+// ASANA_PARITY_DESIGN_PLAN.md F20(2026-10-08, Phase 5) — **탭 재구성**:
+// 기존 3구역("내 업무"/"공용 조회"/"운영 관리")을 "오늘 할 일"/"설정"
+// 2구역으로 합친다(설계 문서: "신규 사용자가 매일 보는 화면을 좁힌다").
+// `TABS` 배열의 `group` 값(user/common/admin) 자체는 그대로 둔다 —
+// "admin" 그룹(Pool 5종·Team·Model Registry 등 자주 안 바뀌는 설정성
+// 화면)을 "설정"으로, 나머지(user+common — 업무 요청·성과 리뷰·
+// 인력 검색·조직도처럼 역할과 무관하게 자주 참조하는 화면 포함)를
+// "오늘 할 일"로 묶는다. 설계 문서가 예시로 든 "인박스·내 업무·할 일
+// 보드·결재" 4개만 남기고 나머지(업무 요청 등)를 "설정"으로 보내는
+// 더 좁은 해석도 가능했지만, 매일 쓰는 "업무 요청"을 "설정"에 숨기면
+// 오히려 더 불편해질 위험이 커서 "admin 전용 여부"를 기준으로
+// 묶었다 — `docs/LIMITS.md`에 이 해석을 정직하게 기록해둔다.
 function buildNav() {
   const nav = document.getElementById("tabs");
   nav.innerHTML = "";
 
-  const userTabs = TABS.filter(t => t.group === "user" && t.roles.includes(ME.role));
-  const commonTabs = TABS.filter(t => t.group === "common" && t.roles.includes(ME.role));
-  const adminTabs = TABS.filter(t => t.group === "admin" && t.roles.includes(ME.role));
+  const todayTabs = TABS.filter(
+    t => (t.group === "user" || t.group === "common") && t.roles.includes(ME.role)
+  );
+  const settingsTabs = TABS.filter(t => t.group === "admin" && t.roles.includes(ME.role));
 
   const addGroup = (label, tabs, cls) => {
     if (!tabs.length) return;
@@ -647,9 +656,8 @@ function buildNav() {
     nav.appendChild(row);
   };
 
-  addGroup("내 업무", userTabs, "");
-  addGroup("공용 조회", commonTabs, "common-group");
-  addGroup("운영 관리", adminTabs, "admin-group");
+  addGroup("오늘 할 일", todayTabs, "");
+  addGroup("설정", settingsTabs, "admin-group");
 }
 
 let currentTab = null;
@@ -715,6 +723,17 @@ async function renderInbox(content) {
       '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
   }).join("");
 
+  // ASANA_PARITY_DESIGN_PLAN.md F20(2026-10-08, Phase 5) — "샘플로
+  // 체험하기"는 admin 전용(seed API 자체가 admin 전용)이고, 로그인
+  // 직후 가장 먼저 보이는 화면(TABS 배열 맨 앞 = inbox)에 둬야 "로그인
+  // 첫 화면"이라는 설계 의도와 맞는다. 처리할 조치가 하나도 없는
+  // 빈 인박스일 때만 보여준다 — 이미 데이터가 쌓여 있는 운영 환경에서
+  // 매번 보이면 오히려 잡음이다.
+  const seedPrompt = (ME.role === "admin" && !items.length)
+    ? '<div class="card"><p class="muted">아직 업무 데이터가 없나요?</p>' +
+      '<button class="small" id="seed-demo-btn">샘플로 체험하기</button></div>'
+    : '';
+
   content.innerHTML =
     '<section class="card"><h2>내게 필요한 조치</h2>' +
     '<ul class="muted help-list">' +
@@ -722,7 +741,19 @@ async function renderInbox(content) {
     '<li>완전한 시간순 통합은 아니고 종류별로 묶여 있습니다 — 처리는 각 항목의 원래 화면(결재/내 업무)에서 합니다.</li>' +
     '</ul>' +
     (items.length ? cards : '<p class="muted">지금 조치가 필요한 항목이 없습니다.</p>') +
+    seedPrompt +
     '</section>';
+
+  const seedBtn = document.getElementById("seed-demo-btn");
+  if (seedBtn) {
+    seedBtn.onclick = async () => {
+      try {
+        const result = await api("POST", "/api/demo/seed", {});
+        showMsg("global-msg", "샘플 데이터를 만들었습니다 — '업무 요청' 탭에서 확인하세요.", "ok");
+        await selectTab("briefs");
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  }
 
   content.querySelectorAll("[data-goto-approvals]").forEach(btn => {
     btn.onclick = () => selectTab("approvals");

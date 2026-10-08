@@ -285,4 +285,19 @@ DEFAULT ''`. (버전 이력까지 필요하면 별도 `task_notes` 테이블로
   unit/test_phase29_asana_parity_phase4.py`). 실서버 라이브 검증 중
   `workload()`가 team 배정을 집계 못 하는 비대칭 갭을 발견해
   `docs/LIMITS.md` §77에 정직하게 기록(다음 리뷰 과제로 남김).
-- [ ] Phase 5 — F20(온보딩/탭 재구성)
+- [x] Phase 5 — F20(온보딩/탭 재구성) — 완료(2026-10-08). **마지막
+  단계 — Phase 1→5 전부 완료.** `POST /api/demo/seed`(admin 전용 —
+  샘플 Brief 1건+Task 2건+Human 1명+Agent 1개를 결재 전 상태로 생성,
+  기존 "데이터 삭제"와 대칭) + 인박스가 비어 있을 때 admin에게만
+  보이는 "샘플로 체험하기" 버튼. 탭 재구성은 기존 3구역("내 업무"/
+  "공용 조회"/"운영 관리")을 "오늘 할 일"/"설정" 2구역으로 렌더링
+  단계에서 병합(`TABS` 배열 자체의 group 값은 그대로 — "user"+
+  "common"→"오늘 할 일", "admin"→"설정"). 설계 문서가 예시로 든
+  "인박스·내 업무·할 일 보드·결재" 4개만 남기는 더 좁은 해석도
+  있었지만, "업무 요청"처럼 매일 쓰는 화면을 "설정"에 숨기면 더
+  불편해질 위험이 커서 "admin 전용 여부" 기준으로 묶었다(`docs/
+  LIMITS.md` §78에 이 해석 기록). 기존 Phase 11 회귀 테스트(`test_
+  phase11_admin_user_nav_split.py`의 `test_gc73`)를 새 구조에 맞게
+  갱신 + 신규 테스트 4건(`tests/unit/test_phase30_asana_parity_
+  phase5.py`). 실서버 라이브 검증 — "샘플로 체험하기" 클릭 → 샘플
+  데이터 생성 → "업무 요청" 탭 자동 이동까지 전체 흐름 확인.
