@@ -316,3 +316,147 @@ UI 단순화 2건은 사용자 결정으로 기록만 남기고 코드는 유지
 - **기록만 남김(§79)**: "할 일 보드"가 조직 전체가 아니라 "내
   업무" 범위로 좁음 / F19 "활동"이 탭이 아니라 접이식 섹션 / 참가자
   UI가 아바타가 아니라 텍스트 목록(순수 코스메틱).
+
+## 9. 대화 중심 협업 고도화 제안(F21, 2026-10-08)
+
+사용자 요청: "ASANA 등을 보면 업무가 대화창에서 진행되고 자연스럽게
+사람이나 에이전트를 대화에 참여시켜 업무를 수행할 수 있어.
+HAIR-Platform의 경우 해당 기능을 어떻게 제공할 수 있을지 확인하고
+개선 방안을 제시해줘." F15(Phase 1-3)로 "초대"와 "댓글 @멘션 트리거"
+자체는 이미 만들었다 — 이 절은 **그 위에서 실제로 코드를 다시 읽고
+확인한 구조적 한계**와 그걸 메우는 구체안이다.
+
+### 9-1. 현재 상태 점검(확인) — 실제로 발견한 4가지 구조적 한계
+
+코드를 직접 추적해 확인했다(추측 아님):
+
+1. **결과물이 0건이면 대화 자체가 불가능하다.** 댓글 입력창
+   (`<form data-comment-form>`)은 `webui.py`의 `deliverableCards =
+   items.map(...)` 안에서만 만들어진다(`webui.py:1022`) — `items`
+   (deliverables)가 비어 있으면 댓글창 자체가 화면에 없다
+   (`아직 결과물이 없습니다` 문구만 뜬다, `webui.py:1093`). 즉 Task를
+   막 만들고 참가자를 초대한 직후엔, 누군가 먼저 "결과물 작성"(사실상
+   하나의 공식 문서 제출)을 해야만 대화가 열린다 — Asana처럼 "일단
+   말부터 걸기"가 안 된다. **현재 구조에서 가장 치명적인 차이다.**
+2. **@멘션 트리거가 대화 맥락을 전혀 안 본다.** `app.py`의 댓글
+   생성 핸들러(`create_deliverable_comment`)는 `payload.content`
+   (방금 그 댓글 한 줄)만 그대로 `start_comment_triggered_execution()`
+   /`run_comment_triggered_execution_job()`에 넘긴다(`app.py:1267-1288`)
+   — 이전에 오간 댓글들은 프롬프트에 안 들어간다. "아까 그거 다시
+   해줘"·"이거 말고 다르게" 같은 멀티턴 대화가 자연스럽게 이어지지
+   않는다.
+3. **초대 안 된 이름을 멘션해도 조용히 무시된다.** `detect_mentioned_
+   agents()`는 `task_participants`에 이미 있는 Agent만 후보로 본다
+   (`deliverables.py:494`) — 초대 안 된 Agent/사람 이름을 멘션해도
+   에러도, "초대할까요?" 제안도 없이 그냥 아무 일도 안 일어난다.
+   "대화하다가 자연스럽게 끌어들인다"는 경험과 가장 먼 지점이다.
+4. **대화창이 실시간으로 안 갱신된다.** 댓글은 `refreshComments()`를
+   호출해야만 다시 조회된다 — 다른 사람(or Agent)이 새 댓글을 남겨도
+   내가 보던 화면엔 수동으로 다시 열기 전까진 안 보인다(멘션 트리거
+   응답만 `pollExecutionJob()`으로 예외적으로 폴링됨).
+
+(이미 §8/§79에서 정리한 "자동완성 드롭다운 미구현"은 그 사이 보완
+완료 — 이 절의 범위에서 제외.)
+
+### 9-2. 개선안
+
+**F21-1(최우선) — Task 레벨 대화 스레드 신설, "결과물 선행 조건"
+제거**
+
+```sql
+-- deliverable_comments.deliverable_id를 NOT NULL에서 nullable로
+-- 바꾸는 것은 SQLite ALTER TABLE로 불가능하다(컬럼 제약 변경 자체가
+-- 안 됨 — deliverables.py가 이미 같은 이유로 status CHECK 확장을
+-- 포기하고 새 테이블(agent_execution_jobs)을 판 전례가 있다). 같은
+-- 원칙으로 새 테이블을 둔다.
+CREATE TABLE IF NOT EXISTS task_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    author_type TEXT NOT NULL CHECK (author_type IN ('human', 'agent')),
+    author_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+**재사용 가능성이 이미 높다** — 확인해보니 `can_comment_on_task()`·
+`detect_mentioned_agents()`·`start_comment_triggered_execution()`
+세 함수 모두 **이미 `deliverable_id`가 아니라 `task_id`를 직접
+받는다**(`deliverables.py:132,494,568`). `deliverable_comments`
+전용인 건 사실상 `create_comment()`(댓글 INSERT)와 `run_comment_
+triggered_execution_job()`(응답 INSERT 대상)뿐이다 — 이 두 곳만
+"대상 테이블이 `task_messages`냐 `deliverable_comments`냐"를
+분기하면 나머지 로직(권한 판정·멘션 감지·실행 트리거·동시실행
+가드)은 전부 그대로 재사용된다. 중복 구현이 아니라 "출력 대상만
+다른 같은 파이프라인"이다.
+
+**API**: `GET/POST /api/tasks/{task_id}/messages` — `POST`는 기존
+`POST /api/deliverables/{id}/comments`와 동일한 모양(`{content}` →
+`{id, triggered_jobs, skipped_agent_ids}`)으로 대칭 설계.
+
+**UI**: 워크스페이스 최상단(참가자 카드 아래, 결과물 목록 위)에
+"대화" 섹션을 **결과물 유무와 무관하게 항상** 노출한다. 기존
+`@` 자동완성(`setupMentionAutocomplete()`)·Agent 댓글 배지 스타일을
+그대로 재사용.
+
+**"결과물로 제출"은 이미 있는 길을 그대로 쓴다** — F15 Phase 3에서
+만든 "이걸 결과물로 제출" 버튼과 동일하게, 대화 메시지 내용을 기존
+"결과물 작성" textarea에 채워 넣기만 하고 제출은 기존
+`POST /api/tasks/{id}/deliverables`(F7 체인)를 그대로 탄다. **새로운
+승격 경로를 만들지 않는다** — 뒷문 리스크를 Phase 3와 같은 방식으로
+구조적으로 차단한다.
+
+**F21-2 — 멘션 트리거에 최근 대화 맥락 포함**
+
+`run_comment_triggered_execution_job()`이 프롬프트를 조립할 때
+`agent_runtime.execute_agent()`에 넘기기 전에, 같은 스레드의 최근
+N건(예: 10건)을 간단한 transcript로 이어붙인다:
+```
+[이전 대화]
+사용자: ...
+AI 에이전트: ...
+[새 메시지]
+사용자: @Agent이름 ...
+```
+N을 넘는 과거 기록은 자르되, 길이 제한(토큰/비용 관리)은 명시적
+상한(예: 글자수 합산 2000자)으로 추가 안전장치를 둔다 — 대화가
+길어질수록 매 멘션마다 비용이 누적 증가하는 문제를 막는다.
+
+**F21-3 — 미초대 대상 멘션 시 "초대 후 호출" 플로우**
+
+자동완성 드롭다운에 "초대된 참가자"뿐 아니라(구분 표시) 조직 내
+활성 Agent/계정도 후보로 보여주고, 그중 하나를 선택하면 "초대하고
+멘션할까요?" 확인 후 `invite_participant()` → 멘션 트리거를 한
+흐름으로 처리한다. 여기서 "검색 범위"(조직 전체 vs 같은
+브리프 내)는 열린 질문 — 9-3 참고.
+
+**F21-4 — 대화 스레드만 경량 폴링으로 자동 갱신**
+
+전체 워크스페이스 재렌더(`renderCollabWorkspace()` 재호출)는 입력
+중이던 텍스트까지 날리므로(실측 가능한 리스크), 대화 섹션만 별도로
+일정 주기(예: 8초)로 `GET .../messages`를 재조회해 새 메시지만
+이어붙인다 — 기존 `pollExecutionJob()`과 같은 polling 패턴 재사용,
+워크스페이스를 벗어나면(다른 탭 이동) 자동으로 멈춘다.
+
+**F21-5(범위 밖으로 명시) — 실행 중 Agent 인터럽트**
+
+Asana의 "Teammate가 끝날 때까지 기다릴 필요 없다"에 대응하려면
+실행 중인 LLM 호출 자체를 중간에 끊고 재지시할 방법이 필요한데,
+`agent_runtime.execute_agent()`는 동기 완결형 호출이라(스트리밍 토큰
+단위 취소 불가) 기술적 난도가 이번 범위를 넘는다. 1차는 "새 메시지를
+대화에 남기면 다음 멘션 때 그 맥락이 반영된다"(F21-2) 정도로 좁히고,
+진짜 중간 인터럽트는 별도 과제로 남긴다.
+
+### 9-3. 열린 질문
+
+1. **로드맵 우선순위**: F21-1(대화 스레드 신설)이 체감 효과가
+   가장 크고 구조적 선행 조건이라 가장 먼저 해야 한다고 보는데,
+   F21-2~4 중 어느 걸 같이/나중에 할지.
+2. **F21-3의 검색 범위**: "초대 안 된 대상 멘션" 후보를 조직 전체
+   사람/Agent로 열지, 같은 브리프(프로젝트) 안으로 좁힐지 — 전자는
+   편하지만 무관한 사람을 실수로 끌어들일 위험, 후자는 안전하지만
+   브리프 간 협업엔 못 쓴다.
+3. **task_messages 보존 기간**: 결과물로 승격 안 된 잡담성 메시지가
+   무한정 쌓이는 것을 그대로 둘지(단순함 우선, append-only 원칙과도
+   일치), 아니면 보존/정리 정책을 따로 둘지.
+
+이 중 진행할 범위를 알려주면 그 부분부터 실제 코드로 구현한다.
