@@ -317,146 +317,191 @@ UI 단순화 2건은 사용자 결정으로 기록만 남기고 코드는 유지
   업무" 범위로 좁음 / F19 "활동"이 탭이 아니라 접이식 섹션 / 참가자
   UI가 아바타가 아니라 텍스트 목록(순수 코스메틱).
 
-## 9. 대화 중심 협업 고도화 제안(F21, 2026-10-08)
+## 9. 대화 중심 작업공간(Conversational Workspace) — 확장 제안(2026-10-08)
 
-사용자 요청: "ASANA 등을 보면 업무가 대화창에서 진행되고 자연스럽게
-사람이나 에이전트를 대화에 참여시켜 업무를 수행할 수 있어.
-HAIR-Platform의 경우 해당 기능을 어떻게 제공할 수 있을지 확인하고
-개선 방안을 제시해줘." F15(Phase 1-3)로 "초대"와 "댓글 @멘션 트리거"
-자체는 이미 만들었다 — 이 절은 **그 위에서 실제로 코드를 다시 읽고
-확인한 구조적 한계**와 그걸 메우는 구체안이다.
+**경과**: 1차 요청("Asana처럼 대화창에서...")에 대한 1차 답으로 아래
+9-1의 구조적 한계 분석과 "Task에 종속된 대화 스레드(F21-1, `task_
+messages`)"를 제안했다. **사용자가 이어서 더 근본적인 방향을
+지시**했다: "현재 방식(Brief→팀 구성→확정→수행)은 유연성/Agility가
+부족하다. 사용자가 로그인하면 기본적으로 대화창이 주어지고, 거기서
+다른 사용자나 에이전트(에이전트 그룹)를 호출하거나 skill을 사용해
+업무를 수행하는 방식으로 UX를 개선했으면 한다. 기존 방식과 공존
+(업무 성격에 따라 선택)하는 방향도 좋다." 이 절은 그 지시를 반영해
+**Task 종속 여부와 무관한, 로그인 시 바로 쓸 수 있는 독립된 "대화"
+엔티티**로 설계를 확장한다 — F21-1의 `task_messages`는 아래 설계의
+특수 케이스로 흡수되므로 별도로 만들지 않는다(9-4 참고).
 
-### 9-1. 현재 상태 점검(확인) — 실제로 발견한 4가지 구조적 한계
+### 9-1. 현재 상태 점검(확인) — 기존 구조의 한계
 
-코드를 직접 추적해 확인했다(추측 아님):
+1. **무거운 선행 경로가 유일한 입구다.** 지금 Agent/사람이 업무에
+   관여하려면 Brief 제출 → Task 분해 → 배정 요청 → F7 결재 승인
+   (확정) → 실행이라는 순서를 반드시 거친다. 빠른 질문 하나, 가벼운
+   검토 요청에도 이 전체 절차가 필요해 Agility가 떨어진다(사용자
+   지적 그대로).
+2. **F15(Phase 1-3)로 만든 Task 참가자 초대+댓글 @멘션도 Task
+   존재가 전제다.** 그리고 결과물이 0건이면 댓글창 자체가 안 뜬다
+   (`webui.py:1022,1093`) — Task를 막 만들고 참가자를 초대해도
+   누군가 먼저 "결과물 작성"을 해야 대화가 열린다.
+3. **@멘션 트리거가 대화 맥락을 안 본다** — 직전 메시지 한 줄만
+   프롬프트로 쓰여(`app.py:1267-1288`) 멀티턴 대화가 자연스럽게
+   이어지지 않는다.
+4. **초대 안 된 이름을 멘션해도 조용히 무시된다**(`deliverables.py:494`
+   `detect_mentioned_agents()`가 이미 초대된 Agent만 본다) — "대화
+   하다가 자연스럽게 끌어들인다"는 경험과 거리가 멀다.
+5. **대화창이 실시간 갱신 안 됨** — 수동 새로고침 필요.
+6. **"에이전트 그룹(Team)"을 가볍게 부르는 경로가 아예 없다** — Team
+   Crew 실행(`start_team_crew_execution()`)은 그 Task에 **팀이
+   confirmed 배정돼 있어야만** 호출 가능하다(`deliverables.py:1036`)
+   — 가벼운 대화 중에 "이 팀 불러서 같이 봐줘"가 안 된다.
 
-1. **결과물이 0건이면 대화 자체가 불가능하다.** 댓글 입력창
-   (`<form data-comment-form>`)은 `webui.py`의 `deliverableCards =
-   items.map(...)` 안에서만 만들어진다(`webui.py:1022`) — `items`
-   (deliverables)가 비어 있으면 댓글창 자체가 화면에 없다
-   (`아직 결과물이 없습니다` 문구만 뜬다, `webui.py:1093`). 즉 Task를
-   막 만들고 참가자를 초대한 직후엔, 누군가 먼저 "결과물 작성"(사실상
-   하나의 공식 문서 제출)을 해야만 대화가 열린다 — Asana처럼 "일단
-   말부터 걸기"가 안 된다. **현재 구조에서 가장 치명적인 차이다.**
-2. **@멘션 트리거가 대화 맥락을 전혀 안 본다.** `app.py`의 댓글
-   생성 핸들러(`create_deliverable_comment`)는 `payload.content`
-   (방금 그 댓글 한 줄)만 그대로 `start_comment_triggered_execution()`
-   /`run_comment_triggered_execution_job()`에 넘긴다(`app.py:1267-1288`)
-   — 이전에 오간 댓글들은 프롬프트에 안 들어간다. "아까 그거 다시
-   해줘"·"이거 말고 다르게" 같은 멀티턴 대화가 자연스럽게 이어지지
-   않는다.
-3. **초대 안 된 이름을 멘션해도 조용히 무시된다.** `detect_mentioned_
-   agents()`는 `task_participants`에 이미 있는 Agent만 후보로 본다
-   (`deliverables.py:494`) — 초대 안 된 Agent/사람 이름을 멘션해도
-   에러도, "초대할까요?" 제안도 없이 그냥 아무 일도 안 일어난다.
-   "대화하다가 자연스럽게 끌어들인다"는 경험과 가장 먼 지점이다.
-4. **대화창이 실시간으로 안 갱신된다.** 댓글은 `refreshComments()`를
-   호출해야만 다시 조회된다 — 다른 사람(or Agent)이 새 댓글을 남겨도
-   내가 보던 화면엔 수동으로 다시 열기 전까진 안 보인다(멘션 트리거
-   응답만 `pollExecutionJob()`으로 예외적으로 폴링됨).
+(§8/§79에서 이미 정리한 "@ 자동완성 미구현"은 보완 완료 — 범위 제외.)
 
-(이미 §8/§79에서 정리한 "자동완성 드롭다운 미구현"은 그 사이 보완
-완료 — 이 절의 범위에서 제외.)
-
-### 9-2. 개선안
-
-**F21-1(최우선) — Task 레벨 대화 스레드 신설, "결과물 선행 조건"
-제거**
+### 9-2. 핵심 설계 — `conversations` : Task와 독립적인 대화 엔티티
 
 ```sql
--- deliverable_comments.deliverable_id를 NOT NULL에서 nullable로
--- 바꾸는 것은 SQLite ALTER TABLE로 불가능하다(컬럼 제약 변경 자체가
--- 안 됨 — deliverables.py가 이미 같은 이유로 status CHECK 확장을
--- 포기하고 새 테이블(agent_execution_jobs)을 판 전례가 있다). 같은
--- 원칙으로 새 테이블을 둔다.
-CREATE TABLE IF NOT EXISTS task_messages (
+-- "대화"는 Task가 있어야만 존재하는 게 아니다 — 로그인한 사용자가
+-- 아무 때나 새로 열 수 있는 독립된 공간이다. linked_task_id를 두면
+-- "이 Task 전용 대화"(F21-1이 원래 노리던 것)도 같은 테이블로
+-- 표현된다 — 별도 task_messages 테이블을 만들 필요가 없어진다.
+CREATE TABLE IF NOT EXISTS conversations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    title TEXT NOT NULL DEFAULT '',
+    linked_task_id INTEGER REFERENCES tasks(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- task_participants(F15)와 같은 모양이지만 participant_type에
+-- 'team'(에이전트 그룹)을 추가한다 — "에이전트 그룹을 호출"을
+-- 표현하려면 꼭 필요하다(task_participants는 F15 범위상 human/agent
+-- 둘뿐이었다).
+CREATE TABLE IF NOT EXISTS conversation_participants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    participant_type TEXT NOT NULL CHECK (participant_type IN ('human', 'agent', 'team')),
+    participant_id INTEGER NOT NULL,
+    invited_by INTEGER NOT NULL REFERENCES users(id),
+    invited_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(conversation_id, participant_type, participant_id)
+);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
     author_type TEXT NOT NULL CHECK (author_type IN ('human', 'agent')),
     author_id INTEGER NOT NULL,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 ```
-**재사용 가능성이 이미 높다** — 확인해보니 `can_comment_on_task()`·
-`detect_mentioned_agents()`·`start_comment_triggered_execution()`
-세 함수 모두 **이미 `deliverable_id`가 아니라 `task_id`를 직접
-받는다**(`deliverables.py:132,494,568`). `deliverable_comments`
-전용인 건 사실상 `create_comment()`(댓글 INSERT)와 `run_comment_
-triggered_execution_job()`(응답 INSERT 대상)뿐이다 — 이 두 곳만
-"대상 테이블이 `task_messages`냐 `deliverable_comments`냐"를
-분기하면 나머지 로직(권한 판정·멘션 감지·실행 트리거·동시실행
-가드)은 전부 그대로 재사용된다. 중복 구현이 아니라 "출력 대상만
-다른 같은 파이프라인"이다.
+생성자(`created_by`)는 자동으로 첫 참가자. `linked_task_id`가
+채워지면 그 Task 워크스페이스 안의 "대화" 섹션이 되고, `NULL`이면
+완전히 독립된 "내 대화"(로그인 직후 랜딩)가 된다 — **하나의 모델로
+두 유스케이스를 다 커버**한다.
 
-**API**: `GET/POST /api/tasks/{task_id}/messages` — `POST`는 기존
-`POST /api/deliverables/{id}/comments`와 동일한 모양(`{content}` →
-`{id, triggered_jobs, skipped_agent_ids}`)으로 대칭 설계.
+**API**:
+- `POST /api/conversations` — `{title?, linked_task_id?}`, 생성자
+  자동 참가.
+- `GET /api/conversations` — 내가 참가 중인 대화 목록(최근순).
+- `GET/POST /api/conversations/{id}/messages`, `GET/POST /api/
+  conversations/{id}/participants` — F15의 `can_comment_on_task()`
+  /`detect_mentioned_agents()`/`start_comment_triggered_execution()`
+  을 `task_id` 대신 `conversation_id` 기준으로 일반화한 버전을
+  그대로 재사용한다(세 함수 모두 이미 특정 task_id를 받는 구조라
+  매개변수 교체 수준의 작업 — 중복 구현 아님).
+- `POST /api/conversations/{id}/promote-to-brief` — 대화를 정식
+  업무 요청(Brief)으로 승격(9-3 "공존" 경로). 기존 `POST /api/briefs`
+  를 그대로 호출 — 새 생성 로직을 만들지 않는다.
 
-**UI**: 워크스페이스 최상단(참가자 카드 아래, 결과물 목록 위)에
-"대화" 섹션을 **결과물 유무와 무관하게 항상** 노출한다. 기존
-`@` 자동완성(`setupMentionAutocomplete()`)·Agent 댓글 배지 스타일을
-그대로 재사용.
+**Agent 그룹(Team) 호출**: 멘션 대상이 `participant_type='team'`
+이면, `crew_runtime.run_crew_for_team()`(`deliverables.py:1134`에서
+이미 `run_team_crew_job()`이 호출하는 바로 그 저수준 함수)을 **배정
+확정 여부 확인 없이** 직접 호출한다 — F15 Phase 3가 `start_agent_
+execution()`(확정 배정 필요) 대신 `agent_runtime.execute_agent()`
+(확정 불필요)를 썼던 것과 완전히 같은 패턴. 결과는 Gate 평가·
+`deliverables` 생성·F7 체인 없이, 참여 Agent별로(또는 매니저 조율
+결과 하나로 — 9-3 열린 질문 2) `conversation_messages`에
+`author_type='agent'`로만 쌓인다.
 
-**"결과물로 제출"은 이미 있는 길을 그대로 쓴다** — F15 Phase 3에서
-만든 "이걸 결과물로 제출" 버튼과 동일하게, 대화 메시지 내용을 기존
-"결과물 작성" textarea에 채워 넣기만 하고 제출은 기존
-`POST /api/tasks/{id}/deliverables`(F7 체인)를 그대로 탄다. **새로운
-승격 경로를 만들지 않는다** — 뒷문 리스크를 Phase 3와 같은 방식으로
-구조적으로 차단한다.
+**Skill 사용**: 기존 `assist()`/`_skill_grounded_system_prompt()`
+(Task 워크스페이스의 "LLM으로 도와줘")를 대화에도 그대로 노출한다
+— 메시지 작성 시 skill_pool에서 하나를 골라 "이 스킬로 보강된 AI
+응답"을 받는 보조 액션. 새 그라운딩 메커니즘을 만들지 않는다(9-3
+열린 질문 3 — 사용자가 말한 "skill 사용"이 이 의미가 맞는지 확인
+필요).
 
-**F21-2 — 멘션 트리거에 최근 대화 맥락 포함**
+**UI**:
+- 로그인 직후 "오늘 할 일" 탭군 맨 앞에 "대화"(홈) 탭 신설 — 내
+  대화 목록 + "새 대화 시작" 버튼. 빈 상태면 바로 새 대화를 열 수
+  있게 한다(브리프/태스크 없이).
+- 대화 화면: F15/F21-1에서 이미 만든 chat-human/chat-agent 카드
+  스타일, `@` 자동완성(`setupMentionAutocomplete()`), 참가자 초대
+  폼(F15 "참가자" 카드 확장 — human/agent/**team** 선택 가능하게)을
+  그대로 재사용.
+- "정식 업무 요청으로 전환" 버튼 — 대화가 무거워지면 Brief로 승격
+  (9-3 "공존" 경로 1).
+- Task 워크스페이스의 "대화" 섹션(F21-1 당초 설계)은 `linked_task_id`
+  가 채워진 대화 하나를 그 자리에 그대로 임베드하는 것으로 구현한다
+  — **완전히 같은 컴포넌트**를 두 자리(독립 탭/Task 워크스페이스
+  내부)에서 재사용.
 
-`run_comment_triggered_execution_job()`이 프롬프트를 조립할 때
-`agent_runtime.execute_agent()`에 넘기기 전에, 같은 스레드의 최근
-N건(예: 10건)을 간단한 transcript로 이어붙인다:
-```
-[이전 대화]
-사용자: ...
-AI 에이전트: ...
-[새 메시지]
-사용자: @Agent이름 ...
-```
-N을 넘는 과거 기록은 자르되, 길이 제한(토큰/비용 관리)은 명시적
-상한(예: 글자수 합산 2000자)으로 추가 안전장치를 둔다 — 대화가
-길어질수록 매 멘션마다 비용이 누적 증가하는 문제를 막는다.
+### 9-3. "기존 방식과 공존" — 두 경로의 연결 지점
 
-**F21-3 — 미초대 대상 멘션 시 "초대 후 호출" 플로우**
+사용자가 "업무 성격에 따라 선택"을 언급했다 — 설계는 **강제 분기가
+아니라 승격 경로**로 구현한다(어느 쪽이 "맞는" 방식인지 시스템이
+미리 정하지 않는다):
+- **가벼운 질문/검토 → 대화만으로 끝**: `conversations`에서 시작해
+  필요한 사람/Agent/Team을 불러 끝낸다. Gate/F7을 전혀 안 거친다.
+- **대화가 커지면 → Brief로 승격**: "정식 업무 요청으로 전환" 버튼
+  으로 지금까지의 대화를 `raw_text`로 넘겨 기존 Brief 제출 흐름에
+  태운다 — 이후론 기존 Task 분해·배정·승인 파이프라인 그대로.
+- **이미 Task가 있는 작업 → Task에 종속된 대화**(F21-1): Task
+  워크스페이스 안에서 가볍게 주고받다가 "결과물로 제출" 버튼으로
+  정식 deliverable(F7 체인)로 승격 — 이미 설계된 경로 그대로.
 
-자동완성 드롭다운에 "초대된 참가자"뿐 아니라(구분 표시) 조직 내
-활성 Agent/계정도 후보로 보여주고, 그중 하나를 선택하면 "초대하고
-멘션할까요?" 확인 후 `invite_participant()` → 멘션 트리거를 한
-흐름으로 처리한다. 여기서 "검색 범위"(조직 전체 vs 같은
-브리프 내)는 열린 질문 — 9-3 참고.
+이 세 경로 전부 "격식 있는 파이프라인 진입은 사람이 명시적으로
+눌러야 한다"는 원칙(1-1, F15 Phase 3 결정 a)을 공유한다 — 대화
+자체는 어떤 경우에도 자동으로 Gate/승인을 우회해 정식 결과물이
+되지 않는다.
 
-**F21-4 — 대화 스레드만 경량 폴링으로 자동 갱신**
+### 9-4. F21-1(`task_messages`)과의 관계
 
-전체 워크스페이스 재렌더(`renderCollabWorkspace()` 재호출)는 입력
-중이던 텍스트까지 날리므로(실측 가능한 리스크), 대화 섹션만 별도로
-일정 주기(예: 8초)로 `GET .../messages`를 재조회해 새 메시지만
-이어붙인다 — 기존 `pollExecutionJob()`과 같은 polling 패턴 재사용,
-워크스페이스를 벗어나면(다른 탭 이동) 자동으로 멈춘다.
+1차안에서 제안했던 `task_messages` 테이블은 **별도로 만들지 않고
+`conversations`(+`linked_task_id`)로 흡수한다** — 두 테이블을 같이
+만들면 "Task 종속 대화"가 두 가지 메커니즘으로 중복 구현된다. F21-1
+에서 이미 확인한 재사용 가능성(`can_comment_on_task()`/`detect_
+mentioned_agents()`/`start_comment_triggered_execution()`이 모두
+task_id 기반)은 그대로 `conversation_id` 기준으로 옮겨 재사용한다.
 
-**F21-5(범위 밖으로 명시) — 실행 중 Agent 인터럽트**
+F21-2(대화 맥락 포함)·F21-4(경량 폴링)는 이번 확장에도 그대로
+유효한 하위 과제로 유지한다 — 번호만 아래 로드맵에 재배치.
 
-Asana의 "Teammate가 끝날 때까지 기다릴 필요 없다"에 대응하려면
-실행 중인 LLM 호출 자체를 중간에 끊고 재지시할 방법이 필요한데,
-`agent_runtime.execute_agent()`는 동기 완결형 호출이라(스트리밍 토큰
-단위 취소 불가) 기술적 난도가 이번 범위를 넘는다. 1차는 "새 메시지를
-대화에 남기면 다음 멘션 때 그 맥락이 반영된다"(F21-2) 정도로 좁히고,
-진짜 중간 인터럽트는 별도 과제로 남긴다.
+### 9-5. 로드맵 제안
 
-### 9-3. 열린 질문
+| 단계 | 범위 |
+|---|---|
+| 1 | `conversations`/`conversation_participants`(human·agent만)/`conversation_messages` 스키마 + 기본 CRUD + 메시지 작성(멘션 없이 사람 참가자끼리 대화만) |
+| 2 | 단일 Agent 멘션 트리거(F15 Phase 3 로직 재사용) + Task 워크스페이스의 "대화" 섹션(linked_task_id 활용, F21-1 당초 목표 달성) |
+| 3 | Team(에이전트 그룹) 멘션 호출(`run_crew_for_team()` 재사용) |
+| 4 | "정식 업무 요청으로 전환" 승격 버튼, 로그인 랜딩을 "대화" 탭으로 |
+| 5 | 대화 맥락 포함(구 F21-2), 경량 폴링(구 F21-4), 미초대 대상 멘션 시 초대 플로우(구 F21-3) |
 
-1. **로드맵 우선순위**: F21-1(대화 스레드 신설)이 체감 효과가
-   가장 크고 구조적 선행 조건이라 가장 먼저 해야 한다고 보는데,
-   F21-2~4 중 어느 걸 같이/나중에 할지.
-2. **F21-3의 검색 범위**: "초대 안 된 대상 멘션" 후보를 조직 전체
-   사람/Agent로 열지, 같은 브리프(프로젝트) 안으로 좁힐지 — 전자는
-   편하지만 무관한 사람을 실수로 끌어들일 위험, 후자는 안전하지만
-   브리프 간 협업엔 못 쓴다.
-3. **task_messages 보존 기간**: 결과물로 승격 안 된 잡담성 메시지가
-   무한정 쌓이는 것을 그대로 둘지(단순함 우선, append-only 원칙과도
-   일치), 아니면 보존/정리 정책을 따로 둘지.
+### 9-6. 열린 질문
 
-이 중 진행할 범위를 알려주면 그 부분부터 실제 코드로 구현한다.
+1. **1인당 대화가 여러 개(주제별)인지, 기본 1개(항상 같은 방)인지**
+   — Slack/Asana류는 여러 개가 일반적이라 "새 대화 시작" 허용을
+   추천하지만 확인 필요.
+2. **Team 호출 시 워커 Agent별 메시지를 각각 올릴지, 매니저가 합친
+   응답 하나만 올릴지** — 기존 Team Crew 실행(Task 워크스페이스)은
+   "Agent별 deliverable 여러 개" 방식이었다. 대화에서도 그대로
+   가져오면 대화가 시끄러워질 수 있다.
+3. **"skill을 사용하여"의 정확한 의미** — (a) 메시지에 스킬을 명시
+   적으로 붙여 AI 응답을 보강하는 것(기존 assist 메커니즘)인지,
+   (b) `/명령어`처럼 스킬 자체를 직접 실행하는 별도 트리거인지.
+   설계는 1차로 (a)를 가정했다.
+4. **미초대 대상 멘션 시 검색 범위** — 조직 전체 vs 같은 Brief/
+   Task 범위로 좁힐지(구 F21-3).
+5. **로드맵 범위** — 9-5의 어디까지 이번에 진행할지(1단계만 먼저
+   확인하고 싶을 수도 있다).
+
+이 중 방향을 확인해주면 그 범위부터 실제 코드로 구현한다.
