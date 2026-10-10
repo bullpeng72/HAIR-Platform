@@ -1,0 +1,161 @@
+"""통합 CLI — `hair` 하나로 서버 실행·최초 ADMIN 계정 생성·Gate 측정을 다 한다.
+
+사용자 요청(2026-10-10, "실행 명령어가 너무 길고 어려워. 명령어를
+짧고 명료하게 정리하고, 현행화 해줘. 명령어에 대한 도움말(--help
+도움말 포함)을 가독성 높게 구현해줘") — 이전까지 README가 안내하던
+실행 방법은 세 가지 서로 다른 패턴이 뒤섞여 있었다:
+`uvicorn hair_platform.app:create_app --factory --reload`(외부 uvicorn
+CLI를 직접 호출 — 그리고 DB 경로를 지정할 방법이 아예 없어서 매번
+`:memory:`로 뜨고 있었다는 걸 이번에 처음 발견, `docs/LIMITS.md` §83),
+`hair-platform-bootstrap-admin --db-path hair.db --username admin
+--password '...'`(인자 4개짜리 별도 콘솔 스크립트), `python -m
+hair_platform.eval_wiring`(모듈 직접 실행). 전부 `hair <subcommand>`
+하나의 진입점 아래로 모은다 — 기존 `bootstrap.py`의 CLI/테스트는
+그대로 두고(`bootstrap_admin()` 함수만 재사용), `hair-platform-
+bootstrap-admin` 콘솔 스크립트는 `hair bootstrap-admin`으로 대체돼
+`pyproject.toml`에서 제거한다(두 진입점을 동시에 유지하는 대신
+하나로 정리 — 이 프로젝트의 "안 쓰는 경로를 호환성 명목으로
+남기지 않는다" 관례 그대로, `docs/LIMITS.md` §82 참고)."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+_EPILOG_TOP = """\
+예시:
+  hair serve                              서버 실행(http://127.0.0.1:8000, hair.db)
+  hair serve --port 9000 --reload         개발 중 코드 변경 자동 반영
+  hair bootstrap-admin -u admin -p ***    최초 관리자 계정 생성(최초 1회만)
+  hair eval                               Gate A/B/D/E/G 측정 1회 실행
+
+서브커맨드별 자세한 옵션: hair <subcommand> --help
+"""
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="hair",
+        description="HAIR-Platform 통합 CLI.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_EPILOG_TOP,
+    )
+    sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="Web UI + API 서버 실행",
+        description="FastAPI 서버를 띄운다. 브라우저에서 http://<host>:<port>/ 로 접속한다.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "예시:\n"
+            "  hair serve\n"
+            "  hair serve --db-path :memory: --reload   휘발성 DB로 임시 실행 + 자동 재시작\n"
+        ),
+    )
+    p_serve.add_argument(
+        "--host", default="127.0.0.1", help="바인딩할 호스트(기본: 127.0.0.1)"
+    )
+    p_serve.add_argument(
+        "--port", type=int, default=8000, help="바인딩할 포트(기본: 8000)"
+    )
+    p_serve.add_argument(
+        "--db-path",
+        default="hair.db",
+        help="SQLite DB 파일 경로(기본: hair.db). ':memory:'를 주면 종료 시 전부 사라진다.",
+    )
+    p_serve.add_argument(
+        "--reload",
+        action="store_true",
+        help="코드 변경 시 자동 재시작(개발용, 기본 꺼짐)",
+    )
+    p_serve.set_defaults(func=_cmd_serve)
+
+    p_boot = sub.add_parser(
+        "bootstrap-admin",
+        help="최초 ADMIN 계정 생성(콜드스타트 전용, 최초 1회만 동작)",
+        description=(
+            "users 테이블이 비어 있을 때만 동작한다(최초 1회).\n"
+            "그 이후 계정 추가는 로그인해서 POST /api/users를 쓴다."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="예시:\n  hair bootstrap-admin -u admin -p 'change-me'\n",
+    )
+    p_boot.add_argument(
+        "-u", "--username", required=True, help="생성할 관리자 계정 이름"
+    )
+    p_boot.add_argument(
+        "-p", "--password", required=True, help="생성할 관리자 계정 비밀번호"
+    )
+    p_boot.add_argument(
+        "-d", "--db-path", default="hair.db", help="SQLite DB 파일 경로(기본: hair.db)"
+    )
+    p_boot.set_defaults(func=_cmd_bootstrap_admin)
+
+    p_eval = sub.add_parser(
+        "eval",
+        help="Gate A/B/D/E/G 측정 1회 실행(results/에 저장, 비용 없음)",
+        description=(
+            "agent-evaluator SDK로 결정론적 스텁 생성 경로를 측정한다.\n"
+            "results/agent_generation_eval.json에 저장(LLM 미호출, 비용 없음)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "예시:\n"
+            "  hair eval\n"
+            "  agent-eval gate results/*.json --tcr 85   측정 결과를 채점(agent-evaluator SDK)\n"
+        ),
+    )
+    p_eval.set_defaults(func=_cmd_eval)
+
+    return parser
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    # uvicorn의 `--reload`는 재시작마다 팩토리 함수를 인자 없이 다시
+    # 호출한다 — 그 경로로 `db_path`를 전달할 수단이 환경변수 말고는
+    # 없다(`create_app()`이 `HAIR_PLATFORM_DB_PATH`를 보는 이유).
+    os.environ["HAIR_PLATFORM_DB_PATH"] = args.db_path
+    import uvicorn
+
+    uvicorn.run(
+        "hair_platform.app:create_app",
+        factory=True,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
+    return 0
+
+
+def _cmd_bootstrap_admin(args: argparse.Namespace) -> int:
+    from hair_platform.bootstrap import bootstrap_admin
+
+    try:
+        user_id = bootstrap_admin(args.db_path, args.username, args.password)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"ADMIN 계정 생성 완료: id={user_id}, username={args.username}")
+    return 0
+
+
+def _cmd_eval(_args: argparse.Namespace) -> int:
+    import runpy
+
+    # eval_wiring.py 자체의 `if __name__ == "__main__":` 블록을 그대로
+    # 재사용한다(측정 예시·저장·완료 메시지를 여기서 다시 베껴 쓰면
+    # 그쪽이 바뀔 때 둘이 어긋날 수 있다).
+    runpy.run_module("hair_platform.eval_wiring", run_name="__main__")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -35,7 +35,13 @@ crewai = ["crewai>=1.0.0"]
 mcp = ["crewai-tools[mcp]>=1.0.0"]
 
 [project.scripts]
-hair-platform-bootstrap-admin = "hair_platform.bootstrap:main"
+# 통합 CLI(2026-10-10) — `hair serve`/`hair bootstrap-admin`/`hair eval`
+# 하나의 진입점 아래로 모은다(src/hair_platform/cli.py). 이전엔 콜드스타트용
+# 콘솔 스크립트(hair-platform-bootstrap-admin)만 따로 있었는데, 지금은
+# `hair bootstrap-admin`이 그 자리를 대신한다 — 두 진입점을 동시에 유지하지
+# 않는다(bootstrap.py의 `bootstrap_admin()`/`main()` 자체는 그대로 남아있고
+# 테스트도 그 함수를 직접 쓴다 — 지워진 건 콘솔 스크립트 등록뿐).
+hair = "hair_platform.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

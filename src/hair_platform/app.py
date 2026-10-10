@@ -119,7 +119,16 @@ def parse_brief_stub(raw_text: str) -> list[str]:
     return lines or [raw_text.strip()]
 
 
-def create_app(db_path: str = ":memory:") -> FastAPI:
+def create_app(db_path: str | None = None) -> FastAPI:
+    """`db_path`를 생략하면(uvicorn `--factory` 경로가 인자 없이 호출하는
+    바로 그 경우) `HAIR_PLATFORM_DB_PATH` 환경변수를 본다 — 이전까지
+    여기 아무 폴백이 없어 `uvicorn hair_platform.app:create_app --factory`
+    로 띄우면 `--db-path`를 지정할 방법 자체가 없이 매 재시작마다
+    조용히 ":memory:"(휘발성)로 뜨고 있었다(2026-10-10, `hair serve` CLI
+    작업 중 발견 — `docs/LIMITS.md` §83). 명시적으로 인자를 넘기는
+    기존 호출(테스트 등)은 전부 그대로 동작한다."""
+    if db_path is None:
+        db_path = os.environ.get("HAIR_PLATFORM_DB_PATH", ":memory:")
     # 사용자 요청(2026-09-26) — 프로젝트 루트 `.env`(gitignore됨)에서
     # ANTHROPIC_API_KEY/OPENAI_API_KEY/HAIR_PLATFORM_SECRET_KEY 등을 읽는다.
     # `.env`가 없으면 조용히 아무 일도 하지 않는다(기존 동작과 동일).
@@ -255,7 +264,9 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         """사용자 요청(2026-09-29, "비밀번호 조회/초기화 기능 추가 필요") —
         조회는 bcrypt 해시라 원리상 불가능하고, 초기화만 제공한다(ADMIN
         전용). 감사로그엔 비밀번호 값 자체를 남기지 않는다."""
-        target = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        target = conn.execute(
+            "SELECT id FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
         if target is None:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
         if not payload.password:
@@ -264,9 +275,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             "UPDATE users SET password_hash = ? WHERE id = ?",
             (hash_password(payload.password), user_id),
         )
-        audit.record(
-            conn, user["id"], "user_password_reset", "user", user_id
-        )
+        audit.record(conn, user["id"], "user_password_reset", "user", user_id)
         conn.commit()
         return {"id": user_id, "status": "password_reset"}
 
@@ -511,9 +520,7 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 "SELECT id FROM users WHERE id = ?", (payload.manager_id,)
             ).fetchone()
             if manager is None:
-                raise HTTPException(
-                    status_code=404, detail="매니저를 찾을 수 없습니다"
-                )
+                raise HTTPException(status_code=404, detail="매니저를 찾을 수 없습니다")
             updates["manager_id"] = payload.manager_id
         if not updates:
             raise HTTPException(status_code=400, detail="수정할 필드가 없습니다")
@@ -1011,7 +1018,8 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 ) from None
             if reason == "self_dependency":
                 raise HTTPException(
-                    status_code=400, detail="자기 자신을 선행 작업으로 지정할 수 없습니다"
+                    status_code=400,
+                    detail="자기 자신을 선행 작업으로 지정할 수 없습니다",
                 ) from None
             if reason == "cycle_detected":
                 raise HTTPException(
@@ -1042,7 +1050,11 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
             raise HTTPException(
                 status_code=404, detail="등록된 의존관계를 찾을 수 없습니다"
             ) from None
-        return {"task_id": task_id, "depends_on_task_id": depends_on_task_id, "deleted": True}
+        return {
+            "task_id": task_id,
+            "depends_on_task_id": depends_on_task_id,
+            "deleted": True,
+        }
 
     @app.get("/api/tasks/{task_id}/dependencies")
     def get_task_dependencies_endpoint(
@@ -1178,8 +1190,10 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
     ):
         """사용자 결정(4) — 미초대 대상 검색 범위는 조직 전체. 누구나
         접근 가능(초대 자체가 admin/manager 전용이 아니므로 검색도
-        마찬가지)."""
-        return conversations.search_mentionable(conn, q)
+        마찬가지). `actor_id`는 역할/스킬 매칭 자체엔 안 쓰이고 "이
+        사람이 최근 초대한 대상"을 앞세우는 정렬에만 쓰인다(검색
+        결과를 사용자별로 숨기지 않음 — 여전히 조직 전체 검색)."""
+        return conversations.search_mentionable(conn, q, user["id"])
 
     @app.get("/api/conversations/{conversation_id}")
     def get_conversation_endpoint(
@@ -1352,7 +1366,11 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 user["id"],
             )
             triggered_jobs.append(
-                {"trigger_type": "agent_mention", "job_id": job_id, "agent_id": agent["id"]}
+                {
+                    "trigger_type": "agent_mention",
+                    "job_id": job_id,
+                    "agent_id": agent["id"],
+                }
             )
         for team in result["mentioned_teams"]:
             job_id = conversations.start_team_mention_job(
@@ -1367,7 +1385,11 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 user["id"],
             )
             triggered_jobs.append(
-                {"trigger_type": "team_mention", "job_id": job_id, "team_id": team["id"]}
+                {
+                    "trigger_type": "team_mention",
+                    "job_id": job_id,
+                    "team_id": team["id"],
+                }
             )
         if result["skill"] or (not result["has_mentions"] and result["ai_auto_reply"]):
             job_id = conversations.start_default_ai_job(
@@ -1450,7 +1472,8 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
                 ) from None
             if str(exc) == "not_human_deliverable":
                 raise HTTPException(
-                    status_code=400, detail="Agent 산출물은 생성 즉시 자동으로 제출됩니다"
+                    status_code=400,
+                    detail="Agent 산출물은 생성 즉시 자동으로 제출됩니다",
                 ) from None
             raise HTTPException(
                 status_code=409, detail="이미 제출되었거나 처리된 결과물입니다"
@@ -1962,7 +1985,10 @@ def create_app(db_path: str = ":memory:") -> FastAPI:
         # 등)와 달리 admin 전용으로 좁힌다. 엔드포인트 전체를 admin
         # 전용으로 만들지 않고 이 두 kind만 막는 이유는 native 도구
         # 등록(운영 업무 성격)까지 매니저에게서 뺏을 이유가 없어서다.
-        if payload.kind in ("mcp_stdio", "mcp_remote") and user["role"] != Role.ADMIN.value:
+        if (
+            payload.kind in ("mcp_stdio", "mcp_remote")
+            and user["role"] != Role.ADMIN.value
+        ):
             raise HTTPException(
                 status_code=403,
                 detail="MCP 도구(mcp_stdio/mcp_remote) 등록은 admin 전용입니다"

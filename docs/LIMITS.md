@@ -4324,3 +4324,50 @@ textarea 프리필만 되는 것, (2) 27B 로컬 모델(느림)에 메시지를 
 약 20초 후 상태 문구가 정확히 "응답이 도착했습니다"로 바뀌고 실제
 응답이 채팅에 뜨는 것. 백엔드 테스트 2건 삭제(해당 엔드포인트 제거에
 따른 정리) — 전체 스위트 318건(320-2) 통과.
+
+## 83. 실행 명령어 통합 CLI(`hair`) — `uvicorn --factory`가 DB 경로를
+지정할 방법이 아예 없었던 갭을 발견·수정(2026-10-10)
+
+**사용자 요청**: "실행 명령어가 너무 길고 어려워. 명령어를 짧고
+명료하게 정리하고, 현행화 해줘. 명령어에 대한 도움말(--help 도움말
+포함)을 가독성 높게 구현해줘."
+
+**작업 중 발견한 실제 버그(사용자가 지적한 범위 밖, 코드 확인 중
+우연히 발견)**: README가 안내하던 서버 실행 명령
+`uvicorn hair_platform.app:create_app --factory --reload`는
+`create_app(db_path=":memory:")`를 **인자 없이** 호출한다 — uvicorn의
+`--factory` 경로는 팩토리 함수를 항상 인자 없이 호출하므로, 이 명령을
+그대로 따라 하면 `--db-path` 같은 옵션 자체가 없어 매번 조용히
+휘발성 메모리 DB로 서버가 떴다. 코드베이스 전체에서 `create_app()`이
+인자 없이 호출되는 유일한 지점이 바로 이 지점이라, 테스트(전부
+명시적으로 `:memory:`나 `tmp_path`를 넘긴다)로는 이 갭이 전혀 드러나지
+않았다. **직전 세션(2026-10-10 앞부분, §10 작업)에서 "실서버(uvicorn+
+실제 hair.db) 기동 확인"이라고 기록한 것도 실은 이 갭 때문에 `:memory:`
+였다 — hair.db의 mtime이 그 세션 이후로 전혀 바뀌지 않은 것으로
+직접 확인, 위 §10 기록 문구 정정 필요(기록은 남기되 이 사실을 여기
+남김).**
+
+**수정**: `create_app(db_path: str | None = None)`로 바꿔, 인자가
+없으면 `HAIR_PLATFORM_DB_PATH` 환경변수(없으면 기존과 같은
+`:memory:`)를 본다. 명시적으로 인자를 넘기는 기존 호출(테스트 등)은
+전혀 영향 없음.
+
+**통합 CLI**: `src/hair_platform/cli.py` 신설, `hair` 콘솔 스크립트
+하나로 세 가지 실행 경로를 모았다 — `hair serve`(`--db-path`를
+`HAIR_PLATFORM_DB_PATH`로 세팅한 뒤 `uvicorn.run(..., factory=True)`
+호출, `--reload` 옵션 지원), `hair bootstrap-admin`(기존
+`bootstrap.py`의 `bootstrap_admin()`을 그대로 재사용, 짧은 `-u/-p/-d`
+플래그 추가), `hair eval`(`eval_wiring.py`의 `__main__` 블록을
+`runpy.run_module()`로 위임). 기존 `hair-platform-bootstrap-admin`
+콘솔 스크립트 등록은 `pyproject.toml`에서 제거(기능은 `hair
+bootstrap-admin`이 대신한다 — `bootstrap.py` 모듈 자체와 그 테스트는
+안 건드림, 두 진입점을 동시에 유지하지 않는다는 원칙만 적용). 각
+서브커맨드에 `--help`(예시 포함, `argparse.RawDescriptionHelpFormatter`
+로 줄바꿈 그대로 보존)를 갖췄다.
+
+**검증**: 신규 테스트 12건(`tests/unit/test_phase33_cli.py` — `--help`
+전부 정상 종료, `bootstrap-admin`이 기존 `bootstrap.py` CLI와 동일하게
+동작, `eval`이 `eval_wiring`에 위임, `create_app()`의 환경변수 폴백/
+명시적 인자 우선순위). 실제로 `hair serve --port 8010 --db-path
+/tmp/....db`를 띄워 로그인 시도 후 그 경로에 SQLite 파일이 실제로
+생성되는 것까지 실측 확인. 전체 스위트 335건 통과.

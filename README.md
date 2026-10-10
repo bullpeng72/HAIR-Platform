@@ -11,10 +11,10 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 상태/우선순위/의존관계+Riido 수준 그래프 시각화·F18 운영 가시성·F20
 온보딩 간소화+탭 재구성) + **대화 중심 작업공간**(§9, 로그인 직후
 독립 대화 + 기본 AI 자동응답/특정 Agent·Team 멘션/skill 그라운딩 +
-Task 종속 대화 흡수 + Brief 승격 공존), `pytest` 320건 통과, API
-엔드포인트 108개. 알려진 갭·미구현 범위는 전부 `docs/LIMITS.md`에
-정직하게 기록돼
-있다(가장 최신: §78).
+Task 종속 대화 흡수 + Brief 승격 공존) + **통합 CLI**(`hair`, §83 —
+`serve`/`bootstrap-admin`/`eval` 세 서브커맨드로 정리), `pytest`
+335건 통과, API 엔드포인트 107개. 알려진 갭·미구현 범위는 전부
+`docs/LIMITS.md`에 정직하게 기록돼 있다(가장 최신: §83).
 
 ## 핵심 기능
 
@@ -84,8 +84,9 @@ Task 종속 대화 흡수 + Brief 승격 공존), `pytest` 320건 통과, API
 - 데이터 삭제/초기화(도구·스킬·사람·Agent·brief/task, confirmed 배정이
   있는 대상은 보호) + 보관기간 정책(`retention.py`, assignment_history
   1년 — audit_log는 append-only 트리거를 이 모듈만 통제된 방식으로 해제)
-- Web UI 20개 탭을 RBAC 매트릭스 기준 "내 업무"/"공용 조회"/"운영 관리"
-  3구역으로 분리(ADR 결정 9)
+- Web UI 22개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
+  분리(ADR 결정 9 — 원래 "내 업무"/"공용 조회"/"운영 관리" 3구역이었으나
+  F20 Phase 5(`docs/ASANA_PARITY_DESIGN_PLAN.md` §7)에서 2구역으로 재편)
 
 ### 권한(RBAC)
 4개 역할(`admin`/`manager`/`member`/`viewer`, ADR 결정 3) — 생성/조회는
@@ -98,13 +99,21 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 320건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 335건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
-콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로):
+실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
+옵션/예시는 `hair <subcommand> --help`로 확인(`src/hair_platform/cli.py`):
 
 ```bash
-hair-platform-bootstrap-admin --db-path hair.db --username admin --password '...'
+hair --help
+```
+
+콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로,
+`users` 테이블이 완전히 비어 있을 때만 동작):
+
+```bash
+hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.db
 ```
 
 실제 CrewAI 연동을 쓰려면(무거운 의존성 — opt-in):
@@ -151,16 +160,16 @@ export ANTHROPIC_API_KEY=...               # 또는 OPENAI_API_KEY
 Web UI 실행(부트스트랩으로 만든 ADMIN 계정으로 로그인):
 
 ```bash
-uvicorn hair_platform.app:create_app --factory --reload
-# 브라우저에서 http://127.0.0.1:8000/ 접속
+hair serve                # http://127.0.0.1:8000/, hair.db(기본)에 저장
+hair serve --reload       # 개발 중 — 코드 변경 시 자동 재시작
 ```
 
 Gate A–G 수동 실측(선택, 서비스 경로는 이미 상시 연결돼 있음 —
 `agent_evaluation.py`):
 
 ```bash
-agent-eval check                     # API 키 등 설정 먼저 확인
-python -m hair_platform.eval_wiring  # Gate A/B/D/E/G 측정 실행
+agent-eval check          # API 키 등 설정 먼저 확인
+hair eval                 # Gate A/B/D/E/G 측정 실행(results/에 저장)
 agent-eval gate results/*.json       # 채점
 ```
 
@@ -171,7 +180,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(83개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(107개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -186,8 +195,9 @@ src/hair_platform/
   retention.py       # 데이터 보관기간 정책(assignment_history 1년)
   eval_wiring.py      # Gate A/B/D/E/G 평가 배선 수동 실행 probe(agent-evaluator SDK, python -m으로 직접 실행)
   agent_evaluation.py # Gate A-G 평가를 Agent 실행 경로에 상시 연결(agent_evaluations 테이블)
-  bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성 CLI
-  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 20개 탭)
+  bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
+  cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/eval
+  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 22개 탭)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
   model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용")
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
@@ -204,7 +214,7 @@ src/hair_platform/
 docs/
   SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
   ADR.md             # 설계 결정 목록
-  LIMITS.md          # 알려진 갭(정직하게 기록, §80까지)
+  LIMITS.md          # 알려진 갭(정직하게 기록, §83까지)
   ROLE_TASK_CLASSIFICATION.md      # 관리자/사용자 고유·공통 업무 재분류(외부 사례 리서치)
   SCENARIOS.md                     # 대표 시나리오 워크스루(개발/일반업무/CS/Tool·Skill 활용)
   COLLABORATION_PLATFORM_PLAN.md   # 사람-AI 협업(결과물 전달/HITL/HOTL) 기획안 — 구현 완료
@@ -214,10 +224,11 @@ docs/
   PHASE1_DELIVERABLE_SPEC.md       # 협업 워크스페이스 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
   COLLABORATION_UX_IMPROVEMENT_PROPOSAL.md  # 오픈소스/상용 Agent-Human 협업 사례 벤치마크 + 개선 제안 — 기획만
   HAIR_REDESIGN_PROPOSAL.md        # Asana AI Teammates·Riido 벤치마크 기반 재기획안 — 기획만
-  ASANA_PARITY_DESIGN_PLAN.md      # F15–F20 설계 + §9 대화 중심 작업공간(conversations) — 전부 구현 완료(§7-§9)
+  ASANA_PARITY_DESIGN_PLAN.md      # F15–F20 설계 + §9 대화 중심 작업공간(conversations) + §10 멘션 발견성 — 전부 구현 완료(§7-§10)
+  GAME_CONCEPT.md                  # HAIR 협업 구조를 게임화한 웹 브라우저 게임(Gatekeeper) 기획안 — 프로토타입은 별도 Artifact로 퍼블리시, 이 저장소엔 코드 없음
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 320건
+tests/unit/                            # 골든셋 335건
 ```
 
 ## 로드맵

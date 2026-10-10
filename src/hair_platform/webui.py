@@ -327,7 +327,7 @@ async function withBusy(btn, busyLabel, fn) {
 }
 
 const LABELS = {
-  human: "사람", agent: "AI 에이전트",
+  human: "사람", agent: "AI 에이전트", team: "팀",
   brief: "업무 요청", assignment: "배정", deliverable: "결과물", human_pool: "사람 인력", agent_pool: "AI 에이전트",
   agent_execution_jobs: "AI 실행 작업",
   job: "생성 작업", job_item: "생성 항목", approval: "결재", user: "사용자",
@@ -871,7 +871,8 @@ async function renderConversationDetail(conversationId, containerId) {
     '</div>' +
     '<p class="muted">AI 자동응답이 켜져 있으면 멘션 없는 메시지에도 매번 LLM 호출이 발생합니다(비용 발생). provider/model을 고른 뒤 "모델 설정 저장"을 눌러야 반영됩니다.</p>' +
     '<h4>참가자</h4>' +
-    (participantRows ? '<ul>' + participantRows + '</ul>' : '<p class="muted">참가자가 없습니다.</p>') +
+    '<ul id="conv-participant-list">' + participantRows + '</ul>' +
+    (participantRows ? '' : '<p class="muted" id="conv-participant-empty-hint">참가자가 없습니다.</p>') +
     '<div style="position:relative;margin-bottom:0.75rem">' +
     '<input id="conv-invite-input" placeholder="이름으로 검색해 초대(사람·Agent·Team, 조직 전체 검색)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
     '<ul class="mention-dropdown" id="conv-invite-dropdown" style="display:none"></ul>' +
@@ -901,7 +902,16 @@ async function renderConversationDetail(conversationId, containerId) {
 
   const mentionInput = document.getElementById("conv-message-input");
   const mentionDropdown = document.getElementById("conv-mention-dropdown");
-  setupMentionAutocomplete(mentionInput, mentionDropdown, participants);
+  // 사용자 요청(2026-10-10, "채팅에서 @로 호출하려면 미리 전체 이름을
+  // 알고 있어야 해") — 메시지창 자동완성이 이미 초대된 참가자만 보던
+  // 것을, 조직 전체 검색(`/api/conversations/mentionable`, 이미
+  // "참가자 초대" 입력창이 쓰던 바로 그 엔드포인트)까지 함께 보도록
+  // 확장한다. 미초대 대상을 드롭다운에서 고르면 별도 화면 이동 없이
+  // 그 자리에서 바로 초대한 뒤 멘션을 끼워 넣는다(`_inviteAndTrackParticipant`).
+  setupMentionAutocomplete(mentionInput, mentionDropdown, participants, {
+    search: (q) => api("GET", qs("/api/conversations/mentionable", { q })),
+    onInvited: (item) => _inviteAndTrackParticipant(conversationId, participants, item),
+  });
 
   document.getElementById("conv-save-model-btn").addEventListener("click", () => _saveConversationModel(conversationId));
 
@@ -1028,6 +1038,40 @@ async function renderConversationDetail(conversationId, containerId) {
     () => refreshConversationMessages(conversationId, participants, conv.llm_model),
     6000
   );
+}
+
+// 메시지창 자동완성에서 미초대 대상을 고르면 호출된다 — 전체 화면
+// 재렌더(`renderConversationDetail`) 없이 (1) 초대 API를 호출하고
+// (2) 그 자리에서 쓰는 `participants` 배열과 "참가자" 목록 DOM만
+// 갱신한다(전체 재렌더는 작성 중이던 메시지 초안을 지워버린다).
+async function _inviteAndTrackParticipant(conversationId, participants, item) {
+  try {
+    await api("POST", "/api/conversations/" + conversationId + "/participants", {
+      participant_type: item.type,
+      participant_id: item.id,
+    });
+  } catch (e) {
+    // 드롭다운이 갱신되기 전 같은 대상을 두 번 고르는 등 드문 경합은
+    // "이미 초대됨"으로 조용히 넘기고 멘션은 그대로 진행한다.
+    if (!String(e.message || "").includes("이미 초대")) {
+      showMsg("global-msg", e.message, "error");
+      throw e;
+    }
+  }
+  participants.push({
+    participant_type: item.type,
+    participant_id: item.id,
+    display_name: item.name,
+  });
+  const emptyHint = document.getElementById("conv-participant-empty-hint");
+  if (emptyHint) emptyHint.remove();
+  const list = document.getElementById("conv-participant-list");
+  if (list) {
+    const li = document.createElement("li");
+    li.textContent = label(item.type) + " " + item.name;
+    list.appendChild(li);
+  }
+  showMsg("global-msg", item.name + "님을 대화에 초대했습니다.", "ok");
 }
 
 async function _saveConversationModel(conversationId) {
@@ -1973,15 +2017,31 @@ async function refreshComments(deliverableId) {
 // 대체했는데, 실제 누락으로 확인돼("HAIR-Platform... 구현에 누락
 // 부분이 없는지 확인해줘") 보완한다. 외부 라이브러리 없이 순수 JS로
 // 커서 위치 기준 마지막 "@" 뒤 텍스트를 쿼리 삼아 필터링한다.
-function setupMentionAutocomplete(inputEl, dropdownEl, participants) {
-  const candidates = participants
+//
+// §10 채팅 호출 UX 개선(2026-10-10, 사용자 요청 "채팅에서 @로 생성된
+// AI Agent와 사용자를 호출하려면 미리 전체 이름을 알고 있어야 해") —
+// `opts.search`가 주어지면(대화 메시지창만; Task 결과물 댓글은 기존과
+// 완전히 같은 "로컬 참가자만" 동작을 유지한다 — `opts` 생략 시 이전
+// 동작과 100% 동일) 조직 전체 검색(`/api/conversations/mentionable`,
+// 역할/스킬까지 부분 일치 + 이 사용자가 최근 초대한 대상 우선)도 함께
+// 조회해 "참가자"/"초대 후 멘션" 두 그룹으로 보여준다. 후자를 고르면
+// `opts.onInvited`로 먼저 초대한 뒤 멘션을 끼워 넣는다 — 화면 이동
+// 없이 "검색→클릭"만으로 처음 보는 이름도 바로 부를 수 있다.
+function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
+  opts = opts || {};
+  const localCandidates = participants
     .filter(p => p.display_name)
-    .map(p => ({ name: p.display_name, type: p.participant_type }));
-  if (!candidates.length) return;
+    .map(p => ({ name: p.display_name, type: p.participant_type, id: p.participant_id }));
+  if (!localCandidates.length && !opts.search) return;
+
+  const MENTION_TYPE_BADGE = { agent: "(AI)", team: "(팀)" };
+  let searchToken = 0;
+  let searchDebounce = null;
 
   function closeDropdown() {
     dropdownEl.style.display = "none";
     dropdownEl.innerHTML = "";
+    searchToken++; // 아직 안 돌아온 원격 검색 응답을 무효화한다
   }
 
   function insertMention(name) {
@@ -1998,42 +2058,90 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants) {
     inputEl.focus();
   }
 
-  inputEl.addEventListener("input", () => {
-    const val = inputEl.value;
-    const cursor = inputEl.selectionStart;
-    const atIndex = val.lastIndexOf("@", cursor - 1);
-    if (atIndex === -1) { closeDropdown(); return; }
-    const query = val.slice(atIndex + 1, cursor);
+  function renderGroups(localMatches, remoteItems) {
+    if (!localMatches.length && !remoteItems.length) {
+      dropdownEl.style.display = "none";
+      dropdownEl.innerHTML = "";
+      return;
+    }
+    let html = localMatches.map(c =>
+      '<li data-mention-name="' + escAttr(c.name) + '">' + esc(c.name) +
+      (MENTION_TYPE_BADGE[c.type] ? ' <span class="muted">' + MENTION_TYPE_BADGE[c.type] + '</span>' : '') +
+      '</li>'
+    ).join("");
+    if (remoteItems.length) {
+      html += '<li class="muted" style="padding:0.25rem 0.5rem">초대 후 멘션</li>' +
+        remoteItems.map(c =>
+          '<li data-mention-name="' + escAttr(c.name) + '" data-mention-invite-type="' + c.type +
+          '" data-mention-invite-id="' + c.id + '">' + esc(c.name) +
+          ' <span class="muted">' + (MENTION_TYPE_BADGE[c.type] || '(사람)') + ' · 초대 필요</span></li>'
+        ).join("");
+    }
+    dropdownEl.innerHTML = html;
+    dropdownEl.style.display = "block";
+  }
+
+  function handleQuery(query) {
     // 실측으로 발견한 버그(2026-10-08, §9 라이브 검증) — 원래 "@뒤에
     // 공백이 있으면 멘션이 끝난 것"으로 보고 닫았는데, "게임 AI팀"처럼
     // 이름 자체에 공백이 있는 참가자(흔한 한국어 Team/Agent 이름)를
     // 끝까지 타이핑하면 중간 공백에서 드롭다운이 영구히 닫혀버렸다.
     // 공백 여부로 판단하지 않고, 후보 이름에 그 쿼리가 부분 문자열로
-    // 남아있는 동안만 계속 열어둔다 — 후보와 전혀 안 맞게 갈라지면
-    // 아래 `matches.length` 검사가 자연스럽게 닫는다.
-    const matches = candidates.filter(c => c.name.includes(query));
-    if (!matches.length) { closeDropdown(); return; }
-    // ASANA_PARITY_DESIGN_PLAN.md §9(2026-10-08) — 대화에는 Team
-    // (에이전트 그룹) 참가자도 있어 Agent/Team 둘 다 배지로 구분한다
-    // (Task 참가자는 human/agent뿐이라 이전까진 "(AI)"만 있으면 됐다).
-    const MENTION_TYPE_BADGE = { agent: "(AI)", team: "(팀)" };
-    dropdownEl.innerHTML = matches.map(c =>
-      "<li data-mention-name=\\"" + escAttr(c.name) + "\\">" +
-      esc(c.name) + (MENTION_TYPE_BADGE[c.type] ? ' <span class="muted">' + MENTION_TYPE_BADGE[c.type] + '</span>' : "") + "</li>"
-    ).join("");
-    dropdownEl.style.display = "block";
+    // 남아있는 동안만 계속 열어둔다.
+    const localMatches = localCandidates.filter(c => c.name.includes(query));
+    if (!opts.search) { renderGroups(localMatches, []); return; }
+    // 로컬 매치는 즉시 보여주고(깜빡임 방지), 조직 전체 검색만 디바운스
+    // 한다 — 매치가 하나도 없는 상태에서 디바운스 중 잠깐 닫았다 여는
+    // 깜빡임을 피하려고, 로컬 매치가 없을 땐 응답이 올 때까지 아무
+    // 것도 안 바꾼다(기존 상태 유지).
+    if (localMatches.length) renderGroups(localMatches, []);
+    clearTimeout(searchDebounce);
+    const myToken = ++searchToken;
+    searchDebounce = setTimeout(async () => {
+      let remote;
+      try {
+        remote = await opts.search(query);
+      } catch (e) {
+        return;
+      }
+      if (myToken !== searchToken) return; // 늦게 도착한 응답은 버린다
+      const localKeys = new Set(localCandidates.map(c => c.type + ":" + c.id));
+      const remoteItems = [
+        ...remote.humans.map(h => ({ type: "human", id: h.id, name: h.username })),
+        ...remote.agents.map(a => ({ type: "agent", id: a.id, name: a.role_name })),
+        ...remote.teams.map(t => ({ type: "team", id: t.id, name: t.name })),
+      ].filter(it => !localKeys.has(it.type + ":" + it.id));
+      renderGroups(localMatches, remoteItems);
+    }, 200);
+  }
+
+  inputEl.addEventListener("input", () => {
+    const val = inputEl.value;
+    const cursor = inputEl.selectionStart;
+    const atIndex = val.lastIndexOf("@", cursor - 1);
+    if (atIndex === -1) { closeDropdown(); return; }
+    handleQuery(val.slice(atIndex + 1, cursor));
   });
 
   // blur가 드롭다운 클릭보다 먼저 발생해 클릭이 씹히는 것을 막기 위해
   // mousedown(클릭보다 먼저 발생)에서 선택을 처리하고, blur는 약간
   // 지연 후 닫는다.
   inputEl.addEventListener("blur", () => setTimeout(closeDropdown, 150));
-  dropdownEl.addEventListener("mousedown", (ev) => {
+  dropdownEl.addEventListener("mousedown", async (ev) => {
     const li = ev.target.closest("[data-mention-name]");
-    if (li) {
-      ev.preventDefault();
-      insertMention(li.dataset.mentionName);
+    if (!li) return;
+    ev.preventDefault();
+    const name = li.dataset.mentionName;
+    if (li.dataset.mentionInviteType && opts.onInvited) {
+      try {
+        await opts.onInvited({
+          type: li.dataset.mentionInviteType,
+          id: Number(li.dataset.mentionInviteId),
+          name,
+        });
+      } catch (e) { return; } // onInvited가 이미 에러 메시지를 보여줬다
     }
+    insertMention(name);
   });
 }
 

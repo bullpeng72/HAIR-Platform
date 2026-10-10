@@ -238,32 +238,66 @@ def list_participants(conn: sqlite3.Connection, conversation_id: int) -> list[di
     return result
 
 
-def search_mentionable(conn: sqlite3.Connection, query: str) -> dict:
+def search_mentionable(conn: sqlite3.Connection, query: str, actor_id: int) -> dict:
     """사용자 결정(4) — 미초대 대상 검색 범위는 조직 전체(같은 Brief/
     Task로 좁히지 않는다). 활성 계정/Agent/팀만 후보로 보여준다. UI가
     이 결과에서 고른 대상을 바로 `invite_participant()`로 초대한
     *뒤에* 멘션 텍스트를 메시지에 끼워 넣는 흐름이다 — 백엔드가 아직
-    모르는 이름을 원문에서 파싱해 추측하지 않는다(안전하고 명확함)."""
+    모르는 이름을 원문에서 파싱해 추측하지 않는다(안전하고 명확함).
+
+    채팅 UI 개선(2026-10-10, 사용자 요청 "채팅에서 @로 호출하려면
+    미리 전체 이름을 알고 있어야 해") — 두 가지를 더한다: (1) 이름
+    컬럼뿐 아니라 사람의 `human_pool.role`/`skill_tags`, Agent의
+    `skill_tags`, Team의 `description`까지 부분 일치시켜 "이름을
+    몰라도 역할/스킬로 찾을 수 있게" 한다. (2) `actor_id`가 과거에
+    직접 초대한 이력(`conversation_participants.invited_by`)이 있는
+    대상을 그 초대 시각 최신순으로 앞세운다 — "자주/최근 부르는
+    사람"이 매번 똑같이 타이핑하지 않아도 먼저 보이게."""
     like = f"%{query}%"
     humans = conn.execute(
-        "SELECT id, username FROM users WHERE username LIKE ? "
-        "ORDER BY username LIMIT 20",
-        (like,),
+        """
+        SELECT DISTINCT u.id, u.username,
+            (SELECT MAX(cp.invited_at) FROM conversation_participants cp
+             WHERE cp.participant_type = 'human' AND cp.participant_id = u.id
+               AND cp.invited_by = ?) AS last_invited
+        FROM users u
+        LEFT JOIN human_pool hp ON hp.user_id = u.id
+        WHERE u.username LIKE ? OR hp.role LIKE ? OR hp.skill_tags LIKE ?
+        ORDER BY last_invited IS NULL, last_invited DESC, u.username
+        LIMIT 20
+        """,
+        (actor_id, like, like, like),
     ).fetchall()
     agents = conn.execute(
-        "SELECT id, role_name FROM agent_pool WHERE status = 'active' "
-        "AND role_name LIKE ? ORDER BY role_name LIMIT 20",
-        (like,),
+        """
+        SELECT id, role_name,
+            (SELECT MAX(cp.invited_at) FROM conversation_participants cp
+             WHERE cp.participant_type = 'agent' AND cp.participant_id = agent_pool.id
+               AND cp.invited_by = ?) AS last_invited
+        FROM agent_pool
+        WHERE status = 'active' AND (role_name LIKE ? OR skill_tags LIKE ?)
+        ORDER BY last_invited IS NULL, last_invited DESC, role_name
+        LIMIT 20
+        """,
+        (actor_id, like, like),
     ).fetchall()
     teams_rows = conn.execute(
-        "SELECT id, name FROM teams WHERE is_active = 1 AND name LIKE ? "
-        "ORDER BY name LIMIT 20",
-        (like,),
+        """
+        SELECT id, name,
+            (SELECT MAX(cp.invited_at) FROM conversation_participants cp
+             WHERE cp.participant_type = 'team' AND cp.participant_id = teams.id
+               AND cp.invited_by = ?) AS last_invited
+        FROM teams
+        WHERE is_active = 1 AND (name LIKE ? OR description LIKE ?)
+        ORDER BY last_invited IS NULL, last_invited DESC, name
+        LIMIT 20
+        """,
+        (actor_id, like, like),
     ).fetchall()
     return {
-        "humans": [dict(r) for r in humans],
-        "agents": [dict(r) for r in agents],
-        "teams": [dict(r) for r in teams_rows],
+        "humans": [{"id": r["id"], "username": r["username"]} for r in humans],
+        "agents": [{"id": r["id"], "role_name": r["role_name"]} for r in agents],
+        "teams": [{"id": r["id"], "name": r["name"]} for r in teams_rows],
     }
 
 
@@ -544,7 +578,9 @@ def run_agent_mention_job(
         output = agent_runtime.execute_agent(
             conn, agent_id, actor_id, transcript or "대화를 시작합니다."
         )
-        _finish_job_with_message(conn, job_id, conversation_id, agent_id, output, actor_id)
+        _finish_job_with_message(
+            conn, job_id, conversation_id, agent_id, output, actor_id
+        )
     except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
         _fail_job(conn, job_id, actor_id, exc)
 
