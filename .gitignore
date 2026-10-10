@@ -12,3 +12,4 @@ results/
 *.db-wal
 *.db.bak-*
 .claude/.agent-evaluator/
+uv.lock
