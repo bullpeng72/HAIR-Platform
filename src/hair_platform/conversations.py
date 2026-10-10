@@ -136,7 +136,113 @@ def list_conversations_for_user(conn: sqlite3.Connection, actor_id: int) -> list
     return [dict(r) for r in rows]
 
 
+def _cascade_delete_conversation(
+    conn: sqlite3.Connection, conversation_id: int
+) -> None:
+    """메시지·작업(job)·참가자·대화 행 자체까지 전부 지운다(`data_admin.
+    delete_task()`와 같은 "완전한 연쇄 삭제" 관례). `delete_conversation()`
+    과 `leave_conversation()`(마지막 참가자가 나간 경우)이 공유한다 —
+    커밋/오딧 기록은 호출자가 각자의 맥락에 맞게 남긴다."""
+    conn.execute(
+        "DELETE FROM conversation_messages WHERE conversation_id = ?",
+        (conversation_id,),
+    )
+    conn.execute(
+        "DELETE FROM conversation_jobs WHERE conversation_id = ?", (conversation_id,)
+    )
+    conn.execute(
+        "DELETE FROM conversation_participants WHERE conversation_id = ?",
+        (conversation_id,),
+    )
+    conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+
+
+def delete_conversation(
+    conn: sqlite3.Connection, conversation_id: int, actor_id: int
+) -> None:
+    """사용자 요청(2026-10-10, "대화 세션 삭제/나가기 기능을 구현해줘")
+    — 대화를 통째로 지운다. 초대는 참가자 누구나 할 수 있는 가벼운
+    레이어지만(`invite_participant()` 참고), 삭제는 되돌릴 수 없어
+    만든 사람(`created_by`)만 할 수 있게 좁힌다 — 다른 참가자는
+    자기 참가만 빼는 `leave_conversation()`을 쓴다.
+
+    만든 사람이라도 이미 `leave_conversation()`으로 나갔다면(참가자가
+    아님) 거부한다 — 나간 뒤에도 "원 제작자"라는 이유로 남은 사람들의
+    대화를 바깥에서 지울 수 있게 두지 않는다."""
+    conv = get_conversation(conn, conversation_id)
+    if conv is None:
+        raise ValueError("conversation_not_found")
+    if not is_participant(conn, conversation_id, actor_id):
+        raise PermissionError("not_a_participant")
+    if conv["created_by"] != actor_id:
+        raise PermissionError("not_creator")
+
+    _cascade_delete_conversation(conn, conversation_id)
+    audit.record(
+        conn,
+        actor_id,
+        "conversation_deleted",
+        "conversations",
+        conversation_id,
+        before={"title": conv["title"], "linked_task_id": conv["linked_task_id"]},
+    )
+    conn.commit()
+
+
 # ---------- 참가자 ----------
+
+
+def leave_conversation(
+    conn: sqlite3.Connection, conversation_id: int, actor_id: int
+) -> dict:
+    """참가자가 자기 자신을 대화에서 뺀다 — 다른 사람을 빼는 기능은
+    없다(§9가 admin/manager 게이트 없이 참가자 서로를 신뢰하는 가벼운
+    레이어이기 때문, `invite_participant()`와 같은 전제).
+
+    나간 뒤 human 참가자가 0명이 되면(마지막 사람이 나간 경우) 누구도
+    다시 들어올 길이 없는 유령 대화가 DB에 영원히 남는다 — 그 경우
+    `delete_conversation()`과 같은 연쇄 삭제로 대화 자체를 지운다."""
+    if get_conversation(conn, conversation_id) is None:
+        raise ValueError("conversation_not_found")
+    if not is_participant(conn, conversation_id, actor_id):
+        raise PermissionError("not_a_participant")
+
+    conn.execute(
+        "DELETE FROM conversation_participants WHERE conversation_id = ? "
+        "AND participant_type = 'human' AND participant_id = ?",
+        (conversation_id, actor_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "conversation_participant_left",
+        "conversation_participants",
+        conversation_id,
+    )
+
+    remaining_humans = conn.execute(
+        "SELECT COUNT(*) AS c FROM conversation_participants WHERE "
+        "conversation_id = ? AND participant_type = 'human'",
+        (conversation_id,),
+    ).fetchone()["c"]
+    conversation_deleted = remaining_humans == 0
+    if conversation_deleted:
+        _cascade_delete_conversation(conn, conversation_id)
+        audit.record(
+            conn,
+            actor_id,
+            "conversation_deleted",
+            "conversations",
+            conversation_id,
+            after={"reason": "last_participant_left"},
+        )
+
+    conn.commit()
+    return {
+        "conversation_id": conversation_id,
+        "left": True,
+        "conversation_deleted": conversation_deleted,
+    }
 
 
 def invite_participant(

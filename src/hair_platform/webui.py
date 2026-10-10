@@ -757,7 +757,11 @@ async function renderConversations(content) {
       c.id,
       esc(c.title || "(제목 없음)") + (c.linked_task_id ? ' <span class="muted">(업무 #' + c.linked_task_id + ')</span>' : ''),
       esc(c.created_at),
-      '<button class="small" data-open-conversation="' + c.id + '">열기</button>',
+      '<button class="small" data-open-conversation="' + c.id + '">열기</button> ' +
+      '<button class="small danger" data-leave-conversation="' + c.id + '">나가기</button> ' +
+      (c.created_by === ME.id
+        ? '<button class="small danger" data-delete-conversation="' + c.id + '">삭제</button>'
+        : ''),
     ])) +
     '<div id="conversation-detail"></div>' +
     '</section>';
@@ -775,6 +779,30 @@ async function renderConversations(content) {
 
   content.querySelectorAll("[data-open-conversation]").forEach(btn => {
     btn.onclick = () => renderConversationDetail(Number(btn.dataset.openConversation), "conversation-detail");
+  });
+  content.querySelectorAll("[data-delete-conversation]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 대화를 메시지·참가자까지 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/conversations/" + btn.dataset.deleteConversation);
+        showMsg("global-msg", "대화를 삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-leave-conversation]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 대화에서 나갑니다. 계속할까요?")) return;
+      try {
+        const result = await api("POST", "/api/conversations/" + btn.dataset.leaveConversation + "/leave");
+        showMsg(
+          "global-msg",
+          result.conversation_deleted ? "대화에서 나갔습니다(마지막 참가자라 대화도 삭제됐습니다)." : "대화에서 나갔습니다.",
+          "ok"
+        );
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
   });
 }
 
@@ -847,6 +875,18 @@ async function renderConversationDetail(conversationId, containerId) {
     '<section class="card">' +
     '<h3>' + esc(conv.title || "(제목 없음)") +
     (conv.linked_task_id ? ' <span class="muted">업무 #' + conv.linked_task_id + ' 전용 대화</span>' : '') +
+    // 사용자 요청(2026-10-10, "대화 세션 삭제/나가기 기능을 구현해줘")
+    // — "삭제"(연쇄 삭제, 되돌릴 수 없음)는 만든 사람(created_by)만
+    // 쓸 수 있다(`conversations.delete_conversation()`과 같은 권한
+    // 경계). "나가기"는 만든 사람 포함 참가자 누구나 쓸 수 있다 —
+    // 처음엔 만든 사람에게 삭제만 보여줬는데, 그러면 다른 참가자가
+    // 남아 있어도 "그냥 빠지기"를 못 하고 삭제(전체 파괴)만 고를 수
+    // 있는 게 됐다(Playwright로 실제 클릭해보며 발견) — 만든 사람도
+    // `leave_conversation()`을 쓸 수 있으므로 버튼도 둘 다 보여준다.
+    ' <button class="small danger" id="conv-leave-btn">나가기</button>' +
+    (conv.created_by === ME.id
+      ? ' <button class="small danger" id="conv-delete-btn">대화 삭제</button>'
+      : '') +
     '</h3>' +
     '<div class="inline">' +
     // "AI 에이전트 관리"(provider-{id} select)와 같은 관례 — provider
@@ -912,6 +952,37 @@ async function renderConversationDetail(conversationId, containerId) {
     search: (q) => api("GET", qs("/api/conversations/mentionable", { q })),
     onInvited: (item) => _inviteAndTrackParticipant(conversationId, participants, item),
   });
+
+  // 삭제/나가기 뒤의 새로고침은 `refresh()`(전역, 현재 탭을 다시
+  // 렌더)로 한다 — 이 함수는 독립 "대화" 탭과 Task 워크스페이스
+  // 임베드(`_loadTaskConversation`) 양쪽에서 호출되므로, 둘 중 어느
+  // 쪽에서 열렸는지 모르는 채로도 올바른 화면을 다시 그려준다.
+  const deleteBtn = document.getElementById("conv-delete-btn");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", async () => {
+      if (!window.confirm("이 대화를 메시지·참가자까지 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/conversations/" + conversationId);
+        showMsg("global-msg", "대화를 삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  }
+  const leaveBtn = document.getElementById("conv-leave-btn");
+  if (leaveBtn) {
+    leaveBtn.addEventListener("click", async () => {
+      if (!window.confirm("이 대화에서 나갑니다. 계속할까요?")) return;
+      try {
+        const result = await api("POST", "/api/conversations/" + conversationId + "/leave");
+        showMsg(
+          "global-msg",
+          result.conversation_deleted ? "대화에서 나갔습니다(마지막 참가자라 대화도 삭제됐습니다)." : "대화에서 나갔습니다.",
+          "ok"
+        );
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  }
 
   document.getElementById("conv-save-model-btn").addEventListener("click", () => _saveConversationModel(conversationId));
 

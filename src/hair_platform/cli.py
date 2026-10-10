@@ -25,8 +25,9 @@ import sys
 
 _EPILOG_TOP = """\
 예시:
-  hair serve                              서버 실행(http://127.0.0.1:8000, hair.db)
+  hair serve                              서버 실행 + 브라우저 자동 열기(http://127.0.0.1:8000, hair.db)
   hair serve --port 9000 --reload         개발 중 코드 변경 자동 반영
+  hair serve --no-browser                 브라우저 자동 열기 끄기(서버만 실행)
   hair bootstrap-admin -u admin -p ***    최초 관리자 계정 생성(최초 1회만)
   hair eval                               Gate A/B/D/E/G 측정 1회 실행
 
@@ -46,11 +47,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_serve = sub.add_parser(
         "serve",
         help="Web UI + API 서버 실행",
-        description="FastAPI 서버를 띄운다. 브라우저에서 http://<host>:<port>/ 로 접속한다.",
+        description=(
+            "FastAPI 서버를 띄운다. http://<host>:<port>/ 가 뜨면 브라우저를 자동으로 연다."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "예시:\n"
             "  hair serve\n"
+            "  hair serve --no-browser                  브라우저 자동 열기 끄기\n"
             "  hair serve --db-path :memory: --reload   휘발성 DB로 임시 실행 + 자동 재시작\n"
         ),
     )
@@ -69,6 +73,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reload",
         action="store_true",
         help="코드 변경 시 자동 재시작(개발용, 기본 꺼짐)",
+    )
+    p_serve.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="서버 실행 후 브라우저를 자동으로 열지 않음(기본: 자동으로 염)",
     )
     p_serve.set_defaults(func=_cmd_serve)
 
@@ -118,6 +127,19 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # 없다(`create_app()`이 `HAIR_PLATFORM_DB_PATH`를 보는 이유).
     os.environ["HAIR_PLATFORM_DB_PATH"] = args.db_path
     import uvicorn
+
+    if not args.no_browser:
+        import threading
+        import webbrowser
+
+        # 0.0.0.0/:: 은 "모든 인터페이스에 바인딩"이라는 뜻이라 브라우저
+        # 주소로는 못 쓴다 — 로컬 접속 주소인 127.0.0.1로 대신 연다.
+        browser_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+        url = f"http://{browser_host}:{args.port}/"
+        # uvicorn.run()은 블로킹이라 "서버가 뜬 시점" 콜백을 못 받는다 —
+        # 기동 시간을 감안한 고정 지연 후에 연다(--reload는 부모 프로세스
+        # 기준 1회만 실행되므로 재시작마다 다시 열리지 않는다).
+        threading.Timer(1.5, webbrowser.open, args=[url]).start()
 
     uvicorn.run(
         "hair_platform.app:create_app",

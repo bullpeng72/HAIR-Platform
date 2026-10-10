@@ -160,8 +160,9 @@ export ANTHROPIC_API_KEY=...               # 또는 OPENAI_API_KEY
 Web UI 실행(부트스트랩으로 만든 ADMIN 계정으로 로그인):
 
 ```bash
-hair serve                # http://127.0.0.1:8000/, hair.db(기본)에 저장
+hair serve                # http://127.0.0.1:8000/, hair.db(기본)에 저장 — 브라우저 자동으로 열림
 hair serve --reload       # 개발 중 — 코드 변경 시 자동 재시작
+hair serve --no-browser   # 브라우저 자동 열기 끄기(서버만 실행)
 ```
 
 Gate A–G 수동 실측(선택, 서비스 경로는 이미 상시 연결돼 있음 —

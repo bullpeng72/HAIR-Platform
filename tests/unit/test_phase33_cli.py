@@ -13,7 +13,10 @@ CLI(test_phase7의 test_gc53)와 같은 동작을 유지하는지, (3) `eval`이
 (이전엔 `uvicorn --factory`로 띄우면 DB 경로를 지정할 방법이 없어
 매번 ":memory:"였다 — `docs/LIMITS.md` §83)이 제대로 동작하는지를
 검증한다. `hair serve` 자체(uvicorn.run 호출)는 프로세스를 블로킹
-시키므로 단위 테스트로 실행하지 않는다 — 실서버 기동으로 수동 확인."""
+시키므로 단위 테스트로 실행하지 않는다 — 실서버 기동으로 수동 확인.
+단, uvicorn.run/threading.Timer를 모킹해 "브라우저 자동 열기 예약"
+로직(사용자 요청, 2026-10-10, "자동으로 브라우저가 실행되고 8000번
+포트 열리도록 개선해줘")만은 블로킹 없이 검증한다."""
 
 from __future__ import annotations
 
@@ -74,6 +77,38 @@ def test_gc_serve_db_path_defaults_to_hair_db():
     assert args.host == "127.0.0.1"
     assert args.port == 8000
     assert args.reload is False
+    assert args.no_browser is False
+
+
+# ---------- `hair serve` 브라우저 자동 열기(사용자 요청, 2026-10-10) ----------
+# uvicorn.run()은 블로킹이므로 실제로 서버를 띄우지 않고 uvicorn.run과
+# threading.Timer를 모킹해 "무엇을 예약했는지"만 검증한다.
+
+
+def test_gc_serve_schedules_browser_open_by_default():
+    with patch("uvicorn.run") as mock_run, patch("threading.Timer") as mock_timer:
+        code = cli.main(["serve"])
+    assert code == 0
+    mock_run.assert_called_once()
+    mock_timer.assert_called_once()
+    _delay, func = mock_timer.call_args.args
+    assert func.__name__ == "open"  # webbrowser.open
+    assert mock_timer.call_args.kwargs["args"] == ["http://127.0.0.1:8000/"]
+    mock_timer.return_value.start.assert_called_once()
+
+
+def test_gc_serve_no_browser_flag_skips_scheduling():
+    with patch("uvicorn.run") as mock_run, patch("threading.Timer") as mock_timer:
+        code = cli.main(["serve", "--no-browser"])
+    assert code == 0
+    mock_run.assert_called_once()
+    mock_timer.assert_not_called()
+
+
+def test_gc_serve_wildcard_host_opens_localhost_in_browser():
+    with patch("uvicorn.run"), patch("threading.Timer") as mock_timer:
+        cli.main(["serve", "--host", "0.0.0.0", "--port", "9000"])
+    assert mock_timer.call_args.kwargs["args"] == ["http://127.0.0.1:9000/"]
 
 
 def test_gc_eval_subcommand_delegates_to_eval_wiring_main_block():

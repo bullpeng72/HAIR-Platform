@@ -1208,6 +1208,43 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
         return conv
 
+    @app.delete("/api/conversations/{conversation_id}")
+    def delete_conversation_endpoint(
+        conversation_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """사용자 요청(2026-10-10, "대화 세션 삭제/나가기 기능을
+        구현해줘") — 만든 사람만 대화를 통째로 지울 수 있다. 다른
+        참가자는 `/leave`로 자기 참가만 뺀다."""
+        try:
+            conversations.delete_conversation(conn, conversation_id, user["id"])
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="대화를 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 대화를 만든 사람만 삭제할 수 있습니다"
+            ) from None
+        return {"id": conversation_id, "deleted": True}
+
+    @app.post("/api/conversations/{conversation_id}/leave")
+    def leave_conversation_endpoint(
+        conversation_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """사용자 요청(2026-10-10) — 참가자가 자기 자신을 대화에서
+        뺀다. 마지막 사람이 나가면 대화 자체가 삭제된다(응답의
+        `conversation_deleted`로 알려준다)."""
+        try:
+            return conversations.leave_conversation(conn, conversation_id, user["id"])
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="대화를 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 나갈 수 있습니다"
+            ) from None
+
     @app.patch("/api/conversations/{conversation_id}/model")
     def update_conversation_model_endpoint(
         conversation_id: int,
