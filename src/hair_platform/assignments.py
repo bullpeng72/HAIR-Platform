@@ -121,6 +121,71 @@ def create_assignment_request(
     return result
 
 
+def create_delegation(
+    conn: sqlite3.Connection, task_id: int, agent_id: int, delegated_by: int
+) -> dict:
+    """SCREEN_UX_BENCHMARK_PROPOSAL.md §4-D(2026-10-12, "Task 카드에 위임/
+    배정 버튼 분리") — Linear의 "위임(delegation)"/"배정(ownership)" 분리,
+    Devin의 Ask/Agent 모드 착안. `create_assignment_request()`("배정",
+    F7 결재 체인 필수)와 달리 **결재 없이 즉시 `status='confirmed'`로
+    만든다** — `approval_id`는 NULL로 남는다(결재 체인 자체가 없다).
+
+    사용자 결정(2026-10-12, "위임은 Gate A-G 그대로 타고, audit_log에도
+    남겨줘"): ① Gate A-G는 이 함수가 신경 쓸 필요가 없다 — `agent_
+    evaluation.run_and_score()`가 Deliverable 생성 시점에 무조건
+    적용되는 로직이라, `status='confirmed'`로만 만들어두면 이후
+    `execute-agent`가 평소처럼 그 Deliverable을 만들고 자동으로 Gate가
+    매겨진다(코드 변경 불필요 — 이미 그렇게 동작한다). ② `audit.record()`
+    를 `"agent_delegated"`라는 별도 action으로 남겨 일반
+    `"assignment_confirmed"`(결재를 거친 확정)와 구분한다 — 나중에
+    "이 배정이 결재를 거쳤는지 위임으로 바로 됐는지"를 감사로그만 보고
+    알 수 있어야 한다.
+
+    agent 전용이다(resource_type='human'/'team'은 이 경량 경로를 쓸
+    이유가 없다 — 사람/팀은 원래부터 F6 배정·F7 결재가 "무겁다"는
+    불만의 대상이 아니었다, §4-D 원문 "Linear 위임/배정 분리"도 AI
+    Agent 전용 개념이다). self-approval 방지(ADR 3-A)는 적용하지
+    않는다 — 승인 단계 자체가 없어 "누가 승인하는지"가 성립하지 않는다
+    (위임은 요청자 본인이 즉시 확정한다는 게 설계 그 자체)."""
+    task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    agent = conn.execute(
+        "SELECT id, status FROM agent_pool WHERE id = ?", (agent_id,)
+    ).fetchone()
+    if agent is None:
+        raise ValueError("agent_not_found")
+    if agent["status"] != "active":
+        raise ValueError("agent_not_active")
+
+    try:
+        cur = conn.execute(
+            "INSERT INTO assignments "
+            "(task_id, resource_type, resource_id, requested_by, status) "
+            "VALUES (?, 'agent', ?, ?, 'confirmed')",
+            (task_id, agent_id, delegated_by),
+        )
+        assignment_id = cur.lastrowid
+        assert assignment_id is not None
+        _record_history(
+            conn, assignment_id, None, "confirmed", delegated_by, reason="delegated"
+        )
+        result = {"assignment_id": assignment_id, "status": "confirmed"}
+        audit.record(
+            conn,
+            delegated_by,
+            "agent_delegated",
+            "assignment",
+            assignment_id,
+            after={"task_id": task_id, "agent_id": agent_id, **result},
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return result
+
+
 def resolve_assignment_decision(
     conn: sqlite3.Connection, assignment_id: int, approve: bool, decided_by: int
 ) -> dict:

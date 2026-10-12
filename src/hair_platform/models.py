@@ -176,6 +176,14 @@ class AssignmentRequest(BaseModel):
     replaces_assignment_id: int | None = None
 
 
+class DelegateAgentRequest(BaseModel):
+    """SCREEN_UX_BENCHMARK_PROPOSAL.md §4-D — "위임"(결재 없는 경량 연결,
+    `AssignmentRequest`의 "배정"과 대칭). Agent 전용이라 `resource_type`
+    선택지가 없다."""
+
+    agent_id: int
+
+
 class TeamLeaderUpdate(BaseModel):
     team_leader_id: int
 

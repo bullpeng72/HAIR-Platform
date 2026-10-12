@@ -82,6 +82,7 @@ from hair_platform.models import (
     ConversationParticipantInvite,
     CostUpdateRequest,
     CrewRunRequest,
+    DelegateAgentRequest,
     DeliverableCommentCreate,
     DeliverableCreate,
     ExecuteAgentRequest,
@@ -844,6 +845,23 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/tasks/{task_id}/delegate", status_code=201)
+    def delegate_agent(
+        task_id: int,
+        payload: DelegateAgentRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """SCREEN_UX_BENCHMARK_PROPOSAL.md §4-D — "위임". `request_assignment`
+        (F6, "배정")와 같은 ADMIN/MANAGER 권한 경계를 쓴다(Agent 관련 배정
+        행동이 지금까지 MEMBER 셀프서비스 밖이었던 것과 동일) — 결재가
+        없어 더 즉각적인 만큼, 권한은 더 좁히지 않고 그대로 유지한다."""
+        try:
+            return assignments.create_delegation(
+                conn, task_id, payload.agent_id, user["id"]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/tasks/{task_id}/assignments")
     def list_task_assignments(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)
@@ -906,6 +924,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
     ):
         """§2-1 — 확정된 배정 중 내가 당사자이거나(사람) 요청자인(Agent) task."""
         return deliverables.list_my_work(conn, user["id"], limit, offset)
+
+    @app.get("/api/all-work")
+    def get_all_work(
+        limit: int = 200,
+        offset: int = 0,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """SCREEN_UX_BENCHMARK_PROPOSAL.md §4-B — 할 일 보드의 "전체" 범위.
+        `/api/my-work`와 같은 모양을 반환하되 user_id로 안 좁힌다 — 조직
+        전체 현황이라 ADMIN/MANAGER 전용."""
+        return deliverables.list_all_work(conn, limit, offset)
 
     @app.get("/api/inbox")
     def get_inbox_endpoint(user: sqlite3.Row = Depends(get_current_user)):

@@ -267,6 +267,47 @@ def task_completion_summary(conn: sqlite3.Connection, task_id: int) -> dict:
     }
 
 
+def list_all_work(
+    conn: sqlite3.Connection, limit: int = 50, offset: int = 0
+) -> list[dict]:
+    """`GET /api/all-work` — SCREEN_UX_BENCHMARK_PROPOSAL.md §4-B(2026-10-12,
+    "Phase 1 (A)(B)(H1)(H2)(I5)부터 구현 시작해줘") — 할 일 보드가 지금까지
+    "내 업무"(`list_my_work()`, user_id로 좁힘)만 보여줄 수 있어 admin/
+    manager가 조직 전체 현황을 한 보드에서 못 봤다(§3 "진짜 갭"). 같은
+    `tasks`+`assignments` 조인·같은 `task_completion_summary()`를 그대로
+    쓰고, `WHERE user_id = ?` 좁힘만 뺐다 — 새 쿼리 로직을 만들지 않는다.
+    ADMIN/MANAGER 전용(app.py에서 role 체크, 조직 전체 데이터라 민감)."""
+    rows = conn.execute(
+        """
+        SELECT a.id AS assignment_id, a.task_id, a.resource_type, a.resource_id,
+               t.brief_id, t.role_name
+        FROM assignments a
+        JOIN tasks t ON t.id = a.task_id
+        WHERE a.status = 'confirmed'
+        ORDER BY a.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    ).fetchall()
+
+    result = []
+    for row in rows:
+        summary = task_completion_summary(conn, row["task_id"])
+        result.append(
+            {
+                "task_id": row["task_id"],
+                "brief_id": row["brief_id"],
+                "role_name": row["role_name"],
+                "resource_type": row["resource_type"],
+                "resource_id": row["resource_id"],
+                "assignment_id": row["assignment_id"],
+                "my_relationship": None,  # "내 업무"가 아니므로 관계 라벨 없음
+                **summary,
+            }
+        )
+    return result
+
+
 def list_my_work(
     conn: sqlite3.Connection, user_id: int, limit: int = 50, offset: int = 0
 ) -> list[dict]:

@@ -154,7 +154,9 @@ def _skill_based_tools(
     return pool_registry.resolve_pool_tools(conn, stack, skills, agent_id=agent_id)
 
 
-def _static_augmentation(conn: sqlite3.Connection, skills: list[str], description: str) -> str:
+def _static_augmentation(
+    conn: sqlite3.Connection, skills: list[str], description: str
+) -> str:
     """사용자 결정(2026-09-29, "skill_pool.augmentation_mode의 'always'
     값 실제 구현") — `'tool'` 모드는 이미 위 `_skill_based_tools()`로 진짜
     CrewAI Tool을 붙여 Agent가 스스로 호출 여부를 판단하게 한다. `'always'`
@@ -491,9 +493,7 @@ def run_crew(
             # 뽑아준다 — 반환값은 그대로 CrewOutput이라 아래 로직은 전혀
             # 안 바뀐다.
             crew_label = ", ".join(r["role_name"] for r in worker_rows)
-            eval_result = agent_evaluation.run_and_score_crew(
-                crew_label, crew.kickoff
-            )
+            eval_result = agent_evaluation.run_and_score_crew(crew_label, crew.kickoff)
             result = eval_result["output"]
 
     per_agent = []
@@ -588,6 +588,12 @@ def run_crew(
         "agents": per_agent,
         "gate_scores": eval_result["gate_scores"],
         "tcr": eval_result["tcr"],
+        # SCREEN_UX_BENCHMARK_PROPOSAL.md §4-A(2026-10-12) — CrewAI가 이미
+        # 집계해주는 값인데 지금까지 audit_log 참고 기록에만 남고 API
+        # 응답엔 빠져 있어 화면에 보여줄 수가 없었다. 비용/실행시간은
+        # CrewAI가 집계해주지 않아(UsageMetrics에 없음) 여기 포함하지
+        # 않는다 — 없는 값을 지어내지 않는다.
+        "token_usage": result.token_usage.model_dump(),
     }
 
 

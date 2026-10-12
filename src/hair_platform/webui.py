@@ -27,26 +27,59 @@ INDEX_HTML = """<!DOCTYPE html>
      배경은 이 페이지의 라이트 CSS(흰색)가 그대로 남아 글자가 거의 안
      보이는 상태가 된다(실사용 중 발견). 이 페이지는 라이트 전용임을
      명시한다. */
-  :root { color-scheme: light; }
-  body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f5f6f8; color: #1b1f24; }
-  header { background: #14213d; color: #fff; padding: 0.75rem 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  /* SCREEN_UX_BENCHMARK_PROPOSAL.md §6(I1 색상 토큰화·I3 상태 배지 통일,
+     2026-10-12, "UI 개선 잔여 작업 진행해줘") — 반복되는 색을 변수로
+     뽑았다. primary/accent/admin/border류는 기존 값 그대로라 화면이
+     안 바뀐다. 상태색(success/warn/danger, I3)만 예외다 — .gate-badge와
+     .msg가 지금까지 같은 "성공/경고"인데도 서로 다른 초록/주황 톤을
+     썼어서, 통일하면서 .msg 쪽 톤을 .gate-badge 쪽(이미 쓰던 값)에
+     맞췄다 — 아주 미세한 색조 변화가 "의도된" 결과다(두 군데가 이제
+     실제로 같은 색이 된다는 게 I3의 목적 그 자체). 전체 색상을 다
+     뽑진 않았다 — 채팅 버블·코드 하이라이팅처럼 한 자리에서만 쓰는
+     색은 이번 1차 작업 범위 밖으로 남긴다(로드맵 단계적 접근). */
+  :root {
+    color-scheme: light;
+    --color-bg: #f5f6f8;
+    --color-surface: #fff;
+    --color-text: #1b1f24;
+    --color-muted: #777;
+    --color-border: #e2e4e8;
+    --color-border-strong: #ccc;
+    --color-primary: #14213d;
+    --color-accent: #fca311;
+    --color-admin: #a15c00;
+    --color-admin-bg: #fff7ec;
+    --color-admin-border: #f0c98a;
+    /* I3 — 지금까지 .gate-badge/.msg가 각자 따로 고르던 초록/주황/빨강을
+       공통 토큰 3종으로 통일한다(success/warn/danger — "info"는 지금
+       쓰는 곳이 없어 아직 안 만든다, 쓰지 않는 토큰을 미리 만들지
+       않는다는 이 프로젝트 관례와 동일). */
+    --status-success-bg: #dcfce7;
+    --status-success-fg: #166534;
+    --status-warn-bg: #fef3c7;
+    --status-warn-fg: #92400e;
+    --status-danger-bg: #fde2e2;
+    --status-danger-fg: #7a1212;
+  }
+  body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 0; background: var(--color-bg); color: var(--color-text); }
+  header { background: var(--color-primary); color: #fff; padding: 0.75rem 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   header h1 { font-size: 1.1rem; margin: 0; }
   header .spacer { flex: 1; }
-  header button { background: #fca311; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; }
-  nav { background: #fff; border-bottom: 1px solid #ddd; }
+  header button { background: var(--color-accent); border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; }
+  nav { background: var(--color-surface); border-bottom: 1px solid #ddd; }
   .nav-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; padding: 0.4rem 0.5rem; }
-  .nav-group + .nav-group { border-top: 1px dashed #e2e4e8; }
-  .nav-group.admin-group { background: #fff7ec; }
+  .nav-group + .nav-group { border-top: 1px dashed var(--color-border); }
+  .nav-group.admin-group { background: var(--color-admin-bg); }
   .nav-label { font-size: 0.72rem; font-weight: 600; color: #888; margin-right: 0.4rem; min-width: 72px; }
-  .nav-group.admin-group .nav-label { color: #a15c00; }
-  nav button { background: none; border: 1px solid #ccc; padding: 0.35rem 0.7rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
-  nav button.active { background: #14213d; color: #fff; border-color: #14213d; }
-  .nav-group.admin-group button { border-color: #f0c98a; }
-  .nav-group.admin-group button.active { background: #a15c00; border-color: #a15c00; }
-  .badge-adminonly { font-size: 0.65rem; background: #a15c00; color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
+  .nav-group.admin-group .nav-label { color: var(--color-admin); }
+  nav button { background: none; border: 1px solid var(--color-border-strong); padding: 0.35rem 0.7rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+  nav button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+  .nav-group.admin-group button { border-color: var(--color-admin-border); }
+  .nav-group.admin-group button.active { background: var(--color-admin); border-color: var(--color-admin); }
+  .badge-adminonly { font-size: 0.65rem; background: var(--color-admin); color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
   main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
-  section.card { background: #fff; border: 1px solid #e2e4e8; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
-  .deliverable-card { background: #f9fafb; border: 1px solid #e2e4e8; border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 0.6rem; }
+  section.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+  .deliverable-card { background: #f9fafb; border: 1px solid var(--color-border); border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 0.6rem; }
   .deliverable-card + .deliverable-card { margin-top: 0; }
   .deliverable-card.chat-human { margin-right: 12%; border-left: 3px solid #2563eb; }
   .deliverable-card.chat-agent { margin-left: 12%; border-left: 3px solid #7c3aed; background: #f5f3ff; }
@@ -54,8 +87,8 @@ INDEX_HTML = """<!DOCTYPE html>
   .mention-dropdown li { padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
   .mention-dropdown li:hover, .mention-dropdown li.active { background: #eef6ff; }
   .gate-badge { display: inline-block; padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.85em; }
-  .gate-badge.gate-ok { background: #dcfce7; color: #166534; }
-  .gate-badge.gate-warn { background: #fef3c7; color: #92400e; }
+  .gate-badge.gate-ok { background: var(--status-success-bg); color: var(--status-success-fg); }
+  .gate-badge.gate-warn { background: var(--status-warn-bg); color: var(--status-warn-fg); }
   .final-result-card { background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
   .dashboard-grid { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
   .dashboard-grid .card { flex: 1; min-width: 200px; margin-bottom: 0; }
@@ -69,11 +102,11 @@ INDEX_HTML = """<!DOCTYPE html>
   button.danger { background: #d64545; color: #fff; border: none; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; }
   button.small { padding: 0.25rem 0.5rem; font-size: 0.8rem; cursor: pointer; }
   .msg { padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 0.75rem; font-size: 0.85rem; }
-   .msg.error { background: #fde2e2; color: #7a1212; }
-   .msg.ok { background: #e3f6e5; color: #185c2c; }
-   .msg.warn { background: #fff4d6; color: #7a5c00; }
-   .badge-reused { font-size: 0.65rem; background: #a15c00; color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
-  .muted { color: #777; font-size: 0.8rem; }
+   .msg.error { background: var(--status-danger-bg); color: var(--status-danger-fg); }
+   .msg.ok { background: var(--status-success-bg); color: var(--status-success-fg); }
+   .msg.warn { background: var(--status-warn-bg); color: var(--status-warn-fg); }
+   .badge-reused { font-size: 0.65rem; background: var(--color-admin); color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
+  .muted { color: var(--color-muted); font-size: 0.8rem; }
   .help-list { margin: 0.3rem 0 0.75rem; padding-left: 1.1rem; }
   .help-list li { margin-bottom: 0.35rem; line-height: 1.4; }
   .help-list li:last-child { margin-bottom: 0; }
@@ -112,6 +145,11 @@ INDEX_HTML = """<!DOCTYPE html>
   .md-content h4, .md-content h5, .md-content h6 { margin: 0.4rem 0 0.2rem; }
   .md-content li { margin-left: 1rem; }
   .html-preview { width: 100%; min-height: 240px; border: 1px solid #e2e4e8; border-radius: 6px; background: #fff; }
+  /* SCREEN_UX_BENCHMARK_PROPOSAL.md §5(H1 복사·H2 미리보기/소스 토글,
+     2026-10-12) — Claude Artifact처럼 결과물에 전용 툴바를 둔다. 새
+     색상 토큰 없이 기존 .small 버튼 스타일만 재사용한다. */
+  .artifact-toolbar { display: flex; justify-content: flex-end; gap: 0.3rem; margin-bottom: 0.3rem; }
+  .artifact-source-pre { max-height: 400px; overflow-y: auto; }
 
   /* Phase 5(사용자 요청, 2026-09-28, "반응형만 포함(내 업무/알림 확인용)")
      — 이 앱은 고정 1100px 레이아웃(과거 다크모드 회귀 회피와 같은 이유로
@@ -180,7 +218,15 @@ function escAttr(s) {
 // 추가하는 <span> 태그 외에는 원본 텍스트에 있던 "<"/">"가 전부 엔티티로
 // 바뀌어 있어 새 HTML을 주입할 수 없다 — 그래서 외부 라이브러리(마크다운
 // 렌더러 등을 안 쓰기로 한 기존 결정, 위 주석 참고) 없이도 안전하다.
-const _CODE_KEYWORDS = /\\b(function|const|let|var|return|if|else|for|while|def|class|import|from|export|async|await|try|except|catch|finally|new|this|self)\\b/g;
+// SCREEN_UX_BENCHMARK_PROPOSAL.md §5(H4 언어 인식 하이라이팅, 2026-10-12,
+// "UI 개선 잔여 작업 진행해줘") — content_type='code'에 실제 언어 필드가
+// 없어(스키마 변경 없이 가는 쪽을 택함, §3 "정직한 분리"와 같은 원칙)
+// "어떤 언어인지 묻지 않고도 더 많은 언어의 흔한 키워드를 알아보게" 넓힌
+// 것 — JS/Python 중심이던 기존 키워드 세트에 SQL·Go·Java/C#·Rust의
+// 흔한 키워드를 더했고, 대소문자 구분 없이 매칭한다(SQL은 관례상 전부
+// 대문자인 경우가 많다 — `/gi`). 치환은 `$1`(원문 그대로)이라 대소문자가
+// 바뀌어 보이는 부작용은 없다.
+const _CODE_KEYWORDS = /\\b(function|const|let|var|return|if|else|for|while|def|class|import|from|export|async|await|try|except|catch|finally|new|this|self|select|insert|update|delete|where|join|into|values|order|group|having|create|table|alter|drop|func|package|defer|struct|interface|nil|public|private|protected|static|void|namespace|using|fn|impl|mod|pub|match|enum|trait|mut|true|false|null|break|continue|switch|case|default|throw|raise|in|not|and|or)\\b/gi;
 function highlightCode(escaped) {
   // 순서 중요 — 키워드 치환을 가장 먼저 해야 한다. 나중에 하면 뒤 패스들이
   // 이미 넣은 `class="tok-..."` 속성의 "class"라는 글자 자체를 키워드로
@@ -188,7 +234,10 @@ function highlightCode(escaped) {
   return escaped
     .replace(_CODE_KEYWORDS, '<span class="tok-kw">$1</span>')
     .replace(/(&quot;.*?&quot;|&#39;.*?&#39;)/g, '<span class="tok-str">$1</span>')
-    .replace(/(\\/\\/.*$|#.*$)/gm, '<span class="tok-com">$1</span>')
+    // H4 — 블록 주석(/* ... */, C/Java/Go/Rust/SQL 공용)도 한 종류로
+    // 더 추가한다. 기존 줄 주석에 SQL의 `--`도 더했다.
+    .replace(/(\\/\\*[\\s\\S]*?\\*\\/)/g, '<span class="tok-com">$1</span>')
+    .replace(/(\\/\\/.*$|#.*$|--.*$)/gm, '<span class="tok-com">$1</span>')
     .replace(/\\b(\\d+)\\b/g, '<span class="tok-num">$1</span>');
 }
 
@@ -225,40 +274,108 @@ function stripOuterFence(raw) {
   return m ? m[1] : raw;
 }
 
+// SCREEN_UX_BENCHMARK_PROPOSAL.md §5(H1 복사·H2 미리보기/소스 토글,
+// 2026-10-12, "Phase 1 (A)(B)(H1)(H2)(I5)부터 구현 시작해줘") — 매 호출마다
+// 고유 id를 줘서, 렌더링된 위치가 어디든(Task 워크스페이스/Crew 실행
+// 결과/대화 등 renderContent() 호출부 전부) 버튼이 자기 블록만 찾게 한다.
+// 콜러마다 버튼 이벤트를 따로 연결할 필요가 없도록 전역 위임
+// 리스너(`document.addEventListener("click", ...)`, 아래)로 한 번만
+// 연결한다.
+let _artifactSeq = 0;
+
 function renderContent(raw, contentType) {
   if (contentType === "html" || contentType === "code" || contentType === "markdown") {
     raw = stripOuterFence(raw);
   }
+  const artifactId = "artifact-" + (++_artifactSeq);
+  const hasToggle = contentType === "html" || contentType === "code";
+
+  let previewHtml;
   if (contentType === "html") {
-    return '<iframe class="html-preview" sandbox="allow-scripts" srcdoc="' + escAttr(raw) + '"></iframe>';
+    previewHtml = '<iframe class="html-preview" sandbox="allow-scripts" srcdoc="' + escAttr(raw) + '"></iframe>';
+  } else if (contentType === "code") {
+    previewHtml = '<pre class="code-block"><code>' + highlightCode(esc(raw)) + '</code></pre>';
+  } else {
+    const escaped = esc(raw);
+    const withCodeBlocks = escaped.replace(
+      /```[a-zA-Z0-9]*\\n([\\s\\S]*?)```/g,
+      (_match, code) => '<pre class="code-block"><code>' + highlightCode(code.replace(/\\n$/, "")) + "</code></pre>"
+    );
+    if (contentType !== "markdown") {
+      previewHtml = withCodeBlocks
+        .replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>")
+        .replace(/\\n/g, "<br>");
+    } else {
+      // markdown — 헤딩/목록/인라인 코드까지 조금 더 넓게 처리한다(여전히
+      // esc() 이후의 안전한 치환일 뿐, 별도 파서 라이브러리는 안 씀).
+      previewHtml = '<div class="md-content">' + withCodeBlocks
+        .replace(/^###### (.+)$/gm, "<h6>$1</h6>")
+        .replace(/^##### (.+)$/gm, "<h5>$1</h5>")
+        .replace(/^#### (.+)$/gm, "<h4>$1</h4>")
+        .replace(/^### (.+)$/gm, "<h3>$1</h3>")
+        .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+        .replace(/^# (.+)$/gm, "<h1>$1</h1>")
+        .replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>")
+        .replace(/`([^`]+?)`/g, "<code>$1</code>")
+        .replace(/^- (.+)$/gm, "<li>$1</li>")
+        .replace(/\\n/g, "<br>") + '</div>';
+    }
   }
-  if (contentType === "code") {
-    return '<pre class="code-block"><code>' + highlightCode(esc(raw)) + '</code></pre>';
-  }
-  const escaped = esc(raw);
-  const withCodeBlocks = escaped.replace(
-    /```[a-zA-Z0-9]*\\n([\\s\\S]*?)```/g,
-    (_match, code) => '<pre class="code-block"><code>' + highlightCode(code.replace(/\\n$/, "")) + "</code></pre>"
+
+  // 복사 버튼은 렌더링된(하이라이팅/HTML태그 섞인) 결과가 아니라 원본
+  // raw 텍스트를 복사해야 한다 — <textarea> 안에 esc()로 이스케이프해
+  // 넣으면 브라우저가 파싱 시점에 엔티티를 다시 원문으로 풀어주므로,
+  // `.value`를 읽기만 하면 별도 보관 없이 정확한 원본을 얻는다.
+  const toolbarHtml =
+    '<div class="artifact-toolbar">' +
+    '<button type="button" class="small" data-copy-artifact="' + artifactId + '">복사</button>' +
+    (hasToggle
+      ? '<button type="button" class="small" data-toggle-artifact="' + artifactId + '">소스 보기</button>'
+      : "") +
+    '</div>';
+  const sourceHtml = hasToggle
+    ? '<div class="artifact-source" id="' + artifactId + '-source" style="display:none">' +
+      '<pre class="code-block artifact-source-pre">' + esc(raw) + '</pre></div>'
+    : "";
+
+  return (
+    '<div class="artifact-block" data-artifact-id="' + artifactId + '">' +
+    toolbarHtml +
+    '<div class="artifact-preview" id="' + artifactId + '-preview">' + previewHtml + '</div>' +
+    sourceHtml +
+    '<textarea class="artifact-raw-store" id="' + artifactId + '-raw" style="display:none" aria-hidden="true">' +
+    esc(raw) + '</textarea>' +
+    '</div>'
   );
-  if (contentType !== "markdown") {
-    return withCodeBlocks
-      .replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>")
-      .replace(/\\n/g, "<br>");
-  }
-  // markdown — 헤딩/목록/인라인 코드까지 조금 더 넓게 처리한다(여전히
-  // esc() 이후의 안전한 치환일 뿐, 별도 파서 라이브러리는 안 씀).
-  return '<div class="md-content">' + withCodeBlocks
-    .replace(/^###### (.+)$/gm, "<h6>$1</h6>")
-    .replace(/^##### (.+)$/gm, "<h5>$1</h5>")
-    .replace(/^#### (.+)$/gm, "<h4>$1</h4>")
-    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-    .replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>")
-    .replace(/`([^`]+?)`/g, "<code>$1</code>")
-    .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/\\n/g, "<br>") + '</div>';
 }
+
+// 전역 위임(한 번만 등록) — renderContent()가 어디서 호출되든(Task
+// 워크스페이스/Crew 실행 결과/대화 등) 매번 버튼을 다시 연결할 필요가
+// 없다.
+document.addEventListener("click", (ev) => {
+  const copyBtn = ev.target.closest("[data-copy-artifact]");
+  if (copyBtn) {
+    const raw = document.getElementById(copyBtn.dataset.copyArtifact + "-raw");
+    if (!raw) return;
+    navigator.clipboard.writeText(raw.value).then(() => {
+      const original = copyBtn.textContent;
+      copyBtn.textContent = "복사됨";
+      setTimeout(() => { copyBtn.textContent = original; }, 1200);
+    }).catch(() => showMsg("global-msg", "클립보드 복사에 실패했습니다", "error"));
+    return;
+  }
+  const toggleBtn = ev.target.closest("[data-toggle-artifact]");
+  if (toggleBtn) {
+    const id = toggleBtn.dataset.toggleArtifact;
+    const preview = document.getElementById(id + "-preview");
+    const source = document.getElementById(id + "-source");
+    if (!preview || !source) return;
+    const showingSource = source.style.display !== "none";
+    source.style.display = showingSource ? "none" : "block";
+    preview.style.display = showingSource ? "block" : "none";
+    toggleBtn.textContent = showingSource ? "소스 보기" : "미리보기";
+  }
+});
 
 // 결과물을 그대로 다운로드(2026-10-07, Tier 1 — "다운로드는 가능한지
 // 확인해줘"에 대한 답). content_type별 확장자만 붙이고 Blob으로 바로
@@ -1303,12 +1420,30 @@ async function renderMyWork(content) {
 // ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — "할 일 보드"
 // 4칼럼 칸반(backlog/queued/in_progress/done). 드래그 없이 업무를 열어
 // select로 상태를 바꾸는 식으로 단순화했다(설계 문서 UI 설계 그대로).
-// "내 업무"와 같은 데이터(참가 중인 task)를 쓴다 — 전체 조직의 모든
-// task를 한 보드에 보여주는 것은 범위 밖(그건 기존 "업무 요청" 탭이
-// 브리프별로 이미 하고 있다).
+//
+// SCREEN_UX_BENCHMARK_PROPOSAL.md §4-B/§3-1(2026-10-12, "Phase 1 (A)(B)
+// (H1)(H2)(I5)부터 구현 시작해줘") — "전체 조직 범위는 범위 밖"이라던
+// 원래 주석을 뒤집는다: admin/manager에겐 "전체 조직" 범위 선택지를
+// 추가한다(`/api/all-work`, §4-B). 카드 템플릿(STATUS_COLUMNS)은 그대로
+// 재사용하고 데이터 소스만 바꾼다(§3-1 "같은 카드 템플릿, 데이터 소스만
+// 교체" 원칙) — 일반 사용자는 기존과 동일하게 "내 업무"만 보인다.
+const STATUS_COLUMNS = [
+  { key: "backlog", label: "백로그" },
+  { key: "queued", label: "대기" },
+  { key: "in_progress", label: "진행중" },
+  { key: "done", label: "완료" },
+];
+const BOARD_PRIORITY_BADGE = { urgent: "gate-warn", high: "gate-warn", medium: "gate-ok", low: "gate-ok" };
+
 async function renderBoard(content) {
+  const canSeeAll = ["admin", "manager"].includes(ME.role);
+  await _renderBoardScope(content, "mine", canSeeAll);
+}
+
+async function _renderBoardScope(content, scope, canSeeAll) {
   content.innerHTML = '<section class="card"><h2>할 일 보드</h2><p class="muted">불러오는 중…</p></section>';
-  const rows = await api("GET", "/api/my-work");
+  const endpoint = scope === "all" ? "/api/all-work" : "/api/my-work";
+  const rows = await api("GET", endpoint);
   const details = await Promise.all(
     rows.map(r => api("GET", "/api/tasks/" + r.task_id).catch(() => null))
   );
@@ -1316,19 +1451,12 @@ async function renderBoard(content) {
     .map((r, i) => Object.assign({}, r, details[i]))
     .filter(t => t.status !== undefined);
 
-  const STATUS_COLUMNS = [
-    { key: "backlog", label: "백로그" },
-    { key: "queued", label: "대기" },
-    { key: "in_progress", label: "진행중" },
-    { key: "done", label: "완료" },
-  ];
-  const PRIORITY_BADGE = { urgent: "gate-warn", high: "gate-warn", medium: "gate-ok", low: "gate-ok" };
   const columnsHtml = STATUS_COLUMNS.map(col => {
     const colTasks = tasks.filter(t => t.status === col.key);
     const cards = colTasks.map(t =>
       '<div class="deliverable-card">' +
       '<div><strong>' + esc(t.role_name) + '</strong></div>' +
-      '<div><span class="gate-badge ' + (PRIORITY_BADGE[t.priority] || "") + '">' + esc(label(t.priority)) + '</span></div>' +
+      '<div><span class="gate-badge ' + (BOARD_PRIORITY_BADGE[t.priority] || "") + '">' + esc(label(t.priority)) + '</span></div>' +
       '<div class="actions"><button class="small" data-board-open="' + t.task_id + '">열기</button></div>' +
       '</div>'
     ).join("");
@@ -1338,10 +1466,21 @@ async function renderBoard(content) {
       '</div>';
   }).join("");
 
+  const scopeSelectHtml = canSeeAll
+    ? '<label>범위: <select id="board-scope">' +
+      '<option value="mine"' + (scope === "mine" ? " selected" : "") + '>내 업무</option>' +
+      '<option value="all"' + (scope === "all" ? " selected" : "") + '>전체 조직</option>' +
+      '</select></label>'
+    : "";
+
   content.innerHTML =
     '<section class="card"><h2>할 일 보드</h2>' +
+    (scopeSelectHtml ? '<div class="inline">' + scopeSelectHtml + '</div>' : "") +
     '<ul class="muted help-list">' +
-    '<li>"내 업무"에 뜨는, 내가 참가 중인 업무만 보여줍니다(조직 전체 업무는 "업무 요청" 탭에서 브리프별로 확인하세요).</li>' +
+    (scope === "all"
+      ? '<li>조직 전체의 확정된 업무를 보여줍니다(admin/manager 전용 범위).</li>'
+      : '<li>"내 업무"에 뜨는, 내가 참가 중인 업무만 보여줍니다' +
+        (canSeeAll ? '(위 범위를 "전체 조직"으로 바꾸면 조직 전체를 봅니다).</li>' : '(조직 전체 업무는 "업무 요청" 탭에서 브리프별로 확인하세요).</li>')) +
     '<li>카드의 "열기"로 워크스페이스를 펼쳐 상태/우선순위를 바꾸면 이 보드에도 반영됩니다(새로고침 필요).</li>' +
     '</ul>' +
     '<div class="inline" style="align-items:flex-start;flex-wrap:wrap">' + columnsHtml + '</div>' +
@@ -1351,6 +1490,10 @@ async function renderBoard(content) {
   content.querySelectorAll("[data-board-open]").forEach(btn => {
     btn.onclick = () => renderCollabWorkspace(Number(btn.dataset.boardOpen), "board-detail");
   });
+  const scopeSelect = document.getElementById("board-scope");
+  if (scopeSelect) {
+    scopeSelect.onchange = () => _renderBoardScope(content, scopeSelect.value, canSeeAll);
+  }
 }
 
 /* Phase 4 — execute-agent는 202+job_id만 즉시 돌려준다(사용자 요청,
@@ -2624,7 +2767,16 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
       sc.score.toFixed(3) + (sc.exact_match ? " (완전일치)" : ""),
       esc(JSON.stringify(sc.breakdown)),
       accountCell(sc.candidate),
-      '<button class="small" data-assign-type="' + esc(sc.candidate.type) + '" data-assign-id="' + sc.candidate.id + '" data-unlinked="' + (sc.candidate.type === "human" && sc.candidate.user_id == null ? "1" : "0") + '">배정 요청</button>',
+      '<div class="actions">' +
+      '<button class="small" data-assign-type="' + esc(sc.candidate.type) + '" data-assign-id="' + sc.candidate.id + '" data-unlinked="' + (sc.candidate.type === "human" && sc.candidate.user_id == null ? "1" : "0") + '">배정 요청</button>' +
+      // SCREEN_UX_BENCHMARK_PROPOSAL.md §4-D(2026-10-12, "위임은 Gate
+      // A-G 그대로 타고, audit_log에도 남겨줘") — Agent 후보에만
+      // "위임"(결재 없이 즉시 확정)을 추가로 보여준다. 사람/팀은
+      // Linear식 "위임" 개념의 대상이 아니다(§4-D 원문).
+      (sc.candidate.type === "agent"
+        ? '<button class="small" data-delegate-agent-id="' + sc.candidate.id + '" title="결재 없이 즉시 연결 — 바로 실행 가능">위임</button>'
+        : "") +
+      '</div>',
     ])
   );
   box.querySelectorAll("[data-assign-id]").forEach(btn => {
@@ -2637,6 +2789,20 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
           resource_type: btn.dataset.assignType, resource_id: Number(btn.dataset.assignId),
         });
         showMsg("global-msg", "배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.", "ok");
+        if (onAssigned) onAssigned();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  box.querySelectorAll("[data-delegate-agent-id]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm(
+        "결재 없이 이 Agent를 바로 이 업무에 연결합니다(즉시 실행 가능) — 계속하시겠습니까?"
+      )) return;
+      try {
+        await api("POST", "/api/tasks/" + taskId + "/delegate", {
+          agent_id: Number(btn.dataset.delegateAgentId),
+        });
+        showMsg("global-msg", "위임했습니다 — 결재 없이 바로 실행할 수 있습니다.", "ok");
         if (onAssigned) onAssigned();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
@@ -3785,6 +3951,21 @@ function renderCrewResult(result) {
         "</details>"
       : "");
   html += '<h3>최종 산출물</h3><div class="msg ok">' + renderContent(result.final_output) + "</div>";
+  // SCREEN_UX_BENCHMARK_PROPOSAL.md §4-A/§3-1(2026-10-12, "Phase 1 (A)(B)
+  // (H1)(H2)(I5)부터 구현 시작해줘") — CrewAI가 이미 집계해주는 토큰
+  // 사용량을 `run_crew()`가 이제 반환한다(크루 완료 전엔 비어있을 수
+  // 없다 — crew.kickoff() 성공 이후에만 이 함수가 반환되므로 항상 값이
+  // 있다). 기존 대시보드의 `.stat-row` 패턴(§I5, 새 CSS 불필요)을 그대로
+  // 재사용한다. 비용/실행시간은 CrewAI가 집계해주지 않아(UsageMetrics에
+  // 없음) 보여주지 않는다 — 없는 값을 지어내지 않는다.
+  const tu = result.token_usage;
+  html += "<h3>토큰 사용량(이 Crew 실행 전체)</h3>" +
+    '<div class="card">' +
+    '<div class="stat-row"><span>총 토큰</span><span>' + tu.total_tokens + '</span></div>' +
+    '<div class="stat-row"><span>입력(prompt)</span><span>' + tu.prompt_tokens + '</span></div>' +
+    '<div class="stat-row"><span>출력(completion)</span><span>' + tu.completion_tokens + '</span></div>' +
+    '<div class="stat-row"><span>LLM 호출 수</span><span>' + tu.successful_requests + '</span></div>' +
+    '</div>';
   // 사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
   // 연결해줘") — run_crew()가 이제 gate_scores/tcr을 반환한다. 단건
   // deliverable 카드의 gateBadge와 같은 "측정 없음" 구분 원칙(위 §530
