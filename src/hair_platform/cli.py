@@ -34,6 +34,33 @@ _EPILOG_TOP = """\
 서브커맨드별 자세한 옵션: hair <subcommand> --help
 """
 
+# 사용자 요청(2026-10-12, "hair 입력시 간단한 도움말 출력되도록 개선") —
+# 인자 없이 `hair`만 치면 이전엔 argparse가 "command가 필요하다"는
+# 에러(exit 2)를 띄웠다. 처음 쓰는 사람 입장에서는 에러가 아니라 뭘 할 수
+# 있는지 짧게 보여주는 게 맞다 — `hair --help`(아래 _EPILOG_TOP 포함,
+# 상세 도움말)와는 분량을 다르게 둔다.
+_BRIEF_HELP = """\
+HAIR-Platform 통합 CLI — 사람과 AI Agent를 하나의 조직도에서 관리한다.
+
+명령어:
+  serve             Web UI + API 서버 실행
+  bootstrap-admin   최초 ADMIN 계정 생성(콜드스타트 전용)
+  eval              Gate A/B/D/E/G 측정 1회 실행
+
+자세한 도움말:       hair --help
+명령어별 도움말:     hair <command> --help
+버전 확인:           hair --version
+"""
+
+
+def _get_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("hair-platform")
+    except PackageNotFoundError:
+        return "0.0.0"
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -42,7 +69,12 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_EPILOG_TOP,
     )
-    sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"hair {_get_version()}",
+    )
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
 
     p_serve = sub.add_parser(
         "serve",
@@ -176,6 +208,11 @@ def _cmd_eval(_args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command is None:
+        # 서브커맨드 없이 `hair`만 쳤다 — 에러로 취급하지 않고(위 _BRIEF_HELP
+        # 주석 참고) 짧은 안내만 보여주고 성공 종료한다.
+        print(_BRIEF_HELP, end="")
+        return 0
     return args.func(args)
 
 

@@ -38,6 +38,40 @@ def test_gc_help_lists_all_subcommands(capsys):
     assert "eval" in out
 
 
+# ---------- 사용자 요청(2026-10-12, "hair 입력시 간단한 도움말 출력되도록
+# 개선, hair --help/hair 명령어 --help 시 상세 도움말 출력, hair --version
+# 추가") ----------
+
+
+def test_gc_no_subcommand_prints_brief_help_and_exits_zero(capsys):
+    # 이전엔 subparsers가 required=True라 "command가 필요하다" 에러(exit 2)였다
+    # — 이제는 에러가 아니라 짧은 안내를 보여주고 성공 종료해야 한다.
+    code = cli.main([])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "serve" in out
+    assert "bootstrap-admin" in out
+    assert "eval" in out
+    assert "--help" in out
+
+
+def test_gc_no_subcommand_help_is_shorter_than_full_help(capsys):
+    cli.main([])
+    brief = capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    full = capsys.readouterr().out
+    assert len(brief) < len(full)
+
+
+def test_gc_version_flag_exits_cleanly_with_version_string(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert out.strip().startswith("hair ")
+
+
 @pytest.mark.parametrize("subcommand", ["serve", "bootstrap-admin", "eval"])
 def test_gc_subcommand_help_exits_cleanly_with_output(subcommand, capsys):
     with pytest.raises(SystemExit) as exc:
