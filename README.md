@@ -13,7 +13,7 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 독립 대화 + 기본 AI 자동응답/특정 Agent·Team 멘션/skill 그라운딩 +
 Task 종속 대화 흡수 + Brief 승격 공존) + **통합 CLI**(`hair`, §83 —
 `serve`/`bootstrap-admin`/`eval` 세 서브커맨드로 정리), `pytest`
-335건 통과, API 엔드포인트 107개. 알려진 갭·미구현 범위는 전부
+350건 통과, API 엔드포인트 109개. 알려진 갭·미구현 범위는 전부
 `docs/LIMITS.md`에 정직하게 기록돼 있다(가장 최신: §83).
 
 ## 핵심 기능
@@ -99,7 +99,7 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 335건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 350건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -181,7 +181,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(107개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(109개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # F6 매칭 알고리즘(결정론적)
   approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
@@ -229,7 +229,7 @@ docs/
   GAME_CONCEPT.md                  # HAIR 협업 구조를 게임화한 웹 브라우저 게임(Gatekeeper) 기획안 — 프로토타입은 별도 Artifact로 퍼블리시, 이 저장소엔 코드 없음
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 335건
+tests/unit/                            # 골든셋 350건
 ```
 
 ## 로드맵
