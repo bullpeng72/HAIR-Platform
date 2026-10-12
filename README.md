@@ -227,6 +227,8 @@ docs/
   HAIR_REDESIGN_PROPOSAL.md        # Asana AI Teammates·Riido 벤치마크 기반 재기획안 — 기획만
   ASANA_PARITY_DESIGN_PLAN.md      # F15–F20 설계 + §9 대화 중심 작업공간(conversations) + §10 멘션 발견성 — 전부 구현 완료(§7-§10)
   GAME_CONCEPT.md                  # HAIR 협업 구조를 게임화한 웹 브라우저 게임(Gatekeeper) 기획안 — 프로토타입은 별도 Artifact로 퍼블리시, 이 저장소엔 코드 없음
+  SPECIALIST_AGENTS_PLAN.md        # 개발 5단계(요구사항분석·코드분석·설계·구현·검증)+일반업무(시장조사·사업기획·전략수립) 전문 Agent 기획(Harness Methodology 대응) — Phase 1(Agent 8종 등록) 완료, Team 등록·§6-1 Tool은 미착수
+  SCREEN_UX_BENCHMARK_PROPOSAL.md  # Notion AI·ClickUp Brain·Linear·Devin·Replit Agent·CrewAI·LangGraph Studio 실제 화면 UX 벤치마크 + Claude Artifact 수준 결과물 뷰어·비주얼 디자인 개선안 — 기획만, 코드 변경 없음
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
 tests/unit/                            # 골든셋 350건
