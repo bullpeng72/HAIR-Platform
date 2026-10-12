@@ -61,6 +61,7 @@ from hair_platform.assignment import match_candidates
 from hair_platform.auth import (
     Role,
     authenticate,
+    create_session_token,
     create_user,
     get_current_user,
     hash_password,
@@ -144,6 +145,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         "HAIR_PLATFORM_SECRET_KEY", "dev-secret-change-in-production"
     )
     app.add_middleware(SessionMiddleware, secret_key=secret_key)
+    # get_current_user가 Bearer 토큰(탭별 다계정 로그인, auth.py 참고)을
+    # 복호화할 때 같은 키를 쓴다 — 쿠키 서명과 토큰 서명이 어긋나면 안 된다.
+    app.state.secret_key = secret_key
 
     conn = db.get_connection(db_path)
     db.init_schema(conn)
@@ -171,7 +175,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "username": user["username"],
             "role": user["role"],
         }
-        return {"id": user["id"], "username": user["username"], "role": user["role"]}
+        # 탭별 다계정 로그인(auth.py 주석 참고) — Web UI는 이 토큰을
+        # sessionStorage(탭마다 독립)에 저장해 쿠키 세션과 별도로 쓴다.
+        token = create_session_token(secret_key, user["id"])
+        return {
+            "id": user["id"],
+            "username": user["username"],
+            "role": user["role"],
+            "token": token,
+        }
 
     @app.post("/logout")
     def logout(request: Request):

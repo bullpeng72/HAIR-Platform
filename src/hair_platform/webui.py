@@ -285,6 +285,12 @@ async function api(method, path, body) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
+  // 사용자 요청(2026-10-12, "하나의 브라우저에서 두 개의 계정을 동시에 로그인") —
+  // 쿠키는 브라우저 전체가 공유해 탭마다 다른 계정을 유지할 수 없다.
+  // sessionStorage는 탭마다 독립이라, 로그인 시 받은 토큰을 여기 저장해두고
+  // 매 요청마다 헤더로 보내면 탭 B에서 로그인/로그아웃해도 탭 A는 영향을 안 받는다.
+  const token = sessionStorage.getItem("hair_token");
+  if (token) opts.headers["Authorization"] = "Bearer " + token;
   const resp = await fetch(path, opts);
   let data = null;
   try { data = await resp.json(); } catch (e) { /* no body */ }
@@ -693,10 +699,12 @@ document.getElementById("login-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   showMsg("login-msg", "", "ok");
   try {
-    await api("POST", "/login", {
+    const data = await api("POST", "/login", {
       username: document.getElementById("login-username").value,
       password: document.getElementById("login-password").value,
     });
+    // 탭별 다계정 로그인 — 토큰을 이 탭의 sessionStorage에만 저장한다.
+    sessionStorage.setItem("hair_token", data.token);
     await boot();
   } catch (e) {
     showMsg("login-msg", e.message, "error");
@@ -705,6 +713,7 @@ document.getElementById("login-form").addEventListener("submit", async (ev) => {
 
 document.getElementById("logout-btn").addEventListener("click", async () => {
   await api("POST", "/logout");
+  sessionStorage.removeItem("hair_token");
   await boot();
 });
 
