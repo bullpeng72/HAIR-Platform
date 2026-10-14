@@ -1,4 +1,4 @@
-"""Phase 4 검증 — 배정 공정성 지표(NF4, SPEC.md DoD).
+"""Phase 4 검증 — 배정 공정성 지표.
 
 사람·Agent가 같은 기준(Assignment Engine 스코어링)으로 배정되는지, 반려율에
 체계적인 차이가 없는지를 `assignments` 실제 데이터로 계산한다. 표본이 작을 때는

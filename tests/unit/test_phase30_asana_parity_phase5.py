@@ -1,8 +1,8 @@
-"""Phase 30 — ASANA_PARITY_DESIGN_PLAN.md Phase 5(마지막 단계): F20
-온보딩 간소화(사용자 요청, 2026-10-08, "...기획 및 설계안을 제안해줘" →
+"""Phase 30 — ASANA 모방 기획 Phase 5(마지막 단계): 온보딩 간소화(사용자
+요청, 2026-10-08, "...기획 및 설계안을 제안해줘" →
 승인 후 "Phase 1→5 순서로" 진행 지시).
 
-F20의 코드 변경분은 `POST /api/demo/seed`(admin 전용, 샘플 Brief 1건+
+코드 변경분은 `POST /api/demo/seed`(admin 전용, 샘플 Brief 1건+
 Task 2건+Human 1명+Agent 1개 생성)뿐이다 — 탭 재구성("오늘 할 일"/
 "설정" 2구역화)은 순수 UI 변경이라 `test_phase11_admin_user_nav_split.py`
 의 `test_gc73`가 이미 갱신되어 검증한다(이 파일에서 중복 검증하지

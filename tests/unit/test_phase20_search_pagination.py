@@ -1,8 +1,7 @@
 """Phase 5 — 검색/필터 스케일(사용자 요청, 2026-09-28, "Phase 5(기업용
-UI/UX)에 포함할 항목을 고르세요" → "검색/필터 스케일" 선택).
-`docs/HAIR_MASTER_PLAN.md` §6 "부서/스킬/가용성 복합 필터 + 전체
-목록형 화면에 페이지네이션 일괄 적용"을 `GET /api/pool/search`에
-구현한다.
+UI/UX)에 포함할 항목을 고르세요" → "검색/필터 스케일" 선택) — "부서/
+스킬/가용성 복합 필터 + 전체 목록형 화면에 페이지네이션 일괄 적용"을
+`GET /api/pool/search`에 구현한다.
 
 **"부서" 필터를 넣지 않은 이유**: 이 스키마엔 애초에 "부서" 필드가
 없다(조직 구조는 `human_pool.manager_id` 상사 체인/조직도로만
@@ -88,7 +87,7 @@ def test_gc166_search_pagination_slices_correctly(client_and_conn):
 
 
 def test_gc167_search_limit_is_capped(client_and_conn):
-    """감사로그(§13)와 같은 관례 — limit은 200을 넘길 수 없다(무제한
+    """감사로그와 같은 관례 — limit은 200을 넘길 수 없다(무제한
     응답 방지)."""
     client, _conn = client_and_conn
     _login(client, "admin1", "adminpass")

@@ -5,32 +5,32 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 (Spec Interpreter·Code Generator·Verifier·Pool·eval_wiring·Web UI 패턴)을
 재사용하되 "생성" 축을 "사람-Agent 협업/배분" 축으로 확장한다.
 
-**상태**: Phase 0–6 완료, F1–F14/NF1–13 전부 구현, F15–F20(ASANA 모방
-수준 기획, `docs/ASANA_PARITY_DESIGN_PLAN.md`) Phase 1-5 전부 완료
-(F17 메모·F19 활동 타임라인·F15 참가자 초대+댓글 `@멘션` 트리거·F16
-상태/우선순위/의존관계+Riido 수준 그래프 시각화·F18 운영 가시성·F20
-온보딩 간소화+탭 재구성) + **대화 중심 작업공간**(§9, 로그인 직후
+**상태**: 조직도 기반 배치·배분·승인, Agent 생성·실행(Gate A-G 자동
+채점), CrewAI 다중 Agent 협업, ASANA 수준의 작업 구조(메모·활동
+타임라인·참가자 초대+댓글 `@멘션`·상태/우선순위/의존관계 그래프
+시각화·운영 가시성·탭 재구성), **대화 중심 작업공간**(로그인 직후
 독립 대화 + 기본 AI 자동응답/특정 Agent·Team 멘션/skill 그라운딩 +
-Task 종속 대화 흡수 + Brief 승격 공존) + **통합 CLI**(`hair`, §83 —
-`serve`/`bootstrap-admin`/`eval` 세 서브커맨드로 정리), `pytest`
-350건 통과, API 엔드포인트 109개. 알려진 갭·미구현 범위는 전부
-`docs/LIMITS.md`에 정직하게 기록돼 있다(가장 최신: §83).
+Task 종속 대화 흡수 + Brief 승격 공존), **통합 CLI**(`hair serve`/
+`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로 쓸 수 있다. `pytest`
+432건 통과, API 엔드포인트 116개. 개념·아키텍처 전체 설명은
+`docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은 `git log`
+(커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를 참고.
 
 ## 핵심 기능
 
 ### 사람-Agent 협업 모델(HAIR의 축)
-- 사람과 AI Agent를 조직도 위에 함께 배치(F5)·배분(F6, 결정론적 매칭
-  알고리즘)·승인(F7, 조직도 매니저 체인을 따른 다단계 결재라인 + 자기승인
+- 사람과 AI Agent를 조직도 위에 함께 배치·배분(결정론적 매칭
+  알고리즘)·승인(조직도 매니저 체인을 따른 다단계 결재라인 + 자기승인
   방지)
 - 한 할 일에 **여러 건의 confirmed 배정이 기본적으로 공존**한다(사람
   여러 명, Agent 여러 개, 또는 팀) — 교체하려면 `replaces_assignment_id`로
   명시해야 그 배정만 superseded 처리된다
 - **팀(teams/team_members)** — 사람 N명 + Agent M명을 역할명과 함께
   묶어 등록해두고 할 일에 팀 전체를 한 번에 배정(`resource_type='team'`,
-  한 할 일에 팀을 여러 개 배정하는 것도 가능). F7 결재 주체는 팀 리더
+  한 할 일에 팀을 여러 개 배정하는 것도 가능). 결재 주체는 팀 리더
   (기본값은 배정 요청자, 확정 전까지 변경 가능). 협업 워크스페이스의
   "팀 Agent 실행" 버튼으로 팀의 Agent 멤버 전원을 실제 CrewAI Crew로
-  실행하고, 결과가 Agent별 결과물+F7 결재 체인으로 그 할 일에 그대로
+  실행하고, 결과가 Agent별 결과물+결재 체인으로 그 할 일에 그대로
   연결된다(팀이 여러 개 배정돼 있으면 그중 하나를 골라 실행). "AI
   에이전트 생성"에서 여러 할 일을 한 번에 골라 역할별 Agent를 만든
   직후 그 결과 화면에서 바로 "팀으로 묶기"도 가능 — "AI 에이전트
@@ -42,8 +42,8 @@ Task 종속 대화 흡수 + Brief 승격 공존) + **통합 CLI**(`hair`, §83 �
   Agent·팀 Crew 모두 형식을 지정할 수 있고(LLM/Agent 경로는 프롬프트에
   형식 지시 자동 추가), 화면에서 형식에 맞게 그대로 렌더링(Markdown
   헤딩/목록/굵게, 코드 구문 강조, HTML은 `sandbox="allow-scripts"`
-  iframe 미리보기) + 결과물별 다운로드 버튼. 실제 파일(PPTX 등) 생성·
-  저장은 범위 밖(`docs/LIMITS.md` §68)
+  iframe 미리보기, 모든 형식에 복사/미리보기·소스 토글 포함) + 결과물별
+  다운로드 버튼. 실제 파일(PPTX 등) 생성·저장은 범위 밖
 
 ### Agent 실행 · LLM 연동
 - 실제 Anthropic / OpenAI / Ollama 연동(`llm.py`, `agent_runtime.py`) —
@@ -80,16 +80,16 @@ Task 종속 대화 흡수 + Brief 승격 공존) + **통합 CLI**(`hair`, §83 �
 - 통합 인박스(결재 대기 + Agent 실행 실패 + 낮은 Gate 점수 경고),
   매니저 대시보드(팀 Gate 평균·대기 승인 건수·비용 추이)
 - 검색/필터(가용성 양방향 필터 + 페이지네이션), 활동 기록
-  (append-only 감사로그, NF10)
+  (append-only 감사로그)
 - 데이터 삭제/초기화(도구·스킬·사람·Agent·brief/task, confirmed 배정이
   있는 대상은 보호) + 보관기간 정책(`retention.py`, assignment_history
   1년 — audit_log는 append-only 트리거를 이 모듈만 통제된 방식으로 해제)
 - Web UI 22개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
-  분리(ADR 결정 9 — 원래 "내 업무"/"공용 조회"/"운영 관리" 3구역이었으나
-  F20 Phase 5(`docs/ASANA_PARITY_DESIGN_PLAN.md` §7)에서 2구역으로 재편)
+  분리(원래 "내 업무"/"공용 조회"/"운영 관리" 3구역이었으나 이후
+  2구역으로 재편)
 
 ### 권한(RBAC)
-4개 역할(`admin`/`manager`/`member`/`viewer`, ADR 결정 3) — 생성/조회는
+4개 역할(`admin`/`manager`/`member`/`viewer`) — 생성/조회는
 admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인처럼 조직
 구조에 직접 영향을 주는 동작은 admin 전용. 세션 인증(`auth.py`,
 `SessionMiddleware`).
@@ -99,7 +99,7 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 350건(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 432건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -181,18 +181,18 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(109개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(116개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
-  assignment.py      # F6 매칭 알고리즘(결정론적)
-  approvals.py       # F7 다단계 결재라인(조직도 매니저 체인)
-  assignments.py     # F5/F6 배정 요청·확정(팀 배정 + 다중 confirmed 지원)
+  assignment.py      # 매칭 알고리즘(결정론적)
+  approvals.py       # 다단계 결재라인(조직도 매니저 체인)
+  assignments.py     # 배정 요청·확정(팀 배정 + 다중 confirmed 지원)
   teams.py           # 팀(사람+Agent 그룹) CRUD — "등록→재사용" 패턴
-  jobs.py            # F4 Job Queue(+ idempotency)
-  sandbox.py         # ADR 결정8 Docker 샌드박스 명령 구성
-  audit.py           # F13 감사로그
-  performance.py     # F8 성과리뷰(동의 기반)
-  cost.py            # F10 비용 조회
-  fairness.py        # 배정 공정성 지표(NF4)
+  jobs.py            # Job Queue(+ idempotency)
+  sandbox.py         # Docker 샌드박스 명령 구성
+  audit.py           # 감사로그
+  performance.py     # 성과리뷰(동의 기반)
+  cost.py            # 비용 조회
+  fairness.py        # 배정 공정성 지표
   retention.py       # 데이터 보관기간 정책(assignment_history 1년)
   eval_wiring.py      # Gate A/B/D/E/G 평가 배선 수동 실행 probe(agent-evaluator SDK, python -m으로 직접 실행)
   agent_evaluation.py # Gate A-G 평가를 Agent 실행 경로에 상시 연결(agent_evaluations 테이블)
@@ -204,41 +204,26 @@ src/hair_platform/
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
   crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임 + 다이어그램)
   vectorstore.py     # 지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
-  graphquery.py      # 관계분석 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의, NF9 경계
+  graphquery.py      # 관계분석 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
   websearch.py       # 외부 일반 지식 검색(Wikipedia native 도구 + Parallel AI MCP)
-  pool_registry.py   # Skill Pool·Tool Pool(ADR 결정 12) — 스킬→도구 매핑 데이터화, CrewAI Tool 조립
+  pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화, CrewAI Tool 조립
   data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호)
   deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)
   inbox.py           # 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고)
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이)
-  conversations.py   # 대화 중심 작업공간(§9) — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩, Brief 승격
+  conversations.py   # 대화 중심 작업공간 — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩, Brief 승격
 docs/
-  SPEC.md            # 명세(F1–F14, NF1–13, 로드맵, DoD)
-  ADR.md             # 설계 결정 목록
-  LIMITS.md          # 알려진 갭(정직하게 기록, §83까지)
-  ROLE_TASK_CLASSIFICATION.md      # 관리자/사용자 고유·공통 업무 재분류(외부 사례 리서치)
-  SCENARIOS.md                     # 대표 시나리오 워크스루(개발/일반업무/CS/Tool·Skill 활용)
-  COLLABORATION_PLATFORM_PLAN.md   # 사람-AI 협업(결과물 전달/HITL/HOTL) 기획안 — 구현 완료
-  HAIR_MASTER_PLAN.md              # 위 기획안을 포함하는 종합 기획/설계/개발 계획 — 구현 완료
-  MULTI_PARTY_TEAM_COLLABORATION_PLAN.md  # N명 사람+M개 Agent(또는 역할 기반 Agent 그룹) 팀 협업 기획안 — Phase 1-3 구현 완료, Phase 4-5는 미구현(§9)
-  HAIR_ASSISTANT_PLAN.md           # HAIR 매뉴얼 기반 챗봇 도우미 기획안 — 미구현(기획만)
-  PHASE1_DELIVERABLE_SPEC.md       # 협업 워크스페이스 구현 스펙(스키마 DDL·API 계약·GC127-137) — 구현 완료
-  COLLABORATION_UX_IMPROVEMENT_PROPOSAL.md  # 오픈소스/상용 Agent-Human 협업 사례 벤치마크 + 개선 제안 — 기획만
-  HAIR_REDESIGN_PROPOSAL.md        # Asana AI Teammates·Riido 벤치마크 기반 재기획안 — 기획만
-  ASANA_PARITY_DESIGN_PLAN.md      # F15–F20 설계 + §9 대화 중심 작업공간(conversations) + §10 멘션 발견성 — 전부 구현 완료(§7-§10)
-  GAME_CONCEPT.md                  # HAIR 협업 구조를 게임화한 웹 브라우저 게임(Gatekeeper) 기획안 — 프로토타입은 별도 Artifact로 퍼블리시, 이 저장소엔 코드 없음
-  SPECIALIST_AGENTS_PLAN.md        # 개발 5단계(요구사항분석·코드분석·설계·구현·검증)+일반업무(시장조사·사업기획·전략수립) 전문 Agent 기획(Harness Methodology 대응) — Phase 1(Agent 8종 등록) 완료, Team 등록·§6-1 Tool은 미착수
-  SCREEN_UX_BENCHMARK_PROPOSAL.md  # Notion AI·ClickUp Brain·Linear·Devin·Replit Agent·CrewAI·LangGraph Studio 실제 화면 UX 벤치마크 + Claude Artifact 수준 결과물 뷰어·비주얼 디자인 개선안 — 기획만, 코드 변경 없음
+  OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 350건
+tests/unit/                            # 골든셋 432건 통과(1건은 무관한 사전 실패 — 재현 확인됨)
 ```
 
 ## 로드맵
 
-`docs/SPEC.md` §7 참고. Phase 0(부트스트랩)~Phase 6(Skills화)까지 완료,
-Phase 7(`release_hold`)은 대기 중 — 진행하려면 `docs/LIMITS.md`의 갭 목록을
-먼저 검토할 것을 권장한다.
+핵심 기능은 전부 구현 완료됐고, 그 이후 반복적으로 들어온 사용자 요청에
+맞춰 계속 확장돼왔다 — 다음에 뭘 할지는 `docs/OVERVIEW.md`의 "알려진
+한계" 절을 참고해서 정한다.
 
 ## 라이선스
 

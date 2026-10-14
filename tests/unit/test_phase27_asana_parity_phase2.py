@@ -1,13 +1,13 @@
-"""Phase 27 — ASANA_PARITY_DESIGN_PLAN.md Phase 2: F15 Task 참가자 초대
+"""Phase 27 — ASANA 모방 기획 Phase 2: Task 참가자 초대
 (사용자 요청, 2026-10-08, "...기획 및 설계안을 제안해줘" → 승인 후 "Phase
 1→5 순서로" 진행 지시).
 
-F15의 핵심: 지금까지 Agent/사람이 Task에 관여하려면 반드시 배정 요청→F7
+핵심: 지금까지 Agent/사람이 Task에 관여하려면 반드시 배정 요청→
 결재 승인이라는 무거운 절차를 거쳐야 했다. "초대"는 결재가 필요 없는
 가벼운 멤버십이다(`task_participants` 테이블, `assignments`와 분리) —
 초대된 사람/Agent는 **댓글만** 읽고 쓸 수 있고, 결과물 작성·AI 실행
 트리거 같은 "작성자 자격"은 여전히 기존의 엄격한 참가자 판정
-(`task_participant_relationship()`)만 통과시킨다(설계 §1 원칙).
+(`task_participant_relationship()`)만 통과시킨다(설계 원칙).
 
 이 테스트는 그 경계가 실제로 지켜지는지 확인한다: 초대된 사람은
 댓글은 달 수 있지만 결과물은 못 쓴다."""

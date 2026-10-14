@@ -1,14 +1,14 @@
 """SQLite 연결 및 스키마 — v4(전체) 범위까지 다룬다.
 
-ADR 결정 5: 실시간 쓰기가 빈번한 엔티티는 SQLite를 트랜잭션 RDB(WAL 모드)로 쓴다.
-ADR 결정 3: `approvals.step`·`approver_id`로 F7 다단계 결재라인(조직도 매니저 관계
-기반 자동 라우팅)을 표현한다. NF10: `audit_log`는 트리거로 UPDATE/DELETE를 막아
-append-only를 DB 레벨에서 강제한다. NF9: `human_pool.performance_consent`가
-False이면 `performance_score`를 절대 채우지 않는다(F8, 사전 동의 기반 최소수집).
+실시간 쓰기가 빈번한 엔티티는 SQLite를 트랜잭션 RDB(WAL 모드)로 쓴다.
+`approvals.step`·`approver_id`로 다단계 결재라인(조직도 매니저 관계
+기반 자동 라우팅)을 표현한다. `audit_log`는 트리거로 UPDATE/DELETE를 막아
+append-only를 DB 레벨에서 강제한다. `human_pool.performance_consent`가
+False이면 `performance_score`를 절대 채우지 않는다(사전 동의 기반 최소수집).
 
-ADR 결정 10/11(2026-09-26): `agent_pool.framework`가 어떤 생성 경로(stub/
+(2026-09-26): `agent_pool.framework`가 어떤 생성 경로(stub/
 simple_llm/crewai)로 만들어졌는지 기록한다. `knowledge_chunks`는 지식검색
-Agent(VectorDB)의 임베딩 저장소다 — 결정 11에서 정한 대로 별도 벡터DB
+Agent(VectorDB)의 임베딩 저장소다 — 별도 벡터DB
 서버 없이 SQLite에 임베딩을 JSON으로 저장하고, 검색은 애플리케이션에서
 코사인 유사도로 계산한다(로컬/온프레미스 우선 원칙). 관계분석 Agent
 (GraphDB)는 새 테이블이 필요 없다 — 이미 있는 `users.manager_id`·
@@ -21,6 +21,8 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+
+from hair_platform import reference_pipeline_seeds
 
 
 def get_connection(path: str | Path) -> sqlite3.Connection:
@@ -75,7 +77,7 @@ CREATE TABLE IF NOT EXISTS tasks (
         CHECK (priority IN ('low', 'medium', 'high', 'urgent'))
 );
 
--- ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — Task 간
+-- (2026-10-08, Phase 4) — Task 간
 -- 선행관계. `CHECK (task_id != depends_on_task_id)`로 자기참조만 DB
 -- 레벨에서 막는다 — 간접 순환(A→B→C→A)까지는 CHECK로 못 막으므로
 -- 추가 시점에 애플리케이션에서 DFS로 검사한다(deliverables.py
@@ -148,12 +150,14 @@ CREATE TABLE IF NOT EXISTS agent_pool (
     llm_model TEXT,
     last_output TEXT,
     framework TEXT NOT NULL DEFAULT 'stub',
-    mcp_servers TEXT NOT NULL DEFAULT '[]'
+    mcp_servers TEXT NOT NULL DEFAULT '[]',
+    name TEXT,
+    tuning_config TEXT NOT NULL DEFAULT '{}'
 );
 
 -- 사용자 요청(2026-10-06, "복수의 사람이 복수의 Agent와 또는 CrewAI
 -- 장점인 역할에 따른 Agent를 묶어 생성된 그룹과 협업하도록... 다시
--- 기획") — `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 1+2.
+-- 기획") — Phase 1+2.
 -- human_pool/agent_pool 멤버를 역할명과 함께 묶어 여러 업무에 재사용
 -- 가능한 "팀"으로 등록한다(skill_pool/tool_pool과 같은 "등록→재사용"
 -- 패턴). 사람/Agent 풀 자체는 그대로 두고 참조만 한다.
@@ -187,7 +191,7 @@ CREATE TABLE IF NOT EXISTS tool_pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL DEFAULT '',
-    kind TEXT NOT NULL CHECK (kind IN ('mcp_stdio', 'mcp_remote', 'native')),
+    kind TEXT NOT NULL CHECK (kind IN ('mcp_stdio', 'mcp_remote', 'native', 'custom_python')),
     config TEXT NOT NULL DEFAULT '{}',
     tool_names TEXT NOT NULL DEFAULT '[]',
     is_active INTEGER NOT NULL DEFAULT 1
@@ -250,7 +254,7 @@ CREATE INDEX IF NOT EXISTS idx_deliverables_task_id ON deliverables(task_id);
 CREATE INDEX IF NOT EXISTS idx_deliverable_comments_deliverable_id
     ON deliverable_comments(deliverable_id);
 
--- ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, 사용자 요청 "ASANA 모방
+-- (2026-10-08, 사용자 요청 "ASANA 모방
 -- 수준의 기능 및 UI 제공을 위한 기획 및 설계안을 제안해줘" → "Phase
 -- 1→5 순서로" 진행 지시, Phase 2) — "초대"는 결재가 필요 없는 가벼운
 -- 멤버십이다. `assignments`(결재 필요, 작업 책임 발생)와 명확히
@@ -269,11 +273,11 @@ CREATE TABLE IF NOT EXISTS task_participants (
     UNIQUE(task_id, participant_type, participant_id)
 );
 
--- ASANA_PARITY_DESIGN_PLAN.md §9(2026-10-08, 사용자 요청 "로그인하면
+-- (2026-10-08, 사용자 요청 "로그인하면
 -- 기본적으로 대화창이 주어지고... 사람이나 에이전트(에이전트 그룹)를
 -- 호출하거나 skill을 사용하여 업무를 수행하는 방식으로 UX를 개선") —
 -- "대화"는 Task가 있어야만 존재하는 게 아니다. linked_task_id가
--- 채워지면 그 Task 전용 대화(F21-1이 원래 노리던 것), NULL이면
+-- 채워지면 그 Task 전용 대화, NULL이면
 -- 로그인 직후 바로 쓰는 독립된 "내 대화"다 — 하나의 모델로 둘 다
 -- 표현한다. llm_provider/llm_model은 agent_pool과 같은 관례로 NULL=
 -- 플랫폼 기본값(`llm.resolve_provider_and_model()`), ai_auto_reply
@@ -287,10 +291,18 @@ CREATE TABLE IF NOT EXISTS conversations (
     llm_provider TEXT,
     llm_model TEXT,
     ai_auto_reply INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- 사용자 요청(2026-10-14, "10건 이전의 메시지는 요약 형태로 전달되도록
+    -- 개선해줘") — `_build_transcript()`가 최근 10건을 넘는 과거를 그냥
+    -- 버리던 것을, 캐시된 요약으로 대체한다. `context_summary_through_id`
+    -- 는 이 요약이 몇 번째 메시지까지 반영했는지 가리킨다(증분 갱신용 —
+    -- 매번 전체를 다시 요약하지 않고 새로 창 밖으로 밀려난 메시지만 추가
+    -- 요약한다).
+    context_summary TEXT,
+    context_summary_through_id INTEGER
 );
 
--- task_participants(F15)와 같은 모양이지만 'team'(에이전트 그룹)을
+-- task_participants와 같은 모양이지만 'team'(에이전트 그룹)을
 -- participant_type에 추가한다 — "에이전트 그룹 호출"을 표현하려면
 -- 꼭 필요하다.
 CREATE TABLE IF NOT EXISTS conversation_participants (
@@ -364,7 +376,8 @@ CREATE TABLE IF NOT EXISTS agent_execution_jobs (
     deliverable_id INTEGER REFERENCES deliverables(id),
     error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    finished_at TEXT
+    finished_at TEXT,
+    prompt_snapshot TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_execution_jobs_task_id
@@ -384,13 +397,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE TRIGGER IF NOT EXISTS audit_log_no_update
 BEFORE UPDATE ON audit_log
 BEGIN
-    SELECT RAISE(ABORT, 'audit_log is append-only (NF10)');
+    SELECT RAISE(ABORT, 'audit_log is append-only');
 END;
 
 CREATE TRIGGER IF NOT EXISTS audit_log_no_delete
 BEFORE DELETE ON audit_log
 BEGIN
-    SELECT RAISE(ABORT, 'audit_log is append-only (NF10)');
+    SELECT RAISE(ABORT, 'audit_log is append-only');
 END;
 """
 
@@ -407,6 +420,117 @@ def _ensure_column(
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype_with_default}")
 
 
+def _migrate_tool_pool_custom_python_kind(conn: sqlite3.Connection) -> None:
+    """사용자 요청(2026-10-13, "@데코레이터 툴을 추가 생성할 수 있는 기능")
+    — `tool_pool.kind`는 컬럼이 아니라 **CHECK 제약**으로 허용값을
+    제한한다(`'mcp_stdio', 'mcp_remote', 'native'`). SQLite는 기존 테이블의
+    CHECK 제약을 `ALTER TABLE`로 못 바꾼다(`deliverables.status`를 못 넓혀
+    `agent_execution_jobs`를 새로 만들었던 것과 같은 한계) — 여기선 컬럼이
+    아니라 제약 자체를 넓혀야 해서 테이블을 통째로 재생성하는 수밖에 없다.
+
+    **실측으로 발견한 버그**: 이 마이그레이션 없이 `kind='custom_python'`
+    으로 INSERT하면 CHECK 제약 위반으로 `sqlite3.IntegrityError`가 나는데,
+    `app.py`의 예외 처리가 그 예외를 전부 "이미 있는 이름입니다"(이름
+    UNIQUE 위반 전용 메시지)로 오분류해 보여준다 — 원인이 완전히 다른데
+    사용자에게 거짓 사유를 보여주는 상태였다(직접 작성한 테스트로 재현
+    확인)."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tool_pool'"
+    ).fetchone()
+    if row is None or row["sql"] is None or "custom_python" in row["sql"]:
+        return  # 테이블이 아직 없거나(신규 DB — CREATE TABLE에 이미 포함) 이미 마이그레이션됨.
+    # 실측으로 발견한 버그 — `agent_tool_links.tool_pool_id`가 이 테이블을
+    # FK로 참조한다(`PRAGMA foreign_keys=ON`이 전역으로 걸려 있다, `db.py`
+    # `get_connection()` 참고). FK가 켜진 채로 참조되는 테이블을 DROP하면
+    # `sqlite3.IntegrityError: FOREIGN KEY constraint failed`가 난다 —
+    # 이 마이그레이션 구간만 꺼둔다(SQLite 공식 문서가 테이블 재생성
+    # 마이그레이션의 표준 절차로 권장하는 방식).
+    # 실측으로 발견한 두 번째 버그 — `PRAGMA foreign_keys`는 SQLite
+    # 공식 문서에 "트랜잭션 도중엔 no-op"이라고 명시돼 있다. 앞/뒤에
+    # `commit()`으로 트랜잭션을 확실히 비우지 않으면 OFF/ON 토글 자체가
+    # 조용히 무시돼, 마이그레이션은 성공해도 그 뒤로 FK 강제가 영영
+    # 꺼진 채로 남는다(직접 작성한 재현 스크립트로 확인).
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        # 실측으로 발견한 세 번째 버그 — 이 마이그레이션이 DROP TABLE
+        # 단계에서 실패하면(예: 위 FK 버그가 고쳐지기 전 실제 서버에서
+        # 한 번 터졌던 경우) `tool_pool_new`가 고아 테이블로 남아
+        # 다음 재시작 때 "table already exists"로 또 실패한다 —
+        # 재시도가 항상 깨끗하게 시작되도록 먼저 치운다.
+        conn.execute("DROP TABLE IF EXISTS tool_pool_new")
+        conn.execute(
+            """
+            CREATE TABLE tool_pool_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL CHECK (kind IN ('mcp_stdio', 'mcp_remote', 'native', 'custom_python')),
+                config TEXT NOT NULL DEFAULT '{}',
+                tool_names TEXT NOT NULL DEFAULT '[]',
+                is_active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.execute("INSERT INTO tool_pool_new SELECT * FROM tool_pool")
+        conn.execute("DROP TABLE tool_pool")
+        conn.execute("ALTER TABLE tool_pool_new RENAME TO tool_pool")
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _backfill_conversation_last_read(conn: sqlite3.Connection) -> None:
+    """`conversation_participants.last_read_message_id`가 막 추가된
+    뒤(위 `_ensure_column`) 전부 `NULL`인 채로 두면, "읽은 적 없음"으로
+    해석돼 그 참가자가 참여 중인 대화의 **모든 과거 메시지**가 "안 읽은
+    멘션"으로 한꺼번에 몰려온다 — 몇 달치 대화를 이미 다 본 사람에게
+    로그인 한 번에 수십 건씩 브라우저 알림이 쏟아지는 셈이다.
+
+    완벽한 과거 "읽음" 시점을 되살릴 방법은 없지만(그런 기록을 애초에
+    안 남겼다), 합리적인 근사치를 쓴다 — **이 대화에 직접 메시지를 보낸
+    적이 있는 참가자는, 그 자신의 마지막 메시지 시점까지는 적극적으로
+    읽고 있었다고 보고 거기까지 읽은 것으로 표시한다.**
+
+    실측으로 바로잡은 지점(2026-10-14, 사용자가 직접 재현해 보고한
+    "호출이 안 되는 거 같아") — 처음엔 "지금 시점(=백필 실행 시점)까지
+    전부 읽음"으로 더 단순하게 짰었다. 그런데 실데이터로 검증하다가
+    바로 이 버그를 만났다: pm_kim이 과거에 이 대화에서 한 번 말한 적은
+    있었지만(그래서 "말한 적 없는 참가자"엔 안 걸림), 그 **이후에** 새로
+    온 "@pm_kim" 멘션 3건까지 전부 "이미 읽음"으로 뭉개버렸다 — 참가자의
+    마지막 활동 이후에 온 멘션은 당연히 본 적이 없는데 "지금 시점"을
+    기준으로 삼은 게 원인이었다. 그래서 "지금 시점"이 아니라 "**그 참가자
+    자신의 가장 최근 메시지 id**"로 바꿨다 — 그 이후에 온 멘션은(설령
+    백필이 뒤늦게 돌아도) 여전히 안 읽음으로 남는다.
+
+    메시지를 한 번도 안 보낸 참가자(초대만 되고 아직 대화를 열어본 적
+    없을 가능성이 높음)는 `NULL`로 남겨 "전부 안 읽음" 그대로 둔다.
+
+    `WHERE last_read_message_id IS NULL` 조건 덕에 매 기동 재실행해도
+    안전하다(이미 값이 있는 행은 다시 안 건드림 — 한 번만 적용되는
+    1회성 백필)."""
+    conn.execute(
+        """
+        UPDATE conversation_participants
+        SET last_read_message_id = (
+            SELECT MAX(cm.id) FROM conversation_messages cm
+            WHERE cm.conversation_id = conversation_participants.conversation_id
+              AND cm.author_type = 'human'
+              AND cm.author_id = conversation_participants.participant_id
+        )
+        WHERE last_read_message_id IS NULL
+          AND participant_type = 'human'
+          AND EXISTS (
+              SELECT 1 FROM conversation_messages cm2
+              WHERE cm2.conversation_id = conversation_participants.conversation_id
+                AND cm2.author_type = 'human'
+                AND cm2.author_id = conversation_participants.participant_id
+          )
+        """
+    )
+    conn.commit()
+
+
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """`CREATE TABLE IF NOT EXISTS`는 이미 존재하는 테이블에 새 컬럼을 추가하지
     못한다 — 이 저장소가 커오면서 `agent_pool`에 여러 번 컬럼을 추가했는데,
@@ -419,15 +543,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "agent_pool", "framework", "TEXT NOT NULL DEFAULT 'stub'")
     # 사용자 요청(2026-09-29, "사용자 삭제 기능 필요") — users.id는
     # audit_log/assignments/approvals/human_pool.user_id 등에서 NOT NULL
-    # FK로 참조되므로 하드 삭제는 감사 이력·배정 이력을 깨뜨린다(NF10
-    # append-only 원칙과 정면 충돌). Human/Agent Pool이 이미 쓰는
+    # FK로 참조되므로 하드 삭제는 감사 이력·배정 이력을 깨뜨린다(append-only
+    # 원칙과 정면 충돌). Human/Agent Pool이 이미 쓰는
     # "오프보딩"(레코드는 남기고 비활성화) 패턴을 계정에도 그대로
     # 적용한다.
     _ensure_column(conn, "users", "is_active", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(conn, "agent_pool", "mcp_servers", "TEXT NOT NULL DEFAULT '[]'")
     # 사용자 요청(2026-09-29, "Tool, Skill을 적극 활용하는 시나리오를
     # 기획해 진행해줘") 라이브 실행에서 발견한 갭 — VectorDB/GraphDB
-    # 그라운딩(ADR 결정 11)이 실제로 프롬프트에 뭘 주입했는지 사후에
+    # 그라운딩이 실제로 프롬프트에 뭘 주입했는지 사후에
     # 확인할 방법이 어디에도 없었다(결재자가 "이 답변이 실제 근거에
     # 기반했는지" 검증 불가). 실행 job에 근거를 같이 남긴다.
     _ensure_column(conn, "agent_execution_jobs", "retrieved_context", "TEXT")
@@ -437,7 +561,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 정식 이름으로 남기고 "websearch"는 skill_pool에서 제거한다. 같은
     # 요청으로 "vectordb"/"rag"(둘 다 vectordb_search), "graphdb"/"관계질의"
     # (둘 다 graphdb_query)도 같은 방식으로 통합한다 — "rag"/"graphdb"는
-    # 실제 테스트·데이터에서 더 많이 쓰이던 쪽(docs/LIMITS.md §49). 이미
+    # 실제 테스트·데이터에서 더 많이 쓰이던 쪽. 이미
     # 만들어진 DB에 남아있는 제거 대상 행과, 그 이름을 쓰던
     # tasks.required_skills/agent_pool.skill_tags의 값도 남기는 쪽 이름으로
     # 맞춰야 매칭이 끊기지 않는다 — `_seed_default_pools`의 `INSERT OR
@@ -468,8 +592,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM skill_pool WHERE id = ?", (removed_row["id"],))
 
     # 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
-    # `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md`. `team_leader_id`는
-    # resource_type='team' 배정의 F7 결재 주체(기본값은 배정 요청자,
+    # `team_leader_id`는
+    # resource_type='team' 배정의 결재 주체(기본값은 배정 요청자,
     # 변경 가능 — `assignments.update_team_leader()`). `replaces_
     # assignment_id`는 "다중 confirmed 허용"으로 바꾸면서(같은 task·
     # 같은 resource_type이어도 더 이상 자동으로 서로를 밀어내지 않는다)
@@ -503,15 +627,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "CHECK (content_type IN ('text', 'markdown', 'html', 'code'))",
     )
 
-    # ASANA_PARITY_DESIGN_PLAN.md F17(2026-10-08, 사용자 요청 "ASANA 모방
+    # 2026-10-08, 사용자 요청 "ASANA 모방
     # 수준의 기능 및 UI 제공을 위한 기획 및 설계안을 제안해줘" → Phase 1
-    # 승인) — Task 자체에 메모를 남길 수 있는 자유 텍스트 공간. 기존
+    # 승인 — Task 자체에 메모를 남길 수 있는 자유 텍스트 공간. 기존
     # `deliverables.content`(결과물)나 `deliverable_comments`(결과물에 대한
     # 댓글)와 달리, 결과물이 아직 없는 단계에서도 Task 참가자들이 맥락/
     # 의사결정을 적어둘 수 있는 곳이 없었다.
     _ensure_column(conn, "tasks", "notes", "TEXT NOT NULL DEFAULT ''")
 
-    # ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) — 댓글
+    # 2026-10-08, Phase 3 — 댓글
     # `@멘션`으로 트리거된 Agent 실행을 "AI 에이전트 실행" 버튼으로
     # 트리거된 것과 구분하기 위한 출처 표시. NULL이면 기존 경로(버튼),
     # 값이 있으면 그 댓글이 트리거했다는 뜻 — 어느 쪽이든 같은
@@ -523,7 +647,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "INTEGER REFERENCES deliverable_comments(id)",
     )
 
-    # ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 작업 구조
+    # 2026-10-08, Phase 4 — 작업 구조
     # 심화(상태/우선순위). `task_dependencies`는 새 테이블이라
     # `_ensure_column()` 불필요 — SCHEMA의 `CREATE TABLE IF NOT EXISTS`
     # 만으로 기존 DB에도 안전하게 추가된다.
@@ -542,10 +666,71 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "CHECK (priority IN ('low', 'medium', 'high', 'urgent'))",
     )
 
+    # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... 호출시(채팅
+    # 포함)에도 활용될 수 있도록 개선") — 지금까지 Agent는 `role_name`
+    # (생성 당시 역할, 예: "백엔드 개발자 Agent")이 식별자 역할까지
+    # 겸하고 있어, 같은 역할의 Agent가 여럿이면 구분이 안 되고
+    # "에이전트 #7"처럼 ID로만 불러야 했다. Human Pool의 `name`과 같은
+    # 자리 — 선택 입력(NULL 허용)이라 기존 Agent는 전부 비어 있는
+    # 채로 시작하고, 비어 있으면 화면·멘션 전부 `role_name`으로
+    # 그대로 돌아간다(하위 호환 100%, 아무것도 깨지지 않음).
+    _ensure_column(conn, "agent_pool", "name", "TEXT")
+
+    # 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 1,2번
+    # 구현) — "AI 재현 가능한 감사로그" 인사이트. 지금까지 `audit_log`의
+    # `agent_executed` 행이 원본(증강 전) 프롬프트만 `before_value`에
+    # 남기고, 실제로 LLM에 들어간 system prompt·RAG/GraphDB/외부검색로
+    # 증강된 최종 프롬프트·그때 쓴 provider/model은 어디에도 안
+    # 남았다(`agent_pool.llm_provider`/`llm_model`은 다음 실행에
+    # 덮어써져 과거 실행 시점 값을 잃는다) — Gate 점수가 낮게 나온
+    # 산출물을 "왜 이렇게 나왔는지" 사후 재현할 방법이 없었다. 이
+    # 실행(`run_agent_execution_job()`)과 직접 연결된
+    # `agent_execution_jobs`에 그 시점 스냅샷을 JSON으로 남긴다.
+    _ensure_column(conn, "agent_execution_jobs", "prompt_snapshot", "TEXT")
+
+    # 사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해 Finetuning
+    # 하는 기능") — 실제 LLM 가중치 재학습이 아니라(사용자 확인) CrewAI
+    # `Agent`/`LLM`의 동작 파라미터(max_iter/max_rpm/max_execution_time/
+    # max_retry_limit/reasoning/allow_code_execution/
+    # respect_context_window/temperature)를 Agent별로 저장해두고
+    # `crew_runtime.py`의 CrewAI 생성 경로(생성 시점 단일 Agent + Crew
+    # 실행 둘 다)에 반영하는 기능이다. 전부 선택값이라 JSON 하나로
+    # 묶는다(mcp_servers와 같은 관례) — 키가 없으면 CrewAI 기본값을
+    # 그대로 쓴다(지정 안 한 Agent는 지금과 100% 동일하게 동작).
+    _ensure_column(conn, "agent_pool", "tuning_config", "TEXT NOT NULL DEFAULT '{}'")
+    _migrate_tool_pool_custom_python_kind(conn)
+    # 사용자 요청(2026-10-14, "호출 받은 사람에게 브라우저 알림이
+    # 오고... ") — 실측으로 발견한 버그: 처음엔 "최초 폴링은 알림 없이
+    # 기준점만 잡는다"는 클라이언트 메모리 커서(`_mentionNotifySinceId`)
+    # 로 중복 알림을 막았는데, 그 탭이 멘션이 이미 온 *뒤에* 열리면(실제
+    # 테스트 상황 그대로 — admin이 먼저 세 번 호출하고, pm_kim이 그 뒤에
+    # 로그인) 그 멘션들이 전부 "최초 폴링"에 걸려 영원히 알림이 안 뜬다.
+    # 서버가 참가자별 "마지막으로 읽은 메시지"를 기억해야 진짜로 고쳐진다.
+    _ensure_column(
+        conn, "conversation_participants", "last_read_message_id", "INTEGER"
+    )
+    _backfill_conversation_last_read(conn)
+    # 사용자 요청(2026-10-14, "10건 이전의 메시지는 요약 형태로 전달되도록
+    # 개선해줘") — `_build_transcript()`(conversations.py)가 최근
+    # `_CONTEXT_MESSAGE_LIMIT`(10)건보다 오래된 메시지는 그냥 버리던 것을,
+    # 캐시된 요약으로 대체한다.
+    _ensure_column(conn, "conversations", "context_summary", "TEXT")
+    _ensure_column(conn, "conversations", "context_summary_through_id", "INTEGER")
+    # 사용자 요청(2026-10-14, "대화창에 사용중인 모델이 명시되도록 UI를
+    # 개선해줘") — 같은 대화라도 트리거(기본 AI/Agent 멘션/Team 멘션)마다
+    # 실제로 쓰이는 provider/model이 다르다(`conversations.py`의
+    # `run_default_ai_job`/`run_agent_mention_job`/`run_team_mention_job`
+    # 참고 — 대화의 `llm_provider`/`llm_model` 설정은 기본 AI 응답에만
+    # 쓰이고, Agent 멘션은 그 Agent 자신의 저장값을, Team 멘션은 환경변수/
+    # API 키 기반 자동판별값을 쓴다). 메시지마다 실제로 쓰인 값을 저장해야
+    # 화면에 정확히 보여줄 수 있어 대화 설정이 아니라 메시지 단위로 둔다.
+    _ensure_column(conn, "conversation_messages", "llm_provider", "TEXT")
+    _ensure_column(conn, "conversation_messages", "llm_model", "TEXT")
+
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:
-    """ADR 결정 12(사용자 요청, 2026-09-27, "tool_pool·skill_pool 테이블도
-    실제로 구현해줘") — VectorDB/GraphDB를 감싼 native Tool과, 이걸 쓰는
+    """사용자 요청, 2026-09-27, "tool_pool·skill_pool 테이블도
+    실제로 구현해줘" — VectorDB/GraphDB를 감싼 native Tool과, 이걸 쓰는
     skill_pool 항목을 기본 제공한다. 이전까지 `agent_runtime.py`의
     `VECTORDB_SKILL_TAGS`/`GRAPHDB_SKILL_TAGS` 하드코딩이 하던 "스킬→도구"
     매핑을 데이터로 옮긴 것 — 이 시드가 없으면 기존 vectordb/graphdb
@@ -759,7 +944,7 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
     # 사용자 요청(2026-09-28, "CrewAI AI Agent가 개발 단계에 필요한 기능일지
     # 확인하고, 필요한 경우 AI Agent가 호출할 수 있도록 변형해줘") — 18개 중
     # 17개는 git/PR/CLI 판단·SDK 소스 읽기 같은 HITL 절차라 실행 가능한 도구로
-    # 옮길 안전한 방법이 없었지만(§20 오픈 이슈 그대로 유지), 이거 하나는
+    # 옮길 안전한 방법이 없었지만(오픈 이슈로 그대로 유지), 이거 하나는
     # 예외다: `agent_evaluator.integrations.recommend_fix_mcp`가 이미 실제
     # stdio MCP 서버로 구현돼 있고(`recommend_fix(gate, metric, value) -> str`
     # 노출), `.aoo`/평가 결과 파일이 없어도 정적 지식만으로 안전하게 동작한다
@@ -830,8 +1015,8 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
     # 인프라가 아니다 — 조건이 바뀌거나 중단될 수 있다. 또한 `mcp_remote`
     # 이므로 `agent_runtime.augment_with_retrieval()`(정적 프롬프트 주입,
     # 협업 워크스페이스의 단일 LLM 호출 경로)에서는 못 쓴다 — 그 경로는
-    # Agent 호출 루프 자체가 없어 native 함수 직접 호출만 가능하다(§ADR
-    # 11). "Crew 실행"/"AI 에이전트 생성(crewai)"처럼 실제 CrewAI Agent
+    # Agent 호출 루프 자체가 없어 native 함수 직접 호출만 가능하다.
+    # "Crew 실행"/"AI 에이전트 생성(crewai)"처럼 실제 CrewAI Agent
     # 루프가 있는 경로에서만 Agent가 스스로 호출 여부를 판단해 쓸 수
     # 있다.
     conn.execute(
@@ -880,4 +1065,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _migrate_schema(conn)
     _seed_default_pools(conn)
+    # 사용자 요청(2026-10-14, "기본 배포에 코드 및 Skill, Tool, Agent를
+    # 포함해줘") — Harness Methodology 개발 파이프라인(6)·경영/사업
+    # 전략 파이프라인(6) Agent 12개와 그 전용 Tool/Skill을 매 기동마다
+    # 멱등하게(이미 있으면 건너뜀) 재현한다.
+    reference_pipeline_seeds.seed(conn)
     conn.commit()

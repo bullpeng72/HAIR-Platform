@@ -1,8 +1,8 @@
-"""데이터 보관기간 정책 — 사용자 결정(2026-09-29, `docs/SPEC.md` §12 오픈
-이슈 "assignment_history/audit_log 보관기간 정책"에 대해 "1년").
+"""데이터 보관기간 정책 — 사용자 결정(2026-09-29, "assignment_history/
+audit_log 보관기간 정책"에 대해 "1년").
 
 `assignment_history`는 평범한 테이블이라 그냥 DELETE하면 된다. `audit_log`는
-NF10(append-only) 트리거(`db.py`의 `audit_log_no_delete`)가 모든 DELETE를
+append-only 트리거(`db.py`의 `audit_log_no_delete`)가 모든 DELETE를
 막는다 — 실수로/악의적으로 지우는 것을 막기 위한 장치이지, "법적 보관기간이
 지난 기록을 정책적으로 정리"하는 것까지 막을 의도는 아니다. 그래서 이
 모듈의 `purge_expired()`만이 유일하게 그 트리거를 잠깐 내렸다가 반드시
@@ -11,7 +11,7 @@ NF10(append-only) 트리거(`db.py`의 `audit_log_no_delete`)가 모든 DELETE�
 
 `create_app()` 기동 시 자동 실행한다(`deliverables.reap_orphaned_execution_jobs()`
 와 같은 자리, 같은 패턴) — 별도 스케줄러 없이도 "오래된 프로세스가 오래
-켜져 있으면 정리된다"는 정도의 보장이면 충분하다(SPEC.md §12 참고).
+켜져 있으면 정리된다"는 정도의 보장이면 충분하다.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def purge_expired(
         conn.execute(
             "CREATE TRIGGER IF NOT EXISTS audit_log_no_delete "
             "BEFORE DELETE ON audit_log BEGIN "
-            "SELECT RAISE(ABORT, 'audit_log is append-only (NF10)'); END"
+            "SELECT RAISE(ABORT, 'audit_log is append-only'); END"
         )
 
     if history_deleted or audit_deleted:

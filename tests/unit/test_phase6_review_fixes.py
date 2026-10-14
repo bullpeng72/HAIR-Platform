@@ -1,13 +1,13 @@
-"""Phase 6 코드 재점검(2026-09-26, 2회차) 골든셋 — 1회차 수정(GC42-46) 이후에도
+"""Phase 6 코드 재점검(2026-09-26, 2회차) 골든셋 — 1회차 수정 이후에도
 남아있던 4건을 발견·수정하고 회귀 테스트로 고정한다.
 
-1. GC47: `GET /api/users` 없음 — 1회차에 추가한 `PATCH .../manager`를 실제로 쓰려면
+1. `GET /api/users` 없음 — 1회차에 추가한 `PATCH .../manager`를 실제로 쓰려면
    user_id를 조회할 방법이 있어야 하는데 없었다(ADMIN 전용으로 신설).
-2. GC48: 승인 대기함(inbox) 조회 API가 없어 승인권자가 자신에게 무엇이 결재
+2. 승인 대기함(inbox) 조회 API가 없어 승인권자가 자신에게 무엇이 결재
    대기 중인지 알아낼 방법이 전무했다 — `GET /api/approvals`(scope=inbox/mine) 신설.
-3. GC49: `GET /api/audit-log`가 페이지네이션/필터 없이 전체 테이블을 반환하던 것을
+3. `GET /api/audit-log`가 페이지네이션/필터 없이 전체 테이블을 반환하던 것을
    `limit`/`offset`/`actor_id`/`subject_type` 지원하도록 고쳤다.
-4. GC50: 세션 `secret_key`가 하드코딩돼 "배포 시 환경변수로 교체한다"는 주석이
+4. 세션 `secret_key`가 하드코딩돼 "배포 시 환경변수로 교체한다"는 주석이
    실제 코드로 지켜지지 않던 것을 `HAIR_PLATFORM_SECRET_KEY` 환경변수로 고쳤다.
 """
 
@@ -67,7 +67,7 @@ def test_gc48_approval_inbox_scope_matches_decide_authorization(client_and_conn)
     approval_id = resp.json()["approval_id"]
 
     # 요청자 본인(manager1)의 "내 요청" 목록에는 보이지만, inbox에는 자기 요청
-    # 건은 안 뜬다(self-approval 방지, ADR 결정 3-A).
+    # 건은 안 뜬다(self-approval 방지).
     resp = client.get("/api/approvals", params={"scope": "mine"})
     assert approval_id in {row["id"] for row in resp.json()}
     resp = client.get("/api/approvals", params={"scope": "inbox"})
@@ -94,7 +94,7 @@ def test_gc48_approval_inbox_scope_matches_decide_authorization(client_and_conn)
 def test_gc49_audit_log_pagination_and_filter(client_and_conn):
     client, _conn = client_and_conn
     _login(client, "manager1", "managerpass")
-    # submit_brief 자체는 감사기록을 남기지 않는다 — F4 생성 파이프라인(jobs.py)이
+    # submit_brief 자체는 감사기록을 남기지 않는다 — 생성 파이프라인(jobs.py)이
     # 남기므로 이를 이용해 여러 건을 만든다.
     for i in range(3):
         brief_id, task_id = _make_brief_with_task(client, f"역할-{i}")

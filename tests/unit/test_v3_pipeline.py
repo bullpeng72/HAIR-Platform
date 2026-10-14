@@ -1,4 +1,4 @@
-"""Phase 3 v3 골든셋 8건 — F7 다단계 결재라인, F4 Job Queue+샌드박스, F9 온보딩, F13(SPEC.md §9)."""
+"""Phase 3 v3 골든셋 8건 — 다단계 결재라인, Job Queue+샌드박스, 온보딩, 감사로그."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _make_brief_with_task(client, role_name="백엔드 개발자"):
     return brief_id, task_id
 
 
-# ---- F4: Job Queue + 샌드박스 ----------------------------------------------
+# ---- Job Queue + 샌드박스 ----------------------------------------------
 
 
 def test_gc19_generate_batch_succeeds_and_onboards_pending_agent(client_and_conn):
@@ -46,7 +46,7 @@ def test_gc19_generate_batch_succeeds_and_onboards_pending_agent(client_and_conn
     ).fetchone()
     assert row["status"] == "pending_onboarding"
 
-    # 팀원은 생성 권한이 없다(RBAC, F4)
+    # 팀원은 생성 권한이 없다(RBAC)
     _login(client, "member1", "memberpass")
     resp = client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
     assert resp.status_code == 403
@@ -98,7 +98,7 @@ def test_gc21_sandbox_command_uses_adr_isolation_flags():
     assert result.ok is True
     assert result.skipped is True
 
-    # ADR 결정 8의 격리 옵션이 실제 docker 명령에 들어가는지는 명령 구성만 검증한다
+    # 격리 옵션이 실제 docker 명령에 들어가는지는 명령 구성만 검증한다
     # (이 저장소의 개발 샌드박스에는 Docker가 없어 실제 실행 검증은 별도 환경 필요).
     command = build_docker_command("print(1)", cpus="1", memory="512m")
     assert "--network=none" in command
@@ -106,26 +106,37 @@ def test_gc21_sandbox_command_uses_adr_isolation_flags():
     assert "--memory=512m" in command
 
 
-# ---- F9: 온보딩/오프보딩, F3 통합 ------------------------------------------
+# ---- 온보딩/오프보딩, 검색 통합 ------------------------------------------
 
 
-def test_gc22_onboard_then_deprecate_agent_controls_f3_visibility(client_and_conn):
+def test_gc22_onboard_then_deprecate_agent_controls_visibility(client_and_conn):
+    # 2026-10-14 "기본 배포에 Agent를 포함해줘"로 심어진 레퍼런스
+    # Agent 중 "QA 기능테스터"도 role에 "QA"가 들어 있어, role=QA 검색
+    # 결과가 더는 이 테스트가 만든 Agent 하나로 비어있거나 유일하지
+    # 않다 — 검색 결과 전체를 비교하는 대신, 이 테스트가 만든 그
+    # `agent_id`가 결과에 포함돼 있는지만으로 가시성을 판정한다(다른
+    # 레퍼런스 Agent의 존재 여부와 무관하게 본래 검증하려던 것 그대로).
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")
     brief_id, task_id = _make_brief_with_task(client, "QA 엔지니어")
     resp = client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
     assert resp.json()["items"][0]["result"] is not None
 
-    # 아직 pending_onboarding 상태라 F3(Pool 검색)에는 노출되지 않는다
-    resp = client.get("/api/pool/search", params={"role": "QA"})
-    assert resp.json()["items"] == []
-
     agent_row = conn.execute(
         "SELECT id FROM agent_pool ORDER BY id DESC LIMIT 1"
     ).fetchone()
     agent_id = agent_row["id"]
 
-    # 매니저는 온보딩 권한이 없다(Admin 전용, F9)
+    def _agent_ids_in_search():
+        resp = client.get("/api/pool/search", params={"role": "QA"})
+        return {
+            item["id"] for item in resp.json()["items"] if item["type"] == "agent"
+        }
+
+    # 아직 pending_onboarding 상태라 Pool 검색에는 노출되지 않는다
+    assert agent_id not in _agent_ids_in_search()
+
+    # 매니저는 온보딩 권한이 없다(Admin 전용)
     resp = client.post(f"/api/agent-pool/{agent_id}/onboard")
     assert resp.status_code == 403
 
@@ -134,17 +145,14 @@ def test_gc22_onboard_then_deprecate_agent_controls_f3_visibility(client_and_con
     assert resp.status_code == 200
     assert resp.json()["status"] == "active"
 
-    resp = client.get("/api/pool/search", params={"role": "QA"})
-    assert len(resp.json()["items"]) == 1
-    assert resp.json()["items"][0]["type"] == "agent"
+    assert agent_id in _agent_ids_in_search()
 
     resp = client.post(f"/api/agent-pool/{agent_id}/deprecate")
     assert resp.status_code == 200
-    resp = client.get("/api/pool/search", params={"role": "QA"})
-    assert resp.json()["items"] == []
+    assert agent_id not in _agent_ids_in_search()
 
 
-# ---- F13: 감사로그 ----------------------------------------------------------
+# ---- 감사로그 ----------------------------------------------------------
 
 
 def test_gc23_audit_log_records_writes_and_is_role_restricted(client_and_conn):
@@ -180,17 +188,17 @@ def test_gc24_audit_log_is_append_only_at_db_level(client_and_conn):
         raised = False
     except sqlite3.IntegrityError:
         raised = True
-    assert raised, "audit_log는 UPDATE를 막아야 한다(NF10)"
+    assert raised, "audit_log는 UPDATE를 막아야 한다(append-only)"
 
     try:
         conn.execute("DELETE FROM audit_log WHERE id = ?", (row["id"],))
         raised = False
     except sqlite3.IntegrityError:
         raised = True
-    assert raised, "audit_log는 DELETE를 막아야 한다(NF10)"
+    assert raised, "audit_log는 DELETE를 막아야 한다(append-only)"
 
 
-# ---- F7: 다단계 결재라인 -----------------------------------------------------
+# ---- 다단계 결재라인 -----------------------------------------------------
 
 
 def test_gc25_three_step_approval_chain_must_pass_in_order(client_and_conn):

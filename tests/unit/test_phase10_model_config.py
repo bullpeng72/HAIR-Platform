@@ -1,10 +1,10 @@
 """Phase 10 — Ollama 추가 + Agent별 모델 설정 기능(사용자 요청, 2026-09-26).
 
-1. GC69: llm.py에 Ollama provider 추가(로컬 HTTP, API 키 불필요, 자동판별
+1. llm.py에 Ollama provider 추가(로컬 HTTP, API 키 불필요, 자동판별
    대상 아님 — 명시적으로 지정해야 한다).
-2. GC70/71: `PATCH /api/agent-pool/{id}/model`(신규) — Agent별 기본
+2. `PATCH /api/agent-pool/{id}/model`(신규) — Agent별 기본
    provider/model을 저장한다(비용 없음, LLM 호출 안 함).
-3. GC72: `execute_agent`가 provider/model을 안 받으면 Agent에 저장된 모델
+3. `execute_agent`가 provider/model을 안 받으면 Agent에 저장된 모델
    설정을 우선 쓰고, 그것도 없으면 전역 기본값으로 판별한다.
 
 **비용 발생 방지**: `hair_platform.llm.call_llm`/`httpx.post`를 전부 mock으로

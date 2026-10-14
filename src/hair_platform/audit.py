@@ -1,6 +1,6 @@
-"""F13 — 감사로그. append-only는 DB 트리거(db.py)로 강제한다(NF10).
+"""감사로그. append-only는 DB 트리거(db.py)로 강제한다.
 
-Admin·매니저 role만 조회 가능(NF12) — RBAC 검사는 app.py의 라우트에서 수행한다.
+Admin·매니저 role만 조회 가능 — RBAC 검사는 app.py의 라우트에서 수행한다.
 """
 
 from __future__ import annotations

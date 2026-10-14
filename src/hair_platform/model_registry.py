@@ -5,7 +5,7 @@ ollama 모델 및 openai, anthropic 모델 등록하는 메뉴를 두고 등록�
 지금까지 "AI 에이전트 생성"·"AI 에이전트 관리(모델 설정)"·"Crew 실행"의
 "모델명" 입력란이 전부 자유 텍스트였다 — 실제로 쓸 수 있는 모델이 뭔지
 모른 채 타이핑해야 했고, 실제로 ollama 기본값("llama3.1")이 로컬에
-설치돼 있지 않아 404가 난 사고가 있었다(docs/LIMITS.md 참고). `skill_pool`/
+설치돼 있지 않아 404가 난 사고가 있었다. `skill_pool`/
 `tool_pool`과 같은 패턴 — "등록 → 드롭다운에서 선택"으로 바꾼다.
 
 `fetch_available_models()`는 각 provider가 실제로 제공하는 모델 목록

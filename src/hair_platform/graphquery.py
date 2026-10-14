@@ -1,14 +1,13 @@
-"""GraphDB 기반 관계분석 Agent의 관계 질의 — ADR.md 결정 11(사용자 요청,
-2026-09-26, 3차).
+"""GraphDB 기반 관계분석 Agent의 관계 질의 — 사용자 요청(2026-09-26, 3차).
 
 전용 그래프DB 서버(Neo4j 등)를 두지 않고, 이미 있는 관계형 데이터
 (`users.manager_id`, `assignments`, `tasks`)를 그래프로 취급해 조회한다
-(로컬/온프레미스 우선 원칙, SPEC.md §3 — 결정 5의 SQLite 중심 저장 정책과도
+(로컬/온프레미스 우선 원칙 — 결정 5의 SQLite 중심 저장 정책과도
 일관된다). 새 저장소를 추가하지 않는다. 실사용 규모·질의 복잡도가 커지면
-`networkx`나 정식 그래프DB로 교체를 재검토한다(오픈 이슈 — ADR 결정 11).
+`networkx`나 정식 그래프DB로 교체를 재검토한다(오픈 이슈).
 
-**NF9 경계(중요, 실제로 코드에서 강제)**: ADR 결정 11은 관계분석 Agent가
-F8 성과 데이터(`performance_score`·`performance_consent`)를 우회 노출할
+**경계(중요, 실제로 코드에서 강제)**: 관계분석 Agent가
+성과 데이터(`performance_score`·`performance_consent`)를 우회 노출할
 위험을 지적했다 — 이 모듈의 모든 쿼리는 "누가 누구를 관리하는지"·"이
 업무를 누가 맡았는지" 같은 **관계** 정보만 SELECT한다. 성과 관련 컬럼은
 이 파일 어디에도 등장하지 않는다(회귀 테스트가 소스 자체를 검사해 이를
@@ -25,7 +24,7 @@ def manager_chain(
 ) -> list[dict]:
     """이 사람의 상사 → 그 상사의 상사 순으로 체인을 반환한다(순환 방지).
 
-    `approvals.build_manager_chain`과 같은 순회 로직이지만, 이 모듈은 F7
+    `approvals.build_manager_chain`과 같은 순회 로직이지만, 이 모듈은
     결재라인 자동라우팅이 아니라 "관계 질의" 자체가 목적이라 사람이 읽을
     관계 정보(username 포함)를 반환한다.
     """
@@ -82,8 +81,8 @@ def task_assignment_owner(conn: sqlite3.Connection, task_id: int) -> dict | None
 
 
 def org_chart_summary(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
-    """F5 조직도와 같은 데이터를 관계 목록으로 요약한다 — F8 성과 데이터는
-    포함하지 않는다(NF9)."""
+    """조직도와 같은 데이터를 관계 목록으로 요약한다 — 성과 데이터는
+    포함하지 않는다."""
     rows = conn.execute(
         "SELECT a.id AS assignment_id, a.task_id, a.resource_type, a.resource_id, "
         "a.requested_by, t.role_name FROM assignments a "
@@ -108,9 +107,9 @@ def context_for_prompt(conn: sqlite3.Connection) -> str:
 
 
 def as_crewai_tool(conn: sqlite3.Connection):
-    """GraphDB 관계조회를 실제 CrewAI Tool로 감싼다(ADR 결정 12, 사용자 요청
-    2026-09-27 — "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘"). NF9
-    경계는 `context_for_prompt()` 자체가 성과 컬럼을 절대 SELECT하지 않는
+    """GraphDB 관계조회를 실제 CrewAI Tool로 감싼다(사용자 요청
+    2026-09-27 — "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘"). 경계는
+    `context_for_prompt()` 자체가 성과 컬럼을 절대 SELECT하지 않는
     것으로 이미 보장된다 — Tool로 감싸도 호출하는 함수가 그대로이므로 이
     보장은 변하지 않는다(회귀 테스트 `test_gc86`이 계속 이 파일의 소스
     자체를 검사한다). `crewai`는 지연 import한다."""

@@ -1,5 +1,5 @@
-"""Phase 31 — 대화 중심 작업공간(Conversational Workspace), `docs/
-ASANA_PARITY_DESIGN_PLAN.md` §9(2026-10-08, 사용자 요청 "현재 방식의
+"""Phase 31 — 대화 중심 작업공간(Conversational Workspace)(2026-10-08,
+사용자 요청 "현재 방식의
 업무 처리는... 유연성이나 Agility가 부족해. 사용자가 로그인하면
 기본적으로 대화창이 주어지고, 다른 사용자나 에이전트(에이전트 그룹)을
 호출하거나 skill을 사용하여 업무를 수행하는 방식으로... 기존 방식과의
@@ -9,7 +9,7 @@ Team은 워커별 메시지 각각, skill 조회해 모델에 일을 시킴, 멘
 
 `conversations`는 Task 존재 여부와 무관한 독립 엔티티다 —
 `linked_task_id`가 NULL이면 로그인 직후 바로 쓰는 "내 대화", 채워지면
-특정 Task에 종속된 대화(F21-1이 원래 노리던 것을 흡수)다. 이 테스트는
+특정 Task에 종속된 대화(이전에 노리던 것을 흡수)다. 이 테스트는
 세 가지 응답 경로(기본 AI 자동응답/특정 Agent 멘션/특정 Team 멘션)가
 서로 독립적으로, 그리고 멘션이 있으면 기본 AI가 끼어들지 않는다는
 핵심 규칙을 전부 검증한다. 실제 LLM/CrewAI 호출은 `unittest.mock.patch`
@@ -244,6 +244,58 @@ def test_gc_agent_mention_suppresses_default_ai(client_and_conn):
     assert messages[1]["content"] == "에이전트 답변"
 
 
+def test_gc_mentioning_human_participant_suppresses_default_ai(client_and_conn):
+    """버그 재현(사용자 보고, 2026-10-14, "대화 중 Human을 호출했지만
+    AI가 자동 응답을 했다") — 사람을 멘션하면 실행할 job은 없지만
+    (사람은 트리거 대상이 아니다), 기본 AI 자동응답도 끼어들면 안
+    된다. 수정 전엔 `_detect_mentions()`가 사람 참가자를 아예 조회
+    대상에서 빼서 `has_mentions=False`로 잘못 판정됐었다."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "사람호출방"}).json()["id"]
+    manager_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'manager1'"
+    ).fetchone()["id"]
+    resp = client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "human", "participant_id": manager_id},
+    )
+    assert resp.status_code == 201, resp.text
+
+    with patch("hair_platform.llm.call_llm") as mock_default:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@manager1 이거 확인해주세요"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["triggered_jobs"] == []
+        mock_default.assert_not_called()
+
+
+def test_gc_self_mention_does_not_suppress_default_ai(client_and_conn):
+    """버그 재현(사용자 보고, 2026-10-14, "본인이 본인에게 멘션을 보낼
+    수 있는데, 이 기능이 맞는지/필요한지 확인해줘" — 직접 재현해 확인한
+    버그) — "@내아이디"가 메시지에 들어가도 실제로 부른 대상은 아무도
+    없다. 수정 전엔 이걸 "사람을 호출함"으로 오판정해 기본 AI 자동응답
+    까지 조용히 꺼졌다 — 아무도 안 부른 평범한 메시지와 똑같이 취급돼야
+    한다(브라우저 알림 경로 `list_my_recent_mentions()`는 처음부터
+    자기 자신을 제외하고 있었는데, 이 경로만 빠져 있었다)."""
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "메모방"}).json()["id"]
+
+    with patch(
+        "hair_platform.llm.call_llm", return_value="기본 AI 응답"
+    ) as mock_default:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@member1 나한테 메모"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["triggered_jobs"][0]["trigger_type"] == "auto_reply"
+        mock_default.assert_called_once()
+
+
 def test_gc_mentioning_uninvited_agent_name_does_not_trigger(client_and_conn):
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
@@ -459,7 +511,7 @@ def test_gc_non_participant_cannot_invite(client_and_conn):
     assert resp.status_code == 403, resp.text
 
 
-# ---------- Task 종속 대화 (F21-1 흡수) ----------
+# ---------- Task 종속 대화 ----------
 
 
 def test_gc_linked_conversation_uses_task_skills_for_default_ai(client_and_conn):

@@ -1,11 +1,10 @@
-"""대화 중심 작업공간(Conversational Workspace) — `docs/
-ASANA_PARITY_DESIGN_PLAN.md` §9(2026-10-08, 사용자 요청 "현재 방식의
-업무 처리는... 유연성이나 Agility가 부족해. 사용자가 로그인하면
+"""대화 중심 작업공간(Conversational Workspace) — 사용자
+요청(2026-10-08) "현재 방식의 업무 처리는... 유연성이나 Agility가 부족해. 사용자가 로그인하면
 기본적으로 대화창이 주어지고, 다른 사용자나 에이전트(에이전트
 그룹)을 호출하거나 skill을 사용하여 업무를 수행하는 방식으로 사용자
 경험을 개선... 기존 방식과의 공존(업무 성격에 따라 선택)도 좋아").
 
-F15(Task 참가자 초대+댓글 @멘션)가 "Task가 있어야만" 쓸 수 있던
+Task 참가자 초대+댓글 @멘션이 "Task가 있어야만" 쓸 수 있던
 구조를 깨고, **로그인 직후 바로 쓸 수 있는 독립 엔티티**로 확장한다
 — `conversations.linked_task_id`가 채워지면 그 Task 전용 대화,
 NULL이면 완전히 독립된 "내 대화"다.
@@ -22,7 +21,7 @@ NULL이면 완전히 독립된 "내 대화"다.
 
 **세 가지 응답 경로가 서로 다른 "정체성"의 모델을 쓴다**:
 - 특정 Agent 멘션 → 그 Agent 자신의 저장된 provider/model
-  (`agent_runtime.execute_agent()` 재사용, F15 Phase 3와 같은 패턴 —
+  (`agent_runtime.execute_agent()` 재사용, Phase 3와 같은 패턴 —
   `start_agent_execution()`의 confirmed 배정 요구를 우회).
 - 특정 Team 멘션 → 팀 멤버 Agent들 각자의 저장된 provider/model로
   CrewAI 실행(`crew_runtime.run_crew()` 직접 호출 — `run_crew_for_
@@ -196,7 +195,7 @@ def leave_conversation(
     conn: sqlite3.Connection, conversation_id: int, actor_id: int
 ) -> dict:
     """참가자가 자기 자신을 대화에서 뺀다 — 다른 사람을 빼는 기능은
-    없다(§9가 admin/manager 게이트 없이 참가자 서로를 신뢰하는 가벼운
+    없다(admin/manager 게이트 없이 참가자 서로를 신뢰하는 가벼운
     레이어이기 때문, `invite_participant()`와 같은 전제).
 
     나간 뒤 human 참가자가 0명이 되면(마지막 사람이 나간 경우) 누구도
@@ -252,7 +251,7 @@ def invite_participant(
     participant_type: str,
     participant_id: int,
 ) -> dict:
-    """결재 불필요(F15 F21-1과 같은 원칙) — 이미 참가 중인 사람 누구나
+    """결재 불필요(같은 원칙) — 이미 참가 중인 사람 누구나
     더 초대할 수 있다(이 대화는 조직도 기반 RBAC 바깥의 가벼운 레이어
     라 admin/manager 전용 게이트를 두지 않는다)."""
     if get_conversation(conn, conversation_id) is None:
@@ -312,10 +311,13 @@ def invite_participant(
 
 
 def list_participants(conn: sqlite3.Connection, conversation_id: int) -> list[dict]:
-    """`display_name`을 사람(`users.username`)/Agent(`agent_pool.role_name`)
-    /Team(`teams.name`) 각각에 맞게 조인해 붙인다 — `@멘션`에 실제로
-    써야 하는 정확한 문자열이기도 하다(F15 `list_participants()`와
-    같은 이유)."""
+    """`display_name`을 사람(`users.username`)/Agent(`agent_pool.name`,
+    없으면 `role_name`)/Team(`teams.name`) 각각에 맞게 조인해 붙인다 —
+    `@멘션`에 실제로 써야 하는 정확한 문자열이기도 하다(같은 이유).
+
+    사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... 호출시
+    (채팅 포함)에도 활용될 수 있도록") — Agent가 지정한 이름이 있으면
+    그걸 최우선으로 보여준다/멘션에 쓴다."""
     rows = conn.execute(
         "SELECT * FROM conversation_participants WHERE conversation_id = ? "
         "ORDER BY invited_at ASC, id ASC",
@@ -326,10 +328,10 @@ def list_participants(conn: sqlite3.Connection, conversation_id: int) -> list[di
         entry = dict(row)
         if entry["participant_type"] == "agent":
             r = conn.execute(
-                "SELECT role_name FROM agent_pool WHERE id = ?",
+                "SELECT role_name, name FROM agent_pool WHERE id = ?",
                 (entry["participant_id"],),
             ).fetchone()
-            entry["display_name"] = r["role_name"] if r is not None else None
+            entry["display_name"] = (r["name"] or r["role_name"]) if r is not None else None
         elif entry["participant_type"] == "team":
             r = conn.execute(
                 "SELECT name FROM teams WHERE id = ?", (entry["participant_id"],)
@@ -376,16 +378,17 @@ def search_mentionable(conn: sqlite3.Connection, query: str, actor_id: int) -> d
     ).fetchall()
     agents = conn.execute(
         """
-        SELECT id, role_name,
+        SELECT id, role_name, name,
             (SELECT MAX(cp.invited_at) FROM conversation_participants cp
              WHERE cp.participant_type = 'agent' AND cp.participant_id = agent_pool.id
                AND cp.invited_by = ?) AS last_invited
         FROM agent_pool
-        WHERE status = 'active' AND (role_name LIKE ? OR skill_tags LIKE ?)
-        ORDER BY last_invited IS NULL, last_invited DESC, role_name
+        WHERE status = 'active'
+          AND (role_name LIKE ? OR skill_tags LIKE ? OR name LIKE ?)
+        ORDER BY last_invited IS NULL, last_invited DESC, COALESCE(name, role_name)
         LIMIT 20
         """,
-        (actor_id, like, like),
+        (actor_id, like, like, like),
     ).fetchall()
     teams_rows = conn.execute(
         """
@@ -402,9 +405,87 @@ def search_mentionable(conn: sqlite3.Connection, query: str, actor_id: int) -> d
     ).fetchall()
     return {
         "humans": [{"id": r["id"], "username": r["username"]} for r in humans],
-        "agents": [{"id": r["id"], "role_name": r["role_name"]} for r in agents],
+        # "role_name" 키는 그대로 두되 값은 지정된 이름을 우선한다 — 이미
+        # 여러 화면이 이 키로 "@멘션" 텍스트/표시 라벨을 그대로 쓰고
+        # 있어(사용자 요청, 2026-10-13) 키를 바꾸면 그 화면들을 전부
+        # 고쳐야 한다. 값만 바뀌므로 그 화면들은 자동으로 이름을 쓰게
+        # 된다.
+        "agents": [{"id": r["id"], "role_name": r["name"] or r["role_name"]} for r in agents],
         "teams": [{"id": r["id"], "name": r["name"]} for r in teams_rows],
     }
+
+
+def mark_conversation_read(
+    conn: sqlite3.Connection, conversation_id: int, user_id: int
+) -> None:
+    """사용자 요청(2026-10-14, "호출이 안 되는 거 같아" — 실측으로
+    원인 발견) — 처음엔 "읽음" 상태를 서버에 저장하지 않고 프런트엔드
+    메모리 커서(최초 폴링은 알림 생략)로 중복 알림을 막았는데, 그 탭이
+    멘션이 이미 와 있는 *뒤에* 열리면(실제 재현된 상황: admin이 먼저
+    세 번 호출하고 pm_kim은 그 뒤에 로그인) 그 멘션들이 전부 "최초
+    폴링"에 걸려 영영 알림이 안 떴다. 서버가 참가자별 "이 대화를 마지막
+    으로 본 메시지"를 기억해야 한다 — `GET /messages`가 호출될 때마다
+    (=이 대화를 실제로 보고 있을 때) 호출해 갱신한다."""
+    latest = conn.execute(
+        "SELECT MAX(id) AS m FROM conversation_messages WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()["m"]
+    if latest is None:
+        return
+    conn.execute(
+        "UPDATE conversation_participants SET last_read_message_id = ? "
+        "WHERE conversation_id = ? AND participant_type = 'human' AND participant_id = ?",
+        (latest, conversation_id, user_id),
+    )
+    conn.commit()
+
+
+def list_my_recent_mentions(conn: sqlite3.Connection, user_id: int) -> list[dict]:
+    """사용자 요청(2026-10-14, "호출 받은 사람에게 브라우저 알림이
+    오고, 알림 클릭시 대화 참가 가능하도록") — 프런트엔드가 주기적으로
+    폴링해 "내가 참가 중인 대화들 중 나를 @멘션한, 아직 안 읽은 메시지"
+    를 찾는다. `_detect_mentions()`와 같은 "@username 부분 문자열 포함"
+    판정을 쓰되, 대화 하나가 아니라 **내가 참가 중인 모든 대화**를
+    대상으로 한다는 점이 다르다.
+
+    "안 읽음" 기준은 `conversation_participants.last_read_message_id`
+    (`mark_conversation_read()`가 그 대화를 실제로 열 때마다 갱신) —
+    프런트엔드가 직접 커서를 들고 있지 않는다. 그래야 "멘션이 온 뒤에
+    탭을 연 경우"에도 그 대화를 실제로 열기 전까지는 계속 "안 읽음"으로
+    남아 알림이 뜬다(처음 설계는 클라이언트 메모리 커서로 최초 폴링을
+    무조건 건너뛰어서 이 경우를 놓쳤다 — 실측 재현으로 발견)."""
+    user = conn.execute(
+        "SELECT username FROM users WHERE id = ?", (user_id,)
+    ).fetchone()
+    if user is None:
+        return []
+    like_pattern = f"%@{user['username']}%"
+    rows = conn.execute(
+        """
+        SELECT cm.id, cm.conversation_id, cm.content, cm.created_at, c.title
+        FROM conversation_messages cm
+        JOIN conversation_participants cp
+          ON cp.conversation_id = cm.conversation_id
+         AND cp.participant_type = 'human' AND cp.participant_id = ?
+        JOIN conversations c ON c.id = cm.conversation_id
+        WHERE cm.content LIKE ?
+          AND NOT (cm.author_type = 'human' AND cm.author_id = ?)
+          AND cm.id > COALESCE(cp.last_read_message_id, 0)
+        ORDER BY cm.id ASC
+        LIMIT 50
+        """,
+        [user_id, like_pattern, user_id],
+    ).fetchall()
+    return [
+        {
+            "message_id": r["id"],
+            "conversation_id": r["conversation_id"],
+            "conversation_title": r["title"] or "(제목 없음)",
+            "content": r["content"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
 
 
 # ---------- 모델/자동응답 설정 ----------
@@ -476,43 +557,215 @@ def list_messages(conn: sqlite3.Connection, conversation_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def delete_message(
+    conn: sqlite3.Connection, conversation_id: int, message_id: int, actor_id: int
+) -> None:
+    """사용자 요청(2026-10-14, "단위 메시지 삭제 기능") — 대화 전체
+    삭제(`delete_conversation()`, 생성자 전용)와 별개로 메시지 한 건만
+    지운다. 메시지의 "작성자"가 사람 메시지와 AI/Agent 메시지에서
+    서로 다른 의미라(AI 응답은 사람이 직접 쓴 게 아니라 **트리거한**
+    것) 권한을 두 겹으로 둔다 — 사용자 결정: 본인이 보낸 사람 메시지는
+    본인이, 그 외 모든 메시지(AI/Agent 응답 포함)는 이미 대화 전체
+    삭제 권한을 가진 생성자(`created_by`)가 지울 수 있다. 둘 다
+    해당 안 되면 거부."""
+    conv = get_conversation(conn, conversation_id)
+    if conv is None:
+        raise ValueError("conversation_not_found")
+    if not is_participant(conn, conversation_id, actor_id):
+        raise PermissionError("not_a_participant")
+    message = conn.execute(
+        "SELECT * FROM conversation_messages WHERE id = ? AND conversation_id = ?",
+        (message_id, conversation_id),
+    ).fetchone()
+    if message is None:
+        raise ValueError("message_not_found")
+    is_own_human_message = (
+        message["author_type"] == "human" and message["author_id"] == actor_id
+    )
+    is_creator = conv["created_by"] == actor_id
+    if not (is_own_human_message or is_creator):
+        raise PermissionError("not_allowed_to_delete_this_message")
+
+    conn.execute("DELETE FROM conversation_messages WHERE id = ?", (message_id,))
+    audit.record(
+        conn,
+        actor_id,
+        "conversation_message_deleted",
+        "conversation_messages",
+        message_id,
+        before={
+            "conversation_id": conversation_id,
+            "author_type": message["author_type"],
+            "author_id": message["author_id"],
+        },
+    )
+    conn.commit()
+
+
 def _detect_mentions(
-    conn: sqlite3.Connection, conversation_id: int, content: str
+    conn: sqlite3.Connection,
+    conversation_id: int,
+    content: str,
+    author_human_id: int | None = None,
 ) -> dict:
-    """이미 초대된 Agent/Team 중 본문에 "@이름"이 부분 문자열로
-    있는지 본다(F15 `detect_mentioned_agents()`와 같은 판정 — 한국어엔
+    """이미 초대된 사람/Agent/Team 중 본문에 "@이름"이 부분 문자열로
+    있는지 본다(`detect_mentioned_agents()`와 같은 판정 — 한국어엔
     영어 `\\b` 같은 단어 경계가 없어 정규식 토큰화보다 단순 포함이
-    더 안전하다)."""
+    더 안전하다).
+
+    사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... 호출시
+    (채팅 포함)에도 활용될 수 있도록") — `@role_name`(기존 방식)과
+    `@지정한이름`(신규) 둘 다 인정한다. 이름을 나중에 지정해도 기존
+    대화에서 `@역할명`으로 부르던 습관이 그대로 깨지지 않도록 하위
+    호환을 유지한다.
+
+    **사람 멘션도 감지한다(2026-10-14 버그 수정)** — 사용자 보고: "@pm_kim
+    처럼 사람을 멘션했는데 AI가 기본 모델로 자동응답했다." 원인은 이
+    함수가 `participant_type IN ('agent', 'team')`만 조회해서, 사람을
+    멘션해도 `has_mentions=False`로 판정됐다는 것 — `app.py`의 트리거
+    분기(`not has_mentions and ai_auto_reply`)가 "멘션이 전혀 없는
+    메시지"와 "사람을 멘션한 메시지"를 구분하지 못해 똑같이 기본 AI
+    자동응답을 켰다. 사람에게는 (Agent/Team과 달리) 멘션해도 실행할
+    job이 없지만, `has_mentions`를 정확히 채우기 위해 탐지는 한다 —
+    그래야 "호출 대상이 없으면 기본 모델, 있으면 그 대상만" 원칙대로
+    사람을 멘션했을 때 기본 AI가 끼어들지 않는다(사람이 직접 답해야
+    하는 상황이므로).
+
+    `author_human_id`(2026-10-14, 사용자 보고 "본인이 본인에게 멘션을
+    보낼 수 있는데, 이 기능이 맞는지/필요한지" — 직접 재현해 확인한
+    버그) — 보낸 사람 자신의 "@본인아이디"는 사람 멘션으로 치지 않는다.
+    `list_my_recent_mentions()`(브라우저 알림 경로)는 이미 자기 자신이
+    보낸 메시지를 제외하고 있었는데, 이 함수(AI 자동응답 억제 판정
+    경로)는 빠져 있었다 — 그래서 "@본인아이디"가 들어간 메시지를
+    보내면(의도한 타겟이 실제로는 아무도 없는데도) 사람을 호출한 것으로
+    오판정돼 기본 AI 자동응답이 조용히 꺼졌다(직접 재현: member1이
+    "@member1 나한테 메모"를 보내면 `ai_auto_reply=True`인데도
+    `triggered_jobs == []`). 본인 멘션은 "아무도 안 부른 것"과 똑같이
+    취급해야 "호출 대상이 없으면 기본 모델이 답한다" 원칙이 일관되게
+    지켜진다."""
     rows = conn.execute(
         "SELECT participant_type, participant_id FROM conversation_participants "
-        "WHERE conversation_id = ? AND participant_type IN ('agent', 'team')",
+        "WHERE conversation_id = ? AND participant_type IN ('human', 'agent', 'team')",
         (conversation_id,),
     ).fetchall()
+    humans: list[dict] = []
     agents: list[dict] = []
     matched_teams: list[dict] = []
     for row in rows:
-        if row["participant_type"] == "agent":
+        if row["participant_type"] == "human":
+            if row["participant_id"] == author_human_id:
+                continue
             r = conn.execute(
-                "SELECT id, role_name FROM agent_pool WHERE id = ?",
+                "SELECT id, username FROM users WHERE id = ?",
                 (row["participant_id"],),
             ).fetchone()
-            if r is not None and ("@" + r["role_name"]) in content:
-                agents.append(dict(r))
+            if r is not None and ("@" + r["username"]) in content:
+                humans.append({"id": r["id"], "username": r["username"]})
+        elif row["participant_type"] == "agent":
+            r = conn.execute(
+                "SELECT id, role_name, name FROM agent_pool WHERE id = ?",
+                (row["participant_id"],),
+            ).fetchone()
+            if r is not None and (
+                ("@" + r["role_name"]) in content
+                or (r["name"] and ("@" + r["name"]) in content)
+            ):
+                agents.append({"id": r["id"], "role_name": r["name"] or r["role_name"]})
         else:
             r = conn.execute(
                 "SELECT id, name FROM teams WHERE id = ?", (row["participant_id"],)
             ).fetchone()
             if r is not None and ("@" + r["name"]) in content:
                 matched_teams.append(dict(r))
-    return {"agents": agents, "teams": matched_teams}
+    return {"humans": humans, "agents": agents, "teams": matched_teams}
+
+
+def _format_messages_for_summary(rows: list[sqlite3.Row]) -> str:
+    return "\n".join(
+        ("AI" if row["author_type"] == "agent" else "사용자") + ": " + row["content"]
+        for row in rows
+    )
+
+
+def _ensure_context_summary(
+    conn: sqlite3.Connection, conversation_id: int, conv: sqlite3.Row
+) -> str | None:
+    """사용자 요청(2026-10-14, "10건 이전의 메시지는 요약 형태로
+    전달되도록 개선해줘") — `_build_transcript()`가 최근
+    `_CONTEXT_MESSAGE_LIMIT`건보다 오래된 메시지를 그냥 버리던 것을,
+    `conversations.context_summary`에 캐시된 요약으로 대체한다.
+
+    **증분 갱신**(비용 관리) — 메시지가 쌓일 때마다 과거 전체를 처음부터
+    다시 요약하면, 대화가 길어질수록 요약 1회 비용이 계속 커진다. 대신
+    "지난번 요약이 어디까지 반영됐는지"(`context_summary_through_id`)를
+    기억해, **그 이후 창 밖으로 새로 밀려난 메시지만** 기존 요약에
+    얹어서 갱신한다 — 매번 비슷하게 작은 비용으로 끝난다. 창이 아직
+    그대로면(새로 밀려난 메시지가 없으면) 캐시를 그대로 돌려주고 LLM을
+    아예 호출하지 않는다."""
+    total = conn.execute(
+        "SELECT COUNT(*) AS c FROM conversation_messages WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()["c"]
+    if total <= _CONTEXT_MESSAGE_LIMIT:
+        return None  # 아직 요약할 "오래된 과거"가 없다 — 전부 최근 창 안에 있음
+
+    cutoff_offset = total - _CONTEXT_MESSAGE_LIMIT - 1
+    cutoff_row = conn.execute(
+        "SELECT id FROM conversation_messages WHERE conversation_id = ? "
+        "ORDER BY id ASC LIMIT 1 OFFSET ?",
+        (conversation_id, cutoff_offset),
+    ).fetchone()
+    cutoff_id = cutoff_row["id"]
+
+    existing_summary = conv["context_summary"]
+    existing_through_id = conv["context_summary_through_id"]
+    if existing_through_id == cutoff_id:
+        return existing_summary  # 이미 최신 — LLM 호출 불필요
+
+    new_rows = conn.execute(
+        "SELECT author_type, content FROM conversation_messages "
+        "WHERE conversation_id = ? AND id > ? AND id <= ? ORDER BY id ASC",
+        (conversation_id, existing_through_id or 0, cutoff_id),
+    ).fetchall()
+    new_text = _format_messages_for_summary(new_rows)
+
+    provider, model = llm.resolve_provider_and_model(
+        conv["llm_provider"], conv["llm_model"]
+    )
+    prompt = (
+        (f"[기존 요약]\n{existing_summary}\n\n" if existing_summary else "")
+        + f"[추가로 반영할 대화]\n{new_text}\n\n"
+        "위 내용을 반영해 전체를 하나의 요약으로 다시 작성하세요 — 핵심 결정·"
+        "합의된 내용·중요한 숫자/이름 위주로, 5문장 이내로 간결하게."
+    )
+    new_summary = llm.call_llm(
+        provider,
+        model,
+        "당신은 대화 요약 보조자입니다. 다른 설명 없이 요약 본문만 출력하세요.",
+        prompt,
+    )
+    conn.execute(
+        "UPDATE conversations SET context_summary = ?, context_summary_through_id = ? "
+        "WHERE id = ?",
+        (new_summary, cutoff_id, conversation_id),
+    )
+    conn.commit()
+    return new_summary
 
 
 def _build_transcript(
     conn: sqlite3.Connection, conversation_id: int, limit: int = _CONTEXT_MESSAGE_LIMIT
 ) -> str:
-    """최근 N건을 간단한 transcript로 이어붙인다(멀티턴 대화 맥락 —
-    9-6 로드맵 "구 F21-2"). 모든 응답 경로(기본 AI/Agent 멘션/Team
-    멘션)가 이 함수 하나를 공유한다."""
+    """최근 N건 + (있으면) 그 이전 과거의 캐시된 요약을 이어붙인다(멀티턴
+    대화 맥락). 모든 응답 경로(기본 AI/Agent 멘션/Team 멘션)가 이 함수
+    하나를 공유한다."""
+    conv = conn.execute(
+        "SELECT llm_provider, llm_model, context_summary, context_summary_through_id "
+        "FROM conversations WHERE id = ?",
+        (conversation_id,),
+    ).fetchone()
+    summary = _ensure_context_summary(conn, conversation_id, conv) if conv else None
+
     rows = conn.execute(
         "SELECT author_type, content FROM conversation_messages "
         "WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -522,6 +775,8 @@ def _build_transcript(
         ("AI" if row["author_type"] == "agent" else "사용자") + ": " + row["content"]
         for row in reversed(rows)
     ]
+    if summary:
+        lines.insert(0, f"(이전 대화 요약: {summary})")
     return "\n".join(lines)
 
 
@@ -534,7 +789,7 @@ def create_message(
 ) -> dict:
     """사용자 메시지를 저장하고, 어떤 트리거가 필요한지 판정까지만
     한다(실제 LLM 호출은 `app.py`가 `BackgroundTasks`로 스케줄 —
-    F15 Phase 3와 같은 2단계 패턴). `skill`이 있으면(사용자 결정 3)
+    Phase 3와 같은 2단계 패턴). `skill`이 있으면(사용자 결정 3)
     명시적 요청이라 `ai_auto_reply` 설정과 무관하게 항상 트리거한다."""
     conv = get_conversation(conn, conversation_id)
     if conv is None:
@@ -566,17 +821,25 @@ def create_message(
         after={"conversation_id": conversation_id, "author_type": "human"},
     )
 
-    mentions = _detect_mentions(conn, conversation_id, content)
+    mentions = _detect_mentions(conn, conversation_id, content, author_human_id=actor_id)
     conn.commit()
 
     return {
         "id": message_id,
         "conversation_id": conversation_id,
+        "mentioned_humans": mentions["humans"],
         "mentioned_agents": mentions["agents"],
         "mentioned_teams": mentions["teams"],
         "skill": skill,
         "ai_auto_reply": bool(conv["ai_auto_reply"]),
-        "has_mentions": bool(mentions["agents"] or mentions["teams"]),
+        # 버그 수정(2026-10-14, "Human을 호출했지만 AI가 자동 응답했다")
+        # — 사람 멘션도 "호출 대상이 있다"로 쳐야, `app.py`의
+        # `not has_mentions and ai_auto_reply` 분기가 "멘션 없음"과
+        # "사람을 멘션함"을 더는 혼동하지 않는다(사람을 멘션했을 땐
+        # 실행할 job은 없지만, 기본 AI가 대신 끼어들어서도 안 된다).
+        "has_mentions": bool(
+            mentions["humans"] or mentions["agents"] or mentions["teams"]
+        ),
     }
 
 
@@ -591,11 +854,13 @@ def _finish_job_with_message(
     content: str,
     actor_id: int,
     used_skill: str | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> None:
     cur = conn.execute(
         "INSERT INTO conversation_messages (conversation_id, author_type, author_id, "
-        "content, used_skill) VALUES (?, 'agent', ?, ?, ?)",
-        (conversation_id, author_id, content, used_skill),
+        "content, used_skill, llm_provider, llm_model) VALUES (?, 'agent', ?, ?, ?, ?, ?)",
+        (conversation_id, author_id, content, used_skill, llm_provider, llm_model),
     )
     message_id = cur.lastrowid
     conn.execute(
@@ -676,16 +941,28 @@ def run_agent_mention_job(
     agent_id: int,
     actor_id: int,
 ) -> None:
-    """F15 Phase 3와 완전히 같은 패턴 — `agent_runtime.execute_agent()`
+    """Phase 3와 완전히 같은 패턴 — `agent_runtime.execute_agent()`
     를 confirmed 배정 확인 없이 직접 호출한다(그 Agent 자신의 저장된
     provider/model을 그대로 쓴다)."""
     try:
         transcript = _build_transcript(conn, conversation_id)
+        sink: dict = {}
         output = agent_runtime.execute_agent(
-            conn, agent_id, actor_id, transcript or "대화를 시작합니다."
+            conn,
+            agent_id,
+            actor_id,
+            transcript or "대화를 시작합니다.",
+            retrieval_sink=sink,
         )
         _finish_job_with_message(
-            conn, job_id, conversation_id, agent_id, output, actor_id
+            conn,
+            job_id,
+            conversation_id,
+            agent_id,
+            output,
+            actor_id,
+            llm_provider=sink.get("llm_provider"),
+            llm_model=sink.get("llm_model"),
         )
     except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
         _fail_job(conn, job_id, actor_id, exc)
@@ -742,8 +1019,14 @@ def run_team_mention_job(
                 continue  # 매니저 역할 — 산출물 없음(run_crew()의 기존 관례)
             conn.execute(
                 "INSERT INTO conversation_messages (conversation_id, author_type, "
-                "author_id, content) VALUES (?, 'agent', ?, ?)",
-                (conversation_id, agent["agent_id"], agent["output"]),
+                "author_id, content, llm_provider, llm_model) VALUES (?, 'agent', ?, ?, ?, ?)",
+                (
+                    conversation_id,
+                    agent["agent_id"],
+                    agent["output"],
+                    result.get("resolved_provider"),
+                    result.get("resolved_model"),
+                ),
             )
             posted += 1
         conn.execute(
@@ -843,6 +1126,8 @@ def run_default_ai_job(
             output,
             actor_id,
             used_skill=skill,
+            llm_provider=provider,
+            llm_model=model,
         )
     except Exception as exc:  # noqa: BLE001
         _fail_job(conn, job_id, actor_id, exc)

@@ -6,7 +6,7 @@
 실행 방법은 세 가지 서로 다른 패턴이 뒤섞여 있었다:
 `uvicorn hair_platform.app:create_app --factory --reload`(외부 uvicorn
 CLI를 직접 호출 — 그리고 DB 경로를 지정할 방법이 아예 없어서 매번
-`:memory:`로 뜨고 있었다는 걸 이번에 처음 발견, `docs/LIMITS.md` §83),
+`:memory:`로 뜨고 있었다는 걸 이번에 처음 발견),
 `hair-platform-bootstrap-admin --db-path hair.db --username admin
 --password '...'`(인자 4개짜리 별도 콘솔 스크립트), `python -m
 hair_platform.eval_wiring`(모듈 직접 실행). 전부 `hair <subcommand>`
@@ -15,7 +15,7 @@ hair_platform.eval_wiring`(모듈 직접 실행). 전부 `hair <subcommand>`
 bootstrap-admin` 콘솔 스크립트는 `hair bootstrap-admin`으로 대체돼
 `pyproject.toml`에서 제거한다(두 진입점을 동시에 유지하는 대신
 하나로 정리 — 이 프로젝트의 "안 쓰는 경로를 호환성 명목으로
-남기지 않는다" 관례 그대로, `docs/LIMITS.md` §82 참고)."""
+남기지 않는다" 관례 그대로)."""
 
 from __future__ import annotations
 

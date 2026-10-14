@@ -1,9 +1,9 @@
 """실제 LLM 연동 — Anthropic·OpenAI·Ollama 중 선택 가능(사용자 요청, 2026-09-26,
 Ollama는 2차 요청으로 추가).
 
-이전까지 F4(Agent 생성)는 `jobs.default_stub_generator`(역할명·스킬을 그대로
+이전까지 Agent 생성은 `jobs.default_stub_generator`(역할명·스킬을 그대로
 되돌려주는 규칙 기반 함수)만 썼다 — `grep -rniE "anthropic|openai|llm"
-src/`로 확인한 결과 실행 코드에 LLM 호출이 전무했다(ADR 결정 2: "결정론적,
+src/`로 확인한 결과 실행 코드에 LLM 호출이 전무했다("결정론적,
 LLM 미사용"으로 의도적 설계). 이 모듈은 그 한계를 실제로 메운다.
 
 **비용 발생 지점**: `call_llm()`을 호출하면 실제 API가 호출된다(Anthropic/
@@ -23,6 +23,9 @@ OpenAI는 과금, Ollama는 로컬 실행이라 API 비용은 없지만 로컬 �
 from __future__ import annotations
 
 import os
+import sqlite3
+
+from hair_platform import pool_registry
 
 DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-5",
@@ -113,18 +116,50 @@ def _call_ollama(model: str, system: str, prompt: str) -> str:
             ],
             "stream": False,
         },
-        timeout=120,
+        # 사용자 보고(2026-10-14, "@개발자... -> 일부 응답이 실패했습니다:
+        # timed out") — 실측으로 원인 확인: `conversation_jobs`에 정확히
+        # 120.0초만에 "timed out"으로 기록돼 있었다(이전 값과 정확히
+        # 일치). 로컬 대형 모델(실측 사례: 35B)은 120초를 넘기기 쉽고,
+        # `reasoning=True` 튜닝을 쓰면 답변 전 계획 수립용 LLM 호출이
+        # 하나 더 끼어 더 오래 걸린다 — 클라우드 provider(Anthropic/
+        # OpenAI)는 SDK 기본 타임아웃이 이미 넉넉해(수백 초) 이 문제가
+        # 없다. 1차로 300초로 늘렸는데, 재발 보고 후 타임아웃 없이 직접
+        # 측정해보니(2026-10-14, 2차) 같은 Agent(ornith-1.5:35b, 입력
+        # 7,959토큰·출력 7,729토큰짜리 긴 보고서)가 실제로는 337.7초
+        # 만에 **정상 완료**됐다 — 멈춘 게 아니라 초당 ~23토큰의 순수
+        # 생성 속도가 느린 것뿐이다(`total_duration`의 99.96%가
+        # `eval_duration`). 사용자 결정으로 600초로 다시 늘리고,
+        # 프런트엔드 `pollConversationJob()`의 폴링 포기 시한도 700초로
+        # 같이 올렸다(아래 timeout보다 여유 있게 길게 유지 — 백엔드가
+        # 결론을 내기 전에 프런트가 먼저 포기하지 않도록).
+        timeout=600,
     )
     resp.raise_for_status()
     return resp.json()["message"]["content"]
 
 
-def system_prompt_for_role(role_name: str, skills: list[str]) -> str:
+def system_prompt_for_role(
+    conn: sqlite3.Connection, role_name: str, skills: list[str]
+) -> str:
+    """`conn`(2026-10-13, "Harness Methodology 기준 개발 단계별 에이전트
+    생성... skill을 적극 활용") — 전까지는 `skills`의 스킬 "이름"만
+    나열해 전달했다. `skill_pool.description`(예: "코드를 짜기 전에
+    Spec·실패 모드 카탈로그·최소 골든셋을 만든다")은 어디에도 전달되지
+    않아, 절차형 스킬을 Agent에 달아둬도 실행에 아무 영향이 없었다
+    (`pool_registry.skill_knowledge_text()`가 이제 그 설명을 실제로
+    끌어와 붙인다 — `deliverables.skill_grounded_system_prompt()`가
+    쓰던 것과 같은 조회)."""
     skill_text = ", ".join(skills) if skills else "특별히 명시된 스킬 없음"
-    return (
+    base = (
         f"당신은 소프트웨어 개발팀에서 '{role_name}' 역할을 맡은 AI 에이전트입니다. "
         f"보유 역량: {skill_text}. 이 역할의 관점에서 실무에 바로 쓸 수 있는 "
         "구체적이고 실질적인 산출물을 작성하세요. 불필요한 설명 없이 산출물 자체에 집중하세요."
+    )
+    knowledge = pool_registry.skill_knowledge_text(conn, skills)
+    return (
+        f"{base}\n\n참고 지식({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n{knowledge}"
+        if knowledge
+        else base
     )
 
 

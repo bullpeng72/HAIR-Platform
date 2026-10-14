@@ -1,14 +1,14 @@
-"""Phase 26 — ASANA_PARITY_DESIGN_PLAN.md Phase 1: F17(Task 메모) + F19(Task
-단위 통합 활동 타임라인)(사용자 요청, 2026-10-08, "HAIR-Platform이 갖고 있는
+"""Phase 26 — ASANA 모방 기획 Phase 1: Task 메모 + Task
+단위 통합 활동 타임라인(사용자 요청, 2026-10-08, "HAIR-Platform이 갖고 있는
 장점을 살리면서 ASANA 모방 수준의 기능 및 UI 제공을 위한 기획 및 설계안을
 제안해줘" → 설계안 승인 후 "Phase 1→5 순서로" 진행 지시).
 
-F17: `GET /api/tasks/{task_id}`·`PATCH /api/tasks/{task_id}/notes` — 결과물이
+Task 메모: `GET /api/tasks/{task_id}`·`PATCH /api/tasks/{task_id}/notes` — 결과물이
 아직 없는 단계에서도 참가자들이 맥락/의사결정을 적어두는 자유 텍스트 공간.
 결재가 필요 없는 가벼운 메모라 `create_comment()`와 같은 참가자 판정만
 재사용한다(대리 작성 금지, 승인 체인 없음).
 
-F19: `GET /api/tasks/{task_id}/activity` — 배정·결과물·댓글·Agent 실행·결재·
+통합 활동 타임라인: `GET /api/tasks/{task_id}/activity` — 배정·결과물·댓글·Agent 실행·결재·
 Task 자체 변경을 `audit_log`에서 전부 모아 하나의 타임라인으로 합친다.
 `audit_log`의 `subject_type`이 엔티티마다 제각각이라(`assignment`/
 `deliverables`/`deliverable_comments`/`agent_execution_jobs`/`approval`/
@@ -217,7 +217,7 @@ def test_gc_activity_includes_task_notes_updated_entry(client_and_conn):
 
 def test_gc_activity_does_not_leak_across_tasks(client_and_conn):
     client, conn = client_and_conn
-    # human_pool은 계정 1:1 링크 제약(§73)이 있어 같은 member1을 두 번째
+    # human_pool은 계정 1:1 링크 제약이 있어 같은 member1을 두 번째
     # human_pool 레코드에 또 연결할 수 없다 — 하나의 human_pool 리소스를
     # task A·B 양쪽에 confirmed로 배정해 재사용한다(실제로 한 사람이
     # 여러 task를 동시에 맡는 흔한 경우와도 더 맞다).

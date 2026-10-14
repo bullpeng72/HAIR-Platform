@@ -1,6 +1,6 @@
 """팀(Team) — 사용자 요청(2026-10-06, "복수의 사람이 복수의 Agent와 또는
 CrewAI 장점인 역할에 따른 Agent를 묶어 생성된 그룹과 협업하도록... 다시
-기획"). `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 1+2.
+기획"). Phase 1+2.
 
 `human_pool`/`agent_pool` 멤버를 역할명과 함께 묶어 여러 업무에 재사용
 가능한 단위로 등록한다 — `skill_pool`/`tool_pool`(`pool_registry.py`)과
@@ -50,7 +50,8 @@ def get_team(conn: sqlite3.Connection, team_id: int) -> dict | None:
     members = conn.execute(
         """
         SELECT tm.id, tm.member_type, tm.member_id, tm.role_label,
-               CASE WHEN tm.member_type = 'human' THEN hp.name ELSE ap.role_name END
+               CASE WHEN tm.member_type = 'human' THEN hp.name
+                    ELSE COALESCE(ap.name, ap.role_name) END
                    AS member_name
         FROM team_members tm
         LEFT JOIN human_pool hp ON hp.id = tm.member_id AND tm.member_type = 'human'
@@ -102,8 +103,7 @@ def delete_team(conn: sqlite3.Connection, actor_id: int, team_id: int) -> None:
     type='team')가 있어도 FK가 안 걸려 있어(JSON이 아니라 정수 참조지만
     tool_pool/skill_pool과 마찬가지로 엄격한 FK는 안 둠) 막지 않는다 —
     과거 배정 이력(assignment_history)은 "그 당시 팀 이름"을 알아야
-    하는 감사 목적이라 팀 자체를 지워도 레코드는 남는다(NF10과 같은
-    append-only 원칙)."""
+    하는 감사 목적이라 팀 자체를 지워도 레코드는 남는다(append-only 원칙)."""
     row = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
     if row is None:
         raise ValueError("team_not_found")
@@ -181,8 +181,8 @@ def remove_team_member(
 def human_members_with_accounts(conn: sqlite3.Connection, team_id: int) -> list[dict]:
     """이 팀의 사람 멤버 중 로그인 계정이 연결된(human_pool.user_id) 것만
     반환한다 — `deliverables.task_participant_relationship()`이 "이
-    사람이 이 팀의 멤버라서 참가자로 인정되는지" 판정할 때 쓴다(§51의
-    "계정 미연결" 경고와 같은 경계 — 계정 없는 멤버는 애초에 로그인을
+    사람이 이 팀의 멤버라서 참가자로 인정되는지" 판정할 때 쓴다("계정
+    미연결" 경고와 같은 경계 — 계정 없는 멤버는 애초에 로그인을
     못 해 구조적으로 이 판정 대상이 될 수 없다)."""
     rows = conn.execute(
         """
@@ -198,8 +198,7 @@ def human_members_with_accounts(conn: sqlite3.Connection, team_id: int) -> list[
 
 def active_agent_member_ids(conn: sqlite3.Connection, team_id: int) -> list[int]:
     """이 팀의 Agent 멤버 중 온보딩(active)된 것만 — `run_crew()`는
-    active 상태만 받는다(§Phase 3에서 쓸 예정, `docs/MULTI_PARTY_TEAM_
-    COLLABORATION_PLAN.md`)."""
+    active 상태만 받는다(Phase 3에서 쓸 예정)."""
     rows = conn.execute(
         """
         SELECT ap.id AS agent_id

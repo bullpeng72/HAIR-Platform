@@ -11,7 +11,7 @@ CLI(test_phase7의 test_gc53)와 같은 동작을 유지하는지, (3) `eval`이
 `eval_wiring.py`의 `__main__` 블록을 그대로 위임하는지, (4) 이번에
 같이 고친 `create_app()`의 `HAIR_PLATFORM_DB_PATH` 환경변수 폴백
 (이전엔 `uvicorn --factory`로 띄우면 DB 경로를 지정할 방법이 없어
-매번 ":memory:"였다 — `docs/LIMITS.md` §83)이 제대로 동작하는지를
+매번 ":memory:"였다)이 제대로 동작하는지를
 검증한다. `hair serve` 자체(uvicorn.run 호출)는 프로세스를 블로킹
 시키므로 단위 테스트로 실행하지 않는다 — 실서버 기동으로 수동 확인.
 단, uvicorn.run/threading.Timer를 모킹해 "브라우저 자동 열기 예약"
@@ -154,7 +154,7 @@ def test_gc_eval_subcommand_delegates_to_eval_wiring_main_block():
 
 # ---------- create_app()의 HAIR_PLATFORM_DB_PATH 환경변수 폴백 ----------
 # (`hair serve`가 --reload 재시작 시 팩토리를 인자 없이 재호출하므로
-# db_path를 넘길 유일한 통로 — §83에서 새로 발견/수정한 갭)
+# db_path를 넘길 유일한 통로 — 새로 발견/수정한 갭)
 
 
 def test_gc_create_app_defaults_to_memory_without_env_var(monkeypatch):

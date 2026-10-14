@@ -1,4 +1,4 @@
-"""Phase 3 v1 골든셋 4건(알고리즘) — 완전일치/스코어링/null예외/후보없음(SPEC.md §9)."""
+"""Phase 3 v1 골든셋 4건(알고리즘) — 완전일치/스코어링/null예외/후보없음."""
 
 from __future__ import annotations
 

@@ -1,15 +1,15 @@
 """배포된(active) Agent에게 실제로 일을 시키는 온디맨드 실행 — 사용자 요청(2026-09-26).
 
-F4(생성) 시점의 LLM 호출(`jobs.llm_agent_generator`)은 "처음 합류했을 때의
-산출물" 한 번만 만든다. 이 모듈은 그 이후 — 실제로 온보딩(F9)까지 끝나 조직에
+생성 시점의 LLM 호출(`jobs.llm_agent_generator`)은 "처음 합류했을 때의
+산출물" 한 번만 만든다. 이 모듈은 그 이후 — 실제로 온보딩까지 끝나 조직에
 배치된 Agent에게 구체적인 업무를 맡기고 결과를 받는 경로다. 이게 있어야
 "생성만 되고 일은 안 하는 레코드"가 아니라 실제로 호출해 쓸 수 있는 Agent가 된다.
 
-ADR 결정 11(사용자 요청, 2026-09-26, 3차) — `skill_tags`에 "rag"
+사용자 요청(2026-09-26, 3차) — `skill_tags`에 "rag"
 또는 "graphdb"가 있으면 LLM을 부르기 전에 각각 `vectorstore.search()`(임베딩
 검색, 추가 비용 발생)·`graphquery.context_for_prompt()`(SQL 조회, 비용 없음)로
 검색 결과를 프롬프트에 덧붙인다(RAG) — 이게 "지식검색 Agent"·"관계분석
-Agent"의 실제 동작이다. 관계분석 쪽은 NF9 경계를 지키기 위해 `graphquery.py`
+Agent"의 실제 동작이다. 관계분석 쪽은 경계를 지키기 위해 `graphquery.py`
 자체가 성과 데이터를 절대 SELECT하지 않는다.
 
 사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
@@ -18,7 +18,7 @@ API(가능한 무료)를... 추가해줘")로 "외부검색" skill_tags도
 검색, API 키 불필요·무료)로 VectorDB/GraphDB가 못 다루는 "조직 밖
 일반 지식"을 보강한다. ("websearch"/"vectordb"/"관계질의"는 각각
 "외부검색"/"rag"/"graphdb"와 완전히 같은 뜻의 별칭이었으나 자동완성
-중복 리포트로 2026-10-06에 한쪽으로 통합됨, docs/LIMITS.md §49.)
+중복 리포트로 2026-10-06에 한쪽으로 통합됨.)
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def augment_with_retrieval(
     conn: sqlite3.Connection, skills: list[str], prompt: str
 ) -> tuple[str, str | None]:
     """skill_tags로 지식검색(VectorDB)/관계분석(GraphDB) Agent를 판별해
-    검색 결과를 프롬프트에 덧붙인다(ADR 결정 11). 해당 없으면 원본 그대로.
+    검색 결과를 프롬프트에 덧붙인다. 해당 없으면 원본 그대로.
 
     **정정(2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록
     개선해줘")**: 이 정적 주입 방식은 이제 `execute_agent()`(도구 호출
@@ -98,7 +98,7 @@ def index_knowledge(
     model: str | None = None,
 ) -> int:
     """이 Agent의 산출물(또는 지정한 text)을 임베딩해 지식검색 Agent가 찾을
-    수 있게 색인한다(ADR 결정 11, 비용 발생 — 항상 명시적 호출로만 일어난다)."""
+    수 있게 색인한다(비용 발생 — 항상 명시적 호출로만 일어난다)."""
     agent = conn.execute(
         "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
     ).fetchone()
@@ -163,10 +163,21 @@ def execute_agent(
     resolved_provider, resolved_model = llm.resolve_provider_and_model(
         effective_provider, effective_model
     )
-    system = llm.system_prompt_for_role(agent["role_name"], skills)
+    system = llm.system_prompt_for_role(conn, agent["role_name"], skills)
     augmented_prompt, retrieved_context = augment_with_retrieval(conn, skills, prompt)
     if retrieval_sink is not None:
         retrieval_sink["retrieved_context"] = retrieved_context
+        # 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 재현
+        # 가능한 감사로그) — 실제로 LLM에 들어간 전체 프롬프트(시스템+
+        # 증강된 사용자 프롬프트)와 그 시점에 쓴 provider/model을 호출자
+        # (`run_agent_execution_job()`)가 `agent_execution_jobs.
+        # prompt_snapshot`에 영구 저장할 수 있게 같은 side-channel로
+        # 함께 넘긴다 — LLM 호출(실패할 수도 있는 지점) *전에* 채워서,
+        # 실패해도 "무엇을 시도했는지"는 남긴다.
+        retrieval_sink["system_prompt"] = system
+        retrieval_sink["augmented_prompt"] = augmented_prompt
+        retrieval_sink["llm_provider"] = resolved_provider
+        retrieval_sink["llm_model"] = resolved_model
     output = llm.call_llm(resolved_provider, resolved_model, system, augmented_prompt)
 
     conn.execute(
@@ -199,7 +210,7 @@ def set_model_config(
 
     `model`을 안 주면 해당 provider의 기본 모델로 채운다(`llm.DEFAULT_MODELS`).
     `mcp_servers`는 `None`이면 기존 설정을 그대로 두고(부분 갱신), 리스트를
-    주면(빈 리스트 포함) 그 값으로 덮어쓴다(ADR 결정 10, 2026-09-27).
+    주면(빈 리스트 포함) 그 값으로 덮어쓴다(2026-09-27).
     """
     agent = conn.execute(
         "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
@@ -238,3 +249,40 @@ def set_model_config(
     )
     conn.commit()
     return resolved_provider, resolved_model
+
+
+def set_tuning_config(conn: sqlite3.Connection, agent_id: int, actor_id: int, tuning: dict) -> dict:
+    """사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해 Finetuning
+    하는 기능") — CrewAI `Agent`/`LLM`의 동작 파라미터(max_iter/max_rpm/
+    max_execution_time/max_retry_limit/reasoning/allow_code_execution/
+    respect_context_window/temperature)를 Agent별로 저장한다. 실제 LLM
+    가중치 재학습이 아니다(사용자 확인) — `crew_runtime.py`가 CrewAI
+    Agent/LLM을 만들 때 이 값을 읽어 반영한다(`stub`/`simple_llm`
+    프레임워크로 만든 Agent에는 적용되지 않음 — 그 경로엔 CrewAI Agent
+    루프 자체가 없다).
+
+    `tuning`에서 값이 `None`인 키는 저장에서 빼 "CrewAI 기본값 사용"으로
+    되돌린다 — 지정 안 한 설정까지 `null`로 채워 저장하면 나중에 "이게
+    명시적으로 비워진 건지 원래 기본값인지" 구분이 안 된다."""
+    agent = conn.execute(
+        "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
+    ).fetchone()
+    if agent is None:
+        raise ValueError("agent_not_found")
+
+    cleaned = {k: v for k, v in tuning.items() if v is not None}
+    conn.execute(
+        "UPDATE agent_pool SET tuning_config = ? WHERE id = ?",
+        (json.dumps(cleaned, ensure_ascii=False), agent_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "agent_tuning_config_updated",
+        "agent_pool",
+        agent_id,
+        before={"tuning_config": json.loads(agent["tuning_config"])},
+        after={"tuning_config": cleaned},
+    )
+    conn.commit()
+    return cleaned

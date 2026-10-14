@@ -3,31 +3,31 @@
 가능한 구조인데, 복수 그룹 가능하도록 개선, 이 그룹이 전체 업무에서
 사람-에이전트 연동이 가능한 구조인지 확인해줘").
 
-`docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3 — 실측으로 확인한
+Phase 3 — 실측으로 확인한
 전제: 기존 `run_crew()`는 `agent_ids`를 매번 직접 골라야 하는 "즉석
 실행"이고(저장되는 그룹 개념 없음), `task_id`를 받지 않아 결과가
-`assignments`/`deliverables`/결재 체인 어디에도 연결되지 않았다(§61
-"알려진 갭"에서 이미 지적). "복수 그룹"은 팀(teams.py)을 재사용하는
-방식으로 해결한다 — 한 할 일에 팀을 여러 개 배정하는 것 자체는 §61의
+`assignments`/`deliverables`/결재 체인 어디에도 연결되지 않았다("알려진
+갭"에서 이미 지적). "복수 그룹"은 팀(teams.py)을 재사용하는
+방식으로 해결한다 — 한 할 일에 팀을 여러 개 배정하는 것 자체는
 "다중 confirmed 허용"으로 이미 가능했고(팀도 resource_type별 제한
 없음), 이번에 추가하는 것은 "그중 한 팀의 Agent 멤버를 실제 CrewAI
 Crew로 실행해 그 결과를 업무 파이프라인에 연결하는 다리"다(사용자
 결정 — 여러 팀을 동시 실행하지 않고 "팀 하나를 골라서 실행").
 
-GC237-238: `crew_runtime.run_crew_for_team()` — 검증(팀 존재, confirmed
+- `crew_runtime.run_crew_for_team()` — 검증(팀 존재, confirmed
 배정, active Agent 멤버)과 task 맥락 기반 프롬프트 구성.
-GC239-241: `/api/tasks/{id}/execute-team-crew` 엔드포인트 — Agent별
+- `/api/tasks/{id}/execute-team-crew` 엔드포인트 — Agent별
 deliverable+결재 체인 생성(사람-에이전트 연동 증명), RBAC, 복수 팀
 독립 실행.
 
-GC242-243: 사용자 후속 피드백(2026-10-07, "현재 UI가 복수의 에이전트
+사용자 후속 피드백(2026-10-07, "현재 UI가 복수의 에이전트
 그룹 생성 및 HAIR 관점의 연동에 적합한 경우는 아님... AI 에이전트
 생성과 통합 또는 AI 에이전트 관리 노출 검토")으로 추가한 것 —
 `teams.team_names_for_agent()`와 `GET /api/agent-pool`의 `team_names`
 노출(관리 화면에서 Agent의 팀 소속을 바로 보여주기 위함).
 
-GC249: 사용자 요청(2026-10-07, "시나리오 내용도 crew 에이전트 그룹을
-포함하도록 개선해줘")으로 `docs/SCENARIOS.md` 시나리오 5를 "개별
+사용자 요청(2026-10-07, "시나리오 내용도 crew 에이전트 그룹을
+포함하도록 개선해줘")으로 시나리오 5를 "개별
 Agent 배정 없이 팀 배정 하나만으로 팀 Crew 실행" 흐름으로 다시 쓰며
 라이브 실행하다 발견한 실제 버그 — `deliverables.list_my_work()`
 (`GET /api/my-work`)가 `resource_type='team'`을 전혀 몰랐다. 같은
@@ -178,7 +178,7 @@ def test_gc239_execute_team_crew_endpoint_creates_deliverable_and_approval_per_a
     client_and_conn,
 ):
     """핵심 검증 — "사람-에이전트 연동 가능한 구조인지": 팀 Crew 실행
-    결과가 각 Agent별 deliverable + F7 결재 체인으로 떨어져야, 그 순간
+    결과가 각 Agent별 deliverable + 결재 체인으로 떨어져야, 그 순간
     부터 사람(팀 리더/팀원)이 협업 워크스페이스에서 보고 승인할 수
     있다."""
     client, conn = client_and_conn
@@ -240,7 +240,7 @@ def test_gc240_execute_team_crew_rejects_non_participant(client_and_conn):
 
 def test_gc241_two_teams_on_one_task_execute_independently(client_and_conn):
     """ "복수 그룹" 핵심 — 한 할 일에 팀 2개가 confirmed로 공존하고
-    (§61 다중 confirmed 허용), 각각 독립적으로 Crew 실행할 수 있다(동시
+    (다중 confirmed 허용), 각각 독립적으로 Crew 실행할 수 있다(동시
     아님 — 사용자 결정대로 한 번에 하나씩)."""
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")

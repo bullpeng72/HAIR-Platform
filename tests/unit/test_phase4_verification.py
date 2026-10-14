@@ -1,7 +1,7 @@
-"""Phase 4 검증 골든셋 — NF7(idempotency) 갭 수정, 샌드박스 우회 방지 회귀,
-배정 공정성 지표(NF4). SPEC.md §7 "Gate A–G 전부 fail→진단→해결" 항목은 실제
-AgentForge agent-evaluator SDK가 vendor/import되지 않아(§12 오픈 이슈) 이 저장소
-에서는 검증 불가능하다 — 정직하게 남긴다(docs/LIMITS.md 참고).
+"""Phase 4 검증 골든셋 — idempotency 갭 수정, 샌드박스 우회 방지 회귀,
+배정 공정성 지표. "Gate A–G 전부 fail→진단→해결" 항목은 실제
+AgentForge agent-evaluator SDK가 vendor/import되지 않아(오픈 이슈) 이 저장소
+에서는 검증 불가능하다 — 정직하게 남긴다.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ def test_gc37_duplicate_generation_request_reuses_existing_item_nf7(client_and_c
 
 
 def test_gc37b_dedup_response_flags_reused_items(client_and_conn):
-    """NF7 dedup 재사용을 응답에 `reused`/`reused_count`로 명시한다 — UI가
+    """dedup 재사용을 응답에 `reused`/`reused_count`로 명시한다 — UI가
     "생성했는데 안 보인다"는 오해를 피하도록(사용자 요청, 2026-10-02).
 
     **정정(2026-10-06, 사용자 보고 "생성은 '성공'으로 떴는데 관리 탭에
@@ -99,6 +99,13 @@ def test_gc37b_dedup_response_flags_reused_items(client_and_conn):
 def test_gc38_sandbox_failure_cannot_be_bypassed_into_success(client_and_conn):
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")
+    # 2026-10-14 "기본 배포에 Agent를 포함해줘"로 `agent_pool`이 더는
+    # 빈 상태로 시작하지 않는다(레퍼런스 파이프라인 Agent 12개가 항상
+    # 시드돼 있음) — 그래서 "0건"이 아니라 "이 테스트가 시작하기 전
+    # 대비 늘지 않았는지"를 기준으로 삼는다.
+    baseline_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM agent_pool"
+    ).fetchone()["c"]
     brief_id, task_id = _make_brief_with_task(client, "디자이너")
 
     with patch(
@@ -116,7 +123,7 @@ def test_gc38_sandbox_failure_cannot_be_bypassed_into_success(client_and_conn):
 
     # 샌드박스가 실패라고 답했는데도 agent_pool에 항목이 생기면 우회된 것이다.
     count = conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"]
-    assert count == 0
+    assert count == baseline_count
 
 
 def test_gc39_fairness_report_computes_rejection_rate_gap(client_and_conn):

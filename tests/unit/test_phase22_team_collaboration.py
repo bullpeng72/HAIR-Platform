@@ -1,16 +1,16 @@
 """Phase 22 — 다자간 팀 협업(사용자 요청, 2026-10-06, "복수의 사람이 복수의
 Agent와 또는 CrewAI 장점인 역할에 따른 Agent를 묶어 생성된 그룹과 협업하도록
-... 다시 기획"). `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 1+2 구현
-검증: `teams.py`(등록→재사용 CRUD), `assignments.resource_type='team'`(F7
+... 다시 기획"). Phase 1+2 구현
+검증: `teams.py`(등록→재사용 CRUD), `assignments.resource_type='team'`(
 결재 주체는 팀 리더, 기본값은 요청자·변경 가능), "다중 confirmed 허용"(같은
 task·같은 resource_type이어도 명시적 `replaces_assignment_id` 없이는 더 이상
 자동 supersede되지 않음)을 다룬다.
 
-GC226-229: `teams.py` CRUD + RBAC + 409/404 에러 경로.
-GC230-232: 팀 배정 요청 → 리더 기본값/변경 → F7 self-approval.
-GC233: 팀 리더/팀 멤버가 `task_participant_relationship()`에서 참가자로
+- `teams.py` CRUD + RBAC + 409/404 에러 경로.
+- 팀 배정 요청 → 리더 기본값/변경 → self-approval.
+- 팀 리더/팀 멤버가 `task_participant_relationship()`에서 참가자로
 인정되어 결과물을 쓸 수 있는지(그 외엔 403).
-GC234: `GET /api/tasks/{id}/assignments`가 team 자원의 이름(`teams.name`)과
+- `GET /api/tasks/{id}/assignments`가 team 자원의 이름(`teams.name`)과
 `team_leader_id`를 노출하는지 — 이 테스트를 작성하며 기존 쿼리가 teams를
 조인하지 않아 `resource_name`이 항상 null로 나오는 실제 버그를 발견해
 `app.py::list_task_assignments`에 `LEFT JOIN teams` + `team_leader_id`
@@ -218,7 +218,7 @@ def test_gc231_team_leader_defaults_to_requester_and_self_approval_blocked(
     assert row["resource_name"] == "QA팀"
     assert row["team_leader_id"] == manager1_id
 
-    # 팀 리더(=기본값인 요청자 본인)는 self-approval 방지(ADR 3-A)에 걸린다.
+    # 팀 리더(=기본값인 요청자 본인)는 self-approval 방지에 걸린다.
     resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
     assert resp.status_code == 403
 

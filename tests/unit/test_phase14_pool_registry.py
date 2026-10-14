@@ -1,4 +1,4 @@
-"""Phase 14 — Skill Pool·Tool Pool 실제 구현(ADR.md 결정 12, 사용자 요청,
+"""Phase 14 — Skill Pool·Tool Pool 실제 구현(사용자 요청,
 2026-09-27, "tool_pool·skill_pool 테이블도 실제로 구현해줘").
 
 이전 라운드("MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘")에서는
@@ -25,7 +25,7 @@ def test_gc108_init_schema_seeds_default_vectordb_graphdb_pools():
 
     **정정(2026-10-06)**: 원래 "vectordb"/"rag", "graphdb"/"관계질의" 두
     쌍 다 별칭으로 있었으나, "필요 스킬" 자동완성 중복 리포트로 각각
-    "rag"/"graphdb" 하나로 통합했다(docs/LIMITS.md §49)."""
+    "rag"/"graphdb" 하나로 통합했다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     db.init_schema(conn)  # 멱등성 확인
@@ -195,14 +195,14 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
 
 def test_gc196_init_schema_seeds_websearch_pool(client_and_conn):
     """사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
-    API(가능한 무료)를... 추가해줘") — GC108과 같은 방식으로, 외부 자료
+    API(가능한 무료)를... 추가해줘") — 같은 방식으로, 외부 자료
     검색(Wikipedia) native Tool과 "외부검색" skill_pool 항목이 스키마
     초기화 시 자동으로 채워지고, "외부검색" 스킬을 가진 Agent에 실제로
     그 Tool이 연결되는지 확인한다.
 
     **정정(2026-10-06)**: 원래 "websearch"/"외부검색" 두 별칭이 모두
     있었으나, "필요 스킬" 자동완성에 완전히 같은 뜻이 두 번 떠 중복으로
-    보인다는 리포트로 "외부검색" 하나로 통합했다(docs/LIMITS.md §49)."""
+    보인다는 리포트로 "외부검색" 하나로 통합했다."""
     from contextlib import ExitStack
 
     _client, conn = client_and_conn
@@ -236,12 +236,12 @@ def test_gc196_init_schema_seeds_websearch_pool(client_and_conn):
 
 
 class _FakeGeneralWebSearchMCPAdapter:
-    """`crewai_tools.MCPServerAdapter`의 안전한 mock 경계(GC104와 같은
+    """`crewai_tools.MCPServerAdapter`의 안전한 mock 경계(같은
     정신) — 실제 클래스는 생성 시점에 진짜 네트워크 접속을 시도하므로
     (`connect_timeout` 기본 30초), 이 클래스 자체를 patch하는 것이
     유일하게 안전한 검증 방법이다. 실제 접속 자체는 라이브로 이미
-    확인했다(`docs/LIMITS.md` §44 — `web_search`/`web_fetch` 두 Tool이
-    실제로 열리고, 실제 뉴스 검색까지 성공)."""
+    확인했다 — `web_search`/`web_fetch` 두 Tool이 실제로 열리고, 실제
+    뉴스 검색까지 성공."""
 
     def __init__(self, serverparams, *tool_names, connect_timeout=30):
         self.serverparams = serverparams
@@ -317,11 +317,17 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
 
     resp = client.get("/api/tool-pool")
     assert resp.status_code == 200
-    assert len(resp.json()) == 5  # 시드된 VectorDB/GraphDB/recommend_fix/외부검색/일반웹검색 도구
+    # 시드된 VectorDB/GraphDB/recommend_fix/외부검색/일반웹검색(5) +
+    # 2026-10-14 "기본 배포에 Tool을 포함해줘"로 추가된 레퍼런스 파이프라인
+    # custom_python 도구 5개(Spec EARS 린터·실패모드 기계적 도출·골든셋
+    # 커버리지 체커·분석 프레임워크 템플릿 생성기·발표자료 아웃라인 생성기) +
+    # 2026-10-14(PM/AA/DA 등 기획→개발 팀 구성)로 추가된 "테스트 케이스
+    # 기계적 도출" 1개(= 10 + 1 = 11).
+    assert len(resp.json()) == 11
 
-    # 사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 1,
-    # "(a) MCP 종류만 admin 전용으로 좁히기") — 매니저는 mcp_remote/
-    # mcp_stdio 등록이 이제 403이다. native는 여전히 매니저도 가능.
+    # 사용자 결정(2026-09-29, "(a) MCP 종류만 admin 전용으로 좁히기") —
+    # 매니저는 mcp_remote/mcp_stdio 등록이 이제 403이다. native는
+    # 여전히 매니저도 가능.
     resp = client.post(
         "/api/tool-pool",
         json={
@@ -371,12 +377,23 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 22
+        len(resp.json()) == 47
     )  # 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 외부검색 1 +
     # 일반웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복 통합으로
-    # 제거됨(docs/LIMITS.md §49)
-    # — "websearch"는 "외부검색"과 완전히 같은 뜻이라 2026-10-06에 하나로
-    # 통합했다(docs/LIMITS.md §49).
+    # 제거됨 — "websearch"는 "외부검색"과 완전히 같은 뜻이라 2026-10-06에
+    # 하나로 통합했다.
+    # + 2026-10-14 "기본 배포에 Skill을 포함해줘"로 추가된 레퍼런스
+    # 파이프라인 Skill 15개(= 22 + 15 = 37).
+    # + 2026-10-14(PM/AA/DA 등 기획→개발 팀 구성)로 추가된 Skill 9개
+    # (지식 스킬 8개: pm-delivery-coordination·
+    # application-architecture-design-guide·data-model-design-guide·
+    # module-decomposition-and-task-assignment·
+    # frontend-ui-implementation-guide·ui-ux-planning-guide·
+    # test-plan-and-case-design-guide·quality-acceptance-criteria-guide
+    # + tool-wrapping 스킬 1개: test-case-mechanical-derivation
+    # = 37 + 9 = 46).
+    # + 2026-10-14("자율 개발 크루" 10인 개발자 풀)로 추가된 Skill 1개
+    # (data-infra-implementation-guide = 46 + 1 = 47).
 
     resp = client.post(
         "/api/skill-pool",

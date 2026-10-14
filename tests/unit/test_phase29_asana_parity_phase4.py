@@ -1,15 +1,15 @@
-"""Phase 29 — ASANA_PARITY_DESIGN_PLAN.md Phase 4: F16(작업 구조 심화 —
-상태/우선순위/의존관계) + F18(운영 가시성)(사용자 요청, 2026-10-08,
+"""Phase 29 — ASANA 모방 기획 Phase 4: 작업 구조 심화(상태/우선순위/
+의존관계) + 운영 가시성(사용자 요청, 2026-10-08,
 "...기획 및 설계안을 제안해줘" → 승인 후 "Phase 1→5 순서로" 진행 지시,
 열린 질문 3에 "Riido 수준의 그래프 시각화로" 답).
 
-F16의 핵심 리스크는 순환 의존이다 — `task_dependencies`에 CHECK 제약으로
+작업 구조 심화의 핵심 리스크는 순환 의존이다 — `task_dependencies`에 CHECK 제약으로
 자기참조는 막지만 간접 순환(A→B→C→A)은 애플리케이션 레벨 DFS
 (`_would_create_cycle()`)로만 막을 수 있다. 이 테스트의 1순위 목적은
 그 DFS가 실제로 동작하는지 확인하는 것.
 
-F18은 새 계측이 없으므로(설계 문서 §2 F18) 이미 있는 데이터(배정+F16
-상태, 결과물 반려 이력)만으로 workload/bottlenecks가 올바르게
+운영 가시성은 새 계측이 없으므로(설계 문서) 이미 있는 데이터(배정+상태,
+결과물 반려 이력)만으로 workload/bottlenecks가 올바르게
 집계되는지 확인한다."""
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ def _create_outsider(client, username="outsider1"):
     assert resp.status_code == 201, resp.text
 
 
-# ---------- F16: status/priority ----------
+# ---------- status/priority ----------
 
 
 def test_gc_participant_can_update_status_and_priority(client_and_conn):
@@ -134,7 +134,7 @@ def test_gc_default_status_and_priority_on_new_task(client_and_conn):
     assert resp.json()["priority"] == "medium"
 
 
-# ---------- F16: dependencies ----------
+# ---------- dependencies ----------
 
 
 def test_gc_add_and_list_dependency_graph(client_and_conn):
@@ -185,7 +185,7 @@ def test_gc_indirect_cycle_rejected(client_and_conn):
         json={"tasks": [{"role_name": "작업 C", "required_skills": []}]},
     ).json()["tasks"][0]["id"]
     # 의존관계 추가는 "그 task의 참가자"만 할 수 있다(참가자 전용 판정,
-    # F17 때 정한 관례) — member1을 B·C에도 confirmed 배정해 세 task
+    # 그때 정한 관례) — member1을 B·C에도 confirmed 배정해 세 task
     # 모두의 참가자로 만든다.
     _confirm_assignment(
         client, task_b, "human", human_id, requester=("manager1", "managerpass")
@@ -271,7 +271,7 @@ def test_gc_dependency_activity_recorded_in_task_activity(client_and_conn):
     assert "task_dependency_added" in actions
 
 
-# ---------- F18 ----------
+# ---------- 운영 가시성 ----------
 
 
 def test_gc_workload_counts_in_progress_assignments(client_and_conn):

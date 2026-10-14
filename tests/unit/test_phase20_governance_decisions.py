@@ -1,16 +1,16 @@
 """Phase 20 — 사용자 결정(2026-09-29) 8건 골든셋.
 
-`docs/ROLE_TASK_CLASSIFICATION.md`(갭 1·갭 2)와 `docs/SPEC.md` §12 오픈
+외부 사례 리서치(갭 1·갭 2)와 오픈
 이슈 목록을 종합 정리해 사용자에게 물은 뒤, 한 번에 결정을 받은 8건이다:
 (1) 갭 1 — MCP 도구 등록 admin 전용, (2) 갭 2 — Human Pool 비용/성과
-admin 전용, (3) F14 breakdown 본인 공개, (4) 보관기간 1년,
+admin 전용, (3) 매칭 점수 breakdown 본인 공개, (4) 보관기간 1년,
 (5) 팀원 셀프서비스 배정 요청, (6) CrewAI 위임 캡처 방어 로직,
 (7) skill_pool.augmentation_mode='always' 실제 구현, (8) VectorDB
 Ollama 임베딩 지원.
 
-갭 1·갭 2의 RBAC 축소는 기존 골든셋(test_phase14_pool_registry.py의
-GC114, test_phase7_review_fixes.py의 GC54, test_v4_pipeline.py의
-GC27-29)을 새 동작에 맞게 직접 갱신했다 — 이 파일은 그 나머지(3~8)와
+갭 1·갭 2의 RBAC 축소는 기존 골든셋(test_phase14_pool_registry.py,
+test_phase7_review_fixes.py, test_v4_pipeline.py)을 새 동작에 맞게
+직접 갱신했다 — 이 파일은 그 나머지(3~8)와
 갭 1·갭 2의 "성공 경로"만 추가로 검증한다.
 """
 
@@ -46,7 +46,7 @@ def test_gc200_member_can_request_assignment_for_own_human_pool_record(
     client_and_conn,
 ):
     """member1의 human_pool 레코드로 본인이 직접 배정을 요청하면 성공해야
-    한다 — GC12(다른 사람 자원 요청은 여전히 403)와 짝이 되는 성공 경로."""
+    한다 — 다른 사람 자원 요청은 여전히 403인 테스트와 짝이 되는 성공 경로."""
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")
     resp = client.post("/api/briefs", json={"raw_text": "백엔드 개발자"})
@@ -105,7 +105,7 @@ def test_gc200_member_can_request_assignment_for_own_human_pool_record(
     assert resp.status_code == 403
 
 
-# ---------- (3) F14 매칭 점수 breakdown 본인 공개 ----------
+# ---------- (3) 매칭 점수 breakdown 본인 공개 ----------
 
 
 def test_gc201_member_sees_only_own_breakdown_in_match_results(client_and_conn):
@@ -261,7 +261,7 @@ def test_gc203_purge_expired_is_noop_when_nothing_is_old(client_and_conn):
 def test_gc204_delegation_capture_tolerates_renamed_tool_strings():
     """CrewAI가 정확한 문자열("Delegate work to coworker" 등)을 바꿔도
     "delegate"/"coworker" 계열 키워드가 들어간 도구 이름이면 위임으로
-    잡아야 한다(docs/LIMITS.md §12 리스크에 대한 방어 로직)."""
+    잡아야 한다(관련 리스크에 대한 방어 로직)."""
     assert crew_runtime._looks_like_delegation("Delegate work to coworker")
     assert crew_runtime._looks_like_delegation("Ask question to coworker")
     # 버전업으로 표기가 바뀐 상황을 가정한 변형들
@@ -279,7 +279,7 @@ def test_gc204_delegation_capture_tolerates_renamed_tool_strings():
 def test_gc205_always_mode_forces_static_injection_in_run_crew(client_and_conn):
     """`augmentation_mode='always'`로 등록한 스킬은 `run_crew()`에서
     Agent 판단 없이 Task description에 강제로 검색 결과가 끼워 들어가야
-    한다 — 기존 GC106(`'tool'` 모드는 description 원문 유지)과 대비되는
+    한다 — 기존(`'tool'` 모드는 description 원문 유지)과 대비되는
     새 동작이다."""
     _client, conn = client_and_conn
     admin_id = conn.execute(
@@ -336,9 +336,8 @@ def test_gc205_always_mode_forces_static_injection_in_run_crew(client_and_conn):
 
 def test_gc206_tool_mode_skill_still_unaugmented_in_run_crew(client_and_conn):
     """`'always'` 구현이 기존 `'tool'` 모드 스킬(기본 시드된 rag 등)의
-    동작을 바꾸지 않는지 확인한다 — GC106의 회귀 방지 버전. (원래 "vectordb"
-    별칭으로도 됐으나 자동완성 중복 정리로 2026-10-06에 "rag"로 통합됨,
-    docs/LIMITS.md §49.)"""
+    동작을 바꾸지 않는지 확인한다 — 회귀 방지 버전. (원래 "vectordb"
+    별칭으로도 됐으나 자동완성 중복 정리로 2026-10-06에 "rag"로 통합됨.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"

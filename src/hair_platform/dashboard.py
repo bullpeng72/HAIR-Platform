@@ -1,18 +1,17 @@
 """매니저 대시보드 — Phase 5(사용자 요청, 2026-09-28, "Phase 5(기업용
-UI/UX)에 포함할 항목을 고르세요" → "매니저 대시보드" 선택,
-`docs/HAIR_MASTER_PLAN.md` §6 "팀 Agent 평균 Gate 점수, 대기 승인
-건수, 비용 추이를 한 화면에"). 이미 있는 데이터를 모아 보여줄 뿐, 새
-집계 테이블을 만들지 않는다.
+UI/UX)에 포함할 항목을 고르세요" → "매니저 대시보드" 선택 — "팀 Agent
+평균 Gate 점수, 대기 승인 건수, 비용 추이를 한 화면에"). 이미 있는
+데이터를 모아 보여줄 뿐, 새 집계 테이블을 만들지 않는다.
 
 **"비용 추이" 실측 확인**: 처음엔 시계열 비용 데이터가 전혀 없다고
 생각했다(`cost.py`의 `cost_estimate`는 그때그때 값 하나뿐이라). 하지만
-`app.py`의 `agent_cost_updated`(F10 비용 입력)·`human_pool_updated`
+`app.py`의 `agent_cost_updated`(비용 입력)·`human_pool_updated`
 (사람 정보 수정, cost_estimate 포함) 감사로그 액션이 이미 `after_value`
 에 변경된 cost_estimate 값과 `audit_log.created_at` 타임스탬프를 갖고
 있다는 걸 실측으로 확인했다 — 새 계측을 추가할 필요 없이 이 이력을
 그대로 "추이"로 쓴다. 단, 이 DB를 새로 부트스트랩했고 지금까지 아무도
 비용을 바꾼 적이 없으면 이력이 비어있을 수 있다(정직한 한계 — 과거로
-소급해 데이터를 만들어낼 방법은 없다. `docs/LIMITS.md` 참고).
+소급해 데이터를 만들어낼 방법은 없다).
 """
 
 from __future__ import annotations
@@ -94,15 +93,15 @@ def cost_trend(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
 
 
 def workload(conn: sqlite3.Connection) -> list[dict]:
-    """ASANA_PARITY_DESIGN_PLAN.md F18(2026-10-08, Phase 4) — `GET
-    /api/dashboard/workload`. 사람/Agent별 **진행 중**(F16 `tasks.status
+    """2026-10-08, Phase 4 — `GET
+    /api/dashboard/workload`. 사람/Agent별 **진행 중**(`tasks.status
     = 'in_progress'`) Task 수. 새 집계 테이블 없이 confirmed 배정 +
-    F16 상태만으로 계산한다(이 파일 서두의 "이미 있는 데이터를 모아
+    상태만으로 계산한다(이 파일 서두의 "이미 있는 데이터를 모아
     보여줄 뿐" 원칙 그대로)."""
     rows = conn.execute(
         """
         SELECT a.resource_type, a.resource_id,
-               COALESCE(hp.name, ap.role_name) AS name,
+               COALESCE(hp.name, ap.name, ap.role_name) AS name,
                COUNT(*) AS in_progress_count
         FROM assignments a
         JOIN tasks t ON t.id = a.task_id
@@ -118,12 +117,12 @@ def workload(conn: sqlite3.Connection) -> list[dict]:
 
 
 def bottlenecks(conn: sqlite3.Connection) -> list[dict]:
-    """ASANA_PARITY_DESIGN_PLAN.md F18(2026-10-08, Phase 4) — `GET
+    """2026-10-08, Phase 4 — `GET
     /api/dashboard/bottlenecks`("주의 필요" 목록).
 
     설계 문서가 제안한 "마감 임박"은 이 스키마에 마감일 개념 자체가
-    없어(F16도 상태/우선순위까지만 추가했다) 적용할 데이터가 없다 —
-    대신 실제로 계산 가능한 두 신호로 좁혔다: (1) F16 의존관계상 아직
+    없어(상태/우선순위까지만 추가했다) 적용할 데이터가 없다 —
+    대신 실제로 계산 가능한 두 신호로 좁혔다: (1) 의존관계상 아직
     안 끝난 선행 작업에 막혀 있는 task, (2) 결과물이 2회 이상 반려된
     task. `reason`이 둘 다 해당하면 `"blocked+rejected_twice"`로
     합쳐 하나의 행으로 낸다(같은 task가 목록에 중복으로 안 뜨게)."""
@@ -162,6 +161,56 @@ def bottlenecks(conn: sqlite3.Connection) -> list[dict]:
     return list(result.values())
 
 
+# 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 1번 "Gate
+# 점수 기반 자동 경고") — 연속 실패 몇 건부터 "주의 필요"로 볼지는 임의
+# 기준이다. task 쪽 반려 기준(`bottlenecks()`의 "2회 이상")보다 한 단계
+# 더 엄격하게 잡았다 — Agent 하나의 연속 실패는 task 하나의 반복 반려보다
+# "이 Agent를 계속 써도 되는가"라는 더 구조적인 질문이라 판단.
+_REPEATED_GATE_FAILURE_THRESHOLD = 3
+
+
+def _has_failing_gate(gate_scores: dict) -> bool:
+    return any(gate.get("passed") is False for gate in gate_scores.values())
+
+
+def agents_with_repeated_gate_failures(
+    conn: sqlite3.Connection, threshold: int = _REPEATED_GATE_FAILURE_THRESHOLD
+) -> list[dict]:
+    """최근 Gate 평가 `threshold`건이 전부 하나 이상의 Gate에서
+    실패(passed=False)한 활성 Agent를 찾는다 — "이 Agent 계속 믿고 써도
+    되는가"를 사람이 "AI 에이전트 관리" 화면을 일일이 열어보지 않아도
+    대시보드에서 바로 보게 한다.
+
+    평가 건수가 `threshold` 미만이면 판단하지 않는다(표본 부족 — 우연한
+    실패 1~2건으로 단정하지 않는다). 측정 자체가 없는(not_measured)
+    Gate는 "실패"로 안 친다 — `passed`가 명시적으로 `False`일 때만."""
+    agent_rows = conn.execute(
+        "SELECT id, role_name, name FROM agent_pool WHERE status = 'active'"
+    ).fetchall()
+    result = []
+    for agent in agent_rows:
+        rows = conn.execute(
+            """
+            SELECT ae.gate_scores FROM agent_evaluations ae
+            JOIN deliverables d ON d.id = ae.deliverable_id
+            WHERE d.author_type = 'agent' AND d.author_id = ?
+            ORDER BY ae.id DESC LIMIT ?
+            """,
+            (agent["id"], threshold),
+        ).fetchall()
+        if len(rows) < threshold:
+            continue
+        if all(_has_failing_gate(json.loads(row["gate_scores"])) for row in rows):
+            result.append(
+                {
+                    "agent_id": agent["id"],
+                    "role_name": agent["name"] or agent["role_name"],
+                    "recent_evaluation_count": threshold,
+                }
+            )
+    return result
+
+
 def summary(conn: sqlite3.Connection, user_id: int, role: str) -> dict:
     """`GET /api/dashboard` — 한 화면에 필요한 항목을 한 번에 담는다."""
     return {
@@ -171,4 +220,5 @@ def summary(conn: sqlite3.Connection, user_id: int, role: str) -> dict:
         "cost_snapshot": cost.report(conn),
         "workload": workload(conn),
         "bottlenecks": bottlenecks(conn),
+        "agent_bottlenecks": agents_with_repeated_gate_failures(conn),
     }

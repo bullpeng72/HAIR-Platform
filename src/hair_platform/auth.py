@@ -1,6 +1,6 @@
-"""Auth + RBAC — ADR 결정 3(권한 매트릭스)·3-A(self-approval 방지)·6(세션 기반 인증).
+"""Auth + RBAC — 권한 매트릭스·self-approval 방지·세션 기반 인증.
 
-manager_id(직속상사)와 RBAC role은 별개 개념이다(SPEC.md §10) — 이 모듈은 role만
+manager_id(직속상사)와 RBAC role은 별개 개념이다 — 이 모듈은 role만
 다루고, manager_id는 human_pool/users 테이블의 컬럼으로만 저장된다.
 """
 
@@ -111,14 +111,14 @@ def get_current_user(request: Request) -> sqlite3.Row:
 
 
 def require_role(*roles: Role):
-    """지정된 role만 통과시키는 FastAPI 의존성 팩토리(ADR 결정 3 권한 매트릭스)."""
+    """지정된 role만 통과시키는 FastAPI 의존성 팩토리(권한 매트릭스)."""
     allowed = {r.value for r in roles}
 
     def _dependency(user: sqlite3.Row = Depends(get_current_user)) -> sqlite3.Row:
         if user["role"] not in allowed:
             raise HTTPException(
                 status_code=403,
-                detail=f"{user['role']} role은 이 작업을 수행할 수 없습니다(ADR 결정 3)",
+                detail=f"{user['role']} role은 이 작업을 수행할 수 없습니다",
             )
         return user
 

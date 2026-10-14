@@ -1,11 +1,11 @@
 """Phase 9 — 실제 LLM(Anthropic/OpenAI) 연동(사용자 요청, 2026-09-26).
 
-이전까지 F4(Agent 생성)는 `default_stub_generator`(역할명·스킬을 그대로
+이전까지 Agent 생성은 `default_stub_generator`(역할명·스킬을 그대로
 되돌려주는 규칙 기반 함수)만 썼고, 실행 코드 전체에 LLM 호출이 전무했다
 (`grep -rniE "anthropic|openai|llm" src/`로 확인). 이번에:
 
 1. `llm.py` — Anthropic/OpenAI 중 선택 가능한 프로바이더/모델 추상화.
-2. `jobs.llm_agent_generator` — F4 생성 시점에 실제 LLM을 호출하는 옵션(`use_llm=True`,
+2. `jobs.llm_agent_generator` — 생성 시점에 실제 LLM을 호출하는 옵션(`use_llm=True`,
    기본값은 여전히 무료 스텁).
 3. `agent_runtime.execute_agent` — 온보딩된 Agent에게 실제로 업무를 맡기는
    온디맨드 실행 경로(신규).
@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
-from hair_platform import agent_runtime, llm
+from hair_platform import agent_runtime, db, llm
 from hair_platform.jobs import llm_agent_generator
 
 
@@ -70,9 +70,11 @@ def test_gc62_resolve_provider_and_model(monkeypatch):
 
 
 def test_gc63_llm_agent_generator_calls_call_llm_and_shapes_result():
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
     with patch("hair_platform.llm.call_llm", return_value="생성된 산출물 텍스트") as m:
         result = llm_agent_generator(
-            None,
+            conn,
             "백엔드 개발자",
             ["python", "fastapi"],
             provider="anthropic",
@@ -136,6 +138,12 @@ def test_gc66_generate_with_use_llm_but_no_provider_fails_clearly(
     monkeypatch.delenv("HAIR_PLATFORM_LLM_PROVIDER", raising=False)
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")
+    # 2026-10-14 "기본 배포에 Agent를 포함해줘"로 `agent_pool`이 더는
+    # 빈 상태로 시작하지 않는다 — "0건"이 아니라 "이 실패한 생성 시도로
+    # 늘지 않았는지"를 기준으로 삼는다.
+    baseline_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM agent_pool"
+    ).fetchone()["c"]
     brief_id, task_id = _make_brief_with_task(client, "PM")
 
     resp = client.post(
@@ -147,7 +155,7 @@ def test_gc66_generate_with_use_llm_but_no_provider_fails_clearly(
     assert body["status"] == "failed"  # 항목은 실패로 정직하게 기록된다(가짜 성공 없음)
     assert "API_KEY" in body["items"][0]["error"]
     count = conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"]
-    assert count == 0  # 실패했으므로 agent_pool에 생기지 않는다
+    assert count == baseline_count  # 실패했으므로 agent_pool이 늘지 않는다
 
 
 def test_gc67_execute_agent_updates_last_output_and_requires_active(client_and_conn):

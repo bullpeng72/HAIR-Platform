@@ -1,11 +1,11 @@
-"""VectorDB 기반 지식검색 Agent의 임베딩 저장/검색 — ADR.md 결정 11
-(사용자 요청, 2026-09-26, 3차).
+"""VectorDB 기반 지식검색 Agent의 임베딩 저장/검색 — 사용자 요청
+(2026-09-26, 3차).
 
 별도 벡터DB 서버(Pinecone·Chroma 서버 모드 등)를 두지 않고, 이미 있는
 SQLite(`knowledge_chunks`)에 임베딩을 JSON으로 저장하고 검색은 애플리케이션
-레벨에서 코사인 유사도로 계산한다(로컬/온프레미스 우선 원칙, SPEC.md §3).
+레벨에서 코사인 유사도로 계산한다(로컬/온프레미스 우선 원칙).
 실사용 규모·질의 빈도가 커지면 `sqlite-vec` 같은 전용 인덱스로 교체를
-재검토한다(오픈 이슈 — ADR 결정 11).
+재검토한다(오픈 이슈).
 
 **비용 발생 지점**: `embed_text()`(따라서 `index_text()`·`search()`)를 호출하면
 실제 임베딩 API가 호출된다 — 호출부(`app.py`)에서 opt-in으로 게이팅한다.
@@ -23,6 +23,22 @@ DEFAULT_EMBEDDING_MODELS = {
     "ollama": "nomic-embed-text",
 }
 
+# 사용자 보고(2026-10-14, "Error code: 400 - ... maximum context length is
+# 8192 tokens") — 실측으로 확인한 원인: `agent_runtime.
+# augment_with_retrieval()`이 대화 전체 transcript를 그대로 VectorDB 검색
+# 질의로 넘기는데, 메시지 "개수" 제한(`conversations._CONTEXT_MESSAGE_LIMIT`)
+# 은 있어도 토큰 "수" 제한은 없다 — 코드 산출물 하나(실측 사례: 8,256자)만
+# 으로도 OpenAI `text-embedding-3-small`의 8192토큰 한도를 넘긴다(Ollama
+# `nomic-embed-text`도 같은 8192토큰 한도). 정확한 토크나이저(tiktoken)는
+# 이 프로젝트 의존성이 아니라서 보수적인 문자 수 상한으로 잘라낸다(한국어는
+# 영어보다 문자당 토큰 밀도가 높아 넉넉히 잡는다) — 검색 질의는 최근 맥락이
+# 더 중요하므로 앞부분이 아니라 뒷부분을 남긴다.
+_MAX_EMBED_CHARS = 6000
+
+
+def _truncate_for_embedding(text: str) -> str:
+    return text[-_MAX_EMBED_CHARS:] if len(text) > _MAX_EMBED_CHARS else text
+
 
 def embed_text(
     text: str, provider: str | None = None, model: str | None = None
@@ -34,6 +50,7 @@ def embed_text(
     같은 `OLLAMA_BASE_URL` 환경변수·httpx 패턴). Anthropic은 여전히
     지원하지 않는다 — 공개 임베딩 API 자체가 없다.
     """
+    text = _truncate_for_embedding(text)
     provider = provider or "openai"
     if provider == "openai":
         model = model or DEFAULT_EMBEDDING_MODELS["openai"]
@@ -133,7 +150,7 @@ def search(
 
 
 def as_crewai_tool(conn: sqlite3.Connection, top_k: int = 3):
-    """VectorDB 검색을 실제 CrewAI Tool로 감싼다(ADR 결정 12, 사용자 요청
+    """VectorDB 검색을 실제 CrewAI Tool로 감싼다(사용자 요청
     2026-09-27 — "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘").
 
     이전에는 `agent_runtime.augment_with_retrieval()`가 Task를 만들기 전에

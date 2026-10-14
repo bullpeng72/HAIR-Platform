@@ -1,4 +1,4 @@
-"""Phase 3 v0 골든셋 4건 — 파이프라인 형태 증명(SPEC.md §9, ADR.md 결정 1/1-A/3/3-A)."""
+"""Phase 3 v0 골든셋 4건 — 파이프라인 형태 증명."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def test_gc1_auth_and_rbac_boundary(client_and_conn):
     resp = client.post("/login", json={"username": "admin1", "password": "wrong"})
     assert resp.status_code == 401
 
-    # 뷰어는 F1(브리프 제출) 권한이 없다(ADR 결정 3: RBAC 매트릭스)
+    # 뷰어는 브리프 제출 권한이 없다(RBAC 매트릭스)
     _login(client, "viewer1", "viewerpass")
     resp = client.post("/api/briefs", json={"raw_text": "요청"})
     assert resp.status_code == 403
@@ -44,7 +44,7 @@ def test_gc2_f1_brief_submission_pipeline(client_and_conn):
 def test_gc3_f12_human_pool_onboarding_pipeline(client_and_conn):
     client, conn = client_and_conn
 
-    # 팀원은 F12 권한이 없다(ADR 결정 3)
+    # 팀원은 권한이 없다(RBAC 매트릭스)
     _login(client, "member1", "memberpass")
     resp = client.post(
         "/api/human-pool",
@@ -79,7 +79,7 @@ def test_gc4_minimal_approval_workflow_and_self_approval_block(client_and_conn):
     assert resp.status_code == 201
     approval_id = resp.json()["id"]
 
-    # 요청자 본인(manager1, 승인 권한은 있음)이 자기 건을 승인하려 하면 거부된다(ADR 결정 3-A)
+    # 요청자 본인(manager1, 승인 권한은 있음)이 자기 건을 승인하려 하면 거부된다(self-approval 방지)
     resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
     assert resp.status_code == 403
     assert "본인" in resp.json()["detail"]

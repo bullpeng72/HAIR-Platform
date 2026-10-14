@@ -5,7 +5,7 @@
 "AI 에이전트 생성"·"AI 에이전트 관리(모델 설정)"·"Crew 실행"의 "모델명"
 입력란이 전부 자유 텍스트였다 — 실제로 쓸 수 있는 모델이 뭔지 모른 채
 타이핑해야 했고, ollama 기본값("llama3.1")이 로컬에 없어 404가 난 사고가
-실제 선례였다(docs/LIMITS.md 참고). skill_pool/tool_pool과 같은 "등록→
+실제 선례였다. skill_pool/tool_pool과 같은 "등록→
 선택" 패턴을 모델명에도 적용한다 — `model_registry` 테이블+CRUD API+
 provider별 실시간 조회("불러오기")를 신설한다.
 """

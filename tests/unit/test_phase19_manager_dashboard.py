@@ -1,7 +1,7 @@
 """Phase 5 — 매니저 대시보드(사용자 요청, 2026-09-28, "Phase 5(기업용
-UI/UX)에 포함할 항목을 고르세요" → "매니저 대시보드" 선택).
-`docs/HAIR_MASTER_PLAN.md` §6 "팀 Agent 평균 Gate 점수, 대기 승인 건수,
-비용 추이를 한 화면에"를 `GET /api/dashboard`로 구현한다.
+UI/UX)에 포함할 항목을 고르세요" → "매니저 대시보드" 선택) — "팀 Agent
+평균 Gate 점수, 대기 승인 건수, 비용 추이를 한 화면에"를
+`GET /api/dashboard`로 구현한다.
 
 **"비용 추이" 실측 확인**: 새 계측을 추가하지 않고 이미 있던
 `agent_cost_updated`/`human_pool_updated` 감사로그 액션(각각
@@ -116,7 +116,7 @@ def test_gc170_cost_trend_survives_unrelated_human_pool_updates(client_and_conn)
 
 
 def test_gc164_dashboard_forbidden_for_member(client_and_conn):
-    """F10/F13과 같은 RBAC — 팀원은 대시보드를 볼 수 없다."""
+    """비용·감사로그와 같은 RBAC — 팀원은 대시보드를 볼 수 없다."""
     client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     resp = client.get("/api/dashboard")

@@ -1,6 +1,6 @@
 """Phase 5 — 통합 인박스(사용자 요청, 2026-09-28, "Phase 5(기업용 UI/UX)에
-포함할 항목을 고르세요" → "통합 인박스" 선택). `docs/HAIR_MASTER_PLAN.md`
-§6이 제안한 "결재 대기·내 업무 응답 대기·낮은 Gate 점수 경고를 한 곳에"를
+포함할 항목을 고르세요" → "통합 인박스" 선택) — "결재 대기·내 업무
+응답 대기·낮은 Gate 점수 경고를 한 곳에"를
 `GET /api/inbox`로 구현한다 — 새 권한 규칙 없이 기존 `approvals.
 list_inbox()`/`deliverables.list_my_work()`가 이미 강제하는 접근 범위를
 그대로 재사용한다(`inbox.py` 참고).

@@ -20,7 +20,7 @@ Agent가 호출할 수 있도록 변형해줘")에 따라 실제로 검토한 �
 `agent_evaluator.integrations.recommend_fix_mcp`가 이미 읽기 전용 stdio
 MCP 서버로 구현돼 있고 `.aoo` 실행 이력 없이도 안전하게 동작해서, 이것만
 mcp_stdio Tool Pool 항목으로 승격해 `augmentation_mode='tool'`로
-연결했다(`docs/LIMITS.md` §20).
+연결했다.
 """
 
 from __future__ import annotations
@@ -72,10 +72,21 @@ def test_gc125_init_schema_seeds_agent_eval_procedural_skills():
     assert _EXPECTED_AGENT_EVAL_SKILL_NAMES <= skill_names
     assert len(skills) == 4 + len(
         _EXPECTED_AGENT_EVAL_SKILL_NAMES
-    )  # rag/graphdb 2(원래 vectordb/rag/graphdb/관계질의 4였으나 2026-10-06
-    # 자동완성 중복 통합으로 2로 줄어듦, docs/LIMITS.md §49) + 외부검색 1
-    # (원래 websearch/외부검색 2였으나 역시 §49로 1로 줄어듦) + 일반웹검색 1
+    ) + 25  # rag/graphdb 2(원래 vectordb/rag/graphdb/관계질의 4였으나 2026-10-06
+    # 자동완성 중복 통합으로 2로 줄어듦) + 외부검색 1
+    # (원래 websearch/외부검색 2였으나 역시 같은 이유로 1로 줄어듦) + 일반웹검색 1
     # + 절차 18
+    # + 2026-10-14 "기본 배포에 Skill을 포함해줘"로 추가된 레퍼런스
+    # 파이프라인 Skill 15개(Tool 5개를 감싼 'tool' 모드 5 + 지식 주입용
+    # 'none' 모드 10 — adr-template/code-review-checklist/
+    # commit-pr-message-rules/docs-style-guide/incident-postmortem/
+    # human-approval-loop/3c-4p-swot-framework/business-plan-writing-guide/
+    # business-strategy-formulation/executive-report-writing-style)
+    # + 2026-10-14(PM/AA/DA 등 기획→개발 팀 구성)로 추가된 Skill 9개
+    # (지식 8 + test-case-mechanical-derivation 'tool' 모드 1
+    # = 15 + 9 = 24).
+    # + 2026-10-14("자율 개발 크루" 10인 개발자 풀)로 추가된 Skill 1개
+    # (data-infra-implementation-guide = 24 + 1 = 25).
 
     by_name = {s["name"]: s for s in skills}
     for name in _UNTOOLED_AGENT_EVAL_SKILL_NAMES:

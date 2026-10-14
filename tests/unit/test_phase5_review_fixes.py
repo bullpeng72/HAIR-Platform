@@ -2,13 +2,13 @@
 대상으로 한 오류/Gray영역/누락 재검토에서 발견한 4건을 수정하고 회귀 테스트로
 고정한다.
 
-1. GC42: `POST /api/approvals`가 F7 결재라인을 우회하던 구멍(subject_type=assignment,
+1. `POST /api/approvals`가 결재라인을 우회하던 구멍(subject_type=assignment,
    role 제한 없음)을 닫았다 — brief 전용으로 제한.
-2. GC43: F3 검색(`/api/pool/search`)의 role/skill 필터가 Agent Pool에는 적용 안
+2. 검색(`/api/pool/search`)의 role/skill 필터가 Agent Pool에는 적용 안
    되던 버그를 고쳤다.
-3. GC44: 조직도(F5)가 Agent 배정을 전부 `manager_id=None` 버킷으로 뭉개던 것을
+3. 조직도가 Agent 배정을 전부 `manager_id=None` 버킷으로 뭉개던 것을
    고쳐 요청자(`requested_by`)를 관리자로 귀속시킨다.
-4. GC45/GC46: `users.manager_id`를 Web UI/API로 설정할 방법이 전무해 F7이 항상
+4. `users.manager_id`를 Web UI/API로 설정할 방법이 전무해 결재라인이 항상
    flat(단일 단계, approver_id=NULL)로만 동작하던 누락을 메웠다(`POST /api/users`,
    `PATCH /api/users/{id}/manager`) — 실제로 approver_id가 채워지는지, 지정 안 된
    매니저는 거부되는지까지 검증한다.
@@ -50,7 +50,7 @@ def test_gc42_generic_approval_endpoint_rejects_assignment_bypass(client_and_con
     )
     assignment_id = resp.json()["assignment_id"]
 
-    # 진행 중인 정식 F7 체인과 무관한 rogue 승인을 만들려는 시도는 400으로 막힌다.
+    # 진행 중인 정식 결재 체인과 무관한 rogue 승인을 만들려는 시도는 400으로 막힌다.
     resp = client.post(
         "/api/approvals",
         params={"subject_type": "assignment", "subject_id": assignment_id},

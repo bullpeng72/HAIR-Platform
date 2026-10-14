@@ -3,7 +3,7 @@
 수 있을텐데 현재 지원 가능한 범위와, 확장할 수 있는 범위는 어디까지일지...
 확인해줘" → "Tier 2까지 진행해줘").
 
-분석 결과(`docs/LIMITS.md` §67) 기존 `deliverables.content`는 순수
+분석 결과 기존 `deliverables.content`는 순수
 TEXT였다(업로드/다운로드/mime 처리 전혀 없음). Tier 2 범위: `content_type`
 컬럼(`'text'|'markdown'|'html'|'code'`, DB CHECK 제약) + 사람이 직접
 고르는 값(`DeliverableCreate.content_type`) + Agent/LLM에게 그 형식으로
@@ -11,11 +11,11 @@ TEXT였다(업로드/다운로드/mime 처리 전혀 없음). Tier 2 범위: `co
 `crew_runtime.run_crew_for_team()`). 실제 파일(PPT 등) 생성·저장은
 Tier 3로 범위 밖.
 
-GC244: 사람 작성 결과물 — content_type 기본값('text')과 명시값 저장·조회.
-GC245: Pydantic Literal 검증 — 허용 안 된 값은 422.
-GC246: assist() — content_type별 프롬프트 보강(지시문 추가/미추가).
-GC247: execute-agent — 프롬프트 보강 + 완성된 deliverable에 content_type 저장.
-GC248: execute-team-crew — 팀 Crew 산출물 각각에 content_type 저장.
+- 사람 작성 결과물 — content_type 기본값('text')과 명시값 저장·조회.
+- Pydantic Literal 검증 — 허용 안 된 값은 422.
+- assist() — content_type별 프롬프트 보강(지시문 추가/미추가).
+- execute-agent — 프롬프트 보강 + 완성된 deliverable에 content_type 저장.
+- execute-team-crew — 팀 Crew 산출물 각각에 content_type 저장.
 """
 
 from __future__ import annotations

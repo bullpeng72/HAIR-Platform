@@ -1,16 +1,16 @@
-"""F4 — Job Queue(신규 Agent 생성). NF6: 상태머신 pending/running/succeeded/failed/partial.
+"""Job Queue(신규 Agent 생성). 상태머신 pending/running/succeeded/failed/partial.
 
 실제 AgentForge 파이프라인(Spec Interpreter·Code Generator·Verifier)은 아직
-vendor/import되지 않았다(SPEC.md §12 오픈 이슈) — `default_stub_generator`가 그
-자리를 채우는 결정론적 스텁이다(F1과 같은 정신). 실제 연동 시 `generator` 인자만
+vendor/import되지 않았다(오픈 이슈) — `default_stub_generator`가 그
+자리를 채우는 결정론적 스텁이다. 실제 연동 시 `generator` 인자만
 교체하면 된다.
 
 하나의 `job`은 브리프 단위 생성 배치이고, `job_items`는 Task(=역할) 단위 결과다.
 전부 성공하면 job.status=succeeded, 전부 실패하면 failed, 섞이면 partial —
-"실패 역할만 재시도"(NF6)는 실패한 job_item만 골라 재실행한다.
+"실패 역할만 재시도"는 실패한 job_item만 골라 재실행한다.
 
-Phase 4 검증에서 발견: NF7(동일 역할 동시 생성요청 시 idempotency로 중복생성 방지)이
-SPEC에는 결정돼 있었으나 실제로 구현되지 않았던 갭이었다 — `_existing_active_item`이
+Phase 4 검증에서 발견: 동일 역할 동시 생성요청 시 idempotency로 중복생성을 막기로
+결정돼 있었으나 실제로 구현되지 않았던 갭이었다 — `_existing_active_item`이
 이를 메운다(같은 task에 이미 running/succeeded인 job_item이 있으면 재사용한다).
 """
 
@@ -55,7 +55,7 @@ def llm_agent_generator(
     게이팅) — 기본 생성 경로는 여전히 무료인 `default_stub_generator`다.
     """
     resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
-    system = llm.system_prompt_for_role(role_name, required_skills)
+    system = llm.system_prompt_for_role(conn, role_name, required_skills)
     prompt = (
         f"'{role_name}' 역할로서 지금 막 팀에 합류했습니다. "
         "이 역할이 프로젝트에서 처음 맡을 만한 구체적인 산출물을 하나 작성하세요."
@@ -93,7 +93,7 @@ def _recompute_job_status(conn: sqlite3.Connection, job_id: int) -> str:
 
 
 def _existing_active_item(conn: sqlite3.Connection, task_id: int) -> sqlite3.Row | None:
-    """NF7 — 같은 역할(task)에 이미 진행 중이거나 성공한 job_item이 있으면 반환한다.
+    """같은 역할(task)에 이미 진행 중이거나 성공한 job_item이 있으면 반환한다.
 
     동시/반복 생성 요청이 같은 역할에 대해 Agent를 중복 생성하는 것을 막는다
     (Pool 경합 방지). task_id가 자연스러운 idempotency key 역할을 한다.
@@ -168,7 +168,7 @@ def create_and_run_job(
     created_by: int,
     generator: GeneratorFn | None = None,
 ) -> dict:
-    """F4 — 생성 버튼 트리거. 여러 Task를 한 배치(job)로 실행한다.
+    """생성 버튼 트리거. 여러 Task를 한 배치(job)로 실행한다.
 
     `generator`를 기본 인자 값으로 바인딩하지 않고 호출 시점에 모듈 전역에서
     조회한다 — 그래야 테스트가 `default_stub_generator`를 patch했을 때 실제로
@@ -188,7 +188,7 @@ def create_and_run_job(
     for task_id in task_ids:
         existing = _existing_active_item(conn, task_id)
         if existing is not None:
-            # NF7: 이미 진행 중이거나 완료된 역할은 다시 생성하지 않고 재사용한다.
+            # 이미 진행 중이거나 완료된 역할은 다시 생성하지 않고 재사용한다.
             audit.record(
                 conn,
                 created_by,
@@ -232,7 +232,7 @@ def retry_failed_item(
     created_by: int,
     generator: GeneratorFn | None = None,
 ) -> dict:
-    """NF6 — 실패한 역할(job_item)만 재시도한다."""
+    """실패한 역할(job_item)만 재시도한다."""
     generator = generator or default_stub_generator
     item = conn.execute(
         "SELECT * FROM job_items WHERE id = ? AND job_id = ?", (item_id, job_id)
@@ -298,7 +298,7 @@ def _serialize_rows(
                 "result": json.loads(row["result"]) if row["result"] else None,
                 "error": row["error"],
                 "retry_count": row["retry_count"],
-                # NF7 dedup으로 기존 job_item을 재사용한 항목 — 새로 생성한 게
+                # dedup으로 기존 job_item을 재사용한 항목 — 새로 생성한 게
                 # 아니라 "이미 있던 에이전트를 다시 가리킨 것"이라 UI가 이를
                 # 명시적으로 보여줘야 "생성했는데 안 보인다"는 오해를 피한다.
                 "reused": reused,

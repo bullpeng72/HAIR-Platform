@@ -1,11 +1,11 @@
-"""F11 — Web UI 셸. AgentForge의 웹 UI 패턴(f-string+html.escape, Jinja2 미사용,
+"""Web UI 셸. AgentForge의 웹 UI 패턴(f-string+html.escape, Jinja2 미사용,
 빌드 스텝 없는 순수 HTML/CSS/JS)을 그대로 계승한다.
 
-코드 재점검(2026-09-26, R4)에서 발견: SPEC.md §1·F1-F14가 전부 "화면"·"버튼"·
+코드 재점검(2026-09-26, R4)에서 발견: 명세가 요구사항 전부에 "화면"·"버튼"·
 "Web UI 폼"을 명시적으로 요구했는데도, v0-v4 개발과 3라운드의 코드 재점검을
 거치는 동안 HTML/CSS/JS가 단 한 줄도 없었다 — 지금까지 만든 건 잘 테스트된
-JSON REST API뿐, 브라우저에서 조작 가능한 화면은 전무했다(SPEC.md §1: "전 기능을
-인증된 Web UI에서 조작 가능하게 하는 것이 AgentForge와의 핵심 차이다").
+JSON REST API뿐, 브라우저에서 조작 가능한 화면은 전무했다("전 기능을 인증된
+Web UI에서 조작 가능하게 하는 것이 AgentForge와의 핵심 차이다"라는 원칙).
 
 이 모듈은 그 화면을 채운다 — 단일 HTML 페이지 + 바닐라 JS(프레임워크·빌드
 스텝 없음)로, 이미 구현·검증된 JSON API(`app.py`)를 그대로 호출한다. 새 비즈니스
@@ -27,14 +27,14 @@ INDEX_HTML = """<!DOCTYPE html>
      배경은 이 페이지의 라이트 CSS(흰색)가 그대로 남아 글자가 거의 안
      보이는 상태가 된다(실사용 중 발견). 이 페이지는 라이트 전용임을
      명시한다. */
-  /* SCREEN_UX_BENCHMARK_PROPOSAL.md §6(I1 색상 토큰화·I3 상태 배지 통일,
-     2026-10-12, "UI 개선 잔여 작업 진행해줘") — 반복되는 색을 변수로
-     뽑았다. primary/accent/admin/border류는 기존 값 그대로라 화면이
-     안 바뀐다. 상태색(success/warn/danger, I3)만 예외다 — .gate-badge와
-     .msg가 지금까지 같은 "성공/경고"인데도 서로 다른 초록/주황 톤을
-     썼어서, 통일하면서 .msg 쪽 톤을 .gate-badge 쪽(이미 쓰던 값)에
-     맞췄다 — 아주 미세한 색조 변화가 "의도된" 결과다(두 군데가 이제
-     실제로 같은 색이 된다는 게 I3의 목적 그 자체). 전체 색상을 다
+  /* 색상 토큰화·상태 배지 통일(2026-10-12, "UI 개선 잔여 작업
+     진행해줘") — 반복되는 색을 변수로 뽑았다. primary/accent/admin/
+     border류는 기존 값 그대로라 화면이 안 바뀐다. 상태색(success/
+     warn/danger)만 예외다 — .gate-badge와 .msg가 지금까지 같은
+     "성공/경고"인데도 서로 다른 초록/주황 톤을 썼어서, 통일하면서
+     .msg 쪽 톤을 .gate-badge 쪽(이미 쓰던 값)에 맞췄다 — 아주 미세한
+     색조 변화가 "의도된" 결과다(두 군데가 이제 실제로 같은 색이
+     된다는 게 이번 통일의 목적 그 자체). 전체 색상을 다
      뽑진 않았다 — 채팅 버블·코드 하이라이팅처럼 한 자리에서만 쓰는
      색은 이번 1차 작업 범위 밖으로 남긴다(로드맵 단계적 접근). */
   :root {
@@ -86,6 +86,11 @@ INDEX_HTML = """<!DOCTYPE html>
   .mention-dropdown { position: absolute; z-index: 20; top: 100%; left: 0; width: 100%; max-height: 10rem; overflow-y: auto; margin: 2px 0 0; padding: 0.2rem 0; list-style: none; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
   .mention-dropdown li { padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
   .mention-dropdown li:hover, .mention-dropdown li.active { background: #eef6ff; }
+  /* 사용자 보고(2026-10-14, "진행중임을 알 수 있도록 UI를 개선해줘") —
+     대화에서 Agent/Team 응답을 기다리는 동안 보여주는 인라인 표시. */
+  .pending-indicator { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; margin-top: 0.5rem; background: #f5f7fa; border: 1px solid #e2e4e8; border-radius: 6px; color: #555; font-size: 0.9rem; }
+  .spinner { width: 14px; height: 14px; border: 2px solid #c7d2e0; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .gate-badge { display: inline-block; padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.85em; }
   .gate-badge.gate-ok { background: var(--status-success-bg); color: var(--status-success-fg); }
   .gate-badge.gate-warn { background: var(--status-warn-bg); color: var(--status-warn-fg); }
@@ -96,6 +101,22 @@ INDEX_HTML = """<!DOCTYPE html>
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #eee; vertical-align: top; }
   th { background: #f0f1f4; }
+  /* 사용자 요청(2026-10-14, "각 메뉴의 목록 기능에 필터/소트 기능을
+     추가해줘") — table() 헬퍼(앱 전체 23곳 목록 화면이 공유)에 붙는
+     검색창/정렬 가능 헤더 스타일. */
+  .table-wrap .table-filter { width: 100%; max-width: 320px; margin-bottom: 0.5rem; box-sizing: border-box; }
+  /* 사용자 보고(2026-10-14, 스크린샷 — "생성방식 ▲LM"처럼 헤더 글자가
+     옆 칸과 겹쳐 깨져 보임) — 실측으로 확인한 원인: 전역 `table {
+     table-layout: fixed }` + `td, th { overflow-wrap: break-word }`가
+     이미 있는데, 정렬 헤더에만 `white-space: nowrap`을 얹어 그 줄바꿈
+     규칙을 덮어썼다. 좁게 고정된 열(예: "LLM" 3글자)에서 nowrap 텍스트
+     + 화살표가 칸 너비를 넘기면 `overflow: visible`(기본값)이라 옆
+     칸 위로 그대로 흘러나와 겹쳐 보인다. nowrap을 빼서 기존 줄바꿈
+     규칙(그리고 "스킬" 열처럼 폭을 넉넉히 주는 기존 관례)을 그대로
+     따르게 한다. */
+  th.sortable-col { cursor: pointer; user-select: none; }
+  th.sortable-col:hover { background: #e4e6ec; }
+  th.sortable-col .sort-indicator { font-size: 0.75em; color: #14213d; margin-left: 0.15rem; }
   input, select, textarea { padding: 0.35rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; }
   form.inline { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
   button.primary { background: #14213d; color: #fff; border: none; padding: 0.4rem 0.9rem; border-radius: 4px; cursor: pointer; }
@@ -117,12 +138,21 @@ INDEX_HTML = """<!DOCTYPE html>
   .skill-chip button { border: none; background: none; cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0 0.2rem; color: #666; }
   table { table-layout: fixed; }
   td, th { overflow-wrap: break-word; }
-  td.col-actions, th.col-actions { width: 220px; }
-  td.col-output, th.col-output { width: 280px; }
-  .actions { display: flex; flex-direction: column; align-items: stretch; gap: 0.3rem; }
-  .actions > button, .actions > select, .actions > input { width: 100%; box-sizing: border-box; }
-  .actions .pair { display: flex; gap: 0.2rem; }
-  .actions .pair input, .actions .pair select { width: 0; min-width: 0; flex: 1; }
+  td.col-actions, th.col-actions { width: 260px; }
+  td.col-skills, th.col-skills { width: 180px; }
+  td.col-detail, th.col-detail { width: 240px; }
+  td.col-detail details > div { margin-top: 0.3rem; }
+  td.col-detail details > div > div { margin-bottom: 0.2rem; }
+  /* 사용자 보고(2026-10-14, 스크린샷 — 버튼·입력이 전부 풀폭으로
+     세로 스택돼 행 하나가 화면을 가득 채움) — 세로 1열 스택 대신
+     가로로 흐르다 공간이 부족하면 다음 줄로 넘어가게 바꾼다(버튼 2~3개
+     짜리 단순한 행은 가로 한 줄에 다 들어가 오히려 더 작아진다). */
+  .actions { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+  .actions > button { width: auto; }
+  .actions > select, .actions > input { width: auto; min-width: 7rem; box-sizing: border-box; }
+  .actions details { width: 100%; }
+  .actions .pair { display: flex; gap: 0.2rem; align-items: center; }
+  .actions .pair input, .actions .pair select { width: auto; min-width: 6rem; flex: initial; }
   .actions .pair button { width: auto; flex-shrink: 0; }
   #login-view { display: flex; align-items: center; justify-content: center; height: 100vh; }
   #login-view .card { width: 320px; }
@@ -131,25 +161,54 @@ INDEX_HTML = """<!DOCTYPE html>
 
   /* 사용자 요청(2026-10-07, "HAIR 협업 결과물이 코드, 마크다운, PPT,
      HTML 등 다양할 수 있을텐데... Tier 2까지 진행해줘") — content_type별
-     표시 스타일. .code-block 안의 토큰 클래스는 renderContent()의 경량
-     정규식 하이라이터가 붙인다(완전한 파서가 아니라 식별자/문자열/주석/
-     숫자/일부 키워드만 색을 입히는 수준 — 외부 라이브러리 없이 안전하게
-     처리하려는 기존 관례를 그대로 따른다). */
-  .code-block { background: #1e1e1e; color: #d4d4d4; border-radius: 6px; padding: 0.6rem 0.75rem; overflow-x: auto; }
-  .code-block code { background: transparent; padding: 0; color: inherit; }
-  .code-block .tok-kw { color: #569cd6; }
-  .code-block .tok-str { color: #ce9178; }
-  .code-block .tok-com { color: #6a9955; }
-  .code-block .tok-num { color: #b5cea8; }
+     표시 스타일.
+     사용자 요청(2026-10-14, "마크다운 처리 및 다이어그램, 차트, HTML
+     렌더링, 코드 표시가 모두 렌더링되어 미려하게 보이도록") — 손수 짠
+     정규식 렌더러(토큰 클래스 .tok-*)를 걷어내고 highlight.js로
+     교체했다(실제 코드 하이라이팅 CDN 테마 CSS를 <head>에서 불러옴 —
+     아래 .code-block은 테마가 못 채우는 여백/모서리만 보정한다). */
+  .code-block { border-radius: 6px; overflow-x: auto; margin: 0; }
+  .code-block code.hljs { display: block; padding: 0.6rem 0.75rem; border-radius: 6px; }
   .md-content h1, .md-content h2, .md-content h3,
-  .md-content h4, .md-content h5, .md-content h6 { margin: 0.4rem 0 0.2rem; }
-  .md-content li { margin-left: 1rem; }
+  .md-content h4, .md-content h5, .md-content h6 { margin: 0.7rem 0 0.3rem; line-height: 1.3; }
+  .md-content h1:first-child, .md-content h2:first-child, .md-content h3:first-child { margin-top: 0; }
+  .md-content p { margin: 0 0 0.6rem; line-height: 1.55; }
+  .md-content p:last-child { margin-bottom: 0; }
+  .md-content ul, .md-content ol { margin: 0 0 0.6rem; padding-left: 1.4rem; line-height: 1.5; }
+  .md-content li { margin: 0.15rem 0; }
+  /* marked.js가 실제로 표/인용문/이미지를 만들어내므로(손수 짠 렌더러는
+     지원 범위 밖이라 못 만들었다) 그 태그들의 스타일도 새로 추가한다. */
+  .md-content table { border-collapse: collapse; width: 100%; margin: 0 0 0.6rem; font-size: 0.92em; }
+  .md-content th, .md-content td { border: 1px solid #e2e4e8; padding: 0.35rem 0.6rem; text-align: left; }
+  .md-content th { background: #f6f8fa; font-weight: 600; }
+  .md-content blockquote { margin: 0 0 0.6rem; padding: 0.2rem 0.8rem; border-left: 3px solid #d0d7de; color: #57606a; }
+  .md-content img { max-width: 100%; border-radius: 4px; }
+  .mermaid-block { margin: 0.5rem 0; text-align: center; overflow-x: auto; }
+  .mermaid-block svg { max-width: 100%; }
+  .chart-block { margin: 0.5rem 0; max-width: 560px; }
+  .chart-block canvas { max-width: 100%; }
+  .md-content a { color: #2563eb; text-decoration: underline; }
+  .md-content hr { border: none; border-top: 1px solid #e2e4e8; margin: 0.8rem 0; }
+  .md-content .code-block { margin: 0.4rem 0; }
   .html-preview { width: 100%; min-height: 240px; border: 1px solid #e2e4e8; border-radius: 6px; background: #fff; }
-  /* SCREEN_UX_BENCHMARK_PROPOSAL.md §5(H1 복사·H2 미리보기/소스 토글,
-     2026-10-12) — Claude Artifact처럼 결과물에 전용 툴바를 둔다. 새
-     색상 토큰 없이 기존 .small 버튼 스타일만 재사용한다. */
+  /* 복사/미리보기·소스 토글(2026-10-12) — Claude Artifact처럼 결과물에
+     전용 툴바를 둔다. 새 색상 토큰 없이 기존 .small 버튼 스타일만
+     재사용한다. */
   .artifact-toolbar { display: flex; justify-content: flex-end; gap: 0.3rem; margin-bottom: 0.3rem; }
   .artifact-source-pre { max-height: 400px; overflow-y: auto; }
+  /* 사용자 요청(2026-10-13, "HAIR 최종 실행 결과물은 claude artifact
+     수준으로") — 지금까지 이 블록엔 카드 테두리가 전혀 없어 주변
+     텍스트(사람 코멘트 등)와 시각적으로 구분이 안 됐다. 실제 Claude
+     Artifact 패널처럼 테두리·배경·둥근 모서리로 "이건 별도 결과물
+     덩어리다"를 한눈에 알아보게 한다. */
+  .artifact-block { border: 1px solid #e2e4e8; border-radius: 8px; background: #fff; padding: 0.6rem 0.75rem; margin: 0.3rem 0; }
+  .artifact-block .artifact-toolbar { margin-bottom: 0.5rem; }
+  /* 전체화면 오버레이(2026-10-13) — 단일 재사용 엘리먼트, body에 직접
+     붙인다(카드 안에 있으면 overflow:hidden 조상에 잘릴 수 있어서). */
+  .artifact-fullscreen-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 2rem; box-sizing: border-box; }
+  .artifact-fullscreen-panel { position: relative; background: #fff; border-radius: 10px; width: 100%; max-width: 900px; max-height: 90vh; overflow: auto; padding: 2.5rem 1.5rem 1.5rem; box-sizing: border-box; }
+  .artifact-fullscreen-close { position: absolute; top: 0.6rem; right: 0.6rem; }
+  .artifact-fullscreen-body .html-preview { min-height: 60vh; }
 
   /* Phase 5(사용자 요청, 2026-09-28, "반응형만 포함(내 업무/알림 확인용)")
      — 이 앱은 고정 1100px 레이아웃(과거 다크모드 회귀 회피와 같은 이유로
@@ -167,6 +226,20 @@ INDEX_HTML = """<!DOCTYPE html>
     .dashboard-grid .card { min-width: 0; }
   }
 </style>
+<!-- 사용자 요청(2026-10-14, "마크다운 처리 및 다이어그램, 차트, HTML
+     렌더링, 코드 표시가 모두 렌더링되어 미려하게 보이도록") — 이
+     플랫폼은 지금까지 외부 CDN 스크립트가 전혀 없는 자체완결형
+     단일 HTML이었다(손수 짠 정규식 마크다운/하이라이터만 사용).
+     사용자 확인(2026-10-14, "CDN에서 불러오기")을 받고 실제 렌더링
+     라이브러리로 교체한다 — marked(마크다운)·highlight.js(코드
+     하이라이팅)·DOMPurify(marked가 만든 HTML을 innerHTML에 넣기
+     전 필수 살균 — XSS 방지)·mermaid(다이어그램)·Chart.js(차트). -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -212,33 +285,100 @@ function escAttr(s) {
   return esc(s).replace(/"/g, "&quot;");
 }
 
-// 경량 구문 강조 — 완전한 토크나이저가 아니라 문자열/주석/숫자/흔한
-// 키워드만 정규식으로 색을 입힌다(2026-10-07, "Tier 2까지 진행해줘").
-// 입력은 호출자가 이미 esc()로 이스케이프한 문자열이라는 전제라, 여기서
-// 추가하는 <span> 태그 외에는 원본 텍스트에 있던 "<"/">"가 전부 엔티티로
-// 바뀌어 있어 새 HTML을 주입할 수 없다 — 그래서 외부 라이브러리(마크다운
-// 렌더러 등을 안 쓰기로 한 기존 결정, 위 주석 참고) 없이도 안전하다.
-// SCREEN_UX_BENCHMARK_PROPOSAL.md §5(H4 언어 인식 하이라이팅, 2026-10-12,
-// "UI 개선 잔여 작업 진행해줘") — content_type='code'에 실제 언어 필드가
-// 없어(스키마 변경 없이 가는 쪽을 택함, §3 "정직한 분리"와 같은 원칙)
-// "어떤 언어인지 묻지 않고도 더 많은 언어의 흔한 키워드를 알아보게" 넓힌
-// 것 — JS/Python 중심이던 기존 키워드 세트에 SQL·Go·Java/C#·Rust의
-// 흔한 키워드를 더했고, 대소문자 구분 없이 매칭한다(SQL은 관례상 전부
-// 대문자인 경우가 많다 — `/gi`). 치환은 `$1`(원문 그대로)이라 대소문자가
-// 바뀌어 보이는 부작용은 없다.
-const _CODE_KEYWORDS = /\\b(function|const|let|var|return|if|else|for|while|def|class|import|from|export|async|await|try|except|catch|finally|new|this|self|select|insert|update|delete|where|join|into|values|order|group|having|create|table|alter|drop|func|package|defer|struct|interface|nil|public|private|protected|static|void|namespace|using|fn|impl|mod|pub|match|enum|trait|mut|true|false|null|break|continue|switch|case|default|throw|raise|in|not|and|or)\\b/gi;
-function highlightCode(escaped) {
-  // 순서 중요 — 키워드 치환을 가장 먼저 해야 한다. 나중에 하면 뒤 패스들이
-  // 이미 넣은 `class="tok-..."` 속성의 "class"라는 글자 자체를 키워드로
-  // 다시 매칭해 중첩·깨진 span을 만든다(실측으로 발견, 2026-10-07).
-  return escaped
-    .replace(_CODE_KEYWORDS, '<span class="tok-kw">$1</span>')
-    .replace(/(&quot;.*?&quot;|&#39;.*?&#39;)/g, '<span class="tok-str">$1</span>')
-    // H4 — 블록 주석(/* ... */, C/Java/Go/Rust/SQL 공용)도 한 종류로
-    // 더 추가한다. 기존 줄 주석에 SQL의 `--`도 더했다.
-    .replace(/(\\/\\*[\\s\\S]*?\\*\\/)/g, '<span class="tok-com">$1</span>')
-    .replace(/(\\/\\/.*$|#.*$|--.*$)/gm, '<span class="tok-com">$1</span>')
-    .replace(/\\b(\\d+)\\b/g, '<span class="tok-num">$1</span>');
+// 복사·전체화면·다이어그램 id 발급용 — renderContent()와
+// _activateRichBlocks() 양쪽이 공유한다(모두 아래에서 쓴다).
+let _artifactSeq = 0;
+
+// 사용자 요청(2026-10-14, "마크다운 처리 및 다이어그램, 차트, HTML
+// 렌더링, 코드 표시가 모두 렌더링되어 미려하게 보이도록") — 손수 짠
+// 정규식 렌더러(표·블록인용·다이어그램·차트를 의도적으로 지원 범위
+// 밖에 뒀던 버전, 아래 stripOuterFence() 위 주석이 그 경위)를 걷어내고
+// marked(마크다운 파서)+highlight.js(코드 하이라이팅)+DOMPurify(살균)
+// +mermaid(다이어그램)+Chart.js(차트)로 교체한다(사용자 확인, "CDN에서
+// 불러오기"). 다만 CDN을 못 불러오는 환경(폐쇄망 등)에서도 **앱 전체가
+// 깨지면 안 된다** — 그 경우 리치 렌더링만 평문 폴백으로 내려가고 나머지
+// 기능은 그대로 동작해야 한다고 사용자에게 안내했으므로, 아래 모든
+// 라이브러리 접근은 `typeof X === "undefined"` 가드를 거친다.
+if (typeof marked !== "undefined") {
+  // marked는 코드펜스 언어가 "mermaid"/"chart"면 일반 코드블록 대신
+  // 전용 플레이스홀더를 내보내도록 커스텀 렌더러를 쓴다 — 실제 그리기는
+  // DOM에 붙은 뒤에만 가능해서(마크다운 문자열 생성 시점엔 아직 그릴
+  // 대상이 없음) 아래 MutationObserver가 비동기로 처리한다.
+  // 사용자 보고(2026-10-14, "대화를 열려고 하니 '불러오는 중…'로
+  // 표시되면 열리지 않아") — 실측·재현으로 확인한 원인: marked v5+
+  // (여기선 v13.0.3)는 커스텀 렌더러의 code()에 `(code, infostring)`
+  // 위치 인자가 아니라 토큰 **객체**(`{type, raw, lang, text}`)를
+  // 하나만 넘긴다. 객체를 문자열로 착각해 hljs.highlight()에 그대로
+  // 넘기면 "e.replace is not a function"으로 marked.parse() 자체가
+  // 예외를 던지고, 그 예외가 renderContent()→
+  // _renderConversationMessage()→renderConversationDetail()까지
+  // 그대로 전파돼 `detail.innerHTML`을 끝내 "불러오는 중…"에서 못
+  // 벗어났다(실제 marked@13.0.3 소스로 재현·확인). `{ text, lang }`로
+  // 구조분해해야 한다.
+  const _markedRenderer = new marked.Renderer();
+  _markedRenderer.code = function (token) {
+    const code = token.text;
+    const lang = (token.lang || "").trim().split(/\\s+/)[0].toLowerCase();
+    if (lang === "mermaid") {
+      return '<div class="mermaid-block" data-mermaid-src="' + escAttr(code) + '"><p class="muted">다이어그램 렌더링 중…</p></div>';
+    }
+    if (lang === "chart") {
+      return '<div class="chart-block"><canvas data-chart-config="' + escAttr(code) + '"></canvas></div>';
+    }
+    return '<pre class="code-block">' + _highlightCode(code, lang) + "</pre>";
+  };
+  marked.setOptions({ renderer: _markedRenderer, gfm: true, breaks: true });
+}
+if (typeof mermaid !== "undefined") {
+  mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+}
+
+// highlight.js 호출 지점을 하나로 모은다 — "code" content_type과 marked
+// 코드펜스 렌더러 양쪽이 공유한다. 언어를 모르면(또는 지원 안 하면)
+// highlightAuto로 추측한다 — content_type='code'엔 언어 필드가 없다는
+// 기존 설계(스키마 변경 없이 가는 쪽을 택함)를 그대로 유지한다.
+// 사용자 보고(2026-10-14, "대화를 열려고 하니 '불러오는 중…'") 재발
+// 방지 — 라이브러리 버전 차이·예상 밖 입력으로 hljs가 던지더라도
+// (실제로 marked 렌더러 인자 버그가 바로 이 경로에서 예외를 던져
+// 대화 화면 전체를 못 열게 만든 전례가 있다) 호출부(renderContent 등
+// 여러 화면)까지 예외가 전파되지 않도록 여기서 막는다 — 실패하면
+// 하이라이팅만 포기하고 이스케이프된 평문으로 폴백한다.
+function _highlightCode(raw, lang) {
+  if (typeof hljs === "undefined") {
+    return "<code>" + esc(raw) + "</code>"; // CDN 미로드 폴백 — 최소한 안전하게는 보여준다.
+  }
+  try {
+    const known = lang && hljs.getLanguage(lang) ? lang : null;
+    const result = known ? hljs.highlight(raw, { language: known }) : hljs.highlightAuto(raw);
+    return '<code class="hljs language-' + (known || result.language || "plaintext") + '">' + result.value + "</code>";
+  } catch (e) {
+    console.error("hljs highlighting failed, falling back to plain text:", e);
+    return "<code>" + esc(raw) + "</code>";
+  }
+}
+
+// 보안: marked는 입력 마크다운에 섞인 원문 HTML(인라인/블록)을 그대로
+// 통과시킨다 — Agent/LLM 산출물처럼 신뢰할 수 없는 텍스트이므로, 매번
+// DOMPurify.sanitize()를 거친 결과만 innerHTML에 넣는다(<script>/on*
+// 이벤트 핸들러/javascript: 링크 등을 전부 제거) — 기존의 "esc() 먼저,
+// 그 뒤엔 신뢰한 태그만 추가"라는 안전장치를, 더 검증된 라이브러리
+// 기반 살균으로 교체한 것뿐 안전 수준은 유지(오히려 표·인용문·이미지
+// 같은 더 넓은 HTML 표면을 다루면서도 DOMPurify가 전부 검사한다).
+function _renderMarkdown(raw) {
+  if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+    return "<p>" + esc(raw).replace(/\\n/g, "<br>") + "</p>"; // CDN 미로드 폴백
+  }
+  // marked.parse()가 던지면(라이브러리 버전 변경·예상 밖 입력 등) 이
+  // 함수를 호출한 renderContent()/_renderConversationMessage()/
+  // renderConversationDetail() 전체로 예외가 전파돼 화면이 "불러오는
+  // 중…"에서 멈춘 전례가 실제로 있었다 — 여기서 잡아 평문 폴백으로
+  // 내려가고, 화면 자체는 계속 열리게 한다.
+  try {
+    return DOMPurify.sanitize(marked.parse(raw));
+  } catch (e) {
+    console.error("markdown rendering failed, falling back to plain text:", e);
+    return "<p>" + esc(raw).replace(/\\n/g, "<br>") + "</p>";
+  }
 }
 
 // 실사용 리뷰로 발견한 갭(2026-10-07, 시나리오 1/2 실행 중) — Agent/사람
@@ -246,96 +386,121 @@ function highlightCode(escaped) {
 // 후 줄바꿈만 <br>로 바꿔 보여줘, 백틱·별표가 그대로 노출돼 가독성이
 // 떨어졌다(코드 패치 설명 같은 산출물일수록 심함).
 //
-// Tier 2(사용자 요청, 2026-10-07, "HAIR 협업 결과물이 코드, 마크다운,
-// PPT, HTML 등 다양할 수 있을텐데... Tier 2까지 진행해줘") — content_type
-// 별로 다르게 그린다. markdown/code/text 세 경로 모두 esc()로 이스케이프한
-// "뒤에" 정규식으로 안전한 태그만 덧씌우므로(원본의 "<"/">"는 이미
-// 엔티티라 다시 해석되지 않음) XSS 위험이 없다 — 완전한 마크다운 렌더러를
-// 새로 들이지 않기로 한 기존 결정을 그대로 유지한다. html만 예외: 그
-// 자체가 실행 가능한 HTML이라 브라우저가 파싱해야 하므로, 부모 페이지와
-// 완전히 분리된 sandboxed <iframe>(allow-same-origin 없음 — 그 안의
-// 스크립트가 부모 쿠키/DOM/세션에 접근할 수 없음) 안에서만 렌더링한다.
-// 실측으로 발견한 버그(2026-10-07, 실제 서버에 실제 gpt-4o-mini로 시나리오를
-// 돌려보다 발견 — 리뷰 서버의 손수 만든 가짜 응답으로는 한 번도 안 드러났다):
-// content_type을 "html"/"markdown"으로 지정해도 실제 LLM은 응답 전체를
-// ```html ... ``` / ```markdown ... ``` 한 겹으로 또 감싸는 경우가 흔하다.
-// html은 그 결과 iframe 위에 "```html" 글자가 그대로 떠 보기 흉했고,
-// markdown은 더 심각했다 — 전체가 "```markdown 코드 펜스" 하나로 인식돼
-// highlightCode()의 주석 강조 규칙(`#.*$`)이 마크다운 헤딩(`#`/`##`)을
-// 전부 "주석"으로 착각해 <span>으로 감싸버리는 바람에, 그 아래 헤딩/목록
-// 정규식이 더 이상 줄 맨 앞에서 "#"/"-"를 못 찾아 헤딩이 전혀 안 먹혔다
-// (Node로 실제 응답을 직접 렌더링해 재현·확인). 응답 "전체"가 코드
-// 펜스 하나로만 감싸여 있을 때만 그 바깥 펜스를 벗겨내고 안쪽 내용으로
-// 렌더링한다 — 본문 중간에 섞인 펜스(예: 시나리오 1의 설명+코드 혼합
-// 응답)는 그대로 둔다(그건 의도된 "그 형식을 먼저 보여주는" 문서지,
-// 벗겨낼 "감싸기"가 아니다).
+// html/markdown 둘 다 LLM이 응답 전체를 ```html.../```markdown...```
+// 한 겹으로 또 감싸는 경우가 흔하다(실측, 2026-10-07, 실제 gpt-4o-mini로
+// 시나리오를 돌려보다 발견 — 리뷰 서버의 손수 만든 가짜 응답으로는 한
+// 번도 안 드러났다). 응답 "전체"가 코드 펜스 하나로만 감싸여 있을 때만
+// 그 바깥 펜스를 벗겨내고 안쪽 내용으로 렌더링한다 — 본문 중간에 섞인
+// 펜스(예: 설명+코드 혼합 응답)는 그대로 둔다(그건 의도된 "그 형식을
+// 먼저 보여주는" 문서지, 벗겨낼 "감싸기"가 아니다).
 function stripOuterFence(raw) {
   const m = raw.match(/^```[a-zA-Z0-9]*\\n([\\s\\S]*?)\\n?```\\s*$/);
   return m ? m[1] : raw;
 }
 
-// SCREEN_UX_BENCHMARK_PROPOSAL.md §5(H1 복사·H2 미리보기/소스 토글,
-// 2026-10-12, "Phase 1 (A)(B)(H1)(H2)(I5)부터 구현 시작해줘") — 매 호출마다
+// 사용자 요청(2026-10-14) — 다이어그램/차트는 DOM에 실제로 붙은 뒤에만
+// 그릴 수 있는데, renderContent()는 여러 화면(Task 워크스페이스/Crew
+// 실행 결과/대화/Agent 관리 등)에서 호출되는 순수 문자열 생성 함수라
+// "언제 DOM에 붙는지"를 알 방법이 없다 — 매 호출부마다 "다 그렸으면
+// 그려라" 코드를 심는 대신, 복사/전체화면 버튼과 같은 원칙(한 번만
+// 전역 연결)으로 MutationObserver 하나만 걸어 새로 추가되는 노드를
+// 감시한다. mermaid는 렌더가 끝나야 `data-mermaid-rendering`을 지우지
+// 않고 그대로 둔다 — "전체화면" 오버레이가 아직 렌더 중인 블록을
+// innerHTML로 복제해가면(드문 경쟁 상태) 그 복제본은 아직 렌더
+// 전이므로 옵저버가 다시 잡아 독립적으로 렌더해준다.
+function _activateRichBlocks(root) {
+  root.querySelectorAll(".mermaid-block[data-mermaid-src]").forEach(el => {
+    if (el.dataset.mermaidRendering === "1") return;
+    if (typeof mermaid === "undefined") {
+      el.innerHTML = '<p class="muted">다이어그램 라이브러리를 불러오지 못했습니다.</p>';
+      return;
+    }
+    el.dataset.mermaidRendering = "1";
+    const id = "mmd-" + (++_artifactSeq);
+    mermaid.render(id, el.dataset.mermaidSrc).then(({ svg }) => {
+      el.innerHTML = svg;
+    }).catch(e => {
+      el.innerHTML = '<p class="muted">다이어그램 렌더링 실패: ' + esc(e.message || String(e)) + "</p>";
+    });
+  });
+  // Chart.js는 <canvas> DOM 노드 자체에 차트 인스턴스를 붙인다 — innerHTML
+  // 복제(전체화면 오버레이)는 마크업만 복사하고 그 붙은 상태는 복사하지
+  // 않으므로, data-* 플래그가 아니라 `Chart.getChart(canvas)`로 "이
+  // 정확한 노드에 이미 차트가 있는지"를 확인해야 복제본도 올바르게
+  // 다시 그려진다.
+  root.querySelectorAll("canvas[data-chart-config]").forEach(canvas => {
+    if (typeof Chart === "undefined" || Chart.getChart(canvas)) return;
+    try {
+      new Chart(canvas, JSON.parse(canvas.dataset.chartConfig));
+    } catch (e) {
+      canvas.insertAdjacentHTML("afterend", '<p class="muted">차트 설정을 해석하지 못했습니다: ' + esc(e.message) + "</p>");
+    }
+  });
+}
+new MutationObserver(mutations => {
+  for (const m of mutations) {
+    for (const node of m.addedNodes) {
+      if (node.nodeType === 1) _activateRichBlocks(node);
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true });
+
+// 복사 버튼/미리보기·소스 토글(2026-10-12, "Phase 1 (A)(B)(H1)(H2)(I5)
+// 부터 구현 시작해줘") — 매 호출마다
 // 고유 id를 줘서, 렌더링된 위치가 어디든(Task 워크스페이스/Crew 실행
 // 결과/대화 등 renderContent() 호출부 전부) 버튼이 자기 블록만 찾게 한다.
 // 콜러마다 버튼 이벤트를 따로 연결할 필요가 없도록 전역 위임
 // 리스너(`document.addEventListener("click", ...)`, 아래)로 한 번만
 // 연결한다.
-let _artifactSeq = 0;
+// 사용자 요청(2026-10-14, "결과 파일을 복사 및 다운로드 가능하도록") —
+// content_type별로 받는 파일 확장자/MIME. 기본(타입 미지정)도 마크다운
+// 으로 렌더링하므로 .md로 묶는다.
+const _DOWNLOAD_EXT = { html: "html", code: "txt", markdown: "md" };
+const _DOWNLOAD_MIME = { html: "text/html", code: "text/plain", md: "text/plain", txt: "text/plain" };
 
 function renderContent(raw, contentType) {
   if (contentType === "html" || contentType === "code" || contentType === "markdown") {
     raw = stripOuterFence(raw);
   }
   const artifactId = "artifact-" + (++_artifactSeq);
-  const hasToggle = contentType === "html" || contentType === "code";
+  // 사용자 요청(2026-10-14) — 마크다운도 이제 raw 소스(기호·다이어그램/
+  // 차트 코드펜스 원문)를 그대로 확인할 수 있어야 쓸모가 있어 토글
+  // 대상에 추가한다.
+  const hasToggle = contentType === "html" || contentType === "code" || contentType === "markdown";
 
   let previewHtml;
   if (contentType === "html") {
     previewHtml = '<iframe class="html-preview" sandbox="allow-scripts" srcdoc="' + escAttr(raw) + '"></iframe>';
   } else if (contentType === "code") {
-    previewHtml = '<pre class="code-block"><code>' + highlightCode(esc(raw)) + '</code></pre>';
+    previewHtml = '<pre class="code-block">' + _highlightCode(raw) + "</pre>";
   } else {
-    const escaped = esc(raw);
-    const withCodeBlocks = escaped.replace(
-      /```[a-zA-Z0-9]*\\n([\\s\\S]*?)```/g,
-      (_match, code) => '<pre class="code-block"><code>' + highlightCode(code.replace(/\\n$/, "")) + "</code></pre>"
-    );
-    if (contentType !== "markdown") {
-      previewHtml = withCodeBlocks
-        .replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>")
-        .replace(/\\n/g, "<br>");
-    } else {
-      // markdown — 헤딩/목록/인라인 코드까지 조금 더 넓게 처리한다(여전히
-      // esc() 이후의 안전한 치환일 뿐, 별도 파서 라이브러리는 안 씀).
-      previewHtml = '<div class="md-content">' + withCodeBlocks
-        .replace(/^###### (.+)$/gm, "<h6>$1</h6>")
-        .replace(/^##### (.+)$/gm, "<h5>$1</h5>")
-        .replace(/^#### (.+)$/gm, "<h4>$1</h4>")
-        .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-        .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-        .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-        .replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>")
-        .replace(/`([^`]+?)`/g, "<code>$1</code>")
-        .replace(/^- (.+)$/gm, "<li>$1</li>")
-        .replace(/\\n/g, "<br>") + '</div>';
-    }
+    // markdown이든 타입 미지정이든 전부 실제 마크다운 렌더러를 거친다
+    // (기존에도 타입 미지정은 **굵게**/코드펜스만 가볍게 처리하는
+    // "마크다운 라이트" 취급이었다 — 이제 똑같이 풀 렌더링으로 올린다).
+    previewHtml = '<div class="md-content">' + _renderMarkdown(raw) + "</div>";
   }
 
   // 복사 버튼은 렌더링된(하이라이팅/HTML태그 섞인) 결과가 아니라 원본
   // raw 텍스트를 복사해야 한다 — <textarea> 안에 esc()로 이스케이프해
   // 넣으면 브라우저가 파싱 시점에 엔티티를 다시 원문으로 풀어주므로,
   // `.value`를 읽기만 하면 별도 보관 없이 정확한 원본을 얻는다.
+  const downloadExt = _DOWNLOAD_EXT[contentType] || "md";
   const toolbarHtml =
     '<div class="artifact-toolbar">' +
     '<button type="button" class="small" data-copy-artifact="' + artifactId + '">복사</button>' +
+    '<button type="button" class="small" data-download-artifact="' + artifactId + '" data-download-ext="' + downloadExt + '">다운로드</button>' +
     (hasToggle
       ? '<button type="button" class="small" data-toggle-artifact="' + artifactId + '">소스 보기</button>'
       : "") +
+    // 사용자 요청(2026-10-13, "claude artifact 수준으로") — Claude
+    // Artifact의 대표적인 특징인 "전체화면으로 보기"를 추가한다.
+    '<button type="button" class="small" data-fullscreen-artifact="' + artifactId + '">전체화면</button>' +
     '</div>';
   const sourceHtml = hasToggle
     ? '<div class="artifact-source" id="' + artifactId + '-source" style="display:none">' +
-      '<pre class="code-block artifact-source-pre">' + esc(raw) + '</pre></div>'
+      '<pre class="code-block artifact-source-pre">' +
+      _highlightCode(raw, contentType === "html" ? "xml" : contentType === "markdown" ? "markdown" : undefined) +
+      "</pre></div>"
     : "";
 
   return (
@@ -374,7 +539,121 @@ document.addEventListener("click", (ev) => {
     source.style.display = showingSource ? "none" : "block";
     preview.style.display = showingSource ? "block" : "none";
     toggleBtn.textContent = showingSource ? "소스 보기" : "미리보기";
+    return;
   }
+  const fullscreenBtn = ev.target.closest("[data-fullscreen-artifact]");
+  if (fullscreenBtn) {
+    openArtifactFullscreen(fullscreenBtn.dataset.fullscreenArtifact);
+    return;
+  }
+  // 사용자 요청(2026-10-14, "결과 파일을 복사 및 다운로드 가능하도록") —
+  // 복사(클립보드)와 별개로 실제 파일로 저장할 수 있게 한다. 원본 raw
+  // 텍스트는 복사 버튼과 똑같이 숨겨진 textarea에서 그대로 읽는다(다시
+  // 렌더링된 HTML이 아니라 원본을 받아야 한다).
+  const downloadBtn = ev.target.closest("[data-download-artifact]");
+  if (downloadBtn) {
+    const id = downloadBtn.dataset.downloadArtifact;
+    const rawEl = document.getElementById(id + "-raw");
+    if (!rawEl) return;
+    const ext = downloadBtn.dataset.downloadExt || "txt";
+    const mime = _DOWNLOAD_MIME[ext] || "text/plain";
+    const blob = new Blob([rawEl.value], { type: mime + ";charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = id + "." + ext;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return;
+  }
+  // 사용자 요청(2026-10-14, "단위 메시지 삭제 기능") — 메시지 목록은
+  // innerHTML로 통째로 다시 그려지므로(`refreshConversationMessages()`),
+  // 버튼마다 개별 리스너를 거는 대신 복사/전체화면 버튼과 같은 전역
+  // 위임 방식을 쓴다 — 재렌더될 때마다 다시 배선할 필요가 없다.
+  const deleteMsgBtn = ev.target.closest("[data-delete-message]");
+  if (deleteMsgBtn) {
+    const [convId, msgId] = deleteMsgBtn.dataset.deleteMessage.split(":");
+    if (!window.confirm("이 메시지를 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+    api("DELETE", "/api/conversations/" + convId + "/messages/" + msgId)
+      .then(() => _reloadConversationMessagesInPlace(convId))
+      .catch((e) => showMsg("global-msg", e.message, "error"));
+    return;
+  }
+  // 사용자 요청(2026-10-14, "각 메뉴의 목록 기능에 필터/소트 기능을
+  // 추가해줘") — table()이 렌더되는 23곳 전부 이 전역 위임 하나로
+  // 정렬 클릭을 받는다(호출부마다 따로 배선할 필요 없음).
+  const sortTh = ev.target.closest("[data-sort-col]");
+  if (sortTh) {
+    _sortTableByColumn(sortTh);
+  }
+});
+
+// 사용자 보고(2026-10-14, "삭제는 되는데 삭제 후 대화 창을 빠져나가
+// 다시 대화창을 열어야 해") — 실측으로 확인한 원인: 삭제 직후 전역
+// `refresh()`(현재 탭 전체를 `selectTab()`으로 다시 그림)를 불렀는데,
+// "대화" 탭의 기본 화면(`tab.render()`)은 대화 목록이라 상세 화면 안에서
+// 호출하면 그 목록으로 되돌아가 버린다(Task 워크스페이스에 임베드된
+// 경우도 마찬가지로 그 자리가 통째로 다시 그려져 스크롤까지 끊긴다).
+// 지금 열려 있는 대화 상세 화면은 그대로 두고 메시지 영역
+// (`#conv-messages`)만 다시 불러온다 — `refreshConversationMessages()`와
+// 같은 조회를 하지만, 전역 클릭 핸들러에는 그 함수가 쓰는 `conv`/
+// `participants` 클로저가 없어 API로 새로 가져온다.
+async function _reloadConversationMessagesInPlace(conversationId) {
+  const box = document.getElementById("conv-messages");
+  if (!box) return;
+  try {
+    const [conv, participants, messages] = await Promise.all([
+      api("GET", "/api/conversations/" + conversationId),
+      api("GET", "/api/conversations/" + conversationId + "/participants"),
+      api("GET", "/api/conversations/" + conversationId + "/messages"),
+    ]);
+    box.innerHTML = messages.length
+      ? messages.map(m => _renderConversationMessage(m, participants, conv)).join("")
+      : '<p class="muted">아직 메시지가 없습니다 — 아래에 메시지를 입력해 보세요.</p>';
+  } catch (e) {
+    // 참가자가 아니게 됐거나 대화 자체가 지워졌으면 조용히 무시
+    // (`refreshConversationMessages()`와 같은 처리).
+  }
+}
+
+// 사용자 요청(2026-10-13, "claude artifact 수준으로") — 이미 렌더링된
+// 미리보기 DOM을 그대로 복제해 전체화면 오버레이에 옮겨 붙인다(다시
+// 파싱/렌더링할 필요 없음 — html은 iframe이라 복제해도 그대로 동작한다).
+// 오버레이 엘리먼트 하나를 재사용한다(열 때마다 새로 만들지 않음).
+let _artifactFullscreenEl = null;
+function _ensureArtifactFullscreenEl() {
+  if (_artifactFullscreenEl) return _artifactFullscreenEl;
+  const overlay = document.createElement("div");
+  overlay.className = "artifact-fullscreen-overlay";
+  overlay.style.display = "none";
+  overlay.innerHTML =
+    '<div class="artifact-fullscreen-panel">' +
+    '<button type="button" class="small artifact-fullscreen-close" aria-label="닫기">✕ 닫기</button>' +
+    '<div class="artifact-fullscreen-body"></div>' +
+    "</div>";
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay || ev.target.closest(".artifact-fullscreen-close")) {
+      closeArtifactFullscreen();
+    }
+  });
+  _artifactFullscreenEl = overlay;
+  return overlay;
+}
+function openArtifactFullscreen(artifactId) {
+  const preview = document.getElementById(artifactId + "-preview");
+  if (!preview) return;
+  const overlay = _ensureArtifactFullscreenEl();
+  overlay.querySelector(".artifact-fullscreen-body").innerHTML = preview.innerHTML;
+  overlay.style.display = "flex";
+}
+function closeArtifactFullscreen() {
+  if (_artifactFullscreenEl) _artifactFullscreenEl.style.display = "none";
+}
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closeArtifactFullscreen();
 });
 
 // 결과물을 그대로 다운로드(2026-10-07, Tier 1 — "다운로드는 가능한지
@@ -461,7 +740,7 @@ const LABELS = {
   available: "가능", unavailable: "불가", offboarded: "오프보딩됨",
   active: "활성", pending_onboarding: "온보딩 대기", deprecated: "비활성화됨",
   draft: "초안", pending_review: "리뷰 대기", revised: "수정됨",
-  // ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 할 일 보드 상태/우선순위.
+  // (2026-10-08, Phase 4) — 할 일 보드 상태/우선순위.
   backlog: "백로그", queued: "대기", in_progress: "진행중", done: "완료",
   low: "낮음", medium: "보통", high: "높음", urgent: "긴급",
   task_dependencies: "의존관계", tasks: "업무",
@@ -470,18 +749,48 @@ function label(v) { return LABELS[v] || v; }
 
 function headerColClass(h) {
   if (h === "동작") return "col-actions";
-  if (h === "최근 산출물") return "col-output";
+  // 사용자 보고(2026-10-14, 스크린샷 — "스킬" 열이 단어 하나씩
+  // 줄바꿈될 만큼 좁게 눌려 있음) — table-layout:fixed에서 폭을
+  // 안 정해주면 ID/상태처럼 짧은 열과 똑같이 나눠 가져가 버린다.
+  if (h === "스킬") return "col-skills";
+  // "모델 실행 후 쌓이는 정보"를 접어 놓는 열(AI 에이전트 관리) — 펼쳤을
+  // 때 소속팀/비용/LLM/최근 산출물 같은 일반 텍스트가 읽을 수 있게
+  // 줄바꿈되려면 col-skills보다 넉넉한 폭이 필요하다.
+  if (h === "상세정보") return "col-detail";
   return "";
 }
 
+// 사용자 요청(2026-10-14, "각 메뉴의 목록 기능에 필터/소트 기능을
+// 추가해줘") — 이 앱의 모든 목록 화면(23곳)이 전부 이 table() 헬퍼
+// 하나를 공유한다. 호출부마다 따로 구현하는 대신 여기 한 곳에
+// 검색창 + 정렬 가능한 헤더를 붙이면 전체 메뉴에 자동으로 퍼진다.
+// 각 호출부는 이미 렌더링된 HTML 문자열(버튼 등)을 셀 값으로 넘기므로
+// (구조화된 데이터가 아님), 필터/정렬은 **렌더링된 DOM의 textContent**
+// 기준으로 동작한다 — 데이터 모델을 바꾸는 23곳 전면 리팩터링 없이도
+// 전부 적용된다는 뜻이다. "동작" 열(버튼만 있는 열)은 정렬 대상에서
+// 제외한다(`headerColClass()`가 이미 "동작"을 이름으로 식별하는 기존
+// 관례를 그대로 재사용).
+let _tableSeq = 0;
+
 function table(headers, rows) {
-  let html = "<table><thead><tr>";
-  for (const h of headers) {
-    const cls = headerColClass(h);
-    html += "<th" + (cls ? ' class="' + cls + '"' : "") + ">" + esc(h) + "</th>";
+  const tableId = "tbl-" + (++_tableSeq);
+  const hasRows = rows.length > 0;
+  let html = '<div class="table-wrap">';
+  if (hasRows) {
+    html += '<input type="search" class="table-filter" data-table-filter="' + tableId +
+      '" placeholder="검색…" aria-label="목록 검색">';
   }
+  html += '<table id="' + tableId + '"><thead><tr>';
+  headers.forEach((h, i) => {
+    const cls = headerColClass(h);
+    const sortable = hasRows && h !== "동작";
+    const thClass = [cls, sortable ? "sortable-col" : ""].filter(Boolean).join(" ");
+    html += "<th" + (thClass ? ' class="' + thClass + '"' : "") +
+      (sortable ? ' data-sort-col="' + i + '" title="클릭해 정렬"' : "") +
+      ">" + esc(h) + (sortable ? ' <span class="sort-indicator"></span>' : "") + "</th>";
+  });
   html += "</tr></thead><tbody>";
-  if (!rows.length) {
+  if (!hasRows) {
     html += '<tr><td colspan="' + headers.length + '" class="muted">데이터가 없습니다.</td></tr>';
   }
   for (const r of rows) {
@@ -492,14 +801,82 @@ function table(headers, rows) {
     });
     html += "</tr>";
   }
-  html += "</tbody></table>";
+  html += "</tbody></table></div>";
   return html;
 }
+
+// 정렬 클릭·검색 입력 둘 다 렌더링된 테이블의 textContent만 본다 —
+// 숫자처럼 보이는 열(모든 셀이 Number()로 변환되면)은 숫자 비교,
+// 아니면 한국어 로케일 문자열 비교로 정렬한다. "데이터가 없습니다"
+// 자리표시 행은 hasRows가 false일 때만 생기고 그때는 헤더 자체가
+// 정렬 불가능하므로 따로 걸러낼 필요가 없다.
+function _sortTableByColumn(th) {
+  const tbl = th.closest("table");
+  if (!tbl) return;
+  const colIndex = Number(th.dataset.sortCol);
+  const tbody = tbl.querySelector("tbody");
+  // 사용자 보고(2026-10-14, 스크린샷 — 정렬했더니 "구분/내용/타깃/동적
+  // 테스트" 같은 엉뚱한 행이 섞여 테이블이 깨져 보임) — 실측으로 확인한
+  // 원인: "AI 에이전트 관리"의 "최근 산출물"(상세정보 안)은 이제
+  // marked.js로 실제 마크다운 **표**까지 렌더링한다(이전엔 불가능했던
+  // 기능) — 그 결과 셀 안에 중첩된 <table>이 생길 수 있다.
+  // `tbody.querySelectorAll("tr")`은 자손 전체를 뒤져 그 중첩 표의
+  // <tr>까지 집어오고, 정렬 뒤 `tbody.appendChild(tr)`로 그 행들을
+  // **바깥 테이블의 직계 자식**으로 떼어내 옮겨버렸다 — 중첩 표가
+  // 산산조각나 바깥 테이블 행처럼 보인 것. 바깥 tbody의 **직계 자식만**
+  // (`tbody.children`) 대상으로 삼아야 중첩 표는 손대지 않는다.
+  const rows = Array.from(tbody.children);
+  const nextDir = th.dataset.sortDir === "asc" ? "desc" : "asc";
+  tbl.querySelectorAll("th[data-sort-col]").forEach(h => {
+    h.removeAttribute("data-sort-dir");
+    const indicator = h.querySelector(".sort-indicator");
+    if (indicator) indicator.textContent = "";
+  });
+  th.dataset.sortDir = nextDir;
+  const indicator = th.querySelector(".sort-indicator");
+  if (indicator) indicator.textContent = nextDir === "asc" ? "▲" : "▼";
+
+  const cellText = (tr) => {
+    const cell = tr.children[colIndex];
+    return cell ? cell.textContent.trim() : "";
+  };
+  const isNumericLike = (v) => v === "" || v === "-" || !isNaN(Number(v.replace(/,/g, "")));
+  const allNumeric = rows.every(tr => isNumericLike(cellText(tr)));
+  rows.sort((a, b) => {
+    const va = cellText(a);
+    const vb = cellText(b);
+    let cmp;
+    if (allNumeric) {
+      const toNum = (v) => (v === "" || v === "-") ? -Infinity : Number(v.replace(/,/g, ""));
+      cmp = toNum(va) - toNum(vb);
+    } else {
+      cmp = va.localeCompare(vb, "ko");
+    }
+    return nextDir === "asc" ? cmp : -cmp;
+  });
+  rows.forEach(tr => tbody.appendChild(tr));
+}
+
+document.addEventListener("input", (ev) => {
+  const filterInput = ev.target.closest("[data-table-filter]");
+  if (!filterInput) return;
+  const tbl = document.getElementById(filterInput.dataset.tableFilter);
+  const tbody = tbl && tbl.querySelector("tbody");
+  if (!tbody) return;
+  const q = filterInput.value.trim().toLowerCase();
+  // _sortTableByColumn()과 같은 이유로 `tbody.querySelectorAll("tbody tr")`
+  // 대신 직계 자식(tbody.children)만 본다 — 셀 안에 중첩된 마크다운 표의
+  // 행까지 숨김/표시 대상으로 잘못 집어오지 않도록.
+  Array.from(tbody.children).forEach(tr => {
+    const text = tr.textContent.toLowerCase();
+    tr.style.display = (!q || text.includes(q)) ? "" : "none";
+  });
+});
 
 /* Phase 5(사용자 요청, 2026-09-28, "협업 워크스페이스 UX 개선" — Skill
    자동완성). skill_pool에 등록된 이름을 <datalist>로 내려줘 스킬을 자유
    텍스트로 입력하는 곳마다 브라우저 기본 자동완성이 뜨게 한다 — Skill
-   주입(§4)이 skill_pool 이름과 "정확히 일치"해야 매칭되므로, 오타로
+   주입이 skill_pool 이름과 "정확히 일치"해야 매칭되므로, 오타로
    조용히 매칭이 안 되는 걸 줄이는 게 목적이다.
 
    **정정(2026-10-06, 사용자 보고 "하나의 스킬을 선택한 후에는 다른
@@ -669,12 +1046,12 @@ function initSkillPicker(pickerId, hiddenId, initial) {
 let ME = null;
 
 /* 코드 재점검(2026-09-26) 사용자 요청 — 관리자 기능과 일반 업무 기능을
-   화면상에서도 명확히 구분한다(ADR.md 결정 9).
+   화면상에서도 명확히 구분한다.
 
    사용자 요청(2026-09-29, "HAIR 관점에서 외부 사례들을 조사하고... 관리자와
    사용자 고유 업무와 공통 업무를 구분해줘" → "로그인한 계정 유형에 맞춰
    메뉴 노출을 개선해줘")에 따라 group을 둘에서 셋으로 늘렸다
-   (`docs/ROLE_TASK_CLASSIFICATION.md` 실측 재분류 그대로 반영):
+   (관리자/사용자 고유·공통 업무 실측 재분류 그대로 반영):
    - "user": 담당자가 자기 업무를 처리·요청하는 화면(역할마다 안의 동작은
      다르지만 탭 자체는 전 역할에 열려 있다).
    - "common": 역할과 무관한 순수 조회/참조 화면(Viewer 포함 전부 동일하게
@@ -697,7 +1074,16 @@ let ME = null;
    기록 4개가 실제 화면에선 대시보드만 맨 앞에 있고 나머지 3개는
    8~10번째로 흩어져 있었다. 모니터링 4개를 앞으로 모으고, 그 뒤는
    프로세스 순서(배정 → Agent/사람 준비 → Pool 표준화 → 계정 관리)를
-   그대로 따른다. */
+   그대로 따른다.
+
+   사용자 요청(2026-10-13, "상단 메뉴 버튼의 순서도 검토해줘" →
+   "humanpool/agentpool 순서만 바꿔줘")로 한 번 더 조정 — 프로세스 맵
+   16단계가 "AI 에이전트 생성 → AI 에이전트 관리"를 화살표로 이은 한
+   묶음으로, 18단계가 "도구/스킬 Pool"과 "사람 인력 관리"를 같은 단계로
+   나란히 묶어뒀는데, 기존 순서(jobs → humanpool → agentpool →
+   poolregistry)는 humanpool이 그 사이에 끼어 두 묶음을 모두 깨고
+   있었다. humanpool과 agentpool 자리를 바꿔 jobs→agentpool(16단계),
+   humanpool→poolregistry(18단계) 인접성을 둘 다 맞춘다. */
 const TABS = [
   { id: "conversations", label: "대화", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderConversations },
   { id: "inbox", label: "인박스", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderInbox },
@@ -714,8 +1100,8 @@ const TABS = [
   { id: "audit", label: "활동 기록", group: "admin", roles: ["admin", "manager"], render: renderAudit },
   { id: "match", label: "인력 매칭/배정", group: "admin", roles: ["admin", "manager"], render: renderMatch },
   { id: "jobs", label: "AI 에이전트 생성", group: "admin", roles: ["admin", "manager"], render: renderJobs },
-  { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "agentpool", label: "AI 에이전트 관리", group: "admin", roles: ["admin", "manager"], render: renderAgentPool },
+  { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "poolregistry", label: "도구/스킬 Pool", group: "admin", roles: ["admin", "manager"], render: renderPoolRegistry },
   { id: "teams", label: "팀 관리", group: "admin", roles: ["admin", "manager"], render: renderTeams },
   { id: "modelregistry", label: "모델 레지스트리", group: "admin", roles: ["admin", "manager"], render: renderModelRegistry },
@@ -731,14 +1117,16 @@ async function boot() {
     document.getElementById("whoami").textContent = ME.username + " (" + ME.role + ")";
     buildNav();
     selectTab(TABS.find(t => t.roles.includes(ME.role)).id);
+    startMentionNotificationPolling();
   } catch (e) {
     ME = null;
+    stopMentionNotificationPolling();
     document.getElementById("app-view").style.display = "none";
     document.getElementById("login-view").style.display = "flex";
   }
 }
 
-// ASANA_PARITY_DESIGN_PLAN.md F20(2026-10-08, Phase 5) — **탭 재구성**:
+// (2026-10-08, Phase 5) — **탭 재구성**:
 // 기존 3구역("내 업무"/"공용 조회"/"운영 관리")을 "오늘 할 일"/"설정"
 // 2구역으로 합친다(설계 문서: "신규 사용자가 매일 보는 화면을 좁힌다").
 // `TABS` 배열의 `group` 값(user/common/admin) 자체는 그대로 둔다 —
@@ -749,7 +1137,7 @@ async function boot() {
 // 보드·결재" 4개만 남기고 나머지(업무 요청 등)를 "설정"으로 보내는
 // 더 좁은 해석도 가능했지만, 매일 쓰는 "업무 요청"을 "설정"에 숨기면
 // 오히려 더 불편해질 위험이 커서 "admin 전용 여부"를 기준으로
-// 묶었다 — `docs/LIMITS.md`에 이 해석을 정직하게 기록해둔다.
+// 묶었다 — 이 해석은 의도적 판단이었다는 걸 정직하게 기록해둔다.
 function buildNav() {
   const nav = document.getElementById("tabs");
   nav.innerHTML = "";
@@ -789,11 +1177,23 @@ function buildNav() {
 
 let currentTab = null;
 
-async function selectTab(id) {
-  // ASANA_PARITY_DESIGN_PLAN.md §9-6 "경량 폴링" — 대화 화면을 벗어나면
+async function selectTab(id, opts) {
+  // "경량 폴링" — 대화 화면을 벗어나면
   // 어느 쪽에서 열었든(독립 "대화" 탭/Task 워크스페이스 임베드) 반드시
   // 멈춘다(단일 전역 타이머라 여기 한 곳에서만 끊어도 충분하다).
   _stopConversationPolling();
+  // 사용자 요청(2026-10-14, "모델설정 버튼 클릭시 웹 화면이 가장 위로
+  // 자동이동하고 있어, 다른 버튼들도 모두 점검해줘") — 버그 원인: 거의
+  // 모든 버튼 핸들러가 성공 후 `refresh()`(=같은 탭을 `selectTab()`으로
+  // 다시 그림)를 부르는데, 이 함수가 매번 먼저 `content.innerHTML`을
+  // 아주 짧은 "불러오는 중..." 문구로 비웠다 — 긴 목록 아래쪽 버튼을
+  // 눌렀다가 스크롤이 남아있는 채로 내용이 한 줄짜리로 줄어들면 브라우저가
+  // 스크롤 위치를 0에 가깝게 강제로 잘라낸다(실제 내용이 다시 채워져도
+  // 스크롤은 복구되지 않는다). "다른 탭으로 전환"할 때는 맨 위에서
+  // 시작하는 게 맞지만 "같은 탭을 제자리에서 새로고침"할 때는 아니다 —
+  // `refresh()`만 `preserveScroll: true`로 불러 이 둘을 구분한다.
+  const isTabSwitch = currentTab !== id;
+  const scrollY = opts && opts.preserveScroll ? window.scrollY : 0;
   currentTab = id;
   for (const btn of document.querySelectorAll("#tabs button")) {
     btn.classList.toggle("active", btn.dataset.tab === id);
@@ -801,16 +1201,21 @@ async function selectTab(id) {
   showMsg("global-msg", "", "ok");
   const tab = TABS.find(t => t.id === id);
   const content = document.getElementById("content");
-  content.innerHTML = "<p class=\\"muted\\">불러오는 중...</p>";
+  if (isTabSwitch) {
+    content.innerHTML = "<p class=\\"muted\\">불러오는 중...</p>";
+  }
   try {
     await tab.render(content);
   } catch (e) {
     content.innerHTML = "";
     showMsg("global-msg", e.message, "error");
   }
+  if (opts && opts.preserveScroll) {
+    window.scrollTo(0, scrollY);
+  }
 }
 
-function refresh() { if (currentTab) selectTab(currentTab); }
+function refresh() { if (currentTab) selectTab(currentTab, { preserveScroll: true }); }
 
 document.getElementById("login-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -834,7 +1239,7 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
   await boot();
 });
 
-/* ---------- 대화 중심 작업공간(Conversational Workspace, §9,
+/* ---------- 대화 중심 작업공간(Conversational Workspace,
    2026-10-08, 사용자 요청 "로그인하면 기본적으로 대화창이 주어지고...
    사람이나 에이전트(에이전트 그룹)를 호출하거나 skill을 사용하여
    업무를 수행"). TABS 배열 맨 앞(로그인 직후 첫 화면)에 둔다. ---------- */
@@ -848,15 +1253,43 @@ function _stopConversationPolling() {
   }
 }
 
+// 사용자 보고(2026-10-14, 스크린샷 — 메시지를 보낸 뒤 진행 중임을 알
+// 수 없음) — 기존 "응답을 기다리는 중…"은 `#global-msg`(페이지 맨
+// 위)에만 떴다. 대화를 스크롤해 입력창 근처를 보고 있는 사용자에게는
+// 화면 밖이라 안 보였다 — 메시지 목록 바로 아래, 입력창 바로 위에
+// 똑같은 역할을 하는 인라인 표시(+ 전송 버튼 비활성화)를 추가한다.
+function _setConversationPending(pending, count) {
+  const indicator = document.getElementById("conv-pending-indicator");
+  if (!indicator) return;
+  if (pending) {
+    indicator.style.display = "";
+    indicator.innerHTML =
+      '<div class="pending-indicator"><span class="spinner"></span>' +
+      '응답 생성 중' + (count > 1 ? " (" + count + "건)" : "") +
+      '… Agent/Team 호출은 몇 분 걸릴 수 있습니다</div>';
+  } else {
+    indicator.style.display = "none";
+    indicator.innerHTML = "";
+  }
+  const sendBtn = document.querySelector('#conv-message-form button[type="submit"]');
+  if (sendBtn) sendBtn.disabled = !!pending;
+}
+
 // 사용자 보고(2026-10-08, "응답을 기다리는 중…으로 나오고 대화에
 // 모델의 응답이 표시되지 않음") — 원래는 메시지를 보낸 뒤 "응답을
 // 기다리는 중…" 문구만 한 번 띄우고 끝이라, 실제로 응답이 도착해도
-// (Team 멘션처럼 CrewAI가 몇 분씩 걸리는 경우 특히, §80 실측 — 약
+// (Team 멘션처럼 CrewAI가 몇 분씩 걸리는 경우 특히, 실측 — 약
 // 6분) 그 문구가 그대로 남아 있어 "멈췄다/안 된다"로 오인하게 했다.
 // Task 워크스페이스의 `pollExecutionJob()`과 같은 패턴을 대화 쪽에도
 // 적용해 완료/실패를 실제로 확인하고 상태 문구를 갱신한다.
 async function pollConversationJob(conversationId, jobId, intervalMs, timeoutMs) {
-  const deadline = Date.now() + (timeoutMs || 400000); // Team 멘션(CrewAI)은 수 분 걸릴 수 있음
+  // 사용자 보고(2026-10-14, "일부 응답이 실패했습니다: timed out") 재발 —
+  // 백엔드 Ollama 타임아웃을 300초에서 600초로 올리면서(`llm.py`의
+  // `_call_ollama()` 참고, 실측: 느린 로컬 35B 모델이 337.7초 만에
+  // 정상 완료됨을 확인) 이 폴링 포기 시한도 같이 올린다 — 백엔드가
+  // 아직 기다리는 중인데 프런트가 먼저 포기하지 않도록 항상 백엔드
+  // 타임아웃보다 여유 있게 길게 유지한다.
+  const deadline = Date.now() + (timeoutMs || 700000); // Team 멘션(CrewAI)·느린 로컬 모델은 수 분 걸릴 수 있음
   while (Date.now() < deadline) {
     const jobs = await api("GET", "/api/conversations/" + conversationId + "/jobs");
     const job = jobs.find(j => j.id === jobId);
@@ -864,6 +1297,78 @@ async function pollConversationJob(conversationId, jobId, intervalMs, timeoutMs)
     await new Promise(r => setTimeout(r, intervalMs || 2000));
   }
   throw new Error("응답 완료 확인 시간이 초과됐습니다 — 잠시 후 새로고침해 주세요.");
+}
+
+// ---------- 전역 @멘션 브라우저 알림(사용자 요청, 2026-10-14, "호출
+// 받은 사람에게 브라우저 알림이 오고, 알림 클릭시 대화 참가 가능하도록
+// 개선해줘") — 특정 대화 화면을 보고 있지 않아도(다른 탭을 보고 있어도)
+// 동작해야 하므로 `boot()`에서 로그인 성공 시 한 번만 시작하는 전역
+// 폴링이다(개별 대화 화면의 `_conversationPollTimer`와는 별개). ----------
+
+let _mentionNotifyTimer = null;
+// 버그 수정(2026-10-14, 사용자 보고 "호출이 안 되는 거 같아" — 실측
+// 재현) — 원래는 "최초 폴링은 알림 없이 기준점만 잡는다"는 클라이언트
+// 메모리 커서로 중복 알림을 막았는데, 그 탭이 멘션이 이미 온 *뒤에*
+// 열리면(실제 재현: admin이 먼저 세 번 호출하고 pm_kim은 그 뒤에 로그인)
+// 그 멘션들이 전부 "최초 폴링"으로 분류돼 영영 알림이 안 떴다. 이제
+// "안 읽음" 판정 자체를 서버가 들고 있어서(`conversation_participants.
+// last_read_message_id` — 그 대화를 실제로 열면 갱신됨) 서버가 돌려주는
+// 건 전부 "진짜 안 읽은 멘션"이다. 이 Set은 그래도 같은 폴링 주기
+// 내에서(아직 그 대화를 안 열어 계속 "안 읽음"으로 돌아오는 동안) 20초
+// 마다 같은 멘션을 또 알림으로 띄우지 않기 위한 세션 한정 중복 방지일
+// 뿐이다(페이지 새로고침하면 리셋돼도 무해 — 서버가 "안 읽음"이면 다시
+// 한 번 알림이 뜨는 정도).
+let _notifiedMentionIds = new Set();
+
+function _requestNotificationPermissionIfNeeded() {
+  if (typeof Notification === "undefined") return; // 미지원 브라우저는 조용히 건너뜀
+  if (Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+
+async function _openConversationFromNotification(conversationId) {
+  window.focus();
+  await selectTab("conversations");
+  renderConversationDetail(conversationId, "conversation-detail");
+}
+
+async function _pollMyMentions() {
+  let mentions;
+  try {
+    mentions = await api("GET", "/api/conversations/my-mentions");
+  } catch (e) {
+    return; // 네트워크 일시 단절 등 — 다음 주기에 다시 시도
+  }
+  if (!mentions.length) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  for (const m of mentions) {
+    if (_notifiedMentionIds.has(m.message_id)) continue;
+    _notifiedMentionIds.add(m.message_id);
+    const notif = new Notification("💬 \\"" + m.conversation_title + "\\"에서 호출됨", {
+      body: m.content,
+      tag: "hair-mention-" + m.message_id,
+    });
+    notif.onclick = () => {
+      _openConversationFromNotification(m.conversation_id);
+      notif.close();
+    };
+  }
+}
+
+function startMentionNotificationPolling() {
+  if (_mentionNotifyTimer) return; // 이미 돌고 있으면 중복 시작하지 않음
+  _requestNotificationPermissionIfNeeded();
+  _pollMyMentions();
+  _mentionNotifyTimer = setInterval(_pollMyMentions, 20000);
+}
+
+function stopMentionNotificationPolling() {
+  if (_mentionNotifyTimer) {
+    clearInterval(_mentionNotifyTimer);
+    _mentionNotifyTimer = null;
+  }
+  _notifiedMentionIds = new Set(); // 다음 로그인(다른 계정일 수 있음)은 새로 시작
 }
 
 async function renderConversations(content) {
@@ -932,25 +1437,53 @@ async function renderConversations(content) {
   });
 }
 
-async function refreshConversationMessages(conversationId, participants, llmModel) {
+async function refreshConversationMessages(conversationId, participants, conv) {
   const box = document.getElementById("conv-messages");
   if (!box) return;
   try {
     const messages = await api("GET", "/api/conversations/" + conversationId + "/messages");
-    box.innerHTML = messages.length ? messages.map(m => _renderConversationMessage(m, participants, llmModel)).join("")
+    box.innerHTML = messages.length ? messages.map(m => _renderConversationMessage(m, participants, conv)).join("")
       : '<p class="muted">아직 메시지가 없습니다 — 아래에 메시지를 입력해 보세요.</p>';
   } catch (e) {
     // 참가자가 아니게 됐으면(제거됨) 403 — 조용히 무시.
   }
 }
 
-function _conversationAuthorLabel(authorType, authorId, participants, llmModel) {
-  if (authorType === "human") return "사용자 #" + authorId;
+// 사용자 보고(2026-10-14, "대화창에 사용중인 모델이 명시되도록 UI를
+// 개선해줘") — Agent 멘션 응답은 지금까지 "(AI)"만 보이고 실제로 어떤
+// provider/model이 썼는지 전혀 안 보였다(기본 AI만 conv.llm_model을
+// 보여줬는데, 그나마도 "그 메시지를 만들 때 실제로 쓰인 값"이 아니라
+// "지금 대화 설정값"이라 사용자가 나중에 모델을 바꾸면 과거 메시지
+// 라벨까지 거슬러 바뀌는 부정확함이 있었다). 이제 메시지마다 실제로
+// 쓰인 provider/model이 `conversation_messages.llm_provider/llm_model`
+// 에 저장되므로(`conversations.py`의 `_finish_job_with_message()`/
+// `run_team_mention_job()` 참고) 그 값을 우선 쓰고, 마이그레이션 이전
+// 과거 메시지(그 컬럼이 비어 있음)만 기존처럼 대화 설정값으로 폴백한다.
+function _conversationModelBadge(provider, model) {
+  if (!model) return "";
+  return provider ? provider + "/" + model : model;
+}
+
+function _conversationAuthorLabel(m, participants, convLlmModel) {
+  const authorType = m.author_type, authorId = m.author_id;
+  // 실측으로 발견한 비대칭(2026-10-13) — Agent 작성자는 participants에서
+  // display_name을 찾아 보여주는데, 사람 작성자는 찾아보지도 않고 바로
+  // "사용자 #3" 식으로 ID만 보여주고 있었다. 본인이면 로그인 아이디를,
+  // 아니면 participants에서 같은 방식으로 찾는다(둘 다 없을 때만 ID로
+  // 폴백 — 예: 대화를 나간 뒤에도 과거 메시지는 남는 경우).
+  if (authorType === "human") {
+    if (ME && authorId === ME.id) return esc(ME.username);
+    const hp = participants.find(p => p.participant_type === "human" && p.participant_id === authorId);
+    return hp && hp.display_name ? esc(hp.display_name) : "사용자 #" + authorId;
+  }
+  const badge = _conversationModelBadge(m.llm_provider, m.llm_model) ||
+    (authorId === conversationsDefaultAiAuthorId ? (convLlmModel || "") : "");
   if (authorId === conversationsDefaultAiAuthorId) {
-    return "AI" + (llmModel ? "(" + esc(llmModel) + ")" : "");
+    return "AI" + (badge ? " (" + esc(badge) + ")" : "");
   }
   const p = participants.find(p => p.participant_type === "agent" && p.participant_id === authorId);
-  return p ? esc(p.display_name) + " (AI)" : "AI 에이전트 #" + authorId;
+  if (!p) return "AI 에이전트 #" + authorId;
+  return esc(p.display_name) + " (AI" + (badge ? " · " + esc(badge) : "") + ")";
 }
 
 // `conversation_messages.author_id`의 예약 sentinel — 실존 agent_pool
@@ -959,14 +1492,25 @@ function _conversationAuthorLabel(authorType, authorId, participants, llmModel) 
 // 는 AUTOINCREMENT라 0이 될 수 없어 안전한 sentinel이다).
 const conversationsDefaultAiAuthorId = 0;
 
-function _renderConversationMessage(m, participants, llmModel) {
+// 사용자 요청(2026-10-14, "단위 메시지 삭제 기능") — 본인이 보낸 사람
+// 메시지는 본인이, 그 외(AI/Agent 응답 포함)는 대화 생성자가 지울 수
+// 있다(`conversations.delete_message()`와 같은 권한 — 서버가 최종
+// 검증하므로 여기선 버튼 노출 여부만 결정한다).
+function _renderConversationMessage(m, participants, conv) {
   const side = m.author_type === "agent" ? "chat-agent" : "chat-human";
-  const who = _conversationAuthorLabel(m.author_type, m.author_id, participants, llmModel);
+  const who = _conversationAuthorLabel(m, participants, conv ? conv.llm_model : null);
   const skillBadge = m.used_skill
     ? ' <span class="gate-badge gate-ok">스킬: ' + esc(m.used_skill) + '</span>'
     : '';
+  const canDelete = conv && ME && (
+    (m.author_type === "human" && m.author_id === ME.id) || conv.created_by === ME.id
+  );
+  const deleteBtn = canDelete
+    ? ' <button type="button" class="small danger" data-delete-message="' +
+      m.conversation_id + ':' + m.id + '">삭제</button>'
+    : '';
   return '<div class="deliverable-card ' + side + '">' +
-    '<div class="muted">' + who + skillBadge + ' · ' + esc(m.created_at) + '</div>' +
+    '<div class="muted">' + who + skillBadge + ' · ' + esc(m.created_at) + deleteBtn + '</div>' +
     '<div>' + renderContent(m.content) + '</div>' +
     '</div>';
 }
@@ -995,7 +1539,7 @@ async function renderConversationDetail(conversationId, containerId) {
     '<li>' + esc(label(p.participant_type)) + ' ' + esc(p.display_name || ("#" + p.participant_id)) + '</li>'
   ).join("");
 
-  const messageCards = messages.map(m => _renderConversationMessage(m, participants, conv.llm_model)).join("");
+  const messageCards = messages.map(m => _renderConversationMessage(m, participants, conv)).join("");
 
   detail.innerHTML =
     '<section class="card">' +
@@ -1036,15 +1580,39 @@ async function renderConversationDetail(conversationId, containerId) {
     '<button class="small" id="conv-promote-btn">정식 업무 요청으로 전환</button>' +
     '</div>' +
     '<p class="muted">AI 자동응답이 켜져 있으면 멘션 없는 메시지에도 매번 LLM 호출이 발생합니다(비용 발생). provider/model을 고른 뒤 "모델 설정 저장"을 눌러야 반영됩니다.</p>' +
+    // 사용자 요청(2026-10-14, "대화창에 사용중인 모델이 명시되도록 UI를
+    // 개선해줘") — 실측으로 확인한 사실: 이 설정은 **멘션 없는 기본 AI
+    // 응답에만** 적용된다. `@Agent`로 직접 부르면 그 Agent 자신에게 저장된
+    // 모델이 쓰이고, `@Team`으로 부르면 서버 환경변수/API 키로 자동
+    // 판별한 값이 쓰인다(둘 다 이 설정과 무관). 각 메시지가 실제로 어떤
+    // 모델로 응답했는지는 메시지 카드 작성자 줄에 표시한다(아래
+    // `_conversationAuthorLabel()` 참고).
+    '<p class="muted">⚠️ 이 모델 설정은 <b>멘션 없는 기본 AI 응답</b>에만 적용됩니다. ' +
+    '<code>@Agent이름</code>으로 부르면 그 Agent 자신에게 저장된 모델이, ' +
+    '<code>@Team이름</code>으로 부르면 서버가 자동 판별한 모델이 쓰입니다(이 설정과 무관). ' +
+    '각 메시지에 실제로 쓰인 모델은 메시지 작성자 줄에 표시됩니다.</p>' +
     '<h4>참가자</h4>' +
     '<ul id="conv-participant-list">' + participantRows + '</ul>' +
     (participantRows ? '' : '<p class="muted" id="conv-participant-empty-hint">참가자가 없습니다.</p>') +
-    '<div style="position:relative;margin-bottom:0.75rem">' +
-    '<input id="conv-invite-input" placeholder="이름으로 검색해 초대(사람·Agent·Team, 조직 전체 검색)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
-    '<ul class="mention-dropdown" id="conv-invite-dropdown" style="display:none"></ul>' +
-    '</div>' +
+    // 사용자 요청(2026-10-14, "①(참가자 검색-초대 입력창) 없이
+    // ②(메시지 중 @멘션 자동완성)만으로 동작 가능하다면 ①을 삭제") —
+    // 아래 메시지창의 @멘션 자동완성이 이미 "아직 초대 안 된 조직
+    // 전체 후보"까지 검색해서(`/api/conversations/mentionable`),
+    // 드롭다운에서 고르는 순간 `_inviteAndTrackParticipant()`로 먼저
+    // 초대한 뒤 멘션 텍스트를 끼워 넣는다 — 메시지를 실제로 보내지
+    // 않아도 그 시점에 이미 초대가 끝나 있다(사람/Agent/Team 전부
+    // 지원, 기존 이 입력창과 완전히 같은 검색·대상 범위). 그래서
+    // 별도의 참가자 검색-초대 입력창은 기능이 완전히 겹쳐 제거한다
+    // (아래 "대화"의 메시지창에서 "@"를 치면 같은 역할을 한다).
+    '<p class="muted">아래 메시지창에서 "@"를 입력하면 참가자 검색·초대 자동완성이 뜹니다(아직 초대 안 된 사람·Agent·Team도 검색되고, 고르면 바로 초대됩니다).</p>' +
     '<h4>대화</h4>' +
     '<div id="conv-messages">' + (messageCards || '<p class="muted">아직 메시지가 없습니다 — 아래에 메시지를 입력해 보세요.</p>') + '</div>' +
+    // 사용자 보고(2026-10-14, 스크린샷 — 메시지를 보낸 뒤 진행 중임을
+    // 알 수 없음) — "응답을 기다리는 중…"은 이미 있었지만 `#global-msg`
+    // (페이지 맨 위)에만 떴다. 대화를 스크롤해 내려와 입력창 근처를
+    // 보고 있는 사용자에게는 화면 밖이라 안 보였다 — 메시지 목록
+    // 바로 아래, 입력창 바로 위에 똑같은 역할의 인라인 표시를 추가한다.
+    '<div id="conv-pending-indicator" style="display:none"></div>' +
     '<form class="inline" id="conv-message-form" style="margin-top:0.5rem;flex-wrap:wrap">' +
     '<select id="conv-skill-select"><option value="">스킬 선택 안 함</option>' +
     skillNames.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join("") +
@@ -1127,7 +1695,7 @@ async function renderConversationDetail(conversationId, containerId) {
     // 개선해줘") — 원래는 대화 전체를 raw_text로 그대로 넘겨 Brief를
     // **자동 생성**했다. 사람이 걸러낼 기회 없이 잡담·중복·주제 이탈
     // 메시지까지 그대로 정식 업무 요청의 "내용"이 돼버리는 게 문제였다.
-    // "이걸 결과물로 제출"(F15 Phase 3)과 같은 원칙으로 바꾼다 — 자동
+    // "이걸 결과물로 제출"(Phase 3)과 같은 원칙으로 바꾼다 — 자동
     // 생성 대신 기존 "업무 요청" 폼의 textarea에 미리 채워만 주고,
     // 사람이 다듬은 뒤 그 폼의 기존 "제출" 버튼을 직접 눌러야 실제
     // Brief가 된다(새 제출 경로를 만들지 않는다).
@@ -1148,49 +1716,9 @@ async function renderConversationDetail(conversationId, containerId) {
     showMsg("global-msg", "대화 내용을 업무 요청 작성란에 채웠습니다 — 내용을 다듬은 뒤 \\"제출\\"을 눌러주세요.", "ok");
   });
 
-  // 참가자 검색-초대: 입력마다 조직 전체에서 검색(디바운스)하고,
-  // 후보를 클릭하면 바로 초대한다(사용자 결정 4 — 검색 범위는 조직
-  // 전체, 같은 Brief/Task로 좁히지 않는다).
-  const inviteInput = document.getElementById("conv-invite-input");
-  const inviteDropdown = document.getElementById("conv-invite-dropdown");
-  let inviteDebounce = null;
-  inviteInput.addEventListener("input", () => {
-    clearTimeout(inviteDebounce);
-    const q = inviteInput.value.trim();
-    if (!q) { inviteDropdown.style.display = "none"; inviteDropdown.innerHTML = ""; return; }
-    inviteDebounce = setTimeout(async () => {
-      let results;
-      try {
-        results = await api("GET", qs("/api/conversations/mentionable", { q }));
-      } catch (e) { return; }
-      const items = [
-        ...results.humans.map(h => ({ type: "human", id: h.id, name: h.username })),
-        ...results.agents.map(a => ({ type: "agent", id: a.id, name: a.role_name })),
-        ...results.teams.map(t => ({ type: "team", id: t.id, name: t.name })),
-      ];
-      if (!items.length) { inviteDropdown.style.display = "none"; inviteDropdown.innerHTML = ""; return; }
-      const TYPE_LABEL = { human: "사람", agent: "AI 에이전트", team: "팀" };
-      inviteDropdown.innerHTML = items.map(it =>
-        '<li data-invite-type="' + it.type + '" data-invite-id="' + it.id + '">' +
-        esc(it.name) + ' <span class="muted">(' + TYPE_LABEL[it.type] + ')</span></li>'
-      ).join("");
-      inviteDropdown.style.display = "block";
-    }, 250);
-  });
-  inviteInput.addEventListener("blur", () => setTimeout(() => { inviteDropdown.style.display = "none"; }, 150));
-  inviteDropdown.addEventListener("mousedown", async (ev) => {
-    const li = ev.target.closest("[data-invite-type]");
-    if (!li) return;
-    ev.preventDefault();
-    try {
-      await api("POST", "/api/conversations/" + conversationId + "/participants", {
-        participant_type: li.dataset.inviteType,
-        participant_id: Number(li.dataset.inviteId),
-      });
-      showMsg("global-msg", "초대했습니다.", "ok");
-      renderConversationDetail(conversationId, containerId);
-    } catch (e) { showMsg("global-msg", e.message, "error"); }
-  });
+  // 2026-10-14 — 참가자 검색-초대 전용 입력창을 제거했다(아래 메시지창의
+  // "@" 자동완성이 완전히 같은 검색·초대를 포함한다, `setupMentionAutocomplete`
+  // 호출부와 `_inviteAndTrackParticipant()` 참고).
 
   document.getElementById("conv-message-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -1204,13 +1732,15 @@ async function renderConversationDetail(conversationId, containerId) {
       const result = await api("POST", "/api/conversations/" + conversationId + "/messages", payload);
       input.value = "";
       document.getElementById("conv-skill-select").value = "";
-      await refreshConversationMessages(conversationId, participants, conv.llm_model);
+      await refreshConversationMessages(conversationId, participants, conv);
       if (result.triggered_jobs && result.triggered_jobs.length) {
         showMsg("global-msg", "응답을 기다리는 중…(Agent/Team 호출은 몇 분 걸릴 수 있습니다)", "ok");
+        _setConversationPending(true, result.triggered_jobs.length);
         Promise.all(
           result.triggered_jobs.map(j => pollConversationJob(conversationId, j.job_id))
         ).then((jobs) => {
-          refreshConversationMessages(conversationId, participants, conv.llm_model);
+          _setConversationPending(false);
+          refreshConversationMessages(conversationId, participants, conv);
           const failed = jobs.filter(j => j.status === "failed");
           showMsg(
             "global-msg",
@@ -1220,19 +1750,20 @@ async function renderConversationDetail(conversationId, containerId) {
             failed.length ? "error" : "ok"
           );
         }).catch((e) => {
-          refreshConversationMessages(conversationId, participants, conv.llm_model);
+          _setConversationPending(false);
+          refreshConversationMessages(conversationId, participants, conv);
           showMsg("global-msg", e.message, "error");
         });
       }
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
-  // 경량 폴링(9-6 로드맵 "구 F21-4") — 이 대화를 보는 동안 주기적으로
+  // 경량 폴링 — 이 대화를 보는 동안 주기적으로
   // 새 메시지를 반영한다(다른 참가자/Agent/Team이 비동기로 남긴
   // 메시지도 수동 새로고침 없이 보이게). 다른 화면으로 이동하면
   // `_stopConversationPolling()`이 멈춘다.
   _conversationPollTimer = setInterval(
-    () => refreshConversationMessages(conversationId, participants, conv.llm_model),
+    () => refreshConversationMessages(conversationId, participants, conv),
     6000
   );
 }
@@ -1280,10 +1811,10 @@ async function _saveConversationModel(conversationId) {
   } catch (e) { showMsg("global-msg", e.message, "error"); }
 }
 
-// ASANA_PARITY_DESIGN_PLAN.md §9-5(F21-1 흡수) — 이 Task에 종속된
+// 이 Task에 종속된
 // 대화(`linked_task_id`)가 이미 있으면 그대로 임베드하고, 없으면
 // "대화 시작" 버튼만 보여준다(결과물 작성 전에도 항상 쓸 수 있다 —
-// F15 때 발견한 구조적 한계의 직접적인 해소).
+// 발견한 구조적 한계의 직접적인 해소).
 async function _loadTaskConversation(taskId) {
   const box = document.getElementById("ws-conversation-" + taskId);
   if (!box) return;
@@ -1324,7 +1855,16 @@ async function renderInbox(content) {
   };
   const cards = items.map(item => {
     if (item.type === "approval_pending") {
-      return '<div class="deliverable-card"><div class="muted">' + labelOf[item.type] + " · " + esc(label(item.subject_type)) + " #" + item.subject_id + '</div>' +
+      // 사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나
+      // 에이전트명이 표시되지 않는 경우도 있어") — "결재 대기 · 배정
+      // #12"만 보여줘 뭘 승인하는지 결재 탭을 또 열어야 알 수 있었다.
+      // `/api/inbox`가 이제 task_role_name/resource_name도 주므로
+      // (`approvals.describe_subject()`) 그대로 보여준다.
+      const detail = item.task_id != null
+        ? "#" + item.task_id + " " + esc(item.task_role_name || "") +
+          (item.resource_name ? " · " + esc(label(item.resource_type)) + " " + esc(item.resource_name) : "")
+        : esc(label(item.subject_type)) + " #" + item.subject_id;
+      return '<div class="deliverable-card"><div class="muted">' + labelOf[item.type] + " · " + detail + '</div>' +
         '<button class="small" data-goto-approvals>결재 화면으로 이동</button></div>';
     }
     if (item.type === "execution_failed") {
@@ -1336,7 +1876,7 @@ async function renderInbox(content) {
       '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
   }).join("");
 
-  // ASANA_PARITY_DESIGN_PLAN.md F20(2026-10-08, Phase 5) — "샘플로
+  // 2026-10-08, Phase 5 — "샘플로
   // 체험하기"는 admin 전용(seed API 자체가 admin 전용)이고, 로그인
   // 직후 가장 먼저 보이는 화면(TABS 배열 맨 앞 = inbox)에 둬야 "로그인
   // 첫 화면"이라는 설계 의도와 맞는다. 처리할 조치가 하나도 없는
@@ -1417,15 +1957,15 @@ async function renderMyWork(content) {
   });
 }
 
-// ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — "할 일 보드"
+// 2026-10-08, Phase 4 — "할 일 보드"
 // 4칼럼 칸반(backlog/queued/in_progress/done). 드래그 없이 업무를 열어
 // select로 상태를 바꾸는 식으로 단순화했다(설계 문서 UI 설계 그대로).
 //
-// SCREEN_UX_BENCHMARK_PROPOSAL.md §4-B/§3-1(2026-10-12, "Phase 1 (A)(B)
-// (H1)(H2)(I5)부터 구현 시작해줘") — "전체 조직 범위는 범위 밖"이라던
+// 2026-10-12, "Phase 1 (A)(B)
+// (H1)(H2)(I5)부터 구현 시작해줘" — "전체 조직 범위는 범위 밖"이라던
 // 원래 주석을 뒤집는다: admin/manager에겐 "전체 조직" 범위 선택지를
-// 추가한다(`/api/all-work`, §4-B). 카드 템플릿(STATUS_COLUMNS)은 그대로
-// 재사용하고 데이터 소스만 바꾼다(§3-1 "같은 카드 템플릿, 데이터 소스만
+// 추가한다(`/api/all-work`). 카드 템플릿(STATUS_COLUMNS)은 그대로
+// 재사용하고 데이터 소스만 바꾼다("같은 카드 템플릿, 데이터 소스만
 // 교체" 원칙) — 일반 사용자는 기존과 동일하게 "내 업무"만 보인다.
 const STATUS_COLUMNS = [
   { key: "backlog", label: "백로그" },
@@ -1441,7 +1981,12 @@ async function renderBoard(content) {
 }
 
 async function _renderBoardScope(content, scope, canSeeAll) {
-  content.innerHTML = '<section class="card"><h2>할 일 보드</h2><p class="muted">불러오는 중…</p></section>';
+  // 2026-10-14 — 여기서 즉시 content를 "불러오는 중…" 한 줄로 비우면
+  // selectTab()의 같은 블랭크와 중복이고(탭 전환 시), `refresh()`로 이
+  // 탭을 제자리에서 다시 그릴 때는 스크롤이 맨 위로 튀는 원인이 된다
+  // (긴 보드를 스크롤해 본 상태에서 내용이 한 줄로 줄어들면 브라우저가
+  // 스크롤 위치를 강제로 잘라낸다) — 아래에서 데이터를 다 가져온 뒤
+  // 한 번에 교체한다.
   const endpoint = scope === "all" ? "/api/all-work" : "/api/my-work";
   const rows = await api("GET", endpoint);
   const details = await Promise.all(
@@ -1498,8 +2043,7 @@ async function _renderBoardScope(content, scope, canSeeAll) {
 
 /* Phase 4 — execute-agent는 202+job_id만 즉시 돌려준다(사용자 요청,
    2026-09-28, "Phase 4 진행해줘"). 실제 완료는 여기서 폴링으로 확인한다
-   (실시간 WebSocket은 COLLABORATION_PLATFORM_PLAN.md §6에서 1차 범위 밖으로
-   명시). */
+   (실시간 WebSocket은 1차 범위 밖으로 명시적으로 뺐다). */
 async function pollExecutionJob(taskId, jobId, intervalMs, timeoutMs) {
   const deadline = Date.now() + (timeoutMs || 120000);
   while (Date.now() < deadline) {
@@ -1511,7 +2055,7 @@ async function pollExecutionJob(taskId, jobId, intervalMs, timeoutMs) {
   throw new Error("실행 완료 확인 시간이 초과됐습니다 — 잠시 후 새로고침해 주세요.");
 }
 
-// ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — **사용자 결정**:
+// 2026-10-08, Phase 4 — **사용자 결정**:
 // 선행 작업 "목록"이 아니라 Riido 수준의 그래프 시각화로 바로 간다.
 // 외부 그래프 라이브러리 없이(이 프로젝트 전체가 CDN 의존 없는 순수
 // vanilla JS 단일 파일이라는 기존 관례 그대로 유지) 순수 SVG로 그린다
@@ -1602,17 +2146,31 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   detail.innerHTML = '<p class="muted">불러오는 중…</p>';
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = isSupervisor ? await fetchModelsByProvider() : {};
-  let items, jobs, permission, confirmedAgents, confirmedTeams, taskDetail, activity, participants, depGraph;
+  let items, jobs, permission, confirmedAgents, confirmedTeams, taskDetail, activity, depGraph, siblingTasks;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
     jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
-    // ASANA_PARITY_DESIGN_PLAN.md F17(메모)/F19(통합 활동 타임라인)/
-    // F15(참가자 초대, Phase 2)/F16(상태·우선순위·의존관계, Phase 4),
+    // 메모/통합 활동 타임라인/
+    // 상태·우선순위·의존관계(Phase 4),
     // 2026-10-08 — 전부 워크스페이스를 열 때 같이 불러온다.
+    // 사용자 요청(2026-10-14, "내 업무 메뉴에서 참가자 기능 삭제해줘") —
+    // 참가자 초대(Phase 2)는 Task 워크스페이스 전체에서 제거했다(아래
+    // 참가자 카드·ws-invite-input·댓글 @멘션 자동완성도 같이 제거 —
+    // 전부 이 `participants` 하나에서 갈라져 나갔던 기능). 백엔드
+    // `task_participants` 테이블/API(`deliverables.py`)는 그대로 남아
+    // 있지만, 이제 초대할 방법이 없어 `detect_mentioned_agents()`
+    // (댓글 @Agent 호출)도 사실상 동작하지 않게 된다 — 의도된 부수
+    // 효과(요청 범위 밖이라 백엔드까지 지우진 않았다).
     taskDetail = await api("GET", "/api/tasks/" + taskId);
     activity = await api("GET", "/api/tasks/" + taskId + "/activity");
-    participants = await api("GET", "/api/tasks/" + taskId + "/participants");
     depGraph = await api("GET", "/api/tasks/" + taskId + "/dependencies");
+    // 사용자 보고(2026-10-13, "할일 ID를 사전에 모르면 사용 불가") —
+    // "선행 작업 ID" 입력도 같은 문제라 같은 브리프의 다른 할 일
+    // 목록으로 고를 수 있게 한다(선행 작업은 브리프를 넘어서도 걸 수
+    // 있게 백엔드가 허용하지만, 실제로는 거의 항상 같은 브리프 내
+    // 작업이라 이 목록만으로 충분 — 드문 브리프 간 선행 작업은 범위
+    // 밖으로 남긴다).
+    siblingTasks = await api("GET", "/api/briefs/" + taskDetail.brief_id + "/tasks").catch(() => []);
     // 사용자가 스크린샷으로 보고한 갭(2026-09-29) — 참가자기만 하면
     // 무조건 실행 버튼을 보여줘, human assignee가 눌러야만 "권한이
     // 없습니다" 403으로 뒤늦게 알게 됐다. 버튼을 그리기 전에 먼저 확인한다.
@@ -1623,13 +2181,12 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     // 걸리는 하나"가 조용히 실행됨) — 의도와 다른 Agent가 실행돼
     // 실비용만 낭비될 위험이 있었다. 확정된 Agent 배정을 미리 조회해
     // 2개 이상이면 선택 드롭다운을 보여준다(`ExecuteAgentRequest.
-    // agent_id`는 §61에서 이미 추가돼 있었는데 이 UI만 안 쓰고 있었다).
+    // agent_id`는 이미 추가돼 있었는데 이 UI만 안 쓰고 있었다).
     const assignments = await api("GET", "/api/tasks/" + taskId + "/assignments");
     confirmedAgents = assignments.filter(a => a.resource_type === "agent" && a.status === "confirmed");
     // 사용자 요청(2026-10-07, "crew 실행에서... 복수 그룹 가능하도록
-    // 개선... 사람-에이전트 연동이 가능한 구조인지 확인") —
-    // `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
-    // confirmed로 배정된 팀이 있으면 그 팀의 Agent 멤버를 실제 Crew로
+    // 개선... 사람-에이전트 연동이 가능한 구조인지 확인") — Phase 3.
+    // 이 할 일에 confirmed로 배정된 팀이 있으면 그 팀의 Agent 멤버를 실제 Crew로
     // 실행하는 섹션을 보여준다(팀이 여러 개면 드롭다운으로 하나를
     // 고른다 — 사용자 결정, 전부 동시 실행 아님).
     confirmedTeams = assignments.filter(a => a.resource_type === "team" && a.status === "confirmed");
@@ -1642,12 +2199,25 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 최신 job이 아직 안 끝났거나(생성 중) 실패했으면, 아직 timeline에
   // 안 나오는 그 실행을 별도 카드로 보여준다(성공하면 곧 deliverable로
   // 나타나므로 여기서 다시 보여줄 필요 없음).
+  // 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 재현 가능한
+  // 감사로그) — Gate 점수가 낮거나 실행이 실패했을 때 "왜 이렇게
+  // 나왔는지"를 사후에 확인할 수 있게, 그 시점 system prompt·증강된
+  // 프롬프트·provider/model을 펼쳐 보여준다(관리자/매니저만 — 기술적
+  // 세부 정보라 일반 참가자 화면을 어지럽히지 않는다).
+  const promptSnapshotDetails = (job) => (isSupervisor && job.prompt_snapshot)
+    ? '<details class="muted"><summary>실행에 쓰인 프롬프트 보기(재현용)</summary>' +
+      '<p>provider/model: ' + esc(job.prompt_snapshot.llm_provider || "-") + " / " + esc(job.prompt_snapshot.llm_model || "-") + '</p>' +
+      '<p>system prompt:</p><pre style="white-space:pre-wrap">' + esc(job.prompt_snapshot.system_prompt || "") + '</pre>' +
+      '<p>프롬프트(증강 후):</p><pre style="white-space:pre-wrap">' + esc(job.prompt_snapshot.augmented_prompt || "") + '</pre>' +
+      '</details>'
+    : "";
   const latestJob = jobs[0];
   const jobCard = (latestJob && latestJob.status === "running")
     ? '<div class="deliverable-card chat-agent"><div class="muted">AI 에이전트 · 생성 중…</div></div>'
     : (latestJob && latestJob.status === "failed"
       ? '<div class="deliverable-card chat-agent"><div class="muted">AI 에이전트 · 실행 실패(' + esc(latestJob.finished_at) + ')</div>' +
-        '<div>' + esc(latestJob.error || "알 수 없는 오류") + '</div></div>'
+        '<div>' + esc(latestJob.error || "알 수 없는 오류") + '</div>' +
+        promptSnapshotDetails(latestJob) + '</div>'
       : '');
 
   // Phase 5(사용자 요청, 2026-09-28, "협업 워크스페이스 UX 개선") — 공유
@@ -1657,7 +2227,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 안 나오고 있었다).
   const deliverableCards = items.map(d => {
     // 실사용 리뷰로 발견한 갭(2026-10-07, 시나리오 3 실행 중) — 결재자가
-    // 그 task의 참가자가 아니면(흔한 경우 — F7 체인은 조직도 기준이지
+    // 그 task의 참가자가 아니면(흔한 경우 — 결재 체인은 조직도 기준이지
     // task 참가 여부와 무관) 반려해도 "왜"를 댓글로 남길 방법이 전혀
     // 없었다(댓글은 참가자 전용). 승인/반려에 선택적 사유를 붙여 그
     // 사유를 결재자 자격으로(참가자 여부와 무관하게) 타임라인에 남긴다.
@@ -1667,8 +2237,8 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         '<button class="small" data-decide-deliverable="' + d.approval_id + '" data-approve="1">승인</button>' +
         '<button class="small danger" data-decide-deliverable="' + d.approval_id + '" data-approve="0">반려</button></div>'
       : (d.approval_id ? '<p class="muted">결재 대기 중 — "결재" 탭 또는 담당 매니저/관리자가 처리합니다.</p>' : '');
-    // Phase 2 후속(라이브 시나리오 실행에서 발견한 갭 보완, docs/LIMITS.md
-    // §33-34) — 사람 draft는 본인이 명시적으로 "검토 요청"을 눌러야만
+    // Phase 2 후속(라이브 시나리오 실행에서 발견한 갭 보완) — 사람
+    // draft는 본인이 명시적으로 "검토 요청"을 눌러야만
     // 결재 체인이 붙는다(Agent처럼 자동 제출되지 않음). 본인 draft에만
     // 노출한다(대리 제출 금지).
     const submitAction = (d.author_type === "human" && d.status === "draft" && d.author_id === ME.id)
@@ -1703,25 +2273,28 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       ? '<details class="muted"><summary>참고한 근거(Tool/Skill 검색 결과)</summary>' +
         '<div>' + renderContent(sourceJob.retrieved_context) + '</div></details>'
       : '';
+    // 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 재현 가능한
+    // 감사로그) — 위 sourceJob 패턴과 같은 방식으로, 이 deliverable을
+    // 만든 job의 prompt_snapshot을 찾아 보여준다(Gate 점수가 왜 이렇게
+    // 나왔는지 사후에 재현해볼 수 있게).
+    const promptJob = jobs.find(j => j.deliverable_id === d.id && j.prompt_snapshot);
+    const promptBlock = promptJob ? promptSnapshotDetails(promptJob) : "";
     return '<div class="deliverable-card ' + side + '">' +
     '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + " " + gateBadge + '</div>' +
     '<div>' + renderContent(d.content, d.content_type) + '</div>' +
     '<div class="actions"><button class="small" data-download-deliverable="' + d.id + '">다운로드</button></div>' +
     evidenceBlock +
+    promptBlock +
     decideActions +
     submitAction +
     '<div id="comments-' + d.id + '"></div>' +
     '<form class="inline" data-comment-form="' + d.id + '">' +
-    // ASANA_PARITY_DESIGN_PLAN.md F15 UI 설계(2026-10-08) — "댓글
-    // 입력창에 @ 입력 시 참가자 목록 자동완성 드롭다운"을 그대로
-    // 구현한다(1차 구현 땐 정적 힌트 텍스트로만 대체했었다 — 라이브
-    // 감사에서 실제 누락으로 확인돼 보완). input을 relative 컨테이너로
-    // 감싸고 그 아래 절대 위치 드롭다운 <ul>을 둔다.
-    '<div class="mention-wrap" style="position:relative;flex:1">' +
-    '<input placeholder="댓글(@참가자이름으로 호출/멘션 가능)" id="comment-input-' + d.id +
-    '" style="width:100%;box-sizing:border-box" autocomplete="off">' +
-    '<ul class="mention-dropdown" id="mention-dropdown-' + d.id + '" style="display:none"></ul>' +
-    '</div>' +
+    // UI 설계(2026-10-08)로 추가했던 "@ 입력 시 참가자 목록 자동완성
+    // 드롭다운"은 사용자 요청(2026-10-14, "내 업무 메뉴에서 참가자
+    // 기능 삭제해줘")으로 참가자 기능 자체와 함께 제거했다 — 평범한
+    // 입력창으로 되돌린다.
+    '<input placeholder="댓글" id="comment-input-' + d.id +
+    '" style="flex:1;box-sizing:border-box" autocomplete="off">' +
     '<button class="small" type="submit">댓글</button></form>' +
     '</div>';
   }).join("") + jobCard;
@@ -1790,7 +2363,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
 
   // 사용자 요청(2026-10-07, "crew 실행에서... 복수 그룹 가능하도록
   // 개선... 사람-에이전트 연동이 가능한 구조인지 확인") —
-  // `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
+  // Phase 3. 이 할 일에
   // confirmed로 배정된 팀이 있으면 그 팀의 Agent 멤버 전원을 실제
   // CrewAI Crew로 실행하는 섹션을 보여준다. 팀이 여러 개 배정돼
   // 있어도 한 번에 "팀 하나"만 실행한다(사용자 결정) — 전부 동시
@@ -1821,11 +2394,11 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         : '<p class="muted">팀의 온보딩된(active) Agent 멤버 전원이 CrewAI로 함께 실행되고, 각자의 산출물이 이 할 일의 결과물로 쌓입니다.</p>')
     : '';
 
-  // ASANA_PARITY_DESIGN_PLAN.md F17(2026-10-08) — 결과물이 아직 없는
+  // 2026-10-08 — 결과물이 아직 없는
   // 단계에서도 참가자들이 맥락/의사결정을 적어두는 자유 텍스트 공간.
   // 마크다운으로 렌더링(결과물 content_type='markdown'과 같은 렌더러
   // 재사용)하고, 저장 버튼을 누르기 전까진 textarea 그대로 둔다(실시간
-  // 공동편집은 스코프 밖 — ADR 미결정 사항).
+  // 공동편집은 스코프 밖 — 미결정 사항).
   const notesCard =
     '<section class="card">' +
     '<h4>메모</h4>' +
@@ -1839,7 +2412,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '</form>' +
     '</section>';
 
-  // F19 — 배정·결과물·댓글·Agent 실행·결재·Task 변경을 한 타임라인으로
+  // 배정·결과물·댓글·Agent 실행·결재·Task 변경을 한 타임라인으로
   // 합친 통합 활동 기록. 기본은 접혀 있다(평소엔 "진행 이력"만으로
   // 충분하고, 이건 "누가 언제 뭘 했는지"를 감사하듯 들여다볼 때만 연다).
   const activityRows = activity.map(a =>
@@ -1856,35 +2429,12 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       : '<p class="muted">아직 기록된 활동이 없습니다.</p>') +
     '</details>';
 
-  // ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2+3) — 결재 없는
-  // 가벼운 초대. `display_name`(Phase 3 추가, `list_participants()`가
-  // agent_pool/users를 조인해 내려줌)을 보여줘야 참가자가 댓글에
-  // "@정확한이름"을 쓸 수 있다(멘션은 role_name 완전일치 — `detect_
-  // mentioned_agents()` 참고).
-  const invitedAgentNames = participants
-    .filter(p => p.participant_type === "agent" && p.display_name)
-    .map(p => p.display_name);
-  const participantRows = participants.map(p =>
-    '<li>' + esc(label(p.participant_type)) + ' ' +
-    (p.display_name ? esc(p.display_name) : '#' + esc(p.participant_id)) +
-    ' <span class="muted">(초대: 사용자 #' + esc(p.invited_by) + ', ' + esc(p.invited_at) + ')</span></li>'
-  ).join("");
-  const participantsCard =
-    '<section class="card">' +
-    '<h4>참가자</h4>' +
-    '<p class="muted">초대된 사람/Agent는 결재 없이도 이 업무의 댓글을 읽고 달 수 있습니다(결과물 작성·AI 실행 권한은 별개 — 정식 배정이 있어야 합니다). 댓글에 "@Agent이름"을 쓰면 그 Agent를 가볍게 호출합니다(결과는 댓글로만 남고, 결과물로 쓰려면 별도로 제출해야 합니다).</p>' +
-    (participantRows ? '<ul>' + participantRows + '</ul>' : '<p class="muted">아직 초대된 참가자가 없습니다.</p>') +
-    (invitedAgentNames.length
-      ? '<p class="muted">멘션 가능: ' + invitedAgentNames.map(n => '@' + esc(n)).join(", ") + '</p>'
-      : '') +
-    '<form class="inline" id="ws-invite-form">' +
-    '<select id="ws-invite-type"><option value="human">사람(사용자 ID)</option><option value="agent">Agent(Agent ID)</option></select>' +
-    '<input type="number" id="ws-invite-id" placeholder="ID" style="width:6rem" required>' +
-    '<button class="small" type="submit">초대</button>' +
-    '</form>' +
-    '</section>';
+  // 2026-10-08, Phase 2+3에서 만들었던 "참가자" 카드(결재 없는 가벼운
+  // 초대 + ws-invite-input 검색창)는 사용자 요청(2026-10-14, "내 업무
+  // 메뉴에서 참가자 기능 삭제해줘")으로 Task 워크스페이스 전체에서
+  // 제거했다 — 위 participants fetch 제거 지점 주석 참고.
 
-  // ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 상태/우선순위는
+  // 2026-10-08, Phase 4 — 상태/우선순위는
   // select 변경 즉시 저장(드래그 없이 UI를 단순화하는 설계 의도를
   // select onchange로 구현 — "버튼"이 아니라 "select"지만 드래그앤드롭을
   // 피한다는 본질은 같다).
@@ -1902,7 +2452,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '</select></label>' +
     '</div>';
 
-  // F16 — 의존관계 그래프(사용자 결정: Riido 수준 시각화). 제거는
+  // 의존관계 그래프(사용자 결정: Riido 수준 시각화). 제거는
   // SVG 안에서 처리하기보다(클릭 판별이 번거롭다) 그래프 아래 평범한
   // 목록에 "제거" 버튼을 둬서 접근성·구현 단순성을 둘 다 잡는다 —
   // 이 task가 의존하는 쪽(`e.task_id === taskId`)만 여기서 지울 수
@@ -1918,16 +2468,32 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         : '')
       + '</li>';
   }).join("");
+  // 사용자 보고(2026-10-13, "할일 ID를 사전에 모르면 사용 불가") —
+  // 같은 브리프의 다른 할 일(이미 선행으로 걸린 것·자기 자신 제외)만
+  // 골라 select로 보여준다. 다른 브리프 작업을 선행으로 걸고 싶으면
+  // (백엔드는 허용하지만 드문 경우) API를 직접 써야 한다 — 그 희소
+  // 케이스 때문에 모두가 쓰는 폼을 다시 "ID 기억하기"로 되돌리지 않는다.
+  const existingDepIds = new Set(
+    depGraph.edges.filter(e => e.task_id === taskId).map(e => e.depends_on_task_id)
+  );
+  const depCandidates = siblingTasks.filter(t => t.id !== taskId && !existingDepIds.has(t.id));
+  const dependencyForm = depCandidates.length
+    ? '<form class="inline" id="ws-dependency-form">' +
+      '<select id="ws-dependency-input" required style="min-width:220px"><option value="">— 선행 작업 선택 —</option>' +
+      depCandidates.map(t =>
+        '<option value="' + t.id + '">#' + t.id + " " + esc(t.role_name) + " (" + esc(label(t.status)) + ")</option>"
+      ).join("") +
+      '</select>' +
+      '<button class="small" type="submit">선행 작업 추가</button>' +
+      '</form>'
+    : '<p class="muted">같은 브리프에 선행 작업으로 추가할 수 있는 다른 할 일이 없습니다.</p>';
   const dependencySection =
     '<section class="card">' +
     '<h4>의존관계</h4>' +
     '<p class="muted">이 업무와 연결된 선행/후행 작업을 그래프로 보여줍니다 — 테두리 색은 우선순위(빨강=긴급·주황=높음·파랑=보통·회색=낮음), 네모를 클릭하면 그 업무로 이동합니다.</p>' +
     '<div style="overflow-x:auto">' + renderDependencyGraphSvg(depGraph, taskId) + '</div>' +
     (dependencyListRows ? '<ul>' + dependencyListRows + '</ul>' : '') +
-    '<form class="inline" id="ws-dependency-form">' +
-    '<input type="number" id="ws-dependency-input" placeholder="선행 작업 ID" style="width:9rem" required>' +
-    '<button class="small" type="submit">선행 작업 추가</button>' +
-    '</form>' +
+    dependencyForm +
     '</section>';
 
   // 사용자 요청(2026-09-29, "UI/UX를 개선해줘") — 원래 textarea·provider/
@@ -1940,13 +2506,12 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     statusPriorityBar +
     finalResultCard +
     notesCard +
-    // ASANA_PARITY_DESIGN_PLAN.md §9-5(2026-10-08, F21-1 흡수) — 이
+    // 2026-10-08 — 이
     // Task 전용 대화(`conversations.linked_task_id`)를 여기에
-    // 임베드한다. 결과물 유무와 무관하게 항상 노출(F15 때 발견한
+    // 임베드한다. 결과물 유무와 무관하게 항상 노출(그때 발견한
     // "결과물 0건이면 대화 자체가 불가능했던" 구조적 한계를 여기서
     // 해소 — 대화는 더 이상 deliverable에 종속되지 않는다).
     '<div id="ws-conversation-' + taskId + '"><p class="muted">대화를 불러오는 중…</p></div>' +
-    participantsCard +
     dependencySection +
     '<h4 class="muted">진행 이력(중간 과정 포함)</h4>' +
     '<div id="workspace-timeline">' + timeline + '</div>' +
@@ -1978,7 +2543,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   if (isSupervisor && confirmedTeams.length) {
     wireProviderModelSelect("ws-team-crew-provider", "ws-team-crew-model", modelsByProvider);
   }
-  items.forEach(d => loadDeliverableComments(d.id, taskId, containerId, participants));
+  items.forEach(d => loadDeliverableComments(d.id, taskId, containerId));
   _loadTaskConversation(taskId);
 
   detail.querySelectorAll("[data-decide-deliverable]").forEach(btn => {
@@ -2024,19 +2589,9 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
-  document.getElementById("ws-invite-form").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const participantType = document.getElementById("ws-invite-type").value;
-    const participantId = Number(document.getElementById("ws-invite-id").value);
-    try {
-      await api("POST", "/api/tasks/" + taskId + "/participants", {
-        participant_type: participantType,
-        participant_id: participantId,
-      });
-      showMsg("global-msg", "참가자를 초대했습니다.", "ok");
-      renderCollabWorkspace(taskId, containerId);
-    } catch (e) { showMsg("global-msg", e.message, "error"); }
-  });
+  // 사용자 요청(2026-10-14, "내 업무 메뉴에서 참가자 기능 삭제해줘")으로
+  // ws-invite-input 검색-초대 배선을 제거했다(위 participants fetch
+  // 제거 지점 주석 참고).
 
   document.getElementById("ws-status-select").addEventListener("change", async (ev) => {
     try {
@@ -2054,9 +2609,11 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
-  document.getElementById("ws-dependency-form").addEventListener("submit", async (ev) => {
+  const dependencyFormEl = document.getElementById("ws-dependency-form");
+  if (dependencyFormEl) dependencyFormEl.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const dependsOnId = Number(document.getElementById("ws-dependency-input").value);
+    if (!dependsOnId) { showMsg("global-msg", "선행 작업을 선택하세요.", "error"); return; }
     try {
       await api("POST", "/api/tasks/" + taskId + "/dependencies", {
         depends_on_task_id: dependsOnId,
@@ -2212,7 +2769,7 @@ async function refreshComments(deliverableId) {
   if (!box) return;
   try {
     const comments = await api("GET", "/api/deliverables/" + deliverableId + "/comments");
-    // ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) — Agent가
+    // 2026-10-08, Phase 3 — Agent가
     // `@멘션` 트리거로 남긴 응답 댓글을 사람 댓글과 시각적으로 구분한다
     // (배경색 + "AI 에이전트" 배지, 설계 문서 UI 설계 그대로). 사용자
     // 결정(a) — 댓글 트리거 결과는 항상 댓글로만 남고, deliverable로
@@ -2235,13 +2792,13 @@ async function refreshComments(deliverableId) {
   }
 }
 
-// ASANA_PARITY_DESIGN_PLAN.md F15 UI 설계(2026-10-08) — "@" 입력 시
+// UI 설계(2026-10-08) — "@" 입력 시
 // 참가자 목록 자동완성 드롭다운. 1차 구현 때는 정적 힌트 텍스트로만
 // 대체했는데, 실제 누락으로 확인돼("HAIR-Platform... 구현에 누락
 // 부분이 없는지 확인해줘") 보완한다. 외부 라이브러리 없이 순수 JS로
 // 커서 위치 기준 마지막 "@" 뒤 텍스트를 쿼리 삼아 필터링한다.
 //
-// §10 채팅 호출 UX 개선(2026-10-10, 사용자 요청 "채팅에서 @로 생성된
+// 채팅 호출 UX 개선(2026-10-10, 사용자 요청 "채팅에서 @로 생성된
 // AI Agent와 사용자를 호출하려면 미리 전체 이름을 알고 있어야 해") —
 // `opts.search`가 주어지면(대화 메시지창만; Task 결과물 댓글은 기존과
 // 완전히 같은 "로컬 참가자만" 동작을 유지한다 — `opts` 생략 시 이전
@@ -2250,10 +2807,73 @@ async function refreshComments(deliverableId) {
 // 조회해 "참가자"/"초대 후 멘션" 두 그룹으로 보여준다. 후자를 고르면
 // `opts.onInvited`로 먼저 초대한 뒤 멘션을 끼워 넣는다 — 화면 이동
 // 없이 "검색→클릭"만으로 처음 보는 이름도 바로 부를 수 있다.
+// 사용자 요청(2026-10-14, "초대화면 포함 선택 창에서 상하 및 엔터
+// 키로도 선택 가능하도록 개선해줘") — 멘션 자동완성(`setupMentionAutocomplete`)
+// 과 Task 워크스페이스 참가자 초대(`ws-invite-dropdown`)가 똑같은
+// "입력하면 뜨는 목록에서 고른다" 패턴을 각자 따로 구현하고 있어서,
+// 키보드 내비게이션도 공용 헬퍼 하나로 둘 다 적용한다. `.mention-dropdown
+// li.active` CSS는 이미 있었다(하이라이트 스타일만 있고 실제로 켜주는
+// 로직이 없었다).
+function wireDropdownKeyboardNav(inputEl, dropdownEl, itemSelector, onSelect) {
+  let highlightedIndex = -1;
+
+  function items() {
+    return Array.from(dropdownEl.querySelectorAll(itemSelector));
+  }
+
+  function updateHighlight() {
+    const els = items();
+    els.forEach((el, i) => el.classList.toggle("active", i === highlightedIndex));
+    const active = els[highlightedIndex];
+    if (active) active.scrollIntoView({ block: "nearest" });
+  }
+
+  inputEl.addEventListener("keydown", (ev) => {
+    if (dropdownEl.style.display === "none" || !dropdownEl.innerHTML) return;
+    const els = items();
+    if (!els.length) return;
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      highlightedIndex = (highlightedIndex + 1) % els.length;
+      updateHighlight();
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      highlightedIndex = (highlightedIndex - 1 + els.length) % els.length;
+      updateHighlight();
+    } else if (ev.key === "Enter") {
+      // 하이라이트된 항목이 없으면(화살표로 고르기 전) 평범한 Enter로
+      // 둔다 — 메시지 전송 폼의 기본 submit을 가로채지 않는다.
+      if (highlightedIndex >= 0 && highlightedIndex < els.length) {
+        ev.preventDefault();
+        onSelect(els[highlightedIndex]);
+      }
+    } else if (ev.key === "Escape") {
+      dropdownEl.style.display = "none";
+      dropdownEl.innerHTML = "";
+    }
+  });
+
+  return {
+    // 드롭다운을 새로 그릴 때마다 첫 항목을 바로 하이라이트한다 — 타이핑
+    // 후 바로 Enter만 쳐도 가장 위 후보가 선택되는, 흔한 자동완성 UX.
+    highlightFirst() {
+      highlightedIndex = items().length ? 0 : -1;
+      updateHighlight();
+    },
+  };
+}
+
 function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
   opts = opts || {};
+  // 사용자 보고(2026-10-14, "여전히 대화 참가자 pm_kim이 pm_kim에게
+  // 멘션을 보낼 수 있어, 메시지 목록에서 본인은 제외해줘") — 자기
+  // 멘션의 "효과"(기본 AI 억제·알림)는 이미 고쳤지만, 애초에 자동완성
+  // 후보 목록에 본인이 그대로 떠서 고를 수 있었다. 이미 초대된 참가자
+  // (로컬 후보)와 아직 초대 안 된 조직 전체 검색 결과(원격 후보) 둘
+  // 다에서 "나 자신"(사람 타입 + 내 user id)을 제외한다.
   const localCandidates = participants
     .filter(p => p.display_name)
+    .filter(p => !(p.participant_type === "human" && p.participant_id === ME.id))
     .map(p => ({ name: p.display_name, type: p.participant_type, id: p.participant_id }));
   if (!localCandidates.length && !opts.search) return;
 
@@ -2281,6 +2901,24 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
     inputEl.focus();
   }
 
+  async function selectCandidate(li) {
+    const name = li.dataset.mentionName;
+    if (li.dataset.mentionInviteType && opts.onInvited) {
+      try {
+        await opts.onInvited({
+          type: li.dataset.mentionInviteType,
+          id: Number(li.dataset.mentionInviteId),
+          name,
+        });
+      } catch (e) { return; } // onInvited가 이미 에러 메시지를 보여줬다
+    }
+    insertMention(name);
+  }
+
+  const keyboardNav = wireDropdownKeyboardNav(
+    inputEl, dropdownEl, "li[data-mention-name]", selectCandidate
+  );
+
   function renderGroups(localMatches, remoteItems) {
     if (!localMatches.length && !remoteItems.length) {
       dropdownEl.style.display = "none";
@@ -2302,10 +2940,11 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
     }
     dropdownEl.innerHTML = html;
     dropdownEl.style.display = "block";
+    keyboardNav.highlightFirst();
   }
 
   function handleQuery(query) {
-    // 실측으로 발견한 버그(2026-10-08, §9 라이브 검증) — 원래 "@뒤에
+    // 실측으로 발견한 버그(2026-10-08, 라이브 검증) — 원래 "@뒤에
     // 공백이 있으면 멘션이 끝난 것"으로 보고 닫았는데, "게임 AI팀"처럼
     // 이름 자체에 공백이 있는 참가자(흔한 한국어 Team/Agent 이름)를
     // 끝까지 타이핑하면 중간 공백에서 드롭다운이 영구히 닫혀버렸다.
@@ -2333,7 +2972,9 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
         ...remote.humans.map(h => ({ type: "human", id: h.id, name: h.username })),
         ...remote.agents.map(a => ({ type: "agent", id: a.id, name: a.role_name })),
         ...remote.teams.map(t => ({ type: "team", id: t.id, name: t.name })),
-      ].filter(it => !localKeys.has(it.type + ":" + it.id));
+      ]
+        .filter(it => !localKeys.has(it.type + ":" + it.id))
+        .filter(it => !(it.type === "human" && it.id === ME.id));
       renderGroups(localMatches, remoteItems);
     }, 200);
   }
@@ -2354,30 +2995,18 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
     const li = ev.target.closest("[data-mention-name]");
     if (!li) return;
     ev.preventDefault();
-    const name = li.dataset.mentionName;
-    if (li.dataset.mentionInviteType && opts.onInvited) {
-      try {
-        await opts.onInvited({
-          type: li.dataset.mentionInviteType,
-          id: Number(li.dataset.mentionInviteId),
-          name,
-        });
-      } catch (e) { return; } // onInvited가 이미 에러 메시지를 보여줬다
-    }
-    insertMention(name);
+    await selectCandidate(li);
   });
 }
 
-async function loadDeliverableComments(deliverableId, taskId, containerId, participants) {
+// 사용자 요청(2026-10-14, "내 업무 메뉴에서 참가자 기능 삭제해줘")으로
+// 댓글 입력창의 @멘션 참가자 자동완성(setupMentionAutocomplete 호출)을
+// 제거했다 — 입력창 자체는 평범한 댓글 작성용으로 남는다.
+async function loadDeliverableComments(deliverableId, taskId, containerId) {
   await refreshComments(deliverableId);
-  const mentionInput = document.getElementById("comment-input-" + deliverableId);
-  const mentionDropdown = document.getElementById("mention-dropdown-" + deliverableId);
-  if (mentionInput && mentionDropdown && participants) {
-    setupMentionAutocomplete(mentionInput, mentionDropdown, participants);
-  }
-  // F15 Phase 3 — "이걸 결과물로 제출" 버튼은 `refreshComments()`가
+  // Phase 3 — "이걸 결과물로 제출" 버튼은 `refreshComments()`가
   // `box.innerHTML`을 매번 통째로 새로 그리므로, 그 자식 버튼에 직접
-  // 리스너를 매번 새로 붙이면 §73 이전에 겪었던 "리스너 누적" 버그가
+  // 리스너를 매번 새로 붙이면 이전에 겪었던 "리스너 누적" 버그가
   // 똑같이 재발한다 — 부모 `box`(innerHTML 교체에도 노드 자체는 안
   // 바뀜)에 한 번만 위임 바인딩한다.
   const box = document.getElementById("comments-" + deliverableId);
@@ -2406,7 +3035,7 @@ async function loadDeliverableComments(deliverableId, taskId, containerId, parti
         );
         input.value = "";
         await refreshComments(deliverableId);
-        // F15 Phase 3 — @멘션이 트리거됐으면 백그라운드 완료를 폴링해
+        // Phase 3 — @멘션이 트리거됐으면 백그라운드 완료를 폴링해
         // 응답이 오는 대로 댓글 목록을 다시 갱신한다(기존 "AI 에이전트
         // 실행" 버튼의 pollExecutionJob() 패턴 재사용).
         if (result.triggered_jobs && result.triggered_jobs.length) {
@@ -2555,8 +3184,7 @@ async function renderTaskList(briefId) {
     // 현황(+admin/manager는 매칭·배정 요청, 확정됐으면 협업 워크스페이스
     // 요약까지)을 아래에 바로 펼친다. "인력 매칭/배정"·"결재"·"내 업무"는
     // 여러 업무를 가로지르는 일괄 처리용으로 그대로 남겨둔다 — 완전
-    // 통합은 매니저의 일괄 처리 효율을 떨어뜨릴 위험이 있어 기각했다
-    // (검토 근거: docs/LIMITS.md §55).
+    // 통합은 매니저의 일괄 처리 효율을 떨어뜨릴 위험이 있어 기각했다.
     '<ul class="muted help-list">' +
     '<li>"상세"에서 배정 현황을 바로 확인할 수 있습니다.</li>' +
     '<li>"인력 매칭/배정"·"결재"는 여러 할 일을 한꺼번에 처리할 때, "AI 에이전트 생성"은 새 Agent가 필요할 때 씁니다.</li>' +
@@ -2581,7 +3209,7 @@ async function renderTaskList(briefId) {
 }
 
 /* 할 일 하나의 생애주기(배정 현황 → 매칭/배정 요청 → 확정 후 협업
-   워크스페이스)를 한 화면에서 보여준다(옵션 C, docs/LIMITS.md §55).
+   워크스페이스)를 한 화면에서 보여준다(옵션 C).
    매칭 폼·워크스페이스는 기존 "인력 매칭/배정"·"내 업무" 탭의 렌더
    함수를 containerId 파라미터로 그대로 재사용한다(중복 구현 금지) —
    admin/manager만 노출한다: 매칭 결과가 다른 후보의 비용을 보여주고,
@@ -2709,24 +3337,59 @@ async function renderTaskDetailPanel(task) {
 
 /* ---------- 인력 매칭·배정 ---------- */
 
+// 사용자 보고(2026-10-13, "할일 ID의 경우 의미없는 숫자로 할일을 찾아야
+// 해(할일 아이디를 사전에 모르면 사용 불가)") — 원래는 숫자 입력칸에
+// Task ID를 직접 타이핑해야 했다(어디서도 그 ID를 보여주지 않음).
+// `GET /api/briefs/{id}/tasks`의 docstring조차 "Web UI가 매칭/배분
+// 화면에서 브리프별 Task 목록을 골라야 한다"고 적어뒀는데 이 화면만
+// 그 엔드포인트를 안 쓰고 있었다 — 브리프별로 묶은 select로 바꾼다.
+async function _fetchAllTasksGroupedByBrief() {
+  const briefs = await api("GET", "/api/briefs");
+  const taskLists = await Promise.all(
+    briefs.map(b => api("GET", "/api/briefs/" + b.id + "/tasks").catch(() => []))
+  );
+  return briefs.map((b, i) => ({ brief: b, tasks: taskLists[i] }));
+}
+
+function _taskPickerOptionsHtml(groups) {
+  return groups.map(g => {
+    if (!g.tasks.length) return "";
+    const briefLabel = "#" + g.brief.id + " " + (g.brief.raw_text.length > 24 ? g.brief.raw_text.slice(0, 24) + "…" : g.brief.raw_text);
+    const options = g.tasks.map(t =>
+      '<option value="' + t.id + '">#' + t.id + " " + esc(t.role_name) + " (" + esc(label(t.status)) + ")</option>"
+    ).join("");
+    return '<optgroup label="' + escAttr(briefLabel) + '">' + options + '</optgroup>';
+  }).join("");
+}
+
 async function renderMatch(content) {
+  // 2026-10-14 — _renderBoardScope()와 같은 이유로 조기 블랭크를
+  // 제거한다(아래에서 데이터를 다 가져온 뒤 한 번에 교체).
+  const groups = await _fetchAllTasksGroupedByBrief();
+  const hasTasks = groups.some(g => g.tasks.length);
   content.innerHTML =
     '<section class="card"><h2>할 일에 맞는 인력 찾기</h2>' +
     '<ul class="muted help-list">' +
-    '<li>"할 일 ID"는 "업무 요청" 탭에서 "할 일로 나누기"로 만든 것을 씁니다.</li>' +
+    '<li>아래 목록은 "업무 요청" 탭에서 "할 일로 나누기"로 만든 할 일 전체입니다(브리프별로 묶음).</li>' +
     '<li>완전히 일치하는 역할·스킬을 가진 후보가 있으면 그것부터 보여주고, 없으면 가용성40%·적합도35%·비용25% 가중치로 점수를 매겨 상위 3명을 제시합니다(사람 후보가 아직 성과점수를 안 받았으면 적합도를 빼고 가용성60%·비용40%로 재계산).</li>' +
     '<li>후보가 아예 없으면 "AI 에이전트 생성" 탭으로 유도합니다.</li>' +
     '<li>"배정 요청"을 누르면 즉시 확정되는 게 아니라 "결재" 탭에서 승인 절차를 거쳐야 확정(confirmed)됩니다.</li>' +
     '</ul>' +
-    '<form class="inline" id="match-form">' +
-    '<input id="match-task-id" type="number" min="1" step="1" placeholder="할 일 ID" required style="width:100px">' +
-    '<button class="primary" type="submit">찾기</button></form>' +
-    '<div id="match-result"></div></section>';
-  document.getElementById("match-form").addEventListener("submit", async (ev) => {
+    (hasTasks
+      ? '<form class="inline" id="match-form">' +
+        '<select id="match-task-id" required style="min-width:280px"><option value="">— 할 일 선택 —</option>' +
+        _taskPickerOptionsHtml(groups) + '</select>' +
+        '<button class="primary" type="submit">찾기</button></form>' +
+        '<div id="match-result"></div>'
+      : '<p class="msg error">아직 할 일이 없습니다 — "업무 요청" 탭에서 먼저 "할 일로 나누기"를 해주세요.</p>') +
+    "</section>";
+  const form = document.getElementById("match-form");
+  if (!form) return;
+  form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const taskId = Number(document.getElementById("match-task-id").value);
     if (!Number.isInteger(taskId) || taskId < 1) {
-      showMsg("global-msg", "할 일 ID는 1 이상의 정수여야 합니다.", "error"); return;
+      showMsg("global-msg", "할 일을 선택하세요.", "error"); return;
     }
     try {
       const result = await api("POST", "/api/tasks/" + taskId + "/match");
@@ -2750,18 +3413,25 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
   }
   // 사용자 보고(2026-10-06, "매칭/배정 화면에도 계정 미연결 경고
   // 추가해줘") — 사람 후보가 로그인 계정과 연결 안 돼 있으면 배정·승인이
-  // 돼도 당사자가 "내 업무"에서 그 일을 볼 방법이 없다(docs/LIMITS.md
-  // §51). Agent는 로그인 계정 개념이 없어 "해당없음"으로 둔다.
+  // 돼도 당사자가 "내 업무"에서 그 일을 볼 방법이 없다. Agent는
+  // 로그인 계정 개념이 없어 "해당없음"으로 둔다.
   const accountCell = (c) => {
     if (c.type !== "human") return '<span class="muted">해당없음</span>';
     return c.user_id != null
       ? "연결됨"
       : '<span class="gate-badge gate-warn">⚠ 미연결</span>';
   };
+  // 사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나
+  // 에이전트명이 표시되지 않는 경우도 있어") — `role`은 직무 타이틀이라
+  // 같은 역할의 사람이 여럿이면 ID 숫자로만 구분해야 했다. "인력 검색"
+  // 탭은 이미 사람 이름을 보여주고 있었는데(백엔드가 따로 조회해 끼워
+  // 넣음) 이 매칭 결과 테이블만 빠져 있었다 — `ResourceCandidate.name`을
+  // 추가해(`models.py`/`pool.py`) 똑같이 보여준다. Agent는 역할명이
+  // 곧 식별자라 "-"로 둔다.
   box.innerHTML = table(
-    ["순위", "타입", "ID", "역할", "가용", "비용", "점수", "점수 상세", "계정", "동작"],
+    ["순위", "타입", "ID", "이름", "역할", "가용", "비용", "점수", "점수 상세", "계정", "동작"],
     result.top.map((sc, i) => [
-      i + 1, esc(label(sc.candidate.type)), sc.candidate.id, esc(sc.candidate.role),
+      i + 1, esc(label(sc.candidate.type)), sc.candidate.id, esc(sc.candidate.name || sc.candidate.role), esc(sc.candidate.role),
       sc.candidate.is_available ? "가능" : "불가",
       sc.candidate.cost,
       sc.score.toFixed(3) + (sc.exact_match ? " (완전일치)" : ""),
@@ -2769,10 +3439,9 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
       accountCell(sc.candidate),
       '<div class="actions">' +
       '<button class="small" data-assign-type="' + esc(sc.candidate.type) + '" data-assign-id="' + sc.candidate.id + '" data-unlinked="' + (sc.candidate.type === "human" && sc.candidate.user_id == null ? "1" : "0") + '">배정 요청</button>' +
-      // SCREEN_UX_BENCHMARK_PROPOSAL.md §4-D(2026-10-12, "위임은 Gate
-      // A-G 그대로 타고, audit_log에도 남겨줘") — Agent 후보에만
-      // "위임"(결재 없이 즉시 확정)을 추가로 보여준다. 사람/팀은
-      // Linear식 "위임" 개념의 대상이 아니다(§4-D 원문).
+      // 사용자 결정(2026-10-12, "위임은 Gate A-G 그대로 타고, audit_log
+      // 에도 남겨줘") — Agent 후보에만 "위임"(결재 없이 즉시 확정)을
+      // 추가로 보여준다. 사람/팀은 Linear식 "위임" 개념의 대상이 아니다.
       (sc.candidate.type === "agent"
         ? '<button class="small" data-delegate-agent-id="' + sc.candidate.id + '" title="결재 없이 즉시 연결 — 바로 실행 가능">위임</button>'
         : "") +
@@ -2847,11 +3516,24 @@ async function renderApprovals(content) {
   });
 }
 
+// 사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나 에이전트명이
+// 표시되지 않는 경우도 있어") — 원래는 "대상 종류"/"대상 ID"가
+// `assignments.id`/`deliverables.id`를 그대로 보여줘, 승인권자가 "무엇을
+// 승인하는지" 다른 탭을 또 열어야 알 수 있었다. `GET /api/approvals`가
+// 이제 `task_id`/`task_role_name`/`resource_type`/`resource_name`을
+// 같이 내려주므로(`approvals.describe_subject()`) 그걸 보여준다 —
+// 대상이 지워졌으면(task_id가 null) 원래 종류+ID로 안전하게 되돌아간다.
 function approvalTable(rows, withActions) {
-  const headers = ["ID", "대상 종류", "대상 ID", "단계", "상태"];
+  const headers = ["ID", "업무", "대상", "단계", "상태"];
   if (withActions) headers.push("동작");
   return table(headers, rows.map(a => {
-    const row = [a.id, esc(label(a.subject_type)), a.subject_id, a.step, esc(label(a.status))];
+    const taskCell = a.task_id != null
+      ? "#" + a.task_id + " " + esc(a.task_role_name || "")
+      : '<span class="muted">(지워진 ' + esc(label(a.subject_type)) + " #" + a.subject_id + ")</span>";
+    const resourceCell = a.resource_name
+      ? esc(label(a.subject_type)) + ": " + esc(label(a.resource_type)) + " " + esc(a.resource_name)
+      : esc(label(a.subject_type));
+    const row = [a.id, taskCell, resourceCell, a.step, esc(label(a.status))];
     if (withActions) {
       row.push(a.status === "pending"
         ? '<div class="actions">' +
@@ -2901,7 +3583,7 @@ async function renderJobs(content) {
     '<li><b>simple_llm</b>(비용 발생): 실제 LLM API를 딱 한 번만 호출해 "이 역할이 처음 맡을 산출물 하나"를 받아옵니다. CrewAI 같은 프레임워크 오버헤드 없이 가장 가벼운 실제 호출입니다.</li>' +
     '<li><b>crewai</b>(비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 vectordb/graphdb 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 실행" 탭에서 바로 협업시킬 Agent를 만들 때 씁니다.</li>' +
       '<li>만든 Agent는 이 탭이 아니라 "AI 에이전트 관리" 탭에서 온보딩 승인(pending_onboarding → active) 후에야 실제 업무 배정·실행에 쓸 수 있습니다.</li>' +
-      '<li><b>중복 방지(NF7)</b>: 같은 할 일(역할)에 이미 생성된 Agent가 있으면 새 Agent를 만들지 않고 기존 것을 재사용합니다 — 이 경우 "AI 에이전트 관리"에 새 행이 안 생기는데, 결과에 "재사용" 배지와 안내가 표시됩니다. 새 Agent를 만들려면 다른 할 일을 고르세요.</li>' +
+      '<li><b>중복 방지</b>: 같은 할 일(역할)에 이미 생성된 Agent가 있으면 새 Agent를 만들지 않고 기존 것을 재사용합니다 — 이 경우 "AI 에이전트 관리"에 새 행이 안 생기는데, 결과에 "재사용" 배지와 안내가 표시됩니다. 새 Agent를 만들려면 다른 할 일을 고르세요.</li>' +
       '</ul>' +
     '<div id="job-result"></div></section>';
 
@@ -2958,7 +3640,7 @@ function renderJobResult(result) {
   const reusedItems = (result.items || []).filter(it => it.reused);
   const reusedCount = result.reused_count != null ? result.reused_count : reusedItems.length;
 
-  // NF7 dedup: 같은 역할(task)에 이미 생성된 에이전트가 있으면 새 에이전트를
+  // dedup: 같은 역할(task)에 이미 생성된 에이전트가 있으면 새 에이전트를
   // 만들지 않고 기존 job_item을 재사용한다. 이 경우 "AI 에이전트 관리"에 새
   // 행이 안 생기는데, 화면이 "성공"으로만 뜨면 "생성했는데 안 보인다"는
   // 오해를 피할 수 없다 — 재사용을 명시적으로 알리고 관리 탭으로 이동을 돕는다.
@@ -2976,7 +3658,7 @@ function renderJobResult(result) {
       .join(", ");
     banner =
       '<div class="msg warn"><b>새 에이전트가 생성되지 않았습니다.</b> ' +
-      "같은 역할에 이미 생성된 에이전트가 있어 " + reusedCount + "건을 재사용했습니다(NF7 중복 방지)" +
+      "같은 역할에 이미 생성된 에이전트가 있어 " + reusedCount + "건을 재사용했습니다(중복 방지)" +
       (refs ? " — 기존 Agent " + refs + "를 그대로 씁니다." : ".") +
       ' "AI 에이전트 관리" 탭에서 위 ID로 찾으세요. 새 에이전트를 만들려면 다른 할 일 ID로 생성하세요. ' +
       '<button class="small" id="goto-agentpool">AI 에이전트 관리로 이동</button></div>';
@@ -2990,7 +3672,7 @@ function renderJobResult(result) {
   // 묶을 수 있게 한다 — 지금까지는 "Crew 실행"이라는 업무와 무관한
   // 즉석 화면에서만 여러 Agent를 다룰 수 있었고, 그룹을 저장할 방법도
   // 없었다. "팀 관리"에서 하려면 Agent를 다른 할 일로 따로 만들어야
-  // 했던 갭(§64)도 이걸로 없어진다 — 할 일을 처음부터 같이 고르면
+  // 했던 갭도 이걸로 없어진다 — 할 일을 처음부터 같이 고르면
   // 되므로.
   const agentItems = result.items.filter(it => it.agent_pool_id != null);
   const bundleCheckbox = (it) => it.agent_pool_id != null
@@ -3081,14 +3763,14 @@ async function renderHumanPool(content) {
     '<input id="hp-cost" type="number" step="0.01" placeholder="비용" value="0">' +
     '<button class="primary" type="submit">등록</button></form>' +
     '<ul class="muted help-list">' +
-    '<li><b>계정 선택</b>은 "사용자 관리"에서 먼저 만든 로그인 계정 중 아직 다른 사람 인력에 연결 안 된 것만 보여줍니다 — 계정 없이 등록하면 그 사람은 로그인할 수 없어 매칭·배정이 돼도 실제로 업무를 볼 수 없으니(docs/LIMITS.md §50), 계정을 먼저 "사용자 관리"에서 만드세요.</li>' +
+    '<li><b>계정 선택</b>은 "사용자 관리"에서 먼저 만든 로그인 계정 중 아직 다른 사람 인력에 연결 안 된 것만 보여줍니다 — 계정 없이 등록하면 그 사람은 로그인할 수 없어 매칭·배정이 돼도 실제로 업무를 볼 수 없으니, 계정을 먼저 "사용자 관리"에서 만드세요.</li>' +
     '<li>스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거) — 목록에 없는 이름도 자유롭게 추가할 수 있습니다.</li>' +
     '<li><b>비용</b>은 인력 매칭 점수의 25%(또는 성과점수가 없으면 40%)를 차지합니다 — 낮을수록 유리합니다.</li>' +
     '<li>아직 성과 데이터가 없으니 초기엔 "가능" 상태여야 매칭 후보로 잡히고(가용성이 매칭 점수의 40~60%), 스킬은 할 일의 필요 스킬과 겹칠수록 유리합니다.</li>' +
     '</ul>' +
     '</section><section class="card"><h2>사람 인력 목록</h2>' +
     '<ul class="muted help-list">' +
-    '<li><b>동의</b>는 성과 리뷰 사전 동의(NF9)입니다 — 동의 없이는 성과점수를 절대 입력·노출하지 않고, 동의를 철회하면 기존 점수도 즉시 지워집니다.</li>' +
+    '<li><b>동의</b>는 성과 리뷰 사전 동의입니다 — 동의 없이는 성과점수를 절대 입력·노출하지 않고, 동의를 철회하면 기존 점수도 즉시 지워집니다.</li>' +
     '<li><b>오프보딩</b>은 가용성을 offboarded로 바꿔 매칭 후보에서 빠지게 하는데, 이 화면에서 다시 되돌리는 버튼은 없습니다(사실상 편도) — 실수로 눌렀다면 관리자가 DB를 직접 고쳐야 합니다.</li>' +
     '<li><b>삭제</b>(관리자 전용)는 오프보딩과 별개로 레코드 자체를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 삭제가 막힙니다.</li>' +
     '<li><b>계정 연결</b>은 이 사람을 로그인 계정과 이어줍니다 — 연결해야만 그 사람이 "내 업무" 탭에서 자기 업무를 볼 수 있습니다(연결 안 하면 구조적으로 절대 안 보입니다). 드롭다운엔 아직 다른 사람 인력에 연결 안 된 계정만 뜹니다.</li>' +
@@ -3193,30 +3875,112 @@ async function renderHumanPool(content) {
 
 /* ---------- AI 에이전트 ---------- */
 
+// 사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해 Finetuning
+// 하는 기능을 구현해줘" → 명확화: 실제 LLM 가중치 재학습이 아니라 CrewAI
+// Agent/LLM 동작 파라미터 조정) — 비워두면 CrewAI 기본값을 그대로 쓴다.
+// 숫자 입력은 빈 칸이 "기본값 사용"이고, bool류는 체크박스 대신
+// "기본값/켜기/끄기" 3단 select를 쓴다 — 체크박스로 하면 "체크 안 함"이
+// "명시적으로 false로 저장"과 구분이 안 돼, CrewAI 기본값이 true인
+// respect_context_window 같은 값을 의도치 않게 false로 덮어쓸 위험이
+// 있다(실제로 설계 중 발견한 함정이라 기록해둔다).
+function _tuneTriStateHtml(id, current) {
+  const value = current === true ? "true" : current === false ? "false" : "";
+  return '<select id="' + id + '">' +
+    '<option value=""' + (value === "" ? " selected" : "") + '>기본값 사용</option>' +
+    '<option value="true"' + (value === "true" ? " selected" : "") + '>켜기</option>' +
+    '<option value="false"' + (value === "false" ? " selected" : "") + '>끄기</option>' +
+    '</select>';
+}
+function tuningFormHtml(a) {
+  const t = a.tuning_config || {};
+  const num = (id, value, placeholder) =>
+    '<input type="number" id="' + id + '" value="' + (value === undefined || value === null ? "" : value) +
+    '" placeholder="' + placeholder + '" style="width:5rem">';
+  return '<details><summary>파인튜닝</summary>' +
+    '<div class="inline" style="flex-wrap:wrap">' +
+    '<label>max_iter ' + num("tune-maxiter-" + a.id, t.max_iter, "기본값") + '</label>' +
+    '<label>max_rpm ' + num("tune-maxrpm-" + a.id, t.max_rpm, "무제한") + '</label>' +
+    '<label>max_execution_time(초) ' + num("tune-maxtime-" + a.id, t.max_execution_time, "무제한") + '</label>' +
+    '<label>max_retry_limit ' + num("tune-maxretry-" + a.id, t.max_retry_limit, "기본값") + '</label>' +
+    '<label>temperature <input type="number" step="0.1" min="0" max="2" id="tune-temp-' + a.id +
+    '" value="' + (t.temperature ?? "") + '" placeholder="기본값" style="width:5rem">' +
+    '<small style="display:block;color:#888">Anthropic은 0~1만 허용 — 1 초과는 OpenAI/Ollama 전용으로 두세요</small></label>' +
+    '<label>reasoning ' + _tuneTriStateHtml("tune-reasoning-" + a.id, t.reasoning ?? null) + '</label>' +
+    '<label>max_reasoning_attempts ' + num("tune-maxreasonattempts-" + a.id, t.max_reasoning_attempts, "무제한(reasoning 켰을 때만 의미 있음)") + '</label>' +
+    '<label>코드 실행 허용 ' + _tuneTriStateHtml("tune-codeexec-" + a.id, t.allow_code_execution ?? null) + '</label>' +
+    '<label>컨텍스트 자동 축소 ' + _tuneTriStateHtml("tune-respectctx-" + a.id, t.respect_context_window ?? null) + '</label>' +
+    '<button class="small" data-set-tuning="' + a.id + '">파인튜닝 저장</button>' +
+    '</div></details>';
+}
+
 async function renderAgentPool(content) {
   const agents = await api("GET", "/api/agent-pool");
   const isAdmin = ME.role === "admin";
   const canExecute = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = canExecute ? await fetchModelsByProvider() : {};
+  // 사용자 보고(2026-10-13, "할일 ID를 사전에 모르면 사용 불가") — 같은
+  // 패턴: "Tool Pool ID" 숫자 입력도 "도구/스킬 Pool" 탭을 따로 열어
+  // ID를 외워와야 했다. 도구 목록을 같이 받아 select로 바꾼다.
+  const tools = canExecute ? await api("GET", "/api/tool-pool") : [];
+  const toolNameById = {};
+  tools.forEach(t => { toolNameById[t.id] = t.name; });
   content.innerHTML = '<section class="card"><h2>AI 에이전트 목록</h2>' +
     '<ul class="muted help-list">' +
     '<li>"생성방식" 열은 "AI 에이전트 생성" 탭에서 어떤 옵션(stub/simple_llm/crewai)으로 태어났는지를 보여줍니다 — crewai로 만든 Agent만 그 시점에 스킬 매칭 도구를 갖고 태어납니다.</li>' +
     '<li>신규 Agent는 전부 pending_onboarding 상태로 생기고, <b>온보딩 승인</b>을 눌러야 active가 돼 "인력 검색"·매칭 후보로 노출됩니다.</li>' +
     '<li><b>오프보딩</b>(active→deprecated)은 이 화면에서 되돌릴 버튼이 없습니다 — 다시 쓰려면 관리자가 API/DB를 직접 손대야 합니다.</li>' +
     '<li><b>모델 설정</b>은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음).</li>' +
-    '<li><b>실행</b>은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다(ADR 결정 11).</li>' +
+    '<li><b>실행</b>은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다.</li>' +
     '<li><b>지식 색인</b>은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생).</li>' +
-    '<li><b>MCP 서버(JSON)</b>에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다(ADR 결정 10) — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다.</li>' +
-    '<li><b>Tool Pool ID</b>에 "도구/스킬 Pool" 탭에서 등록한 도구 ID를 넣고 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다(ADR 결정 12).</li>' +
+    '<li><b>MCP 서버(JSON)</b>에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다 — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다.</li>' +
+    '<li><b>도구 연결</b>은 아래에서 "도구/스킬 Pool"에 등록된 도구를 골라 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다.</li>' +
+    // 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... AI
+    // 에이전트 목록 포함 AI 에이전트 지정 항목이나 호출시(채팅 포함)에도
+    // 활용될 수 있도록 개선") — "역할"(생성 당시 역할, 예: "백엔드
+    // 개발자 Agent")이 식별자 역할까지 겸해 와서 같은 역할의 Agent가
+    // 여럿이면 ID로만 구분해야 했다. 선택 입력인 "이름"을 추가해 지정한
+    // 이름이 매칭·Crew 선택·팀 멤버·결재·채팅 @멘션 전부에서 역할명보다
+    // 우선 쓰이게 한다(지정 안 하면 기존처럼 역할명 그대로 — 100% 하위
+    // 호환).
+    '<li><b>이름</b>은 선택 입력입니다 — 지정하면 매칭 결과·Crew 실행·팀 멤버·결재·인박스·채팅 @멘션 등 이 Agent가 보이는 모든 화면에서 역할명 대신 그 이름이 먼저 보입니다. 비워서 저장하면 다시 역할명으로 돌아갑니다.</li>' +
+    '<li><b>파인튜닝</b>은 실제 LLM 가중치 재학습이 아니라 CrewAI Agent/LLM의 동작 파라미터(반복 횟수·분당 호출 제한·실행 시간 제한·재시도 횟수·temperature·reasoning·코드 실행 허용·컨텍스트 윈도우 자동 축소)를 저장합니다 — <b>framework가 crewai인 Agent가 "Crew 실행"에 투입될 때만</b> 반영되고, stub/simple_llm Agent나 생성 직후 단일 실행에는 적용되지 않습니다. 비워두면 CrewAI 기본값을 그대로 씁니다.</li>' +
     '<li><b>삭제</b>(관리자 전용)는 레코드를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 막힙니다.</li>' +
     '</ul>' +
-    table(["ID", "역할", "스킬", "소속 팀", "비용", "성과점수(수동)", "자동평가(Gate/TCR)", "상태", "생성방식", "LLM", "최근 산출물", "동작"], agents.map(a => {
+    // 사용자 보고(2026-10-14, 스크린샷 — 13개 열이 전부 끼어서 "성과
+    // 점수(수동)" 같은 헤더가 한 글자씩 세로로 줄바꿈될 만큼 눌림) —
+    // 식별·관리에 바로 필요한 "핵심 정보"(ID/이름/역할/스킬/상태/
+    // 생성방식/동작)만 열로 남기고, "모델 실행 후에만 쌓이는 정보"
+    // (소속팀/비용/성과점수/자동평가/최근 산출물)는 "상세정보"
+    // 한 열의 접힌 패널로 묶는다.
+    // 사용자 요청(2026-10-14, "Agent 목록에 LLM 정보는 기본으로 표시되도록
+    // 해줘") — LLM(provider/model)만은 접지 않고 별도 열로 항상 보이게
+    // 뺀다(실행에 어떤 모델이 쓰이는지는 "실행 후에만 쌓이는 정보"가
+    // 아니라 실행 전에도 미리 확인해야 하는 설정이라 상세 패널에 묻혀
+    // 있으면 안 됨 — "대화창 사용 모델 표시" 개선과 같은 취지).
+    table(["ID", "이름", "역할", "스킬", "상태", "생성방식", "LLM", "상세정보", "동작"], agents.map(a => {
+      // 사용자 보고(2026-10-14, 스크린샷 — "동작" 칸 하나에 10개 넘는
+      // 버튼/입력이 전부 세로로 풀폭 스택돼 행 하나가 화면을 가득
+      // 채움) — 자주 쓰는 상태변경/실행 버튼만 바로 보이게 남기고,
+      // 나머지(이름·비용·점수·모델·도구연결·파인튜닝)는 "⚙ 설정"
+      // 하나로 접는다.
       let actions = "";
       if (isAdmin) {
         if (a.status === "pending_onboarding") actions += '<button class="small" data-onboard="' + a.id + '">온보딩 승인</button>';
         if (a.status === "active") actions += '<button class="small danger" data-deprecate="' + a.id + '">오프보딩</button>';
         actions += '<button class="small danger" data-delete-agent="' + a.id + '">삭제</button>';
-        actions +=
+      }
+      if (canExecute && a.status === "active") {
+        actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
+        actions += '<button class="small" data-index-knowledge="' + a.id + '">지식 색인</button>';
+      }
+      let settings = "";
+      if (canExecute) {
+        settings +=
+          '<span class="pair"><input placeholder="이름(비우면 역할명으로)" id="name-' + a.id + '" value="' + escAttr(a.name || "") + '" style="width:140px">' +
+          '<button class="small" data-set-name="' + a.id + '">이름 저장</button></span>';
+      }
+      if (isAdmin) {
+        settings +=
           '<span class="pair"><input type="number" step="0.01" placeholder="비용" id="cost-' + a.id + '">' +
           '<button class="small" data-set-cost="' + a.id + '">비용입력</button></span>' +
           '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="ascore-' + a.id + '">' +
@@ -3224,25 +3988,41 @@ async function renderAgentPool(content) {
       }
       if (canExecute) {
         const providers = ["anthropic", "openai", "ollama"];
-        actions += '<select id="provider-' + a.id + '">' +
+        settings += '<select id="provider-' + a.id + '">' +
           providers.map(p => '<option value="' + p + '"' + (p === a.llm_provider ? " selected" : "") + ">" + p + "</option>").join("") +
           "</select>" +
           modelSelectHtml("model-" + a.id) +
           '<input placeholder="MCP 서버(JSON, 비우면 유지)" id="mcp-' + a.id + '" value="' + esc(a.mcp_servers && a.mcp_servers.length ? JSON.stringify(a.mcp_servers) : "").replace(/"/g, "&quot;") + '">' +
           '<button class="small" data-set-model="' + a.id + '">모델 설정</button>';
       }
-      if (canExecute && a.status === "active") {
-        actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
-        actions += '<button class="small" data-index-knowledge="' + a.id + '">지식 색인</button>';
-      }
       if (canExecute) {
-        actions +=
-          '<input placeholder="Tool Pool ID" id="linktool-' + a.id + '" type="number" min="1">' +
+        const toolOptions = tools.length
+          ? tools.map(t => '<option value="' + t.id + '">' + esc(t.name) + " (#" + t.id + ")" +
+              (a.linked_tool_ids.includes(t.id) ? " — 연결됨" : "") + '</option>').join("")
+          : '<option value="">(등록된 도구 없음)</option>';
+        settings +=
+          '<select id="linktool-' + a.id + '">' + toolOptions + '</select>' +
           '<span class="pair"><button class="small" data-link-tool="' + a.id + '">연결</button>' +
           '<button class="small" data-unlink-tool="' + a.id + '">해제</button></span>' +
-          '<span class="muted">연결된 도구 ID: ' + (a.linked_tool_ids.length ? esc(a.linked_tool_ids.join(", ")) : "없음(스킬 기반 자동 연결은 별도)") + '</span>';
+          '<span class="muted">연결된 도구: ' + (a.linked_tool_ids.length
+            ? a.linked_tool_ids.map(id => esc(toolNameById[id] || ("#" + id))).join(", ")
+            : "없음(스킬 기반 자동 연결은 별도)") + '</span>';
       }
-      const output = a.last_output ? esc(a.last_output).slice(0, 80) + (a.last_output.length > 80 ? "…" : "") : "-";
+      if (canExecute) {
+        settings += tuningFormHtml(a);
+      }
+      if (settings) {
+        actions += '<details><summary>⚙ 설정</summary><div class="inline" style="flex-wrap:wrap;align-items:center">' + settings + '</div></details>';
+      }
+      // 사용자 보고(2026-10-14, "최근 산출물도 전체화면/복사 가능한
+      // 형태로 개선") — `last_output`은 보통 수백~수천 자짜리 실제
+      // LLM 마크다운 산출물(제목·목록·코드블록 포함)인데, 80자 평문
+      // 자르기만 하면 줄바꿈이 사라지고 마크다운 기호가 그대로 노출돼
+      // 미리보기로서 의미가 없었다. 다른 화면(산출물 상세보기 등)과
+      // 똑같이 `renderContent()`(Claude Artifact 스타일 — 복사·전체화면
+      // 버튼은 전역 위임으로 이미 연결돼 있어 추가 배선 불필요)로
+      // 렌더링한다.
+      const output = a.last_output ? renderContent(a.last_output) : '<span class="muted">-</span>';
       const llmInfo = a.llm_provider ? esc(a.llm_provider) + "/" + esc(a.llm_model || "") : "-";
       // Phase 3 aggregate_agent_score() — 관리자 수동 점수와 별도로,
       // 이 Agent가 만든 산출물들의 실측 Gate A-G/TCR 평균을 보여준다
@@ -3258,9 +4038,21 @@ async function renderAgentPool(content) {
       const teamNames = a.team_names && a.team_names.length
         ? '<button class="small" data-goto-teams="1" title="팀 관리로 이동">' + a.team_names.map(esc).join(", ") + '</button>'
         : '<span class="muted">-</span>';
-      return [a.id, esc(a.role_name), esc(a.skill_tags.join(", ")), teamNames, a.cost_estimate,
-        a.performance_score === null ? "-" : a.performance_score, autoEval, esc(label(a.status)), esc(a.framework), llmInfo, output,
-        '<div class="actions">' + actions + "</div>"];
+      // 핵심 정보(식별·상태·동작)와 분리한 "모델 실행 후 쌓이는 정보"
+      // 묶음 — 소속팀/비용/성과점수/자동평가/최근 산출물은 매번
+      // 볼 필요는 없지만 완전히 없애면 안 되는 정보라 접어서 둔다.
+      // LLM은 별도 열로 뺐으니 여기서는 중복 표시하지 않는다.
+      const detail = '<details><summary>▶ 상세</summary>' +
+        '<div style="text-align:left;white-space:normal">' +
+        '<div>소속팀: ' + teamNames + '</div>' +
+        '<div>비용: ' + a.cost_estimate + '</div>' +
+        '<div>성과점수(수동): ' + (a.performance_score === null ? "-" : a.performance_score) + '</div>' +
+        '<div>자동평가(Gate/TCR): ' + esc(autoEval) + '</div>' +
+        '<div>최근 산출물:' + (a.last_output ? "" : " " + output) + '</div>' +
+        (a.last_output ? output : "") +
+        '</div></details>';
+      return [a.id, a.name ? esc(a.name) : '<span class="muted">(미지정)</span>', esc(a.role_name), esc(a.skill_tags.join(", ")),
+        esc(label(a.status)), esc(a.framework), llmInfo, detail, '<div class="actions">' + actions + "</div>"];
     })) + '<div id="execute-result"></div></section>';
 
   if (canExecute) {
@@ -3309,6 +4101,46 @@ async function renderAgentPool(content) {
       try { await api("POST", "/api/agent-pool/" + btn.dataset.setAscore + "/performance", { score: Number(v) }); refresh(); } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  content.querySelectorAll("[data-set-name]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.setName;
+      const v = document.getElementById("name-" + id).value;
+      try {
+        await api("PATCH", "/api/agent-pool/" + id + "/name", { name: v || null });
+        showMsg("global-msg", v ? "이름을 저장했습니다." : "이름을 지웠습니다(역할명으로 표시됩니다).", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-set-tuning]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.setTuning;
+      const numOrNull = (elId) => {
+        const v = document.getElementById(elId).value;
+        return v === "" ? null : Number(v);
+      };
+      const triOrNull = (elId) => {
+        const v = document.getElementById(elId).value;
+        return v === "" ? null : v === "true";
+      };
+      const payload = {
+        max_iter: numOrNull("tune-maxiter-" + id),
+        max_rpm: numOrNull("tune-maxrpm-" + id),
+        max_execution_time: numOrNull("tune-maxtime-" + id),
+        max_retry_limit: numOrNull("tune-maxretry-" + id),
+        temperature: numOrNull("tune-temp-" + id),
+        reasoning: triOrNull("tune-reasoning-" + id),
+        max_reasoning_attempts: numOrNull("tune-maxreasonattempts-" + id),
+        allow_code_execution: triOrNull("tune-codeexec-" + id),
+        respect_context_window: triOrNull("tune-respectctx-" + id),
+      };
+      try {
+        await api("PATCH", "/api/agent-pool/" + id + "/tuning", payload);
+        showMsg("global-msg", "파인튜닝 설정을 저장했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
   content.querySelectorAll("[data-set-model]").forEach(btn => {
     btn.onclick = async () => {
       const id = btn.dataset.setModel;
@@ -3355,7 +4187,7 @@ async function renderAgentPool(content) {
     btn.onclick = async () => {
       const id = btn.dataset.linkTool;
       const toolId = document.getElementById("linktool-" + id).value;
-      if (!toolId) { showMsg("global-msg", "Tool Pool ID를 입력하세요.", "error"); return; }
+      if (!toolId) { showMsg("global-msg", "연결할 도구를 선택하세요.", "error"); return; }
       try {
         await api("POST", "/api/agent-pool/" + id + "/tools/" + toolId);
         showMsg("global-msg", "도구를 연결했습니다.", "ok");
@@ -3367,7 +4199,7 @@ async function renderAgentPool(content) {
     btn.onclick = async () => {
       const id = btn.dataset.unlinkTool;
       const toolId = document.getElementById("linktool-" + id).value;
-      if (!toolId) { showMsg("global-msg", "Tool Pool ID를 입력하세요.", "error"); return; }
+      if (!toolId) { showMsg("global-msg", "해제할 도구를 선택하세요.", "error"); return; }
       try {
         await api("DELETE", "/api/agent-pool/" + id + "/tools/" + toolId);
         showMsg("global-msg", "도구 연결을 해제했습니다.", "ok");
@@ -3377,7 +4209,7 @@ async function renderAgentPool(content) {
   });
 }
 
-/* ---------- 도구/스킬 Pool(ADR 결정 12) ---------- */
+/* ---------- 도구/스킬 Pool ---------- */
 
 async function renderPoolRegistry(content) {
   const [tools, skills] = await Promise.all([
@@ -3391,6 +4223,11 @@ async function renderPoolRegistry(content) {
     '<li>MCP 서버나 native 도구(VectorDB/GraphDB/외부 자료 검색)를 이름으로 등록해 여러 Agent가 재사용합니다.</li>' +
     '<li>native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"} 또는 {"native_id": "web_search"}(Wikipedia 검색, API 키 불필요·무료 — skill_tags에 "외부검색"을 넣으면 매칭됩니다)를 지원합니다.</li>' +
     '<li>mcp_stdio/mcp_remote는 {"command":...,"args":[...]} 또는 {"url":...,"transport":...} 형태입니다 — 이 두 종류는 Agent가 실행될 때마다 실제로 서버(로컬 프로세스 또는 원격)에 접속을 시도하므로, 잘못된 command/url을 등록해두면 그 스킬을 가진 Agent 실행이 접속 단계에서 실패합니다.</li>' +
+    // 사용자 요청(2026-10-13, "@데코레이터 툴을 추가 생성할 수 있는 기능을
+    // 제공해줘") — mcp_stdio와 같은 신뢰 등급(admin 전용)이라는 걸 화면에도
+    // 명시한다. 실행 중 Docker가 있으면 격리 실행, 없으면 일반
+    // subprocess로 폴백한다는 한계도 숨기지 않는다.
+    '<li><b>custom_python</b>(admin 전용)은 Python 함수를 직접 등록해 새 CrewAI Tool로 쓴다 — <code>def tool_fn(query: str) -> str:</code> 하나만 정의하면 됩니다. 등록된 코드는 그 도구가 호출될 때마다 서버에서 실제로 실행됩니다(Docker가 설치돼 있으면 네트워크 차단된 컨테이너에서, 없으면 격리 없는 일반 프로세스로 폴백) — mcp_stdio와 같은 신뢰 수준이 필요해 admin 전용입니다.</li>' +
     '<li>"활성" 표시를 꺼두면(비활성) 스킬이 매칭돼도 더 이상 자동으로 붙지 않습니다(등록은 유지).</li>' +
     '<li><b>삭제</b>(관리자 전용)는 이 도구를 참조하던 Agent 개별 연결도 함께 지웁니다.</li>' +
     '</ul>' +
@@ -3398,11 +4235,15 @@ async function renderPoolRegistry(content) {
       t.id, esc(t.name), esc(t.kind), esc(t.description), t.is_active ? "활성" : "비활성",
       isAdmin ? '<div class="actions"><button class="small danger" data-delete-tool="' + t.id + '">삭제</button></div>' : "",
     ])) +
-    '<form class="inline" id="tool-form">' +
+    '<form class="inline" id="tool-form" style="flex-wrap:wrap">' +
     '<input id="tp-name" placeholder="이름" required>' +
-    '<select id="tp-kind"><option value="native">native</option><option value="mcp_remote">mcp_remote</option><option value="mcp_stdio">mcp_stdio</option></select>' +
+    '<select id="tp-kind"><option value="native">native</option><option value="mcp_remote">mcp_remote</option><option value="mcp_stdio">mcp_stdio</option><option value="custom_python">custom_python</option></select>' +
     '<input id="tp-description" placeholder="설명" style="flex:1;min-width:160px">' +
     '<input id="tp-config" placeholder="config JSON, 예: {&#39;native_id&#39;:&#39;vectordb_search&#39;}" style="flex:1;min-width:220px">' +
+    '<div id="tp-custom-python-fields" style="display:none;width:100%">' +
+    '<textarea id="tp-custom-source" placeholder="def tool_fn(query: str) -> str:&#10;    return &#34;...&#34;" rows="5" style="width:100%;box-sizing:border-box;font-family:monospace"></textarea>' +
+    '<label>타임아웃(초) <input type="number" id="tp-custom-timeout" value="10" min="1" max="60" style="width:4rem"></label>' +
+    '</div>' +
     '<button class="primary" type="submit">도구 등록</button></form>' +
     "</section>" +
     '<section class="card"><h2>Skill Pool — skill_tags 정식 등록</h2>' +
@@ -3424,19 +4265,40 @@ async function renderPoolRegistry(content) {
     '<button class="primary" type="submit">스킬 등록</button></form>' +
     "</section>";
 
+  const tpKindSelect = document.getElementById("tp-kind");
+  const tpConfigInput = document.getElementById("tp-config");
+  const tpCustomFields = document.getElementById("tp-custom-python-fields");
+  const syncToolKindFields = () => {
+    const isCustom = tpKindSelect.value === "custom_python";
+    tpCustomFields.style.display = isCustom ? "block" : "none";
+    tpConfigInput.style.display = isCustom ? "none" : "";
+  };
+  tpKindSelect.addEventListener("change", syncToolKindFields);
+  syncToolKindFields();
+
   document.getElementById("tool-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    const kind = tpKindSelect.value;
     let config = {};
-    const raw = document.getElementById("tp-config").value.trim();
-    if (raw) {
-      try { config = JSON.parse(raw); } catch (e) {
-        showMsg("global-msg", "config가 올바른 JSON이 아닙니다: " + e.message, "error"); return;
+    if (kind === "custom_python") {
+      // 사용자 요청(2026-10-13, "@데코레이터 툴을 추가 생성할 수 있는
+      // 기능") — 여긴 JSON이 아니라 Python 소스를 그대로 담는다.
+      config = {
+        function_source: document.getElementById("tp-custom-source").value,
+        timeout_seconds: Number(document.getElementById("tp-custom-timeout").value) || 10,
+      };
+    } else {
+      const raw = tpConfigInput.value.trim();
+      if (raw) {
+        try { config = JSON.parse(raw); } catch (e) {
+          showMsg("global-msg", "config가 올바른 JSON이 아닙니다: " + e.message, "error"); return;
+        }
       }
     }
     try {
       await api("POST", "/api/tool-pool", {
         name: document.getElementById("tp-name").value,
-        kind: document.getElementById("tp-kind").value,
+        kind,
         description: document.getElementById("tp-description").value,
         config,
       });
@@ -3487,7 +4349,7 @@ async function renderPoolRegistry(content) {
 
 /* ---------- 팀(사용자 요청, 2026-10-06, "복수의 사람이 복수의 Agent와
    또는 CrewAI 장점인 역할에 따른 Agent를 묶어 생성된 그룹과 협업하도록...
-   다시 기획"). `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 1+2 —
+   다시 기획"). Phase 1+2 —
    human_pool/agent_pool 멤버를 역할명과 함께 묶어 등록하는 "등록→재사용"
    화면(tool_pool/skill_pool/model_registry와 같은 패턴). 팀 자체를 할 일에
    배정하는 동작("배정 요청")은 이 탭이 아니라 "업무 요청" 탭의 할 일 상세
@@ -3506,7 +4368,7 @@ async function renderTeams(content) {
     people.map(p => '<option value="human:' + p.id + '">' + esc(p.name) + '(' + esc(p.role) + ')</option>').join("") +
     '</optgroup>' +
     '<optgroup label="Agent">' +
-    agents.map(a => '<option value="agent:' + a.id + '">' + esc(a.role_name) + '(#' + a.id + ')</option>').join("") +
+    agents.map(a => '<option value="agent:' + a.id + '">' + agentDisplayLabel(a) + '(#' + a.id + ')</option>').join("") +
     '</optgroup>';
 
   const teamCardHtml = (t) =>
@@ -3730,7 +4592,7 @@ async function renderModelRegistry(content) {
   });
 }
 
-/* ---------- Crew 실행(ADR 결정 11 — Agent 협업) ---------- */
+/* ---------- Crew 실행(Agent 협업) ---------- */
 
 // 사용자 보고(2026-10-06, "crew 실행 UI/UX를 개선해줘 — 에이전트 ID를
 // 알 수 없음 등") — 이전엔 위 표에서 ID를 직접 읽어 textarea에
@@ -3739,9 +4601,17 @@ async function renderModelRegistry(content) {
 // 문제). Agent별로 드롭다운+할 일 입력 행을 두고 "+ Agent 추가"로 늘리는
 // 방식으로 바꾼다 — 드롭다운 자체가 "#id 역할명(스킬)"을 보여줘 ID를
 // 몰라도 된다.
+// 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... AI 에이전트
+// 지정 항목이나 호출시에도 활용될 수 있도록") — Agent를 고르는 모든
+// 드롭다운/라벨이 지정한 이름을 역할명보다 우선 보여주도록 한곳에
+// 모은다(지정 안 했으면 역할명 그대로 — 호출부 변경 없이 자동 적용).
+function agentDisplayLabel(a) {
+  return a.name ? esc(a.name) + " (" + esc(a.role_name) + ")" : esc(a.role_name);
+}
+
 function crewAgentOptionsHtml(active) {
   return active.map(a =>
-    '<option value="' + a.id + '">#' + a.id + " " + esc(a.role_name) +
+    '<option value="' + a.id + '">#' + a.id + " " + agentDisplayLabel(a) +
     (a.skill_tags.length ? " (" + esc(a.skill_tags.join(", ")) + ")" : "") + "</option>"
   ).join("");
 }
@@ -3850,8 +4720,8 @@ async function renderCrew(content) {
    묶였는지, 실제로 누가 누구에게 위임했는지를 표를 읽어 머릿속으로
    재구성해야 했다. 실선(회색)은 요청 시점에 이미 정해진 구조(sequential
    순서 전달 / hierarchical 조율 관계) — 항상 그린다. 점선(주황)은
-   `result.delegations`에 실제로 기록된 위임만 그린다(추측 금지, ADR
-   결정 11 "실제 발동 증거를 남긴다" 원칙과 같은 정신) — 대상이
+   `result.delegations`에 실제로 기록된 위임만 그린다(추측 금지,
+   "실제 발동 증거를 남긴다" 원칙과 같은 정신) — 대상이
    확인되지 않으면(알 수 없는 동료를 호출해 CrewAI가 에러를 반환한
    경우 등) 화살표 대신 아래 "확인 안 된 위임" 목록에 원문을 남긴다.
    외부 차트 라이브러리 없이 순수 inline SVG로 그린다(이 앱의 기존
@@ -3921,7 +4791,13 @@ function crewDiagramSvg(result) {
   allNodes.forEach(a => {
     const pos = positions[a.role_name];
     const isManagerNode = a === managerNode;
-    const label = a.role_name.length > 18 ? a.role_name.slice(0, 17) + "…" : a.role_name;
+    // 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정... 호출시(채팅
+    // 포함)에도 활용될 수 있도록") — 다이어그램 라벨만 이름을 우선
+    // 보여준다. `positions`/위임 매칭 키는 여전히 role_name 그대로다
+    // (CrewAI가 실제로 보고하는 coworker 문자열과 일치해야 해서 건드리면
+    // 위임 선 자체가 안 그려진다).
+    const rawLabel = a.name || a.role_name;
+    const label = rawLabel.length > 18 ? rawLabel.slice(0, 17) + "…" : rawLabel;
     body += '<rect x="' + pos.x + '" y="' + pos.y + '" width="' + nodeW + '" height="' + nodeH + '" rx="8" ' +
       'fill="' + (isManagerNode ? "#fef3c7" : "#eef1f6") + '" stroke="' + (isManagerNode ? "#b45309" : "#888") + '" stroke-width="1.5" />' +
       '<text x="' + (pos.x + nodeW / 2) + '" y="' + (pos.y + nodeH / 2 + 4) + '" font-size="12" text-anchor="middle" fill="#222">' +
@@ -3951,11 +4827,11 @@ function renderCrewResult(result) {
         "</details>"
       : "");
   html += '<h3>최종 산출물</h3><div class="msg ok">' + renderContent(result.final_output) + "</div>";
-  // SCREEN_UX_BENCHMARK_PROPOSAL.md §4-A/§3-1(2026-10-12, "Phase 1 (A)(B)
-  // (H1)(H2)(I5)부터 구현 시작해줘") — CrewAI가 이미 집계해주는 토큰
-  // 사용량을 `run_crew()`가 이제 반환한다(크루 완료 전엔 비어있을 수
+  // 사용자 요청(2026-10-12, "UI 개선 잔여 작업 진행해줘") — CrewAI가
+  // 이미 집계해주는 토큰 사용량을 `run_crew()`가 이제 반환한다(크루
+  // 완료 전엔 비어있을 수
   // 없다 — crew.kickoff() 성공 이후에만 이 함수가 반환되므로 항상 값이
-  // 있다). 기존 대시보드의 `.stat-row` 패턴(§I5, 새 CSS 불필요)을 그대로
+  // 있다). 기존 대시보드의 `.stat-row` 패턴(새 CSS 불필요)을 그대로
   // 재사용한다. 비용/실행시간은 CrewAI가 집계해주지 않아(UsageMetrics에
   // 없음) 보여주지 않는다 — 없는 값을 지어내지 않는다.
   const tu = result.token_usage;
@@ -3968,8 +4844,8 @@ function renderCrewResult(result) {
     '</div>';
   // 사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
   // 연결해줘") — run_crew()가 이제 gate_scores/tcr을 반환한다. 단건
-  // deliverable 카드의 gateBadge와 같은 "측정 없음" 구분 원칙(위 §530
-  // 참고)을 그대로 따른다.
+  // deliverable 카드의 gateBadge와 같은 "측정 없음" 구분 원칙을 그대로
+  // 따른다.
   const gates = Object.values(result.gate_scores);
   const measured = gates.filter(g => !g.not_measured);
   html += "<h3>Gate A-G 채점(이 Crew 실행 전체)</h3>";
@@ -3978,7 +4854,7 @@ function renderCrewResult(result) {
     : '<p>' + measured.filter(g => g.passed).length + "/" + measured.length + " 통과" +
       (result.tcr === null ? "" : " · TCR " + result.tcr.toFixed(0) + "%") + '</p>';
   html += "<h3>Agent별 산출물</h3>" + table(["Agent ID", "역할", "산출물"], result.agents.map(a => [
-    a.agent_id, esc(a.role_name),
+    a.agent_id, agentDisplayLabel(a),
     a.output === null ? "(없음 — 매니저는 조율만 하고 직접 산출물을 내지 않습니다)"
       : esc(a.output).slice(0, 200) + (a.output.length > 200 ? "…" : ""),
   ]));
@@ -4025,7 +4901,7 @@ async function renderSearch(content) {
     }));
     document.getElementById("search-result").innerHTML = table(
       ["타입", "ID", "이름", "역할", "가용", "비용", "스킬", "성과점수"],
-      body.items.map(c => [esc(label(c.type)), c.id, esc(c.name || "-"), esc(c.role), c.is_available ? "가능" : "불가", c.cost, esc(c.skill_tags.join(", ")), c.performance_score === null ? "-" : c.performance_score])
+      body.items.map(c => [esc(label(c.type)), c.id, esc(c.name || c.role), esc(c.role), c.is_available ? "가능" : "불가", c.cost, esc(c.skill_tags.join(", ")), c.performance_score === null ? "-" : c.performance_score])
     );
     const shown = body.items.length ? offset + 1 : 0;
     document.getElementById("search-page-info").textContent =
@@ -4052,6 +4928,53 @@ async function renderSearch(content) {
 
 /* ---------- 조직도 ---------- */
 
+const ORG_CHART_COLOR = { human: "#4a90d9", agent: "#8e5fd9", team: "#3fa34d" };
+
+// 사용자 요청(2026-10-13) — 조직도를 "매니저별 테이블 나열"에서 실제
+// 트리 다이어그램으로 바꾼다. org-chart API는 매니저 1명 + 그 매니저에게
+// 귀속된 리포트 목록(2단계)만 주므로, 버킷 하나당 루트(매니저) 1개 +
+// 자식(리포트) 열 하나짜리 단순 트리를 그린다(의존관계 그래프의 다단 컬럼
+// 레이아웃과 달리 깊이가 항상 2라 더 단순하게 구현했다).
+function renderOrgChartTreeSvg(bucket) {
+  const nodeW = 170, nodeH = 40, rowHeight = 52, padding = 16, gapX = 70;
+  const reports = bucket.reports;
+  const rootX = padding, childX = padding + nodeW + gapX;
+  const height = padding * 2 + Math.max(1, reports.length) * rowHeight - (rowHeight - nodeH);
+  const rootY = padding + (height - padding * 2) / 2 - nodeH / 2;
+  const width = childX + nodeW + padding;
+
+  const managerLabel = bucket.manager_username ? bucket.manager_username : "(지정된 관리자 없음)";
+  const rootSvg = '<rect x="' + rootX + '" y="' + rootY + '" width="' + nodeW + '" height="' + nodeH +
+    '" rx="6" fill="#fff" stroke="#333" stroke-width="2"/>' +
+    '<text x="' + (rootX + nodeW / 2) + '" y="' + (rootY + nodeH / 2 + 4) +
+    '" text-anchor="middle" font-size="12" font-weight="bold">' + esc(managerLabel) + '</text>';
+
+  const childrenSvg = reports.map((r, i) => {
+    const y = padding + i * rowHeight;
+    const color = ORG_CHART_COLOR[r.resource_type] || "#999";
+    const roleLabel20 = r.role_name.length > 18 ? r.role_name.slice(0, 17) + "…" : r.role_name;
+    const nameLabel20 = (r.resource_name || "-").length > 20 ? r.resource_name.slice(0, 19) + "…" : (r.resource_name || "-");
+    const x1 = rootX + nodeW, y1 = rootY + nodeH / 2;
+    const x2 = childX, y2 = y + nodeH / 2;
+    const midX = (x1 + x2) / 2;
+    return '<path d="M' + x1 + ',' + y1 + ' C' + midX + ',' + y1 + ' ' + midX + ',' + y2 + ' ' + x2 + ',' + y2 +
+      '" fill="none" stroke="#bbb" stroke-width="1.5" marker-end="url(#org-arrow)"/>' +
+      '<g><title>' + esc(r.role_name) + " · " + esc(label(r.resource_type)) + " · " + esc(r.resource_name || "-") +
+      " (배정 #" + r.assignment_id + ", 할 일 #" + r.task_id + ')</title>' +
+      '<rect x="' + childX + '" y="' + y + '" width="' + nodeW + '" height="' + nodeH +
+      '" rx="6" fill="#fff" stroke="' + color + '" stroke-width="2"/>' +
+      '<text x="' + (childX + nodeW / 2) + '" y="' + (y + 16) +
+      '" text-anchor="middle" font-size="11" font-weight="bold">' + esc(nameLabel20) + '</text>' +
+      '<text x="' + (childX + nodeW / 2) + '" y="' + (y + 31) +
+      '" text-anchor="middle" font-size="10" fill="#666">' + esc(roleLabel20) + '</text></g>';
+  }).join("");
+
+  return '<svg width="' + width + '" height="' + height + '" style="max-width:100%">' +
+    '<defs><marker id="org-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" ' +
+    'markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#bbb"/></marker></defs>' +
+    rootSvg + childrenSvg + '</svg>';
+}
+
 async function renderOrgChart(content) {
   const chart = await api("GET", "/api/org-chart");
   let html = '<section class="card"><h2>조직도(확정된 배정)</h2>' +
@@ -4060,11 +4983,21 @@ async function renderOrgChart(content) {
     '<li>묶는 기준(관리자)이 사람과 AI 에이전트가 다릅니다: 사람 배정은 그 사람의 "상사"(사용자 관리에서 지정)로, AI 에이전트 배정은 Agent에게 상사가 없으므로 그 배정을 요청한 사람으로 귀속시킵니다.</li>' +
     '<li>상사가 없으면 "(지정된 관리자 없음)" 묶음에 들어갑니다.</li>' +
     '</ul>';
+  if (chart.length) {
+    html += '<p class="muted">' +
+      '<span style="color:' + ORG_CHART_COLOR.human + '">■</span> 사람 &nbsp;' +
+      '<span style="color:' + ORG_CHART_COLOR.agent + '">■</span> AI 에이전트 &nbsp;' +
+      '<span style="color:' + ORG_CHART_COLOR.team + '">■</span> 팀' +
+      ' — 카드에 마우스를 올리면 배정 ID·할 일 ID가 보입니다.</p>';
+  }
   for (const bucket of chart) {
-    html += "<h3>" + (bucket.manager_username ? esc(bucket.manager_username) : "(지정된 관리자 없음)") + "</h3>";
-    html += table(["배정 ID", "할 일 ID", "역할", "타입", "리소스"], bucket.reports.map(r => [
-      r.assignment_id, r.task_id, esc(r.role_name), esc(label(r.resource_type)), esc(r.resource_name || "-"),
-    ]));
+    html += '<div class="card" style="overflow-x:auto">' +
+      renderOrgChartTreeSvg(bucket) +
+      '<details class="muted"><summary>표로 보기</summary>' +
+      table(["배정 ID", "할 일 ID", "역할", "타입", "리소스"], bucket.reports.map(r => [
+        r.assignment_id, r.task_id, esc(r.role_name), esc(label(r.resource_type)), esc(r.resource_name || "-"),
+      ])) +
+      '</details></div>';
   }
   if (!chart.length) html += '<p class="muted">확정된 배정이 없습니다.</p>';
   html += "</section>";
@@ -4077,13 +5010,13 @@ async function renderPerformance(content) {
   const rows = await api("GET", "/api/performance-review");
   content.innerHTML = '<section class="card"><h2>성과 리뷰</h2>' +
     '<ul class="muted help-list">' +
-    '<li>사람의 "성과점수"는 사전 동의(NF9)가 있어야만 값이 채워집니다 — "사람 인력 관리" 탭에서 동의를 받은 사람만 점수를 입력할 수 있고, 동의를 철회하면 그 순간 점수가 지워집니다.</li>' +
+    '<li>사람의 "성과점수"는 사전 동의가 있어야만 값이 채워집니다 — "사람 인력 관리" 탭에서 동의를 받은 사람만 점수를 입력할 수 있고, 동의를 철회하면 그 순간 점수가 지워집니다.</li>' +
     '<li>AI 에이전트는 동의 개념이 없어 항상 입력·조회 가능합니다.</li>' +
     '<li>이 화면의 점수는 둘 다 관리자가 직접 입력한 수동값입니다 — Agent의 실제 Gate A-G 자동 채점 결과는 이 화면이 아니라 "AI 에이전트 관리" 탭의 "자동평가(Gate/TCR)" 열에서 따로 봅니다(둘을 아직 한 화면에 병기하진 않습니다).</li>' +
     '<li>"확정 배정 수"만 실제 데이터(confirmed 배정 건수)입니다.</li>' +
     '</ul>' +
     table(["타입", "ID", "이름", "역할", "동의", "성과점수", "확정 배정 수"], rows.map(r => [
-      esc(label(r.type)), r.id, esc(r.name || "-"), esc(r.role),
+      esc(label(r.type)), r.id, esc(r.name || r.role), esc(r.role),
       r.performance_consent === null ? "-" : (r.performance_consent ? "동의함" : "미동의"),
       r.performance_score === null ? "-" : r.performance_score,
       r.confirmed_assignments,
@@ -4091,6 +5024,101 @@ async function renderPerformance(content) {
 }
 
 /* ---------- 매니저 대시보드(Phase 5, 사용자 요청 2026-09-28) ---------- */
+
+// 사용자 요청(2026-10-13) — Gate A-G 7개 점수를 숫자 나열 대신 레이더
+// 차트로. 값은 항상 0.0~1.0(agent_evaluation.GATE_IDS 채점 스케일)이라
+// 반지름 0~1을 그 범위에 그대로 매핑한다. not_measured(null) 축은 점을
+// 중심(0)에 찍어 "측정 안 됨"이 눈에 띄게 낮게 보이도록 한다(평균
+// 계산에서는 이미 제외돼 있으므로 차트 모양에만 영향).
+function renderGateRadarSvg(gateAverages) {
+  const gates = ["A", "B", "C", "D", "E", "F", "G"];
+  const cx = 110, cy = 100, r = 80;
+  const angle = i => -Math.PI / 2 + i * (2 * Math.PI / gates.length);
+  const pt = (i, frac) => [cx + Math.cos(angle(i)) * r * frac, cy + Math.sin(angle(i)) * r * frac];
+
+  const rings = [0.25, 0.5, 0.75, 1.0].map(frac =>
+    '<polygon points="' + gates.map((_, i) => pt(i, frac).join(",")).join(" ") +
+    '" fill="none" stroke="#e0e0e0" stroke-width="1"/>'
+  ).join("");
+
+  const spokes = gates.map((_, i) => {
+    const [x, y] = pt(i, 1);
+    return '<line x1="' + cx + '" y1="' + cy + '" x2="' + x + '" y2="' + y + '" stroke="#e0e0e0" stroke-width="1"/>';
+  }).join("");
+
+  const values = gates.map(g => gateAverages[g]);
+  const dataPoints = gates.map((_, i) => pt(i, Math.max(0, Math.min(1, values[i] || 0))));
+  const dataPolygon = '<polygon points="' + dataPoints.map(p => p.join(",")).join(" ") +
+    '" fill="#4a90d9" fill-opacity="0.25" stroke="#4a90d9" stroke-width="2"/>';
+  const dataDots = dataPoints.map((p, i) => values[i] === null ? "" :
+    '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="3" fill="#4a90d9"><title>Gate ' + gates[i] + ": " +
+    values[i].toFixed(2) + '</title></circle>'
+  ).join("");
+
+  const labels = gates.map((g, i) => {
+    const [x, y] = pt(i, 1.18);
+    const v = values[i];
+    return '<text x="' + x + '" y="' + y + '" text-anchor="middle" font-size="11" font-weight="bold">' +
+      g + '</text><text x="' + x + '" y="' + (y + 13) + '" text-anchor="middle" font-size="9" fill="#666">' +
+      (v === null ? "미측정" : v.toFixed(2)) + '</text>';
+  }).join("");
+
+  return '<svg width="220" height="230" style="max-width:100%">' +
+    rings + spokes + dataPolygon + dataDots + labels + '</svg>';
+}
+
+// 사용자 요청(2026-10-13) — "비용 변경 이력" 테이블을 라인 차트로.
+// cost_trend는 최신순(DESC)·여러 리소스(subject_type+subject_id)가
+// 뒤섞인 단가 변경 이벤트 목록이라, 그냥 순서대로 한 줄로 이으면 서로
+// 다른 리소스의 단가가 이어진 것처럼 보여 오해를 준다 — 리소스별로
+// 선을 나누고, x축은 전체 이벤트의 시간순 인덱스를 공유해 "누가 언제"를
+// 같은 좌표계에서 비교할 수 있게 한다.
+function renderCostTrendSvg(trend) {
+  if (!trend.length) return '<p class="muted">비용 변경 이력이 없습니다.</p>';
+  const asc = trend.slice().reverse(); // DESC로 오므로 오래된 것 → 최신으로 뒤집는다
+  const seriesKeys = [...new Set(asc.map(t => t.subject_type + ":" + t.subject_id))];
+  const colors = ["#4a90d9", "#8e5fd9", "#3fa34d", "#e0a030", "#d9534f", "#2aa8a8", "#c2538f"];
+  const colorOf = key => colors[seriesKeys.indexOf(key) % colors.length];
+
+  const padding = 34;
+  const width = Math.max(260, padding * 2 + (asc.length - 1) * 40);
+  const height = 180;
+  const values = asc.map(t => t.cost_estimate);
+  const minV = Math.min(0, ...values), maxV = Math.max(1, ...values);
+  const xOf = i => padding + i * ((width - padding * 2) / Math.max(1, asc.length - 1));
+  const yOf = v => (height - padding) - ((v - minV) / (maxV - minV || 1)) * (height - padding * 2);
+
+  const bySeries = {};
+  asc.forEach((t, i) => {
+    const key = t.subject_type + ":" + t.subject_id;
+    (bySeries[key] = bySeries[key] || []).push({ i, v: t.cost_estimate, t });
+  });
+
+  const lines = Object.entries(bySeries).map(([key, pts]) => {
+    const color = colorOf(key);
+    const path = pts.map((p, idx) => (idx === 0 ? "M" : "L") + xOf(p.i) + "," + yOf(p.v)).join(" ");
+    const dots = pts.map(p =>
+      '<circle cx="' + xOf(p.i) + '" cy="' + yOf(p.v) + '" r="3" fill="' + color + '"><title>' +
+      esc(label(p.t.subject_type)) + " #" + p.t.subject_id + " · " + esc(p.t.created_at) + " · " + p.v +
+      '</title></circle>'
+    ).join("");
+    return (pts.length > 1 ? '<path d="' + path + '" fill="none" stroke="' + color + '" stroke-width="2"/>' : "") + dots;
+  }).join("");
+
+  const axisY = minV < 0 ? yOf(0) : height - padding;
+  const axis = '<line x1="' + padding + '" y1="' + axisY + '" x2="' + (width - padding) + '" y2="' + axisY + '" stroke="#ccc"/>' +
+    '<line x1="' + padding + '" y1="' + padding + '" x2="' + padding + '" y2="' + (height - padding) + '" stroke="#ccc"/>' +
+    '<text x="4" y="' + (padding + 4) + '" font-size="9" fill="#888">' + maxV + '</text>' +
+    '<text x="4" y="' + (height - padding + 4) + '" font-size="9" fill="#888">' + minV + '</text>';
+
+  const legend = seriesKeys.map(key => {
+    const [stype, sid] = key.split(":");
+    return '<span style="color:' + colorOf(key) + '">■</span> ' + esc(label(stype)) + " #" + sid;
+  }).join("&nbsp;&nbsp;");
+
+  return '<div style="overflow-x:auto"><svg width="' + width + '" height="' + height + '" style="max-width:none">' +
+    axis + lines + '</svg></div><p class="muted" style="font-size:0.85em">' + legend + '</p>';
+}
 
 async function renderDashboard(content) {
   const d = await api("GET", "/api/dashboard");
@@ -4104,7 +5132,7 @@ async function renderDashboard(content) {
     esc(t.created_at), esc(label(t.subject_type)), t.subject_id, t.cost_estimate,
   ]);
 
-  // ASANA_PARITY_DESIGN_PLAN.md F18(2026-10-08, Phase 4) — "팀 부하" 바
+  // 2026-10-08, Phase 4 — "팀 부하" 바
   // 차트(진행 중 Task 수를 막대 길이로 표현, 외부 차트 라이브러리 없이
   // div width%로 충분)와 "주의 필요" 목록.
   const maxWorkload = Math.max(1, ...d.workload.map(w => w.in_progress_count));
@@ -4122,6 +5150,14 @@ async function renderDashboard(content) {
     '</li>'
   ).join("") || '<p class="muted">주의가 필요한 업무가 없습니다.</p>';
 
+  // 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 1번 "Gate
+  // 점수 기반 자동 경고") — 최근 Gate 평가가 연속으로 실패한 Agent를
+  // "AI 에이전트 관리" 탭을 일일이 열어보지 않아도 여기서 바로 본다.
+  const agentBottleneckRows = (d.agent_bottlenecks || []).map(a =>
+    '<li>#' + a.agent_id + " " + esc(a.role_name) + " — 최근 " + a.recent_evaluation_count +
+    '건 연속 Gate 실패</li>'
+  ).join("") || '<p class="muted">최근 연속 Gate 실패가 있는 Agent가 없습니다.</p>';
+
   content.innerHTML =
     '<section class="card"><h2>매니저 대시보드</h2>' +
     '<ul class="muted help-list">' +
@@ -4129,17 +5165,24 @@ async function renderDashboard(content) {
     '<li>Gate 점수는 실제로 측정된 산출물이 있을 때만 값이 나옵니다(not_measured는 평균에서 제외).</li>' +
     '<li>비용 추이는 "AI 에이전트 관리"·"사람 인력 관리" 탭에서 단가를 바꿀 때마다 남는 감사로그 이력이라, 지금까지 아무도 단가를 바꾼 적이 없으면 비어 있습니다.</li>' +
     '<li>"주의 필요"는 마감일 개념이 이 플랫폼에 없어 "선행 작업 미완료로 막힘"·"결과물 2회 이상 반려"만 신호로 씁니다.</li>' +
+    '<li>"Agent 주의 필요"는 한 Agent의 가장 최근 Gate 평가 3건이 전부 하나 이상의 Gate에서 실패한 경우입니다(평가가 3건 미만이면 표본 부족으로 판단하지 않습니다) — 자동으로 오프보딩하지는 않고 신호만 띄웁니다.</li>' +
     '</ul>' +
     '<div class="dashboard-grid">' +
-    '<div class="card"><h3>팀 Agent 평균 Gate 점수(표본 ' + gs.sample_count + '건)</h3>' + gateRow +
+    '<div class="card"><h3>팀 Agent 평균 Gate 점수(표본 ' + gs.sample_count + '건)</h3>' +
+    '<div style="text-align:center">' + renderGateRadarSvg(gs.gate_averages) + '</div>' +
+    '<details class="muted"><summary>숫자로 보기</summary>' + gateRow + '</details>' +
     '<div class="stat-row"><span>평균 TCR</span><span>' + (gs.avg_tcr === null ? "-" : gs.avg_tcr.toFixed(1) + "%") + '</span></div></div>' +
     '<div class="card"><h3>대기 승인 건수</h3><p style="font-size:2em;margin:0">' + d.pending_approval_count + '</p></div>' +
     '<div class="card"><h3>현재 비용 스냅샷</h3><p style="font-size:2em;margin:0">' + d.cost_snapshot.total_cost + '</p></div>' +
     '</div>' +
     '<h3>팀 부하(진행 중인 업무 수)</h3>' + workloadRows +
     '<h3>주의 필요(' + d.bottlenecks.length + '건)</h3><ul>' + bottleneckRows + '</ul>' +
+    '<h3>Agent 주의 필요(' + (d.agent_bottlenecks || []).length + '건)</h3><ul>' + agentBottleneckRows + '</ul>' +
     '<h3>비용 변경 이력(최근 ' + d.cost_trend.length + '건)</h3>' +
+    renderCostTrendSvg(d.cost_trend) +
+    '<details class="muted"><summary>표로 보기</summary>' +
     table(["시각", "대상 종류", "대상 ID", "변경된 단가"], trendRows) +
+    '</details>' +
     '</section>';
 }
 
@@ -4154,11 +5197,50 @@ async function renderCost(content) {
     '<li>즉 "일 시켰을 때 실제 API 비용"이 아니라 "이 인력을 계속 쓰면 예상되는 인건비/도입비" 관점의 숫자입니다.</li>' +
     '</ul>' +
     table(["타입", "ID", "이름", "역할", "단가", "확정 배정 수", "합계"], report.resources.map(r => [
-      esc(label(r.type)), r.id, esc(r.name || "-"), esc(r.role), r.cost_estimate, r.confirmed_assignments, r.total_cost,
+      esc(label(r.type)), r.id, esc(r.name || r.role), esc(r.role), r.cost_estimate, r.confirmed_assignments, r.total_cost,
     ])) + "</section>";
 }
 
 /* ---------- 공정성 ---------- */
+
+// 사용자 요청(2026-10-13) — 사람 vs AI 에이전트 반려율을 숫자 두 줄
+// 대신 막대 비교로. 격차가 10%p를 넘으면 빨간색으로 강조해 "격차가
+// 있는지"가 표를 안 읽어도 바로 보이게 한다(10%p는 디자인 임의값 —
+// fairness.py의 low_sample_warning과는 별개 기준).
+function renderFairnessBarSvg(r) {
+  const padding = 76, chartW = 220, barH = 28, rowGap = 14;
+  const width = padding + chartW + 50;
+  const rows = [
+    { label: "사람", rate: r.human.rejection_rate, color: ORG_CHART_COLOR.human },
+    { label: "AI 에이전트", rate: r.agent.rejection_rate, color: ORG_CHART_COLOR.agent },
+  ];
+  const height = rowGap + rows.length * (barH + rowGap) + (r.rejection_rate_gap === null ? 0 : 20);
+
+  const bars = rows.map((row, i) => {
+    const y = rowGap + i * (barH + rowGap);
+    const nameLabel = '<text x="' + (padding - 8) + '" y="' + (y + barH / 2 + 4) +
+      '" text-anchor="end" font-size="11" font-weight="bold">' + esc(row.label) + '</text>';
+    if (row.rate === null) {
+      return nameLabel + '<text x="' + (padding + 4) + '" y="' + (y + barH / 2 + 4) +
+        '" font-size="11" fill="#999">표본 없음</text>';
+    }
+    const w = Math.round(row.rate * chartW);
+    return nameLabel +
+      '<rect x="' + padding + '" y="' + y + '" width="' + chartW + '" height="' + barH +
+      '" rx="4" fill="#eee"/>' +
+      '<rect x="' + padding + '" y="' + y + '" width="' + w + '" height="' + barH +
+      '" rx="4" fill="' + row.color + '"/>' +
+      '<text x="' + (padding + Math.max(w, 2) + 6) + '" y="' + (y + barH / 2 + 4) +
+      '" font-size="11" fill="#333">' + (row.rate * 100).toFixed(1) + '%</text>';
+  }).join("");
+
+  const gapNote = r.rejection_rate_gap === null ? "" :
+    '<text x="' + padding + '" y="' + (height - 4) + '" font-size="10" fill="' +
+    (r.rejection_rate_gap > 0.1 ? "#d9534f" : "#888") + '">격차: ' +
+    (r.rejection_rate_gap * 100).toFixed(1) + '%p</text>';
+
+  return '<svg width="' + width + '" height="' + height + '" style="max-width:100%">' + bars + gapNote + '</svg>';
+}
 
 async function renderFairness(content) {
   const r = await api("GET", "/api/fairness-report");
@@ -4169,24 +5251,35 @@ async function renderFairness(content) {
     '<li>"반려율 격차"가 크면 어느 한쪽이 불리하게 반려되는 패턴이 있을 수 있다는 신호입니다(단, 표본이 작으면 우연일 수 있음).</li>' +
     '</ul>' +
     (r.low_sample_warning ? '<p class="msg error">표본이 작아(각 10건 미만) 통계적 해석에 주의가 필요합니다.</p>' : "") +
+    renderFairnessBarSvg(r) +
+    '<details class="muted"><summary>표로 보기</summary>' +
     table(["구분", "확정", "반려", "결정됨", "반려율"], [
       ["사람", r.human.confirmed, r.human.rejected, r.human.decided, r.human.rejection_rate === null ? "-" : r.human.rejection_rate.toFixed(3)],
       ["AI 에이전트", r.agent.confirmed, r.agent.rejected, r.agent.decided, r.agent.rejection_rate === null ? "-" : r.agent.rejection_rate.toFixed(3)],
     ]) +
-    "<p>반려율 격차: " + (r.rejection_rate_gap === null ? "-" : r.rejection_rate_gap.toFixed(3)) + "</p></section>";
+    "<p>반려율 격차: " + (r.rejection_rate_gap === null ? "-" : r.rejection_rate_gap.toFixed(3)) + "</p>" +
+    '</details></section>';
 }
 
 /* ---------- 활동 기록 ---------- */
 
 async function renderAudit(content) {
+  // 사용자 보고(2026-10-13, "할일 ID를 사전에 모르면 사용 불가") — "처리자
+  // ID" 필터도 같은 문제라 활성 계정 목록(select)으로 바꾼다. 비활성
+  // 계정이 과거에 남긴 기록은 이 select로 못 고르지만(`/api/users/names`가
+  // 활성 계정만 주므로), "전체"를 고르면 필터 없이 다 보이니 완전히
+  // 막히진 않는다.
+  const users = await api("GET", "/api/users/names").catch(() => []);
   content.innerHTML =
     '<section class="card"><h2>활동 기록</h2>' +
     '<ul class="muted help-list">' +
-    '<li>이 로그는 DB 트리거로 수정·삭제 자체가 막혀 있는 append-only 기록입니다(NF10) — 다른 탭의 "삭제" 버튼으로 브리프/할 일/사람/에이전트/도구/스킬을 실제로 지워도, "무엇을 언제 누가 지웠는지"는 여기 그대로 남습니다.</li>' +
+    '<li>이 로그는 DB 트리거로 수정·삭제 자체가 막혀 있는 append-only 기록입니다 — 다른 탭의 "삭제" 버튼으로 브리프/할 일/사람/에이전트/도구/스킬을 실제로 지워도, "무엇을 언제 누가 지웠는지"는 여기 그대로 남습니다.</li>' +
     '<li>Admin·매니저만 조회할 수 있습니다.</li>' +
     '</ul>' +
     '<form class="inline" id="audit-form">' +
-    '<input id="a-actor" type="number" min="1" step="1" placeholder="처리자 ID">' +
+    '<select id="a-actor"><option value="">처리자: 전체</option>' +
+    users.map(u => '<option value="' + u.id + '">' + esc(u.username) + " (" + esc(label(u.role)) + ")</option>").join("") +
+    '</select>' +
     '<input id="a-subject" placeholder="대상 종류(예: brief, assignment)">' +
     '<button class="primary" type="submit">조회</button></form>' +
     '<div id="audit-result"></div></section>';

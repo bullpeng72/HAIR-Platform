@@ -2,8 +2,8 @@
 초기화 기능 추가").
 
 **범위(사용자가 명시적으로 선택)**: 도구/스킬 Pool + 사람/AI 에이전트 Pool +
-업무 요청/할 일(brief/task)까지. **활동 기록(감사로그)은 제외** — NF10
-(append-only)에 따라 `db.py`의 DB 트리거가 UPDATE/DELETE 자체를 막고
+업무 요청/할 일(brief/task)까지. **활동 기록(감사로그)은 제외** —
+append-only 원칙에 따라 `db.py`의 DB 트리거가 UPDATE/DELETE 자체를 막고
 있어 애초에 삭제 API를 만들 수 없다(만들어도 트리거가 막는다).
 
 **설계 원칙**:
@@ -15,7 +15,7 @@
    source_job_item_id`처럼 지워질 행을 참조하는 컬럼은 먼저 NULL로
    비워서(그 자체 삭제 대상이 아니므로) FK 위반을 피한다.
 2. **진행 중인 배정은 보호한다** — `status='confirmed'`인 배정이 걸려
-   있는 task/brief/human/agent는 삭제를 막는다(먼저 F6/F7 화면에서
+   있는 task/brief/human/agent는 삭제를 막는다(먼저 배정/결재 화면에서
    배정을 정리하도록 유도) — 조직도가 조용히 깨지는 것을 막기 위한
    안전장치다. `status='requested'`(아직 승인 전)나 `'superseded'`
    (이미 지나간 이력)는 막지 않는다.
@@ -110,7 +110,7 @@ def _delete_deliverables_for_tasks(
     conn: sqlite3.Connection, task_ids: list[int]
 ) -> int:
     """**실측으로 발견한 갭(2026-09-28, "Phase1~4까지... 분석하고
-    개선해줘" 리뷰 중)**: 이 함수가 처음 작성됐을 때(§19)는 `deliverables`
+    개선해줘" 리뷰 중)**: 이 함수가 처음 작성됐을 때는 `deliverables`
     테이블이 아직 없었다 — Phase 1-4가 그 뒤에 추가한 `deliverables`/
     `deliverable_comments`/`agent_evaluations`/`agent_execution_jobs`를
     이 모듈이 몰라서, "배정이 superseded된 뒤(더 이상 confirmed가 아님)
@@ -158,8 +158,8 @@ def _delete_deliverables_for_tasks(
 def delete_task(conn: sqlite3.Connection, actor_id: int, task_id: int) -> None:
     """할 일(task) 하나를 그 아래 assignments·job_items·deliverables까지
     전부 지운다. `confirmed` 상태 배정이 있으면 막는다(먼저 정리하도록
-    유도) — deliverable 존재 자체는 막지 않는다(§19 설계 원칙 1번,
-    "완전한 연쇄 삭제"를 그대로 따른다)."""
+    유도) — deliverable 존재 자체는 막지 않는다("완전한 연쇄 삭제" 설계
+    원칙을 그대로 따른다)."""
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
@@ -285,7 +285,7 @@ def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None
 
 
 def seed_demo_data(conn: sqlite3.Connection, actor_id: int) -> dict:
-    """ASANA_PARITY_DESIGN_PLAN.md F20(2026-10-08, Phase 5) — `POST
+    """2026-10-08, Phase 5 — `POST
     /api/demo/seed`(admin 전용). 샘플 Brief 1건+Task 2건+Agent 1개+
     Human 1명을 한 번에 만들어 신규 관리자가 빈 화면에서 뭘 해야 할지
     막막해하지 않고 바로 체험할 수 있게 한다 — 이 파일 서두의 "데이터

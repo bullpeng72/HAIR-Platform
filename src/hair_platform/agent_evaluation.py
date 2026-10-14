@@ -1,6 +1,6 @@
-"""Phase 3 — Agent 산출물 Gate A-G 평가 인라인 연결(`docs/HAIR_MASTER_PLAN.md` §5,
-사용자 요청 2026-09-28 "Phase 3 진행해줘"). 로드맵 3번 항목 — 기존 `eval_wiring.py`
-(SPEC.md §12 시절 만든 실행 예시/probe 스크립트, `python -m hair_platform.eval_wiring`로
+"""Phase 3 — Agent 산출물 Gate A-G 평가 인라인 연결(사용자 요청 2026-09-28
+"Phase 3 진행해줘"). 로드맵 3번 항목 — 기존 `eval_wiring.py`
+(수동 실행 예시/probe 스크립트, `python -m hair_platform.eval_wiring`로
 수동 실행)와 달리, 이 모듈은 `deliverables.execute_agent_for_task()` 안에서 매
 Agent 실행마다 자동으로 호출되는 실제 프로덕션 배선이다.
 
@@ -29,10 +29,10 @@ Agent 실행은 도구 호출이 없는 단발 LLM 호출이라 Gate B(행동 �
 이건 버그가 아니라 "측정할 신호가 없다"는 정직한 표시다. Gate G(설명가능성)는
 `execute_agent_for_task()`가 짜는 프롬프트가 "판단 근거를 명시하라"고 요구하지
 않으므로 낮게 나올 가능성이 높다 — 이번 스코프는 "평가 인프라 연결"이지 "Agent
-응답 품질 개선"이 아니라서 프롬프트는 건드리지 않았다(`docs/LIMITS.md` §24).
+응답 품질 개선"이 아니라서 프롬프트는 건드리지 않았다.
 
 **`agent_pool.performance_score`와의 관계**: 기존 `performance.set_agent_performance()`
-는 관리자 수동 입력 전용으로 남긴다(§5-2 "완전 자동 대체 아님, 구분해서 보여준다") —
+는 관리자 수동 입력 전용으로 남긴다("완전 자동 대체 아님, 구분해서 보여준다") —
 이 모듈은 그 컬럼을 갱신하지 않는다. 자동 측정치는 `agent_evaluations` 테이블에서
 `aggregate_agent_score()`로 별도 조회한다.
 """
@@ -195,7 +195,7 @@ def latest_evaluation(conn: sqlite3.Connection, deliverable_id: int) -> dict | N
 
 
 def aggregate_agent_score(conn: sqlite3.Connection, agent_id: int) -> dict | None:
-    """§5-2 — `agent_pool.performance_score`(관리자 수동)와 별도로 보여줄
+    """`agent_pool.performance_score`(관리자 수동)와 별도로 보여줄
     자동 측정 평균값. 그 Agent가 만든 모든 deliverable의 최신 평가를 모아
     Gate별 평균 점수(측정된 것만)와 평균 TCR을 낸다. 평가 이력이 없으면
     None(수동 값만 있고 자동 값은 "아직 없음"을 의미)."""

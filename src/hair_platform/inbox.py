@@ -1,21 +1,21 @@
 """통합 인박스 — "내게 필요한 조치"를 한 화면에(사용자 요청, 2026-09-28,
-Phase 5 — `docs/HAIR_MASTER_PLAN.md` §6 "통합 인박스": "결재 대기·내 업무
+Phase 5 — "결재 대기·내 업무
 응답 대기·낮은 Gate 점수 경고를 한 곳에"). 이미 Phase 1-4가 만든 데이터
 (`agent_execution_jobs`, `agent_evaluations`, `approvals`)를 그대로
 조회해 조합할 뿐, 새 상태를 만들지 않는다.
 
 **3종 항목**:
 - `approval_pending` — `approvals.list_inbox()` 그대로(Admin/매니저 전용,
-  ADR 결정 3-A 자기승인 방지 포함).
+  자기승인 방지 포함).
 - `execution_failed` — 내 "내 업무" task 중 가장 최근 Agent 실행이
-  실패로 끝난 것(§25/§27이 만든 `agent_execution_jobs`/친절한 에러
+  실패로 끝난 것(`agent_execution_jobs`/친절한 에러
   메시지를 그대로 재사용).
 - `low_gate_score` — 내 "내 업무" task 안에서 아직 `pending_review`인
-  deliverable 중 Gate A-G 하나라도 `passed: false`인 것(§24가 만든
-  `agent_evaluations`를 그대로 재사용). 이미 승인/반려된 건 "조치가 끝난
+  deliverable 중 Gate A-G 하나라도 `passed: false`인 것(`agent_evaluations`를
+  그대로 재사용). 이미 승인/반려된 건 "조치가 끝난
   일"이라 제외한다.
 
-**정직한 한계**: `approvals` 테이블엔 `created_at`이 없어(F7 설계 당시
+**정직한 한계**: `approvals` 테이블엔 `created_at`이 없어(설계 당시
 부터) 3종을 하나의 타임스탬프로 완전히 통합 정렬할 수 없다 — 타입별로
 묶어서 반환하고(결재 → 실행 실패 → 낮은 Gate 순), 각 타입 내부는 최신
 순으로 정렬한다. 완전한 시간순 통합이 필요해지면 `approvals`에
@@ -49,6 +49,13 @@ def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
                 "approval_id": a["id"],
                 "subject_type": a["subject_type"],
                 "subject_id": a["subject_id"],
+                # 사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나
+                # 에이전트명이 표시되지 않는 경우도 있어") — approvals_mod.
+                # describe_subject()와 같은 이유로 추가(결재 화면과 동일한
+                # 보강을 인박스에도 적용).
+                **approvals_mod.describe_subject(
+                    conn, a["subject_type"], a["subject_id"]
+                ),
             }
         )
 

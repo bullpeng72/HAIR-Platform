@@ -1,17 +1,17 @@
-"""실제 CrewAI 연동 — ADR.md 결정 10·11(사용자 요청, 2026-09-26, 2~3차).
+"""실제 CrewAI 연동 — 사용자 요청, 2026-09-26, 2~3차.
 
-이전까지 F4(Agent 생성)는 stub(무료)와 simple_llm(1회성 LLM 호출)만 있었다.
+이전까지 Agent 생성은 stub(무료)와 simple_llm(1회성 LLM 호출)만 있었다.
 `grep -rniE "crewai" src/`로 확인한 결과 실행 코드에 CrewAI가 실제로 들어간
 적이 없었다(`agents_yaml_snippet` 필드는 CrewAI 흉내만 낸 문자열). 이 모듈이
 그 갭을 실제로 메운다.
 
 **두 가지 경로**:
-1. `crewai_agent_generator()` — F4 생성 시점에 단일 Agent+Task+Crew(sequential)
-   를 실제로 구성해 kickoff한다(결정 10). `jobs.py`의 기존 `GeneratorFn`
+1. `crewai_agent_generator()` — 생성 시점에 단일 Agent+Task+Crew(sequential)
+   를 실제로 구성해 kickoff한다. `jobs.py`의 기존 `GeneratorFn`
    계약(role_name, required_skills) -> dict)을 그대로 따르므로 stub/simple_llm과
    동일한 방식으로 갈아끼울 수 있다.
 2. `run_crew()` — 여러 개의 이미 온보딩된 Agent를 하나의 Crew로 묶어 실제로
-   협업 실행한다(결정 11) — `Task.context`로 앞 Agent의 산출물을 다음 Agent에게
+   협업 실행한다 — `Task.context`로 앞 Agent의 산출물을 다음 Agent에게
    전달하고(sequential), `allow_delegation=True`로 Agent가 동료에게 실제로
    위임/질문할 수 있게 한다. 위임이 실제로 일어났는지는 CrewAI의 이벤트버스에서
    "Delegate work to coworker"/"Ask question to coworker" 도구 사용 이벤트를
@@ -30,15 +30,15 @@ mock해야 한다 — 그보다 안쪽(`LLM.call` 등)을 mock하면 CrewAI 내�
 로직이 그걸 우회해 실제 네트워크 호출로 새어나갈 수 있다(이 세션에서 실제로
 한 번 발생시켜 확인함).
 
-**MCP(외부 도구) 연동(ADR 결정 10, 사용자 요청 2026-09-27)**: `run_crew()`에서
+**MCP(외부 도구) 연동(사용자 요청 2026-09-27)**: `run_crew()`에서
 각 Agent의 `agent_pool.mcp_servers`(`AgentModelConfig.mcp_servers`로 설정)에
 따라 `crewai-tools`의 `MCPServerAdapter`로 실제 MCP 서버에 접속해 도구를
-붙인다(`_mcp_tools()`). `crewai_agent_generator()`(F4 단일 생성)에는 아직
+붙인다(`_mcp_tools()`). `crewai_agent_generator()`(단일 생성)에는 아직
 연결하지 않았다 — 그 시점엔 아직 `agent_pool` row가 없어 MCP 설정을 읽어올
 곳이 없기 때문이다(온보딩 이후 `run_crew()`에서만 유효, 오픈 이슈로 명시).
 `MCPServerAdapter`는 생성 시점에 실제로 네트워크/프로세스 접속을 시도하므로,
 이 환경처럼 접속 가능한 MCP 서버가 없으면 mock 경계(`crewai_tools.
-MCPServerAdapter` 클래스 자체)로만 검증할 수 있다 — `docs/LIMITS.md` 참고.
+MCPServerAdapter` 클래스 자체)로만 검증할 수 있다.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ DELEGATION_TOOL_NAMES = {"Delegate work to coworker", "Ask question to coworker"
 # 사용자 결정(2026-09-29, "CrewAI 위임 캡처가 CrewAI 내부 문자열에
 # 하드코딩돼 있는 리스크 — 지금 방어 로직을 추가") — 위 정확한 문자열이
 # CrewAI 버전업으로 바뀌면 위임이 실제로 발생해도 `delegations`가 계속
-# 비어 있는 "조용한 실패"가 된다(docs/LIMITS.md §12). 정확한 이름 매칭을
+# 비어 있는 "조용한 실패"가 된다. 정확한 이름 매칭을
 # 우선하되, 대소문자·표기 변형(예: "co-worker")까지 놓치지 않도록 키워드
 # 기반 완화 매칭을 fallback으로 둔다 — 이 기능의 목적(위임 발생 여부의
 # 정직한 기록) 상 오탐보다 미탐이 훨씬 치명적이라는 판단.
@@ -113,7 +113,7 @@ def _resolve_delegation_target(tool_args, known_roles: list[str]) -> str | None:
     return raw.strip()
 
 
-# ADR 결정 11 한계 섹션이 "반드시 걸어야 한다"고 명시했던 상한(사용자 요청,
+# "반드시 걸어야 한다"고 명시했던 상한(사용자 요청,
 # 2026-09-27, "crewai 기능 적절히 적용됐는지 분석" 리뷰에서 실제로 미반영 상태를
 # 발견해 반영함). CrewAI Agent 기본값(25)보다 보수적으로 잡는다 — 우리는 Crew
 # 전체 Agent에 allow_delegation=True를 켜서 위임 왕복이 겹칠 수 있기 때문이다.
@@ -123,7 +123,7 @@ DELEGATION_MAX_ITER = 10
 def _mcp_tools(stack: ExitStack, mcp_servers: list[dict]) -> list:
     """`AgentModelConfig.mcp_servers`(Agent별 개별 MCP 설정)에 실제로
     접속해 CrewAI 도구 목록을 모은다 — 접속 로직 자체는
-    `pool_registry.connect_mcp_tools()`에 있다(ADR 결정 12 이후 Tool Pool
+    `pool_registry.connect_mcp_tools()`에 있다(Tool Pool
     경로와 공유). `mcp_servers`가 비어 있으면 `crewai_tools`/`mcp`를 아예
     import하지 않는다(설치 안 해도 CrewAI의 다른 경로는 그대로 동작해야
     하므로 — 지연 import 원칙)."""
@@ -142,7 +142,7 @@ def _skill_based_tools(
     skills: list[str],
     agent_id: int | None = None,
 ) -> list:
-    """`skill_pool`/`agent_tool_links`(ADR 결정 12, 사용자 요청 2026-09-27
+    """`skill_pool`/`agent_tool_links`(사용자 요청 2026-09-27
     — "tool_pool·skill_pool 테이블도 실제로 구현해줘")를 조회해 실제
     CrewAI Tool을 붙인다 — `pool_registry.resolve_pool_tools()`에 위임한다.
 
@@ -188,22 +188,91 @@ def _static_augmentation(
     return "\n\n".join(parts) + f"\n\n요청: {description}"
 
 
-def _crewai_llm(provider: str, model: str):
+def _crewai_llm(provider: str, model: str, temperature: float | None = None):
     from crewai import LLM  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
 
+    # temperature(2026-10-13, "생성된 CrewAI 에이전트를 선택해 Finetuning
+    # 하는 기능") — Agent별 `tuning_config.temperature`가 있을 때만 그
+    # Agent 전용 LLM 인스턴스를 새로 만든다(없으면 호출자가 Crew 전체가
+    # 공유하는 기존 LLM 인스턴스를 그대로 쓴다 — 매번 새로 안 만들어도
+    # 되는 경우까지 쪼갤 이유가 없다).
+    kwargs = {} if temperature is None else {"temperature": temperature}
     if provider == "ollama":
         base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        return LLM(model=f"ollama/{model}", base_url=base_url)
-    return LLM(model=f"{provider}/{model}")
+        return LLM(model=f"ollama/{model}", base_url=base_url, **kwargs)
+    return LLM(model=f"{provider}/{model}", **kwargs)
 
 
-def _agent_goal(role_name: str) -> str:
-    return f"'{role_name}' 역할로서 주어진 업무를 실무에 바로 쓸 수 있는 수준으로 완수한다."
+# 사용자 요청(2026-10-13, "위 1~2까지 반영") — Gate A-G는 산출물이 이미
+# 저장된 *뒤에* 사후 평가한다. CrewAI 자체 `Task.guardrail`로 명백히
+# 빈/너무 짧은 산출물은 Crew 실행 *안에서* 바로 걸러 자동 재시도시킨다
+# (CrewAI가 `guardrail_max_retries`만큼 알아서 재시도 — 기본값 그대로
+# 둔다). 길이만 보는 가장 단순한 품질 바닥선이고, 내용의 적절성까지
+# 보장하진 않는다 — Gate A-G의 역할을 대체하지 않고 그 앞단의 저렴한
+# 1차 방어선일 뿐이라는 걸 명시해둔다.
+_GUARDRAIL_MIN_CHARS = 20
 
 
-def _agent_backstory(role_name: str, skills: list[str]) -> str:
+def _min_length_guardrail(output):
+    # 실측으로 발견한 버그(2026-10-13) — 리턴 타입 annotation을 일부러
+    # 안 붙인다. `crewai/task.py`의 guardrail 검증기는
+    # `inspect.signature(v).return_annotation`을 그대로 비교하는데, 이
+    # 파일은 `from __future__ import annotations`라 어떤 annotation을
+    # 적어도 **런타임엔 평가 안 된 문자열**로 남는다(PEP 563 지연 평가 —
+    # `inspect.signature()`는 기본적으로 그 문자열을 다시 실제 타입으로
+    # 풀어주지 않는다). `Tuple[bool, Any]`를 정확히 써봐도 검증기 눈엔
+    # 그냥 문자열이라 매번 "If return type is annotated, it must be
+    # Tuple[bool, Any]"로 거부당했다(실제 Crew 실행을 걸어보기 전까진
+    # 안 드러나는 함정 — `Task(...)` 생성 시점에만 터진다). 검증기 자체가
+    # "annotation이 있으면 검사하되 없으면 요구하지 않는다"고 돼 있어,
+    # annotation을 아예 생략하는 게 유일하게 안전한 해법이다.
+    text = (output.raw or "").strip()
+    if len(text) < _GUARDRAIL_MIN_CHARS:
+        return False, (
+            f"산출물이 비어있거나 너무 짧습니다(최소 {_GUARDRAIL_MIN_CHARS}자 "
+            "필요) — 역할에 맞는 구체적인 내용으로 다시 작성하세요."
+        )
+    return True, output.raw
+
+
+def _agent_goal(role_name: str, skills: list[str]) -> str:
+    """사용자 요청(2026-10-13, "goal도 skill 기반으로 보강") — 지금까지
+    모든 Agent가 역할명만 다를 뿐 완전히 동일한 목표 문장을 썼다(스킬이
+    몇 개든, 어떤 스킬이든 goal에는 전혀 반영되지 않았다). `backstory`
+    (`_agent_backstory()`)는 이미 스킬 "설명 전문"을 그대로 옮겨 "각
+    스킬이 구체적으로 무엇을 하라는 것인지"를 전달하므로, `goal`에
+    같은 텍스트를 또 넣는 건 프롬프트만 불리고 새 정보가 없다(CrewAI의
+    role/goal/backstory 관례상 goal은 "무엇을 달성해야 하는가"라는
+    목표 자체를 말하는 자리다). 그래서 goal에는 스킬 "설명"이 아니라
+    "스킬이 정한 완료 기준·절차를 반드시 지키라"는 목표를 얹는다 —
+    예: 절차 스킬을 가진 Agent가 HITL 승인 단계를 임의로 건너뛰는 것을
+    막는 효과."""
+    base = f"'{role_name}' 역할로서 주어진 업무를 실무에 바로 쓸 수 있는 수준으로 완수한다."
+    if not skills:
+        return base
+    skill_text = ", ".join(skills)
+    return (
+        f"{base} 보유 스킬({skill_text})이 요구하는 절차와 완료 기준을 "
+        "정확히 따르고, 산출물 형식이나 승인(HITL) 단계를 임의로 생략하지 않는다."
+    )
+
+
+def _agent_backstory(
+    conn: sqlite3.Connection, role_name: str, skills: list[str]
+) -> str:
+    """`conn`(2026-10-13, "skill을 적극 활용") — `llm.
+    system_prompt_for_role()`과 같은 이유로 스킬 "이름"만 나열하던 것에
+    `skill_pool.description`(절차/지식 안내문)을 덧붙인다 — CrewAI
+    Agent 루프에서는 이게 `backstory`로 들어가 매 Task마다 참고된다."""
     skill_text = ", ".join(skills) if skills else "특별히 명시된 스킬 없음"
-    return f"소프트웨어 개발팀의 '{role_name}'로서 보유 역량은 {skill_text}이다."
+    backstory = f"소프트웨어 개발팀의 '{role_name}'로서 보유 역량은 {skill_text}이다."
+    knowledge = pool_registry.skill_knowledge_text(conn, skills)
+    return (
+        f"{backstory}\n\n보유 역량 상세({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n"
+        f"{knowledge}"
+        if knowledge
+        else backstory
+    )
 
 
 def crewai_agent_generator(
@@ -213,13 +282,13 @@ def crewai_agent_generator(
     provider: str | None = None,
     model: str | None = None,
 ) -> dict:
-    """F4 생성 시점에 실제 CrewAI Agent+Task+Crew(단일, sequential)를 구성해
+    """생성 시점에 실제 CrewAI Agent+Task+Crew(단일, sequential)를 구성해
     kickoff한다. `jobs.GeneratorFn`과 같은 시그니처라 그대로 갈아끼울 수 있다.
 
     `conn`은 이 Agent가 vectordb/graphdb 스킬을 가졌을 때 실제 CrewAI
     Tool(`_skill_based_tools()`)을 붙이기 위해 필요하다(사용자 요청,
     2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘" —
-    `GeneratorFn` 계약 자체에 conn을 추가해 F4 생성 시점부터 이 Agent가
+    `GeneratorFn` 계약 자체에 conn을 추가해 생성 시점부터 이 Agent가
     쓸 도구를 가지고 태어나게 했다)."""
     from crewai import Agent, Crew, Process, Task
 
@@ -227,13 +296,13 @@ def crewai_agent_generator(
     crew_llm = _crewai_llm(resolved_provider, resolved_model)
 
     # Tool Pool 항목 중 mcp_stdio/mcp_remote 종류는 접속을 유지했다가 정리해야
-    # 해서 ExitStack이 필요하다(ADR 결정 12) — native(VectorDB/GraphDB)는
+    # 해서 ExitStack이 필요하다 — native(VectorDB/GraphDB)는
     # 필요 없지만 같은 해석 경로(_skill_based_tools)를 쓰므로 통일한다.
     with ExitStack() as pool_stack:
         agent = Agent(
             role=role_name,
-            goal=_agent_goal(role_name),
-            backstory=_agent_backstory(role_name, required_skills),
+            goal=_agent_goal(role_name, required_skills),
+            backstory=_agent_backstory(conn, role_name, required_skills),
             llm=crew_llm,
             allow_delegation=False,  # 단일 Agent Crew라 위임할 동료가 없다.
             tools=_skill_based_tools(conn, pool_stack, required_skills),
@@ -248,6 +317,7 @@ def crewai_agent_generator(
             ),
             expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
             agent=agent,
+            guardrail=_min_length_guardrail,
         )
         crew = Crew(
             agents=[agent], tasks=[task], process=Process.sequential, verbose=False
@@ -289,7 +359,7 @@ def run_crew(
     model: str | None = None,
     manager_agent_id: int | None = None,
 ) -> dict:
-    """ADR 결정 11 — 여러 온보딩된 Agent를 CrewAI Crew로 묶어 실제 협업
+    """여러 온보딩된 Agent를 CrewAI Crew로 묶어 실제 협업
     실행한다. N번째 `agent_ids`가 N번째 `task_descriptions`를 맡는다.
 
     `process="sequential"`이면 Task.context로 앞 Agent의 산출물이 다음
@@ -305,7 +375,7 @@ def run_crew(
     가능하게 한다 — 실제로 위임이 발동했는지는 CrewAI 이벤트버스에서
     캡처해 정직하게 기록한다(추측 아님).
 
-    `memory=True`(ADR 결정 10에서 약속했으나 누락됐던 부분, 2026-09-27
+    `memory=True`(약속했으나 누락됐던 부분, 2026-09-27
     리뷰에서 발견해 반영함)로 Crew 전체가 이전 실행 맥락을 기억한다 —
     **주의**: CrewAI의 기본 메모리 임베더는 provider와 무관하게 OpenAI
     임베딩 API를 쓴다(Anthropic은 임베딩 API 자체가 없다). 즉
@@ -344,23 +414,46 @@ def run_crew(
     resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
     crew_llm = _crewai_llm(resolved_provider, resolved_model)
 
-    # ADR 결정 10(MCP, 2026-09-27) — MCPServerAdapter는 생성 시점에 실제로
+    # 사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해 Finetuning
+    # 하는 기능") — Agent별 `tuning_config`(CrewAI Agent/LLM 동작
+    # 파라미터, `models.AgentTuningConfig` 참고)를 읽어온다. `temperature`
+    # 만 LLM 쪽 필드라 따로 빼고, 나머지(max_iter/max_rpm/
+    # max_execution_time/max_retry_limit/reasoning/allow_code_execution/
+    # respect_context_window)는 `Agent(**...)`에 그대로 스프레드할 수
+    # 있는 키 이름이다 — `AgentTuningConfig` 필드명을 CrewAI `Agent`
+    # 생성자 키워드와 **의도적으로 동일하게** 설계해 변환 없이 바로 쓴다.
+    # `max_iter`는 지정 안 하면 기존처럼 `DELEGATION_MAX_ITER`로
+    # 떨어진다(여기서만 특별 취급 — 위임 Agent 루프가 너무 일찍 끊기지
+    # 않게 하려고 원래부터 CrewAI 기본값보다 높여 쓰고 있었다).
+    def _agent_kwargs_for(row: sqlite3.Row) -> dict:
+        tuning = json.loads(row["tuning_config"])
+        temperature = tuning.pop("temperature", None)
+        tuning.setdefault("max_iter", DELEGATION_MAX_ITER)
+        tuning["llm"] = (
+            crew_llm
+            if temperature is None
+            else _crewai_llm(resolved_provider, resolved_model, temperature=temperature)
+        )
+        return tuning
+
+    agent_kwargs_by_id = {row["id"]: _agent_kwargs_for(row) for row in rows}
+
+    # MCP, 2026-09-27 — MCPServerAdapter는 생성 시점에 실제로
     # 접속을 시도하므로, Crew 실행이 끝날 때까지 연결을 유지했다가 정리하기
     # 위해 ExitStack으로 감싼다.
     with ExitStack() as mcp_stack:
         crewai_agents = [
             Agent(
                 role=row["role_name"],
-                goal=_agent_goal(row["role_name"]),
+                goal=_agent_goal(row["role_name"], json.loads(row["skill_tags"])),
                 backstory=_agent_backstory(
-                    row["role_name"], json.loads(row["skill_tags"])
+                    conn, row["role_name"], json.loads(row["skill_tags"])
                 ),
-                llm=crew_llm,
-                allow_delegation=True,  # ADR 결정 11 — 정적 릴레이가 아니라 실제 협업
-                max_iter=DELEGATION_MAX_ITER,
-                # AgentModelConfig.mcp_servers(Agent별 개별 MCP 설정, ADR
-                # 결정 10) + skill_pool/agent_tool_links(Tool Pool, ADR 결정
-                # 12) — 둘 다 실제 CrewAI Tool이라 같은 리스트에 합친다.
+                **agent_kwargs_by_id[row["id"]],
+                allow_delegation=True,  # 정적 릴레이가 아니라 실제 협업
+                # AgentModelConfig.mcp_servers(Agent별 개별 MCP 설정)
+                # + skill_pool/agent_tool_links(Tool Pool) — 둘 다 실제
+                # CrewAI Tool이라 같은 리스트에 합친다.
                 tools=(
                     _mcp_tools(mcp_stack, json.loads(row["mcp_servers"]))
                     + _skill_based_tools(
@@ -402,6 +495,7 @@ def run_crew(
                     expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
                     agent=crewai_agents[i],
                     context=context,
+                    guardrail=_min_length_guardrail,
                 )
             )
 
@@ -520,6 +614,12 @@ def run_crew(
             {
                 "agent_id": row["id"],
                 "role_name": row["role_name"],
+                # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
+                # CrewAI에 실제로 넘기는 `role=`(위 Agent() 생성부)은
+                # 그대로 role_name을 쓴다(위임 라우팅·known_roles 매칭이
+                # 이 문자열 그대로와 일치해야 해서 건드리면 안 됨).
+                # 화면 표시용으로만 지정한 이름을 따로 얹는다.
+                "name": row["name"],
                 "output": task_output.raw,
             }
         )
@@ -529,6 +629,7 @@ def run_crew(
             {
                 "agent_id": manager_row["id"],
                 "role_name": manager_row["role_name"],
+                "name": manager_row["name"],
                 "output": None,  # 매니저는 조율·위임만 하고 자기 몫의 산출물은 없다
             }
         )
@@ -544,7 +645,7 @@ def run_crew(
             "process": process,
             "delegation_count": len(delegations),
             # CrewAI가 실제로 집계해주는 토큰 사용량 — 참고용 기록일 뿐
-            # F10 비용 조회(cost.py)의 cost_estimate 계산에는 아직 연결
+            # 비용 조회(cost.py)의 cost_estimate 계산에는 아직 연결
             # 안 함(2026-09-27, "CrewAI 개념을 제대로 활용하는지 확인" 요청
             # 으로 확인: cost.py는 수동입력만 쓰는 게 1차 범위로 이미
             # 문서화돼 있다 — 자동 비용 갱신은 그 스코프를 벗어나는 더 큰
@@ -588,8 +689,14 @@ def run_crew(
         "agents": per_agent,
         "gate_scores": eval_result["gate_scores"],
         "tcr": eval_result["tcr"],
-        # SCREEN_UX_BENCHMARK_PROPOSAL.md §4-A(2026-10-12) — CrewAI가 이미
-        # 집계해주는 값인데 지금까지 audit_log 참고 기록에만 남고 API
+        # 사용자 요청(2026-10-14, "대화창에 사용중인 모델이 명시되도록") —
+        # 크루 전체가 공유하는 provider/model(개별 Agent 저장값과는 무관,
+        # 위 `resolved_provider`/`resolved_model` 호출부 참고)을 호출자가
+        # 메시지에 표시용으로 기록할 수 있게 반환값에 포함한다.
+        "resolved_provider": resolved_provider,
+        "resolved_model": resolved_model,
+        # 사용자 요청(2026-10-12, "UI 개선 잔여 작업 진행해줘") — CrewAI가
+        # 이미 집계해주는 값인데 지금까지 audit_log 참고 기록에만 남고 API
         # 응답엔 빠져 있어 화면에 보여줄 수가 없었다. 비용/실행시간은
         # CrewAI가 집계해주지 않아(UsageMetrics에 없음) 여기 포함하지
         # 않는다 — 없는 값을 지어내지 않는다.
@@ -611,12 +718,12 @@ def run_crew_for_team(
     """사용자 요청(2026-10-07, "crew 실행에서 묶인 에이전트 그룹의 경우
     하나의 그룹만 가능한 구조인데, 복수 그룹 가능하도록 개선, 이 그룹이
     전체 업무에서 사람-에이전트 연동이 가능한 구조인지 확인") —
-    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 기존
+    Phase 3. 기존
     `run_crew()`(즉석 실행 — `agent_ids`를 매번 직접 고름, `task_id` 없이
     결과가 `agent_pool.last_output`에만 남고 끝)와 달리, 이 함수는 **팀
     (teams.py, "등록→재사용" 그룹)을 실제 할 일(task)의 맥락에서** 실행한다
-    — "복수 그룹"은 한 할 일에 팀을 여러 개 배정할 수 있다는 뜻이다(§61
-    "다중 confirmed 허용"으로 이미 가능했다 — team 배정도 resource_type별
+    — "복수 그룹"은 한 할 일에 팀을 여러 개 배정할 수 있다는 뜻이다("다중
+    confirmed 허용"으로 이미 가능했다 — team 배정도 resource_type별
     제한 없이 여러 건 confirmed로 공존한다). 이 함수 자체는 그중 **한
     팀**을 실행한다(호출자가 어느 팀인지 고른다 — 사용자 결정, "팀 하나를
     골라서 실행").
@@ -632,10 +739,10 @@ def run_crew_for_team(
 
     사람-에이전트 연동: 이 함수가 반환하는 `agents`(Agent별 산출물)는
     호출자(`deliverables.run_team_crew_job()`)가 각각 `deliverables`
-    (author_type='agent') + F7 결재 체인으로 저장한다 — 그 순간부터
+    (author_type='agent') + 결재 체인으로 저장한다 — 그 순간부터
     팀 리더·팀원(사람)이 같은 할 일의 협업 워크스페이스에서 결과물을
     보고, 댓글을 달고, 승인/반려할 수 있다. 즉 "즉석 실행"이던 Crew가
-    처음으로 업무 파이프라인(F5-F7, 협업 워크스페이스, Gate A-G)에
+    처음으로 업무 파이프라인(조직도·배정, 협업 워크스페이스, Gate A-G)에
     연결된다 — 지금까지 `run_crew()`가 완전히 격리돼 있던 것과의 핵심
     차이."""
     team = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()

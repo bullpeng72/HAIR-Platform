@@ -1,4 +1,4 @@
-"""Phase 36 — SCREEN_UX_BENCHMARK_PROPOSAL.md Phase 1 구현(2026-10-12,
+"""Phase 36 — UI 개선 로드맵 Phase 1 구현(2026-10-12,
 "Phase 1 (A)(B)(H1)(H2)(I5)부터 구현 시작해줘").
 
 (A) `run_crew()`가 CrewAI의 토큰 사용량(`token_usage`)을 API 응답에 포함한다
@@ -139,7 +139,7 @@ def test_gc_all_work_is_admin_manager_only(client_and_conn):
 
 def test_gc_all_work_returns_org_wide_confirmed_assignments(client_and_conn):
     """member1 혼자서는 안 보이는, 다른 사람에게 확정 배정된 task까지
-    admin이 `/api/all-work`로는 전부 볼 수 있어야 한다(§4-B "전체 조직
+    admin이 `/api/all-work`로는 전부 볼 수 있어야 한다("전체 조직
     범위") — `/api/my-work`는 여전히 당사자만 좁혀 보여준다(회귀 없음)."""
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")

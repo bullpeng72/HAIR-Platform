@@ -16,7 +16,7 @@ ContentType = Literal["text", "markdown", "html", "code"]
 GeneratorFramework = Literal["stub", "simple_llm", "crewai"]
 CrewProcess = Literal["sequential", "hierarchical"]
 McpTransport = Literal["sse", "streamable-http"]
-ToolPoolKind = Literal["mcp_stdio", "mcp_remote", "native"]
+ToolPoolKind = Literal["mcp_stdio", "mcp_remote", "native", "custom_python"]
 AugmentationMode = Literal["tool", "always", "none"]
 
 
@@ -26,7 +26,7 @@ class LoginRequest(BaseModel):
 
 
 class UserCreate(BaseModel):
-    """조직도(F5/F7) 코드 재점검 후 신규 — `users.manager_id`를 Web UI로 채울 수 있는
+    """조직도 코드 재점검 후 신규 — `users.manager_id`를 Web UI로 채울 수 있는
     유일한 경로였던 부트스트랩 스크립트 의존을 없앤다(ADMIN 전용)."""
 
     username: str
@@ -36,7 +36,7 @@ class UserCreate(BaseModel):
 
 
 class ManagerUpdate(BaseModel):
-    """F7 결재라인 자동라우팅이 참조하는 `users.manager_id`를 갱신한다(ADMIN 전용)."""
+    """결재라인 자동라우팅이 참조하는 `users.manager_id`를 갱신한다(ADMIN 전용)."""
 
     manager_id: int | None = None
 
@@ -53,20 +53,20 @@ class UserPasswordReset(BaseModel):
 class UserStatusUpdate(BaseModel):
     """사용자 요청(2026-09-29, "사용자 삭제 기능 필요") — `users.id`는
     audit_log/assignments/approvals/human_pool.user_id에서 NOT NULL로
-    참조돼 하드 삭제가 불가능하다(NF10 감사 이력 보존과 충돌). Human/
+    참조돼 하드 삭제가 불가능하다(감사 이력 보존과 충돌). Human/
     Agent Pool의 오프보딩과 같은 "비활성화" 방식을 쓴다(ADMIN 전용)."""
 
     is_active: bool
 
 
 class BriefSubmission(BaseModel):
-    """F1 — 규칙기반 스텁. 실제 Spec Interpreter(LLM) 연동은 이후 버전에서 이뤄진다."""
+    """규칙기반 스텁. 실제 LLM 기반 해석기 연동은 이후 버전에서 이뤄진다."""
 
     raw_text: str
 
 
 class HumanPoolCreate(BaseModel):
-    """F12 — Human Pool 온보딩 폼.
+    """Human Pool 온보딩 폼.
 
     `user_id`는 사용자 보고(2026-10-06, "사람 인력으로 등록되어 있지만
     사용자 관리에 등록되지 않은 경우 로그인도 안 돼 일을 할 수 없다")로
@@ -91,10 +91,10 @@ class HumanPoolUpdate(BaseModel):
     전부 optional — 보낸 필드만 갱신한다.
 
     `user_id`는 협업 워크스페이스 구현(사용자 요청, 2026-09-28) 중 발견한
-    진짜 갭을 메운다 — `human_pool.user_id`(F8 `review_for_member()`가 이미
+    진짜 갭을 메운다 — `human_pool.user_id`(`review_for_member()`가 이미
     참조하던 컬럼)를 실제로 채울 API가 지금까지 전혀 없었다(항상 NULL).
     이 필드가 없으면 어떤 Human Pool 레코드도 로그인 계정과 연결될 수 없어
-    F8의 "내 성과점수 조회"도, 이번 협업 워크스페이스의 "내 업무"도 사람
+    "내 성과점수 조회"도, 이번 협업 워크스페이스의 "내 업무"도 사람
     쪽 결과를 절대 낼 수 없었다.
 
     `manager_id`는 사용자 요청(2026-09-29, "admin, 사용자 계정을 정리해줘")
@@ -116,7 +116,7 @@ class HumanPoolUpdate(BaseModel):
 class ApprovalDecision(BaseModel):
     """`reason`(2026-10-07, 실사용 리뷰로 발견한 갭) — 결재자가 그
     subject(assignment/deliverable)의 task 참가자가 아닌 경우가 흔한데
-    (F7 체인은 조직도 기준이지 참가 여부와 무관), 참가자 전용인 댓글
+    (결재 체인은 조직도 기준이지 참가 여부와 무관), 참가자 전용인 댓글
     기능으로는 반려 사유를 전혀 남길 수 없었다. 비워도 되는 선택
     필드 — 주면 감사로그에 남고, `subject_type='deliverable'`이면
     그 산출물의 댓글 타임라인에도 결재자 자격으로(참가자 여부 무관)
@@ -127,7 +127,7 @@ class ApprovalDecision(BaseModel):
 
 
 class TaskItem(BaseModel):
-    """F2 — Resource Designer가 산출한 Task 분해 결과 한 건(ADR 결정 1-A: 후보 매칭 미포함)."""
+    """Resource Designer가 산출한 Task 분해 결과 한 건(후보 매칭 미포함)."""
 
     role_name: str
     required_skills: list[str] = []
@@ -135,19 +135,26 @@ class TaskItem(BaseModel):
 
 
 class TaskDecomposition(BaseModel):
-    """F2 — 매니저가 검토·조정한 Task 분해 결과 전체."""
+    """매니저가 검토·조정한 Task 분해 결과 전체."""
 
     tasks: list[TaskItem]
 
 
 class ResourceCandidate(BaseModel):
-    """ADR 결정 4 — Human Pool·Agent Pool 공통 인터페이스.
+    """Human Pool·Agent Pool 공통 인터페이스.
 
     `user_id`는 사용자 보고(2026-10-06, "매칭/배정 화면에도 계정 미연결
     경고 추가해줘")로 추가했다 — `type="human"`인데 `user_id`가 `None`이면
     로그인 계정이 연결 안 된 사람 인력이라, 매칭·배정이 돼도 당사자가
-    "내 업무"에서 그 일을 볼 방법이 없다(`docs/LIMITS.md` §51). Agent는
-    로그인 계정 개념이 없어 항상 `None`이다."""
+    "내 업무"에서 그 일을 볼 방법이 없다. Agent는
+    로그인 계정 개념이 없어 항상 `None`이다.
+
+    `name`은 사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나
+    에이전트명이 표시되지 않는 경우도 있어") — `role`은 직무 타이틀(예:
+    "백엔드 개발자")이라 같은 역할의 사람이 여럿이면 매칭 결과 화면에서
+    ID 숫자로만 구분해야 했다. `human_pool.name`(실제 사람 이름)을 채워
+    그 갭을 메운다. Agent는 역할명(`role_name`)이 곧 식별자라 별도
+    `name`이 없다(`None`으로 둔다 — 화면에서는 `role`을 그대로 쓴다)."""
 
     id: int
     type: Literal["human", "agent"]
@@ -157,15 +164,15 @@ class ResourceCandidate(BaseModel):
     skill_tags: list[str]
     performance_score: float | None = None
     user_id: int | None = None
+    name: str | None = None
 
 
 class AssignmentRequest(BaseModel):
-    """F6 — 배분 화면에서 매니저가 후보를 배정 요청한다(상태는 항상 requested로 시작).
+    """배분 화면에서 매니저가 후보를 배정 요청한다(상태는 항상 requested로 시작).
 
-    사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
-    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md`. `resource_type`에
-    `"team"`을 추가했다 — `resource_id`는 이때 `teams.id`다.
-    `team_leader_id`는 팀 배정의 F7 결재 주체(비워두면 요청자 본인이
+    사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2)으로
+    `resource_type`에 `"team"`을 추가했다 — `resource_id`는 이때 `teams.id`다.
+    `team_leader_id`는 팀 배정의 결재 주체(비워두면 요청자 본인이
     기본값). `replaces_assignment_id`는 "다중 confirmed 허용"으로 바뀐
     뒤에도 "이 배정이 저 배정을 명시적으로 교체한다"를 표현하는 선택적
     필드 — 비워두면 기존 confirmed 배정들과 그냥 공존한다(교체 아님)."""
@@ -177,9 +184,8 @@ class AssignmentRequest(BaseModel):
 
 
 class DelegateAgentRequest(BaseModel):
-    """SCREEN_UX_BENCHMARK_PROPOSAL.md §4-D — "위임"(결재 없는 경량 연결,
-    `AssignmentRequest`의 "배정"과 대칭). Agent 전용이라 `resource_type`
-    선택지가 없다."""
+    """"위임"(결재 없는 경량 연결, `AssignmentRequest`의 "배정"과
+    대칭). Agent 전용이라 `resource_type` 선택지가 없다."""
 
     agent_id: int
 
@@ -205,7 +211,7 @@ class TeamMemberAdd(BaseModel):
 
 class DeliverableCreate(BaseModel):
     """협업 워크스페이스(사용자 요청, 2026-09-28) — 사람이 작성한 결과물을
-    올린다. `docs/PHASE1_DELIVERABLE_SPEC.md` §2-3.
+    올린다.
 
     `content_type`(2026-10-07, Tier 2)은 작성자가 직접 고른다 — 사람이
     쓰는 글이라 LLM 프롬프트 지시가 필요 없고, 본인이 뭘 썼는지 가장
@@ -216,13 +222,13 @@ class DeliverableCreate(BaseModel):
 
 
 class DeliverableCommentCreate(BaseModel):
-    """협업 워크스페이스 — deliverable에 대한 댓글. §2-4."""
+    """협업 워크스페이스 — deliverable에 대한 댓글."""
 
     content: str
 
 
 class TaskNotesUpdate(BaseModel):
-    """ASANA_PARITY_DESIGN_PLAN.md F17(2026-10-08) — Task 메모. 결과물이
+    """2026-10-08 — Task 메모. 결과물이
     아직 없는 단계에서도 참가자들이 맥락/의사결정을 적어두는 자유 텍스트
     공간이다(마크다운으로 렌더링)."""
 
@@ -230,7 +236,7 @@ class TaskNotesUpdate(BaseModel):
 
 
 class TaskParticipantInvite(BaseModel):
-    """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2) — 결재가
+    """2026-10-08, Phase 2 — 결재가
     필요 없는 가벼운 참가자 초대. `participant_id`는 `participant_type=
     'human'`이면 `users.id`(human_pool.id 아님 — db.py의 task_participants
     테이블 주석 참고), `'agent'`면 `agent_pool.id`."""
@@ -244,20 +250,19 @@ TaskPriority = Literal["low", "medium", "high", "urgent"]
 
 
 class TaskStatusUpdate(BaseModel):
-    """ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 할 일 보드
-    칸반 상태."""
+    """2026-10-08, Phase 4 — 할 일 보드 칸반 상태."""
 
     status: TaskStatus
 
 
 class TaskPriorityUpdate(BaseModel):
-    """ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4)."""
+    """2026-10-08, Phase 4."""
 
     priority: TaskPriority
 
 
 class TaskDependencyCreate(BaseModel):
-    """ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — "이 task는
+    """2026-10-08, Phase 4 — "이 task는
     `depends_on_task_id`가 끝나야 시작할 수 있다". 순환 검사는
     `deliverables.add_task_dependency()`가 한다."""
 
@@ -266,7 +271,7 @@ class TaskDependencyCreate(BaseModel):
 
 class AssistRequest(BaseModel):
     """협업 워크스페이스 "LLM으로 도와줘" — `provider`/`model`은 매니저/관리자만
-    채울 수 있다(팀원이 채우면 app.py가 400으로 거부, §3 RBAC 결정)."""
+    채울 수 있다(팀원이 채우면 app.py가 400으로 거부, RBAC 결정)."""
 
     draft_context: str | None = None
     provider: LlmProvider | None = None
@@ -275,7 +280,7 @@ class AssistRequest(BaseModel):
 
 
 class ExecuteAgentRequest(BaseModel):
-    """협업 워크스페이스 — task에 배정된 Agent를 실행한다. §2-6.
+    """협업 워크스페이스 — task에 배정된 Agent를 실행한다.
 
     `agent_id`는 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2)
     으로 추가했다 — "다중 confirmed 허용"으로 한 task에 confirmed agent
@@ -294,11 +299,11 @@ class ExecuteAgentRequest(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    """F4 — 생성 버튼. 부족한 역할(Task)들을 지정해 배치로 Agent 생성을 트리거한다.
+    """생성 버튼. 부족한 역할(Task)들을 지정해 배치로 Agent 생성을 트리거한다.
 
     `use_llm=True`일 때만 실제 Anthropic/OpenAI/Ollama를 호출한다(사용자 요청,
     2026-09-26) — 기본값은 여전히 무료 규칙기반 스텁이다(비용 발생을 암묵적으로
-    유발하지 않기 위해 항상 opt-in). `framework="crewai"`(ADR 결정 10, 2차 요청)면
+    유발하지 않기 위해 항상 opt-in). `framework="crewai"`(2차 요청)면
     `use_llm`을 안 켜도 CrewAI 경로가 쓰이며(CrewAI 자체가 LLM을 호출하므로),
     `use_llm=True`+`framework="simple_llm"`(또는 미지정)는 기존 1회성 LLM 호출과
     동일하다."""
@@ -322,7 +327,7 @@ class AgentExecuteRequest(BaseModel):
 
 
 class MCPServerConfig(BaseModel):
-    """단일 MCP 서버 접속 설정(ADR 결정 10, 사용자 요청 2026-09-27 — "crewai-tools의
+    """단일 MCP 서버 접속 설정(사용자 요청 2026-09-27 — "crewai-tools의
     MCPServerAdapter... 참조해 mcp 기능을 구현해줘"). `crewai-tools`를 실제
     설치해 `MCPServerAdapter`/`mcpadapt.core.MCPAdapt` 소스를 확인해 결정한
     형태다 — stdio(로컬 프로세스로 접속)면 `command`/`args`/`env`를, SSE·
@@ -330,7 +335,7 @@ class MCPServerConfig(BaseModel):
     하나당 둘 중 하나만 유효). `tool_names`를 비워두면 그 서버의 모든
     도구를 허용하고, 채우면 그 이름들만 필터링한다.
 
-    **정정**: ADR 결정 3 계획 당시엔 `mcp_servers: list[str]`(서버 식별자
+    **정정**: 계획 당시엔 `mcp_servers: list[str]`(서버 식별자
     문자열 목록)로 적어뒀으나, 실제로 `MCPServerAdapter`를 붙여보니 접속
     정보(command/url 등) 자체가 필요해 구조화된 설정으로 바꿨다."""
 
@@ -354,13 +359,37 @@ class AgentModelConfig(BaseModel):
     mcp_servers: list[MCPServerConfig] | None = None
 
 
+class AgentTuningConfig(BaseModel):
+    """사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해 Finetuning
+    하는 기능을 구현해줘" → 명확화: 실제 LLM 가중치 재학습이 아니라 CrewAI
+    `Agent`/`LLM`의 동작 파라미터 조정) — `crew_runtime.py`의 CrewAI 생성
+    경로(`crewai_agent_generator()`/`run_crew()` 둘 다)에 그대로 전달된다.
+    전부 선택 입력이고 `None`이면 CrewAI 기본값을 그대로 쓴다(지정 안 하면
+    기존과 100% 동일하게 동작). `stub`/`simple_llm` 프레임워크로 만든
+    Agent에는 적용되지 않는다(그 경로엔 애초에 CrewAI Agent 루프가 없다)."""
+
+    max_iter: int | None = None
+    max_rpm: int | None = None
+    max_execution_time: int | None = None
+    max_retry_limit: int | None = None
+    reasoning: bool | None = None
+    # `reasoning=True`의 짝 필드(2026-10-13, "CrewAI Agent가 최대 효과를
+    # 발휘하도록 추가로 필요한 부분 분석·개선") — CrewAI 기본값(`None`)은
+    # "준비됐다고 판단할 때까지 무제한 재시도"라, `reasoning`만 켜고 이걸
+    # 지정하지 않으면 계획 수립 단계가 끝없이 반복될 수 있다.
+    max_reasoning_attempts: int | None = None
+    allow_code_execution: bool | None = None
+    respect_context_window: bool | None = None
+    temperature: float | None = None
+
+
 class CrewRunRequest(BaseModel):
-    """ADR 결정 11 — 여러 Agent를 CrewAI Crew로 묶어 실제로 협업 실행한다
+    """여러 Agent를 CrewAI Crew로 묶어 실제로 협업 실행한다
     (사용자 요청, 2026-09-26, 3차). `agent_ids`와 `task_descriptions`는 순서가
     같아야 한다(N번째 Agent가 N번째 Task를 맡는다). `process="sequential"`이면
     Task.context로 앞 Agent의 산출물이 다음 Agent에게 자동 전달되고,
     `"hierarchical"`이면 매니저가 동적으로 작업을 조율한다(비용 예측이
-    더 어려움 — ADR 결정 11 한계 참고). 항상 실제 LLM API를 호출한다(비용 발생)."""
+    더 어려움 — 위 한계 참고). 항상 실제 LLM API를 호출한다(비용 발생)."""
 
     agent_ids: list[int]
     task_descriptions: list[str]
@@ -372,8 +401,8 @@ class CrewRunRequest(BaseModel):
 
 class TeamCrewExecuteRequest(BaseModel):
     """사용자 요청(2026-10-07, "crew 실행에서... 복수 그룹 가능하도록
-    개선... 사람-에이전트 연동이 가능한 구조인지 확인") —
-    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
+    개선... 사람-에이전트 연동이 가능한 구조인지 확인") — Phase 3.
+    이 할 일에
     confirmed로 배정된 팀 중 `team_id` 하나를 골라 그 팀의 Agent
     멤버들을 실제 CrewAI Crew로 실행한다(한 할 일에 팀이 여러 개
     배정돼 있어도 한 번에 하나씩 — 사용자 결정)."""
@@ -387,7 +416,7 @@ class TeamCrewExecuteRequest(BaseModel):
 
 
 class KnowledgeIndexRequest(BaseModel):
-    """지식검색 Agent(VectorDB, ADR 결정 11)가 검색할 수 있도록 텍스트를
+    """지식검색 Agent(VectorDB)가 검색할 수 있도록 텍스트를
     임베딩해 저장한다. `text`를 안 주면 그 Agent의 현재 `last_output`을
     색인한다. 실제 임베딩 API를 호출하므로 비용이 발생한다(opt-in)."""
 
@@ -397,26 +426,37 @@ class KnowledgeIndexRequest(BaseModel):
 
 
 class ConsentRequest(BaseModel):
-    """F8 — 사람 성과데이터 수집 사전 동의(opt-in, NF9)."""
+    """사람 성과데이터 수집 사전 동의(opt-in)."""
 
     consent: bool
 
 
 class PerformanceScoreRequest(BaseModel):
-    """F8 — 성과 점수 입력(0~1). Gate 실측 배선 전까지는 수동 입력이다."""
+    """성과 점수 입력(0~1). Gate 실측 배선 전까지는 수동 입력이다."""
 
     score: float
 
 
 class CostUpdateRequest(BaseModel):
-    """F10 — Agent 비용 수동 입력(1차 범위, HR/LLM 과금 연동은 오픈 이슈)."""
+    """Agent 비용 수동 입력(1차 범위, HR/LLM 과금 연동은 오픈 이슈)."""
 
     cost_estimate: float
 
 
+class AgentNameUpdate(BaseModel):
+    """사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고...
+    호출시(채팅 포함)에도 활용될 수 있도록 개선") — `role_name`(생성
+    당시 역할, 식별자 역할까지 겸해 와서 같은 역할의 Agent가 여럿이면
+    ID로만 구분해야 했던)과 별개로 부를 수 있는 이름. 빈 문자열/공백은
+    "이름 지우기"(다시 role_name으로 표시)로 취급한다 — `app.py`에서
+    `None`으로 정규화."""
+
+    name: str | None = None
+
+
 class ToolPoolCreate(BaseModel):
-    """ADR 결정 12(사용자 요청, 2026-09-27, "tool_pool·skill_pool 테이블도
-    실제로 구현해줘") — 실제 도구(MCP 서버 또는 native `@tool`) 하나를
+    """사용자 요청, 2026-09-27, "tool_pool·skill_pool 테이블도
+    실제로 구현해줘" — 실제 도구(MCP 서버 또는 native `@tool`) 하나를
     이름으로 등록해 여러 Agent가 재사용한다. `kind="native"`면 `config`에
     `{"native_id": "vectordb_search"|"graphdb_query"|"web_search"}`를
     넣는다(지원하는 native 도구 전체 목록은 `pool_registry.
@@ -424,7 +464,12 @@ class ToolPoolCreate(BaseModel):
     "외부 자료 검색... 도구화") 추가, `websearch.py`의 Wikipedia 검색을
     감싼다, API 키 불필요). `kind="mcp_stdio"|"mcp_remote"`면 `config`에 `AgentModelConfig.
     mcp_servers`와 같은 형태(command/args/env 또는 url/transport)를
-    넣는다."""
+    넣는다. `kind="custom_python"`(2026-10-13, "@데코레이터 툴을 추가
+    생성할 수 있는 기능" 추가)이면 `config`에
+    `{"function_source": "def tool_fn(query: str) -> str:\\n    ...",
+    "timeout_seconds": 10}`을 넣는다 — `tool_fn`이라는 이름의 함수 하나만
+    정의하면 된다(admin 전용 — mcp_stdio/mcp_remote와 같은 신뢰 경계,
+    `pool_registry.py` 참고)."""
 
     name: str
     description: str = ""
@@ -442,12 +487,12 @@ class ToolActiveUpdate(BaseModel):
 
 
 class SkillPoolCreate(BaseModel):
-    """ADR 결정 12 — 자유 문자열이던 `skill_tags`를 정식 엔티티로 승격한다.
+    """자유 문자열이던 `skill_tags`를 정식 엔티티로 승격한다.
     `augmentation_mode="tool"`이면 `default_tool_pool_ids`가 가리키는
     도구가 이 스킬을 가진 모든 Agent에 자동으로 붙는다(`run_crew()`/
     `crewai_agent_generator()`에서 매번 다시 계산 — 연결을 미리 저장해두지
     않는다). `"always"`/`"none"`은 현재 코드에서 참조하지 않는 예약값이다
-    (오픈 이슈, `docs/LIMITS.md` §18)."""
+    (오픈 이슈)."""
 
     name: str
     description: str = ""
@@ -473,7 +518,7 @@ class ModelActiveUpdate(BaseModel):
 
 
 class ConversationCreate(BaseModel):
-    """ASANA_PARITY_DESIGN_PLAN.md §9(2026-10-08) — 로그인 직후 바로
+    """2026-10-08 — 로그인 직후 바로
     쓸 수 있는 독립 대화, 또는 특정 Task에 종속된 대화. `linked_task_id`
     를 주면 후자(생성자가 그 Task 참가자여야 함 — `app.py`가 확인)."""
 

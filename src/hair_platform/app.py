@@ -1,24 +1,24 @@
 """HAIR-Platform API — Phase 3 v0–v4 (전체 개발 버전 완료).
 
-v0 범위(SPEC.md §9, ADR.md): Auth 최소구현(세션 기반, 결정 6) + RBAC 4종 역할(결정 3)
-+ F1(브리프 제출, 규칙기반 스텁) + F12(Human Pool 온보딩) + 최소 승인 워크플로우
-(단일 승인자, self-approval 방지 — 결정 3-A).
+v0 범위: Auth 최소구현(세션 기반) + RBAC 4종 역할
++ 브리프 제출(규칙기반 스텁) + Human Pool 온보딩 + 최소 승인 워크플로우
+(단일 승인자, self-approval 방지).
 
-v1 범위 추가: F2(Review UI — Task 분해 결과 검토, 후보 매칭 미포함 — ADR 결정 1-A) +
-F3(Pool 통합 검색) + Assignment Engine 매칭(F14 점수 breakdown 포함, `assignment.py`).
+v1 범위 추가: Review UI(Task 분해 결과 검토, 후보 매칭 미포함) +
+Pool 통합 검색 + Assignment Engine 매칭(점수 breakdown 포함, `assignment.py`).
 
-v2 범위 추가: F6(배분 요청 → 승인 후 확정, `assignments`+`assignment_history`
-트랜잭션 원자성 — ADR 결정 7) + F5(조직도 조회, confirmed 배정만 노출) + 재배치
+v2 범위 추가: 배분 요청 → 승인 후 확정(`assignments`+`assignment_history`
+트랜잭션 원자성) + 조직도 조회(confirmed 배정만 노출) + 재배치
 (같은 task 재승인 시 이전 confirmed 배정을 superseded로 전환, `assignments.py`).
 
-v3 범위 추가: F7(다단계 결재라인, 조직도 매니저 체인 자동 라우팅 — `approvals.py`) +
-F4(Job Queue+Docker 샌드박스로 Agent 생성, 실패 역할만 재시도 — `jobs.py`·
-`sandbox.py`) + F9(Agent 온보딩/오프보딩 — 이때 `pool.agent_pool_candidates()`가
-처음으로 실제 데이터를 반환하게 된다) + F13(감사로그, append-only — `audit.py`).
+v3 범위 추가: 다단계 결재라인(조직도 매니저 체인 자동 라우팅 — `approvals.py`) +
+Job Queue+Docker 샌드박스로 Agent 생성(실패 역할만 재시도 — `jobs.py`·
+`sandbox.py`) + Agent 온보딩/오프보딩(이때 `pool.agent_pool_candidates()`가
+처음으로 실제 데이터를 반환하게 된다) + 감사로그(append-only — `audit.py`).
 
-v4(마지막 개발 버전) 범위 추가: F8(성과리뷰 — 사람 데이터는 사전 동의(opt-in) 없이는
-절대 노출하지 않는다, NF9 — `performance.py`) + F10(비용 조회, 1차는 수동 입력만
-— `cost.py`). 이로써 SPEC.md의 F1–F14가 전부 구현됐다.
+v4(마지막 개발 버전) 범위 추가: 성과리뷰(사람 데이터는 사전 동의(opt-in) 없이는
+절대 노출하지 않는다 — `performance.py`) + 비용 조회(1차는 수동 입력만
+— `cost.py`). 이로써 핵심 기능이 전부 구현됐다.
 """
 
 from __future__ import annotations
@@ -70,6 +70,8 @@ from hair_platform.auth import (
 from hair_platform.models import (
     AgentExecuteRequest,
     AgentModelConfig,
+    AgentNameUpdate,
+    AgentTuningConfig,
     ApprovalDecision,
     AssignmentRequest,
     AssistRequest,
@@ -116,7 +118,7 @@ from hair_platform.models import (
 
 
 def parse_brief_stub(raw_text: str) -> list[str]:
-    """F1 규칙기반 스텁 — 줄바꿈 단위로 역할 후보를 나눈다(실제 LLM 파싱은 이후 버전)."""
+    """규칙기반 스텁 — 줄바꿈 단위로 역할 후보를 나눈다(실제 LLM 파싱은 이후 버전)."""
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     return lines or [raw_text.strip()]
 
@@ -127,7 +129,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     여기 아무 폴백이 없어 `uvicorn hair_platform.app:create_app --factory`
     로 띄우면 `--db-path`를 지정할 방법 자체가 없이 매 재시작마다
     조용히 ":memory:"(휘발성)로 뜨고 있었다(2026-10-10, `hair serve` CLI
-    작업 중 발견 — `docs/LIMITS.md` §83). 명시적으로 인자를 넘기는
+    작업 중 발견). 명시적으로 인자를 넘기는
     기존 호출(테스트 등)은 전부 그대로 동작한다."""
     if db_path is None:
         db_path = os.environ.get("HAIR_PLATFORM_DB_PATH", ":memory:")
@@ -138,7 +140,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     load_dotenv()
 
     app = FastAPI(title="HAIR-Platform")
-    # ADR 결정 6: 세션 기반 인증(SessionMiddleware).
+    # 세션 기반 인증(SessionMiddleware).
     # 코드 재점검(2026-09-26)에서 발견: "배포 시 환경변수로 교체한다"는 주석만 있고
     # 실제로 환경변수를 읽는 코드가 없어 항상 소스에 공개된 고정 키를 쓰던 오류를
     # 수정 — HAIR_PLATFORM_SECRET_KEY가 없으면 개발용 기본값으로 폴백한다.
@@ -154,9 +156,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
     db.init_schema(conn)
     # 실측으로 발견(2026-09-28, 리뷰) — 이전 프로세스가 실행 도중
     # 죽으면 agent_execution_jobs가 영원히 'running'으로 남아 해당
-    # task의 실행 버튼이 복구 불가능하게 막힌다. 단일 프로세스 전제
-    # (docs/LIMITS.md §3)이므로 기동 시점의 'running'은 전부 이전
-    # 프로세스의 잔재로 확정하고 정리한다.
+    # task의 실행 버튼이 복구 불가능하게 막힌다. 단일 프로세스 전제이므로
+    # 기동 시점의 'running'은 전부 이전 프로세스의 잔재로 확정하고 정리한다.
     deliverables.reap_orphaned_execution_jobs(conn)
     # 사용자 결정(2026-09-29, "assignment_history/audit_log 보관기간 1년") —
     # 오래 켜진 배포에서 기동 때마다 자연스럽게 정리되도록 여기서도 실행한다
@@ -203,7 +204,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         """코드 재점검(2026-09-26)에서 발견한 누락 보완 — `users`·`manager_id`를
-        Web UI/API로 설정할 방법이 전무해 F7 결재라인이 항상 flat(단일 단계)으로
+        Web UI/API로 설정할 방법이 전무해 결재라인이 항상 flat(단일 단계)으로
         축소되던 갭을 닫는다. ADMIN 전용(사용자 계정 생성은 조직 관리 권한)."""
         try:
             new_id = create_user(
@@ -238,7 +239,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: ManagerUpdate,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
-        """F7이 라우팅에 쓰는 `users.manager_id`를 갱신한다(ADMIN 전용)."""
+        """결재라인 라우팅에 쓰는 `users.manager_id`를 갱신한다(ADMIN 전용)."""
         target = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if target is None:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
@@ -300,7 +301,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     ):
         """사용자 요청(2026-09-29, "사용자 삭제 기능 필요") — `users.id`는
         audit_log/assignments/approvals/human_pool.user_id에서 NOT NULL로
-        참조돼 하드 삭제가 FK 위반으로 불가능하다(NF10 감사 이력 보존과
+        참조돼 하드 삭제가 FK 위반으로 불가능하다(감사 이력 보존과
         정면 충돌). Human/Agent Pool의 오프보딩과 같은 "비활성화" 방식을
         쓴다 — 비활성화된 계정은 로그인이 막히고(`auth.authenticate()`/
         `get_current_user()`), 이력은 그대로 남는다."""
@@ -371,7 +372,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/briefs")
     def list_briefs(user: sqlite3.Row = Depends(get_current_user)):
-        """Web UI가 브리프 목록을 브라우징할 수 있어야 F2(Task 분해) 화면으로
+        """Web UI가 브리프 목록을 브라우징할 수 있어야 Task 분해 화면으로
         이어갈 수 있다 — 지금까지는 생성 응답의 id를 기억해야만 했다."""
         rows = conn.execute("SELECT * FROM briefs ORDER BY id DESC").fetchall()
         return [
@@ -391,7 +392,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     ):
         """사용자 요청(2026-09-28, "각 메뉴에서 데이터 삭제나, 초기화 기능
         추가") — brief와 그 아래 tasks·jobs·assignments를 전부 지운다.
-        `confirmed` 배정이 있으면 막는다(먼저 F6/F7에서 정리)."""
+        `confirmed` 배정이 있으면 막는다(먼저 배정/결재에서 정리)."""
         try:
             data_admin.delete_brief(conn, user["id"], brief_id)
         except ValueError as exc:
@@ -482,18 +483,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if row is None:
             raise HTTPException(status_code=404, detail="사람을 찾을 수 없습니다")
 
-        # 사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 2,
-        # "(b) Human Pool도 admin 전용으로 좁히기") — Agent Pool의
+        # 사용자 결정(2026-09-29, "(b) Human Pool도 admin 전용으로
+        # 좁히기") — Agent Pool의
         # cost_estimate/performance_score는 이미 admin 전용 전용
-        # 엔드포인트로만 수정 가능한데(§2-1), Human Pool은 이 일반
+        # 엔드포인트로만 수정 가능한데, Human Pool은 이 일반
         # PATCH로 매니저도 자유롭게 고칠 수 있어 비대칭이었다. 다른
         # 필드(역할·스킬·가용성·상사 지정 등)는 매니저의 정상 인사
         # 업무라 그대로 두고, cost_estimate만 admin 전용으로 좁힌다.
         if payload.cost_estimate is not None and user["role"] != Role.ADMIN.value:
             raise HTTPException(
                 status_code=403,
-                detail="Human Pool 비용(cost_estimate) 수정은 admin 전용입니다"
-                "(docs/ROLE_TASK_CLASSIFICATION.md 갭 2)",
+                detail="Human Pool 비용(cost_estimate) 수정은 admin 전용입니다",
             )
 
         updates: dict[str, object] = {}
@@ -609,7 +609,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: TaskDecomposition,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """F2 — Task 분해 결과 등록(후보 매칭은 포함하지 않는다, ADR 결정 1-A)."""
+        """Task 분해 결과 등록(후보 매칭은 포함하지 않는다)."""
         brief = conn.execute(
             "SELECT * FROM briefs WHERE id = ?", (brief_id,)
         ).fetchone()
@@ -637,7 +637,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def list_tasks_for_brief(
         brief_id: int, user: sqlite3.Row = Depends(get_current_user)
     ):
-        """Web UI가 F6(매칭/배분) 화면에서 브리프별 Task 목록을 골라야 한다 —
+        """Web UI가 매칭/배분 화면에서 브리프별 Task 목록을 골라야 한다 —
         지금까지는 분해 응답의 id를 기억해야만 했다.
 
         사용자 요청(2026-09-29, "각 업무의 결과물을 어떻게 확인하는지...
@@ -696,20 +696,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
         offset: int = 0,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """F3 — Human Pool + Agent Pool(스텁) 통합 검색. 전원 조회 가능(RBAC 매트릭스).
+        """Human Pool + Agent Pool(스텁) 통합 검색. 전원 조회 가능(RBAC 매트릭스).
 
         코드 재점검(2026-09-26)에서 발견: role/skill 필터가 human_pool에만 걸리고
         Agent Pool은 무조건 전부 반환되던 버그를 수정 — 양쪽에 동일 필터를 적용한다.
 
-        Phase 5(`docs/HAIR_MASTER_PLAN.md` §6 "검색/필터 스케일") — `available_only`
-        (boolean)를 `availability`(가능/불가 둘 다 명시적으로 찾을 수 있게)로
-        넓히고, 감사로그(§13)와 같은 `limit`/`offset`+`total` 페이지네이션
-        규약을 적용했다. Human+Agent를 하나로 합친 뒤 자르는 방식이라(두
-        풀을 SQL에서 각각 페이지네이션하면 "한 페이지"가 한쪽 풀로만 채워질
+        Phase 5("검색/필터 스케일") — `available_only`(boolean)를
+        `availability`(가능/불가 둘 다 명시적으로 찾을 수 있게)로 넓히고,
+        감사로그와 같은 `limit`/`offset`+`total` 페이지네이션 규약을
+        적용했다. Human+Agent를 하나로 합친 뒤 자르는 방식이라(두 풀을
+        SQL에서 각각 페이지네이션하면 "한 페이지"가 한쪽 풀로만 채워질
         수 있어 부정확해진다) 큰 풀에서는 비효율적일 수 있다 — 이 저장소가
         전제하는 소규모 팀 규모에서는 허용 가능한 트레이드오프다.
 
-        "부서" 필터(§6 원안)는 넣지 않았다 — 이 스키마엔 애초에 "부서"라는
+        "부서" 필터(원안)는 넣지 않았다 — 이 스키마엔 애초에 "부서"라는
         필드가 없다(조직 구조는 `manager_id` 상사 체인/조직도로만 표현된다).
         존재하지 않는 데이터를 필터로 꾸며내지 않고, 이미 있는 `role`이
         사실상 같은 역할(직군 단위 검색)을 한다는 점을 그대로 문서화한다.
@@ -743,7 +743,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         items = [
             {
                 **c.model_dump(exclude={"user_id"}),
-                "name": name_by_id.get(c.id) if c.type == "human" else None,
+                # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
+                # 전엔 Agent는 항상 None으로 덮어썼다(이름 자체가 없던
+                # 시절 코드). `pool.agent_pool_candidates()`가 이제
+                # `candidate.name`을 채워 주므로 Agent는 그 값을 그대로
+                # 쓴다(사람은 기존처럼 따로 조회한 값을 그대로 쓴다).
+                "name": name_by_id.get(c.id) if c.type == "human" else c.name,
             }
             for c in candidates
         ]
@@ -761,9 +766,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
             require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
         ),
     ):
-        """F6 매칭 미리보기 + F14(점수 breakdown) — 배정 요청(assignments)은 v2 범위.
+        """매칭 미리보기 + 점수 breakdown — 배정 요청(assignments)은 v2 범위.
 
-        사용자 결정(2026-09-29, "F14 매칭 점수 breakdown을 배정 후보
+        사용자 결정(2026-09-29, "매칭 점수 breakdown을 배정 후보
         본인에게 공개") — MEMBER도 호출할 수 있게 열되, 다른 후보의
         breakdown까지 보이면 프라이버시 문제라 자기 자신(human_pool.
         user_id로 연결된 항목)에 해당하는 한 건만 필터링해 돌려준다."""
@@ -810,12 +815,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
             require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
         ),
     ):
-        """F6 — 배정 요청. 승인(F7) 전까지는 `requested` 상태로만 남는다(NF3).
+        """배정 요청. 승인 전까지는 `requested` 상태로만 남는다.
 
         사용자 결정(2026-09-29, "팀원 셀프서비스(본인이 직접 배정 요청)를
         허용") — MEMBER는 본인의 human_pool 레코드로만 요청할 수 있다
         (다른 사람·Agent를 대신 요청하는 건 여전히 admin/manager 전용).
-        승인 게이트(F7)와 self-approval 방지(ADR 3-A)는 그대로 적용되므로
+        승인 게이트와 self-approval 방지는 그대로 적용되므로
         셀프서비스는 "요청 권한"만 넓힐 뿐 확정 권한은 늘리지 않는다."""
         task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if task is None:
@@ -851,8 +856,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: DelegateAgentRequest,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """SCREEN_UX_BENCHMARK_PROPOSAL.md §4-D — "위임". `request_assignment`
-        (F6, "배정")와 같은 ADMIN/MANAGER 권한 경계를 쓴다(Agent 관련 배정
+        """위임 — 결재 없이 즉시 확정되는 경량 배정. `request_assignment`
+        ("배정")와 같은 ADMIN/MANAGER 권한 경계를 쓴다(Agent 관련 배정
         행동이 지금까지 MEMBER 셀프서비스 밖이었던 것과 동일) — 결재가
         없어 더 즉각적인 만큼, 권한은 더 좁히지 않고 그대로 유지한다."""
         try:
@@ -883,7 +888,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
             """
             SELECT a.id, a.resource_type, a.resource_id, a.status,
                    a.team_leader_id,
-                   hp.name AS human_name, ap.role_name AS agent_role_name,
+                   hp.name AS human_name,
+                   COALESCE(ap.name, ap.role_name) AS agent_role_name,
                    t.name AS team_name
             FROM assignments a
             LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
@@ -912,9 +918,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         ]
 
     # ---------- 협업 워크스페이스(사용자 요청, 2026-09-28) ----------
-    # `docs/PHASE1_DELIVERABLE_SPEC.md` 참고. RBAC 원칙: 관리자/매니저는
-    # 감독 목적으로 조회는 전부 가능하지만, 작성(deliverable/댓글)은 그
-    # task의 사람 당사자/Agent 요청자 본인만 — 대리 작성 금지.
+    # RBAC 원칙: 관리자/매니저는 감독 목적으로 조회는 전부 가능하지만,
+    # 작성(deliverable/댓글)은 그 task의 사람 당사자/Agent 요청자 본인만
+    # — 대리 작성 금지.
 
     @app.get("/api/my-work")
     def get_my_work(
@@ -922,7 +928,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         offset: int = 0,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """§2-1 — 확정된 배정 중 내가 당사자이거나(사람) 요청자인(Agent) task."""
+        """확정된 배정 중 내가 당사자이거나(사람) 요청자인(Agent) task."""
         return deliverables.list_my_work(conn, user["id"], limit, offset)
 
     @app.get("/api/all-work")
@@ -931,24 +937,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
         offset: int = 0,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """SCREEN_UX_BENCHMARK_PROPOSAL.md §4-B — 할 일 보드의 "전체" 범위.
-        `/api/my-work`와 같은 모양을 반환하되 user_id로 안 좁힌다 — 조직
-        전체 현황이라 ADMIN/MANAGER 전용."""
+        """할 일 보드의 "전체" 범위. `/api/my-work`와 같은 모양을
+        반환하되 user_id로 안 좁힌다 — 조직 전체 현황이라 ADMIN/MANAGER
+        전용."""
         return deliverables.list_all_work(conn, limit, offset)
 
     @app.get("/api/inbox")
     def get_inbox_endpoint(user: sqlite3.Row = Depends(get_current_user)):
-        """Phase 5 — 통합 인박스(`docs/HAIR_MASTER_PLAN.md` §6). 결재
-        대기(Admin/매니저)·Agent 실행 실패·낮은 Gate 점수 경고를 한
-        목록으로 합쳐 반환한다. 새 권한 규칙을 추가하지 않는다 — 각
+        """Phase 5 — 통합 인박스. 결재 대기(Admin/매니저)·Agent 실행
+        실패·낮은 Gate 점수 경고를 한 목록으로 합쳐 반환한다. 새 권한
+        규칙을 추가하지 않는다 — 각
         항목은 기존 조회 함수(`approvals.list_inbox`/`deliverables.
         list_my_work`)가 이미 강제하는 접근 범위를 그대로 물려받는다."""
         return inbox.get_inbox(conn, user["id"], user["role"])
 
     @app.get("/api/tasks/{task_id}")
     def get_task_endpoint(task_id: int, user: sqlite3.Row = Depends(get_current_user)):
-        """ASANA_PARITY_DESIGN_PLAN.md F17/F19(2026-10-08) — Task 단건 조회.
-        지금까지 Task 단건 조회 엔드포인트가 없어 `notes`(F17) 등 새 필드를
+        """2026-10-08 — Task 단건 조회.
+        지금까지 Task 단건 조회 엔드포인트가 없어 `notes` 등 새 필드를
         확인하려면 `GET /api/briefs/{brief_id}/tasks` 전체를 받아 걸러내야
         했다."""
         detail = deliverables.get_task_detail(conn, task_id)
@@ -970,7 +976,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: TaskNotesUpdate,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """F17 — Task 메모. 참가자 본인만 수정(결재 불필요한 가벼운
+        """Task 메모. 참가자 본인만 수정(결재 불필요한 가벼운
         메모라 대리 작성 제한만 `create_comment()`와 동일하게 건다)."""
         try:
             return deliverables.update_task_notes(
@@ -992,9 +998,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: TaskStatusUpdate,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """ASANA_PARITY_DESIGN_PLAN.md F16(2026-10-08, Phase 4) — 할 일
-        보드 칸반 상태 이동. `update_task_notes_endpoint()`와 같은
-        참가자 전용 판정."""
+        """2026-10-08, Phase 4 — 할 일 보드 칸반 상태 이동.
+        `update_task_notes_endpoint()`와 같은 참가자 전용 판정."""
         try:
             return deliverables.update_task_status(
                 conn, task_id, user["id"], payload.status
@@ -1015,7 +1020,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: TaskPriorityUpdate,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """F16(2026-10-08, Phase 4)."""
+        """2026-10-08, Phase 4."""
         try:
             return deliverables.update_task_priority(
                 conn, task_id, user["id"], payload.priority
@@ -1036,7 +1041,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: TaskDependencyCreate,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """F16(2026-10-08, Phase 4) — 선행 작업 추가. 자기참조·순환은
+        """2026-10-08, Phase 4 — 선행 작업 추가. 자기참조·순환은
         `deliverables.add_task_dependency()`가 검사한다."""
         try:
             return deliverables.add_task_dependency(
@@ -1076,8 +1081,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         depends_on_task_id: int,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """F16(2026-10-08, Phase 4) — 설계 문서엔 없지만 POST의 자연스러운
-        대칭으로 추가(§2 `remove_task_dependency()` 독스트링 참고)."""
+        """2026-10-08, Phase 4 — 설계 문서엔 없지만 POST의 자연스러운
+        대칭으로 추가(`remove_task_dependency()` 독스트링 참고)."""
         try:
             deliverables.remove_task_dependency(
                 conn, task_id, user["id"], depends_on_task_id
@@ -1101,7 +1106,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_task_dependencies_endpoint(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)
     ):
-        """F16(2026-10-08, Phase 4) — **사용자 결정**: 1차 "선행 작업
+        """2026-10-08, Phase 4 — **사용자 결정**: 1차 "선행 작업
         목록"이 아니라 Riido 수준의 그래프 시각화로 바로 간다. 이
         엔드포인트는 그 그래프가 그릴 노드/엣지(연결된 컴포넌트 전체)를
         반환한다(`deliverables.task_dependency_graph()`)."""
@@ -1124,7 +1129,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_task_activity_endpoint(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)
     ):
-        """F19 — 배정·결과물·댓글·Agent 실행·결재·Task 변경을 합친 통합
+        """배정·결과물·댓글·Agent 실행·결재·Task 변경을 합친 통합
         타임라인."""
         if user["role"] not in ("admin", "manager") and (
             deliverables.task_participant_relationship(conn, task_id, user["id"])
@@ -1147,8 +1152,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: TaskParticipantInvite,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2) — 결재
-        불필요한 가벼운 초대. admin/manager는 항상 가능하고, 그 외엔
+        """2026-10-08, Phase 2 — 결재 불필요한 가벼운 초대.
+        admin/manager는 항상 가능하고, 그 외엔
         이 task에 이미 댓글을 달 수 있는 사람(정식 참가자 또는 이미
         초대된 사람)만 — "초대의 초대"는 허용하되 완전한 외부인이
         마음대로 사람/Agent를 끌어들이진 못하게 한다."""
@@ -1188,7 +1193,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def list_task_participants_endpoint(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)
     ):
-        """F15, Phase 2 — 초대된 참가자 목록."""
+        """Phase 2 — 초대된 참가자 목록."""
         if user["role"] not in ("admin", "manager") and not (
             deliverables.can_comment_on_task(conn, task_id, user["id"])
         ):
@@ -1198,7 +1203,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
         return deliverables.list_participants(conn, task_id)
 
-    # ---------- 대화 중심 작업공간(Conversational Workspace, §9,
+    # ---------- 대화 중심 작업공간(Conversational Workspace,
     # 2026-10-08, 사용자 요청 "로그인하면 기본적으로 대화창이 주어지고
     # ... 사람이나 에이전트(에이전트 그룹)를 호출하거나 skill을 사용
     # 하여 업무를 수행") ----------
@@ -1235,6 +1240,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
         사람이 최근 초대한 대상"을 앞세우는 정렬에만 쓰인다(검색
         결과를 사용자별로 숨기지 않음 — 여전히 조직 전체 검색)."""
         return conversations.search_mentionable(conn, q, user["id"])
+
+    @app.get("/api/conversations/my-mentions")
+    def list_my_mentions_endpoint(user: sqlite3.Row = Depends(get_current_user)):
+        """사용자 요청(2026-10-14, "호출 받은 사람에게 브라우저 알림...")
+        — 프런트엔드가 전역 폴링으로 호출해 브라우저 알림을 띄울지
+        판단한다. 참가 중인 특정 대화 화면이 열려 있지 않아도(다른
+        탭을 보고 있어도) 동작해야 하므로, 특정 `conversation_id`가
+        아니라 `/api/conversations` 바로 아래(로그인한 사용자 전역)에
+        둔다. "안 읽음" 판정은 서버가 `conversation_participants.
+        last_read_message_id`로 들고 있다(클라이언트는 커서를 안 들고
+        있어도 된다) — `mark_conversation_read()`/`GET .../messages` 참고."""
+        return conversations.list_my_recent_mentions(conn, user["id"])
 
     @app.get("/api/conversations/{conversation_id}")
     def get_conversation_endpoint(
@@ -1392,6 +1409,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=403, detail="이 대화의 참가자만 볼 수 있습니다"
             )
+        # 버그 수정(2026-10-14, "호출이 안 되는 거 같아") — 이 대화를
+        # 실제로 보고 있다는 신호라 "읽음"으로 표시한다(`GET /my-mentions`
+        # 폴링의 안 읽음 판정 기준). 조회수 집계가 아니라 사람이 직접
+        # 연 화면이므로 매번 갱신해도 괜찮다.
+        conversations.mark_conversation_read(conn, conversation_id, user["id"])
         return conversations.list_messages(conn, conversation_id)
 
     @app.post("/api/conversations/{conversation_id}/messages", status_code=201)
@@ -1490,11 +1512,38 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         return {"id": result["id"], "triggered_jobs": triggered_jobs}
 
+    @app.delete("/api/conversations/{conversation_id}/messages/{message_id}")
+    def delete_conversation_message_endpoint(
+        conversation_id: int,
+        message_id: int,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-10-14, "단위 메시지 삭제 기능") — 본인이
+        보낸 사람 메시지는 본인이, 그 외(AI/Agent 응답 포함)는 대화
+        생성자가 지운다(`conversations.delete_message()` 참고)."""
+        try:
+            conversations.delete_message(conn, conversation_id, message_id, user["id"])
+        except ValueError as exc:
+            detail = (
+                "대화를 찾을 수 없습니다"
+                if str(exc) == "conversation_not_found"
+                else "메시지를 찾을 수 없습니다"
+            )
+            raise HTTPException(status_code=404, detail=detail) from None
+        except PermissionError as exc:
+            detail = (
+                "이 대화의 참가자만 메시지를 지울 수 있습니다"
+                if str(exc) == "not_a_participant"
+                else "본인이 보낸 메시지이거나 대화를 만든 사람만 지울 수 있습니다"
+            )
+            raise HTTPException(status_code=403, detail=detail) from None
+        return {"id": message_id, "deleted": True}
+
     @app.get("/api/tasks/{task_id}/deliverables")
     def list_task_deliverables(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)
     ):
-        """§2-2 — 협업 워크스페이스 타임라인(시간순)."""
+        """협업 워크스페이스 타임라인(시간순)."""
         task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if task is None:
             raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
@@ -1514,7 +1563,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: DeliverableCreate,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """§2-3 — 사람 결과물 작성. 대리 작성 금지(참가자 본인만)."""
+        """사람 결과물 작성. 대리 작성 금지(참가자 본인만)."""
         try:
             deliverable_id = deliverables.create_deliverable(
                 conn, task_id, user["id"], payload.content, payload.content_type
@@ -1538,9 +1587,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def submit_task_deliverable(
         deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
     ):
-        """§2-3 후속(라이브 시나리오 실행에서 발견한 갭 보완, `docs/LIMITS.md`
-        §33-34) — 사람이 작성한 결과물을 명시적으로 검토 대상으로 제출한다.
-        Agent 산출물과 같은 결재 체인을 재사용한다."""
+        """후속(라이브 시나리오 실행에서 발견한 갭 보완) — 사람이
+        작성한 결과물을 명시적으로 검토 대상으로 제출한다. Agent
+        산출물과 같은 결재 체인을 재사용한다."""
         try:
             result = deliverables.submit_deliverable(conn, deliverable_id, user["id"])
         except ValueError as exc:
@@ -1566,7 +1615,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_deliverable_comments(
         deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
     ):
-        """§2-4. F15(2026-10-08, Phase 2) — 초대만 된 사람도 자신이
+        """2026-10-08, Phase 2 — 초대만 된 사람도 자신이
         초대된 댓글 스레드는 읽을 수 있어야 하므로
         `can_comment_on_task()`(쓰기 판정과 동일)로 열람 권한도 넓힌다."""
         d = conn.execute(
@@ -1590,8 +1639,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         background_tasks: BackgroundTasks,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """§2-4. ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) —
-        댓글에 `@에이전트이름`이 있고 그 Agent가 이 task에 초대돼 있으면,
+        """2026-10-08, Phase 3 — 댓글에 `@에이전트이름`이
+        있고 그 Agent가 이 task에 초대돼 있으면,
         댓글 저장 직후 가볍게 그 Agent를 실행한다(결재·Gate 없음 —
         사용자 결정 a, 결과는 항상 댓글로만 남는다). 이미 다른 실행이
         진행 중이면(버튼이든 다른 멘션이든) 조용히 건너뛰고
@@ -1653,9 +1702,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: AssistRequest,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """§2-5 — "LLM으로 도와줘". 실제 LLM API를 호출하므로 비용이
+        """"LLM으로 도와줘". 실제 LLM API를 호출하므로 비용이
         발생한다. 결과는 저장하지 않는다 — 검토 후 별도로 제출해야 한다.
-        팀원/뷰어는 provider/model을 선택할 수 없다(§3 RBAC 결정, 비용
+        팀원/뷰어는 provider/model을 선택할 수 없다(RBAC 결정, 비용
         통제)."""
         if user["role"] not in ("admin", "manager") and (
             payload.provider or payload.model
@@ -1692,11 +1741,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
         background_tasks: BackgroundTasks,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """§2-6(Phase 4로 비동기화) — task에 배정된 Agent 실행을 큐에
+        """Phase 4로 비동기화 — task에 배정된 Agent 실행을 큐에
         올린다. 검증만 동기로 마치고 202로 즉시 응답하며, 실제 LLM 호출
         (비용 발생)은 응답 전송 후 백그라운드에서 진행된다 — Web UI는
         `GET .../agent-execution-jobs`로 폴링해 완료를 확인한다. 요청자
-        본인 또는 매니저/관리자(감독 대리 실행 허용 — §2-3의 "작성"과
+        본인 또는 매니저/관리자(감독 대리 실행 허용 — "작성"과
         달리 "지금 실행시켜라"는 대리해도 저자성이 안 흐려짐)."""
         if user["role"] not in ("admin", "manager") and (
             payload.provider or payload.model
@@ -1756,9 +1805,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         user: sqlite3.Row = Depends(get_current_user),
     ):
         """사용자 요청(2026-10-07, "crew 실행에서... 복수 그룹 가능하도록
-        개선... 사람-에이전트 연동이 가능한 구조인지 확인") —
-        `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
-        confirmed로 배정된 팀 하나의 Agent 멤버 전원을 CrewAI Crew로
+        개선... 사람-에이전트 연동이 가능한 구조인지 확인") — Phase 3.
+        이 할 일에 confirmed로 배정된 팀 하나의 Agent 멤버 전원을 CrewAI Crew로
         실행하고, 결과를 이 할 일의 deliverables/결재 체인에 연결한다 —
         단일 Agent 실행(`execute-agent`)과 같은 비동기 패턴."""
         if user["role"] not in ("admin", "manager") and (
@@ -1818,7 +1866,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     ):
         """Phase 4 — Web UI가 폴링해 "생성 중…"/실패 상태를 협업
         워크스페이스 타임라인에 얹는다. 접근 권한은 결과물 타임라인
-        조회(§2-2)와 동일하다."""
+        조회와 동일하다."""
         task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if task is None:
             raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
@@ -1854,9 +1902,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: GenerateRequest,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """F4 — 생성 버튼. Job Queue+샌드박스(ADR 결정 8)로 부족한 역할을 배치 생성한다.
+        """생성 버튼. Job Queue+샌드박스로 부족한 역할을 배치 생성한다.
 
-        `framework="crewai"`(ADR 결정 10)면 실제 CrewAI Agent+Task+Crew를
+        `framework="crewai"`면 실제 CrewAI Agent+Task+Crew를
         구성해 kickoff한다. `use_llm=True`+`framework` 미지정(또는
         `"simple_llm"`)이면 기존 1회성 LLM 호출이다. 둘 다 명시적으로
         요청했을 때만 실제 API를 호출한다(사용자 요청, 2026-09-26) —
@@ -1891,7 +1939,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         model: str | None = None,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """NF6 — 실패 역할만 재시도."""
+        """실패 역할만 재시도."""
         generator = None
         if use_llm:
             generator = partial(
@@ -1908,13 +1956,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def list_agent_pool(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """Web UI가 F9(온보딩/오프보딩) 화면에서 status 무관 전체 목록을 봐야
-        한다 — F3 검색(`/api/pool/search`)은 `status='active'`만 노출해서
+        """Web UI가 온보딩/오프보딩 화면에서 status 무관 전체 목록을 봐야
+        한다 — 검색(`/api/pool/search`)은 `status='active'`만 노출해서
         온보딩 대기(pending_onboarding) 항목을 찾을 방법이 없었다.
 
         **실측으로 발견한 갭(2026-09-28, "Phase1~4까지... 분석하고
         개선해줘" 리뷰 중)**: Phase 3가 만든 `agent_evaluation.
-        aggregate_agent_score()`(§5-2 "자동값과 수동값을 구분해서
+        aggregate_agent_score()`("자동값과 수동값을 구분해서
         보여준다")가 실제로는 어떤 API/화면에도 연결돼 있지 않아 테스트
         말고는 아무도 못 보고 있었다 — `auto_evaluation`으로 여기 얹어서
         `performance_score`(관리자 수동)와 나란히 노출한다."""
@@ -1923,6 +1971,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
             {
                 "id": row["id"],
                 "role_name": row["role_name"],
+                # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
+                # 선택 입력이라 비어 있을 수 있다(비어 있으면 화면이
+                # role_name으로 폴백한다).
+                "name": row["name"],
                 "skill_tags": json.loads(row["skill_tags"]),
                 "cost_estimate": row["cost_estimate"],
                 "performance_score": row["performance_score"],
@@ -1935,6 +1987,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "last_output": row["last_output"],
                 "framework": row["framework"],
                 "mcp_servers": json.loads(row["mcp_servers"]),
+                # 사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해
+                # Finetuning") — 지정 안 한 값은 전부 키 자체가 없다(={}),
+                # 화면이 그걸 "CrewAI 기본값 사용 중"으로 보여준다.
+                "tuning_config": json.loads(row["tuning_config"]),
                 "linked_tool_ids": pool_registry.list_agent_tool_ids(conn, row["id"]),
                 # 사용자 요청(2026-10-07, "AI 에이전트 관리 노출 검토") —
                 # 이 Agent가 어느 팀 소속인지 여기서 바로 보여준다(팀은
@@ -2014,13 +2070,33 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "llm_model": resolved_model,
         }
 
+    @app.patch("/api/agent-pool/{agent_id}/tuning")
+    def set_agent_tuning_config(
+        agent_id: int,
+        payload: AgentTuningConfig,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해
+        Finetuning 하는 기능") — CrewAI Agent/LLM 동작 파라미터 저장.
+        `set_agent_model_config`와 같은 권한(admin+manager, 비용 없는
+        설정 전용 엔드포인트)."""
+        try:
+            saved = agent_runtime.set_tuning_config(
+                conn, agent_id, user["id"], payload.model_dump()
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="Agent를 찾을 수 없습니다"
+            ) from exc
+        return {"id": agent_id, "tuning_config": saved}
+
     @app.post("/api/agent-pool/{agent_id}/index-knowledge")
     def index_agent_knowledge(
         agent_id: int,
         payload: KnowledgeIndexRequest,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """ADR 결정 11 — 이 Agent의 산출물(또는 지정 텍스트)을 임베딩해
+        """이 Agent의 산출물(또는 지정 텍스트)을 임베딩해
         지식검색 Agent(VectorDB)가 찾을 수 있게 색인한다. 실제 임베딩 API를
         호출하므로 비용이 발생한다(opt-in — 명시적으로 호출했을 때만)."""
         try:
@@ -2046,7 +2122,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def list_tool_pool(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """ADR 결정 12 — 재사용 가능한 도구(MCP 서버 또는 native Tool)
+        """재사용 가능한 도구(MCP 서버 또는 native Tool)
         레지스트리 조회."""
         return pool_registry.list_tools(conn)
 
@@ -2055,22 +2131,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: ToolPoolCreate,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        # 사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 1,
-        # "(a) MCP 종류만 admin 전용으로 좁히기") — mcp_stdio/mcp_remote는
+        # 사용자 결정(2026-09-29, "(a) MCP 종류만 admin 전용으로
+        # 좁히기") — mcp_stdio/mcp_remote는
         # 등록되는 순간이 아니라 "그 스킬을 가진 Agent가 실행될 때" 조직
         # 전체 Agent가 실제 외부 프로세스/네트워크에 접속하게 만드는
         # 조직 차원 정책이라(GitHub Copilot 원칙 1), native(웹서치 도구
         # 등)와 달리 admin 전용으로 좁힌다. 엔드포인트 전체를 admin
         # 전용으로 만들지 않고 이 두 kind만 막는 이유는 native 도구
         # 등록(운영 업무 성격)까지 매니저에게서 뺏을 이유가 없어서다.
+        #
+        # 사용자 요청(2026-10-13, "@데코레이터 툴을 추가 생성할 수 있는
+        # 기능") — `custom_python`은 등록된 Python 소스가 실행되는 순간
+        # 서버 프로세스와 같은 신뢰 수준으로 동작한다(`pool_registry.
+        # _run_custom_python_tool()` 참고) — mcp_stdio와 같은 등급의
+        # 위험이라 같은 이유로 admin 전용으로 묶는다.
         if (
-            payload.kind in ("mcp_stdio", "mcp_remote")
+            payload.kind in ("mcp_stdio", "mcp_remote", "custom_python")
             and user["role"] != Role.ADMIN.value
         ):
             raise HTTPException(
                 status_code=403,
-                detail="MCP 도구(mcp_stdio/mcp_remote) 등록은 admin 전용입니다"
-                "(docs/ROLE_TASK_CLASSIFICATION.md 갭 1)",
+                detail="MCP·커스텀 Python 도구(mcp_stdio/mcp_remote/custom_python) 등록은 admin 전용입니다",
             )
         try:
             tool_id = pool_registry.create_tool(
@@ -2123,7 +2204,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def list_skill_pool(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """ADR 결정 12 — `skill_tags`를 정식 엔티티로 승격한 Skill Pool
+        """`skill_tags`를 정식 엔티티로 승격한 Skill Pool
         조회. `augmentation_mode="tool"`인 스킬은 `default_tool_pool_ids`가
         가리키는 도구를 이 스킬을 가진 모든 Agent에 자동으로 붙인다."""
         return pool_registry.list_skills(conn)
@@ -2179,7 +2260,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # "운영 관리"에 provider별 사용 가능한 모델을 등록해두고, "AI 에이전트
     # 생성"·"AI 에이전트 관리(모델 설정)"·"Crew 실행"의 자유 텍스트
     # 모델명 입력을 여기서 등록한 목록 중에서 고르는 방식으로 바꾼다
-    # (skill_pool/tool_pool과 같은 "등록→선택" 패턴, docs/LIMITS.md §59).
+    # (skill_pool/tool_pool과 같은 "등록→선택" 패턴).
 
     @app.get("/api/model-registry")
     def list_model_registry(
@@ -2392,7 +2473,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         """Agent별로 skill 매칭과 무관하게 Tool Pool 항목을 하나 더 붙인다
-        (ADR 결정 12) — 다음 `run_crew()`/`crewai_agent_generator()` 실행
+        — 다음 `run_crew()`/`crewai_agent_generator()` 실행
         부터 반영된다."""
         try:
             pool_registry.link_agent_tool(conn, user["id"], agent_id, tool_pool_id)
@@ -2419,7 +2500,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: CrewRunRequest,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """ADR 결정 11 — 여러 온보딩된 Agent를 CrewAI Crew로 묶어 실제 협업
+        """여러 온보딩된 Agent를 CrewAI Crew로 묶어 실제 협업
         실행한다(Task.context로 산출물 전달 + allow_delegation으로 실제 동료
         위임/질의). 항상 실제 LLM API를 호출하므로 비용이 발생한다."""
         try:
@@ -2446,7 +2527,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def onboard_agent(
         agent_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
     ):
-        """F9 — Agent 온보딩 승인(Admin 전용). 승인 후 F3 검색에 노출된다."""
+        """Agent 온보딩 승인(Admin 전용). 승인 후 검색에 노출된다."""
         agent = conn.execute(
             "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
         ).fetchone()
@@ -2471,7 +2552,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def deprecate_agent(
         agent_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
     ):
-        """F9 — Agent 오프보딩(Admin 전용). 이후 F3 검색에서 제외된다."""
+        """Agent 오프보딩(Admin 전용). 이후 검색에서 제외된다."""
         agent = conn.execute(
             "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
         ).fetchone()
@@ -2516,7 +2597,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def seed_demo_data_endpoint(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
-        """ASANA_PARITY_DESIGN_PLAN.md F20(2026-10-08, Phase 5) — "샘플로
+        """2026-10-08, Phase 5 — "샘플로
         체험하기". 기존 데이터 삭제 기능과 대칭되는 admin 전용 생성
         기능이다. 몇 번을 눌러도 매번 새 샘플 Brief/Task/Human/Agent가
         추가로 생긴다(중복 방지 로직 없음 — "초기화"가 아니라 "체험용
@@ -2531,7 +2612,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         subject_type: str | None = None,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """F13 — 감사로그 조회(Admin·매니저 전용, NF12). append-only는 DB 트리거가 강제.
+        """감사로그 조회(Admin·매니저 전용). append-only는 DB 트리거가 강제.
 
         코드 재점검(2026-09-26)에서 발견: 페이지네이션/필터 없이 전체 테이블을
         반환하던 것을 고쳤다 — append-only라 무한정 커지는 테이블을 무제한
@@ -2563,7 +2644,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: ConsentRequest,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """F8 — 사전 동의(opt-in, NF9). 본인 또는 Admin만 설정할 수 있다."""
+        """사전 동의(opt-in). 본인 또는 Admin만 설정할 수 있다."""
         human = conn.execute(
             "SELECT * FROM human_pool WHERE id = ?", (human_id,)
         ).fetchone()
@@ -2574,7 +2655,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if human["user_id"] != user["id"] and user["role"] != Role.ADMIN.value:
             raise HTTPException(
                 status_code=403,
-                detail="본인 또는 Admin만 동의를 설정할 수 있습니다(NF9)",
+                detail="본인 또는 Admin만 동의를 설정할 수 있습니다",
             )
         performance.set_human_consent(conn, human_id, payload.consent)
         audit.record(
@@ -2594,9 +2675,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: PerformanceScoreRequest,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
-        """F8 — 성과 점수 입력. 동의 없이는 거부된다(NF9).
+        """성과 점수 입력. 동의 없이는 거부된다.
 
-        사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 2,
+        사용자 결정(2026-09-29,
         "(b) Human Pool도 admin 전용으로 좁히기") — Agent Pool의
         `/performance`(admin 전용)와 대칭을 맞췄다. 이전엔 admin+manager
         공용이었다."""
@@ -2609,7 +2690,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except PermissionError as exc:
             raise HTTPException(
                 status_code=403,
-                detail="동의 없이는 성과데이터를 수집할 수 없습니다(NF9)",
+                detail="동의 없이는 성과데이터를 수집할 수 없습니다",
             ) from exc
         audit.record(
             conn,
@@ -2628,7 +2709,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: PerformanceScoreRequest,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
-        """F8 — Agent 성과 점수(사람이 아니므로 동의 불필요)."""
+        """Agent 성과 점수(사람이 아니므로 동의 불필요)."""
         performance.set_agent_performance(conn, agent_id, payload.score)
         audit.record(
             conn,
@@ -2647,7 +2728,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
         ),
     ):
-        """F8 — 성과리뷰 조회. Admin·매니저는 전체, 팀원은 본인 관련만(RBAC 매트릭스)."""
+        """성과리뷰 조회. Admin·매니저는 전체, 팀원은 본인 관련만(RBAC 매트릭스)."""
         if user["role"] == Role.MEMBER.value:
             return performance.review_for_member(conn, user["id"])
         return performance.full_review(conn)
@@ -2658,7 +2739,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: CostUpdateRequest,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
-        """F10 — Agent 비용 수동 입력(1차 범위)."""
+        """Agent 비용 수동 입력(1차 범위)."""
         cost.set_agent_cost(conn, agent_id, payload.cost_estimate)
         audit.record(
             conn,
@@ -2671,27 +2752,60 @@ def create_app(db_path: str | None = None) -> FastAPI:
         conn.commit()
         return {"id": agent_id, "cost_estimate": payload.cost_estimate}
 
+    @app.patch("/api/agent-pool/{agent_id}/name")
+    def set_agent_name(
+        agent_id: int,
+        payload: AgentNameUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... 호출시
+        (채팅 포함)에도 활용될 수 있도록 개선") — `role_name`은 생성
+        당시 역할이라 같은 역할의 Agent가 여럿이면 구분이 안 됐다.
+        비용/성과점수(admin 전용)와 달리 이건 human_pool의 역할·스킬
+        수정과 같은 "정상 운영 업무"라 admin+manager 둘 다 허용한다
+        (사람 인력 쪽과의 권한 비대칭 방지). 빈 문자열/공백은 이름
+        지우기(다시 role_name 표시로 복귀)로 정규화한다."""
+        row = conn.execute(
+            "SELECT id FROM agent_pool WHERE id = ?", (agent_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Agent를 찾을 수 없습니다")
+        name = (payload.name.strip() if payload.name else "") or None
+        conn.execute(
+            "UPDATE agent_pool SET name = ? WHERE id = ?", (name, agent_id)
+        )
+        audit.record(
+            conn,
+            user["id"],
+            "agent_name_updated",
+            "agent_pool",
+            agent_id,
+            after={"name": name},
+        )
+        conn.commit()
+        return {"id": agent_id, "name": name}
+
     @app.get("/api/cost-report")
     def get_cost_report(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """F10 — 비용 조회(Admin·매니저 전용, RBAC 매트릭스)."""
+        """비용 조회(Admin·매니저 전용, RBAC 매트릭스)."""
         return cost.report(conn)
 
     @app.get("/api/dashboard")
     def get_dashboard(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """Phase 5 — 매니저 대시보드(`docs/HAIR_MASTER_PLAN.md` §6). 팀
+        """Phase 5 — 매니저 대시보드. 팀
         Agent 평균 Gate 점수·대기 승인 건수·비용 추이를 한 번에 담는다.
-        F10/F13과 같은 이유로 Admin·매니저 전용이다."""
+        비용·감사로그와 같은 이유로 Admin·매니저 전용이다."""
         return dashboard.summary(conn, user["id"], user["role"])
 
     @app.get("/api/dashboard/workload")
     def get_dashboard_workload(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """ASANA_PARITY_DESIGN_PLAN.md F18(2026-10-08, Phase 4) — 사람/
+        """2026-10-08, Phase 4 — 사람/
         Agent별 진행 중 Task 수. `GET /api/dashboard`에도 포함돼 있지만
         (요약 화면용), 설계 문서가 별도 엔드포인트로 명시해 그대로 둔다."""
         return dashboard.workload(conn)
@@ -2700,20 +2814,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_dashboard_bottlenecks(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """F18(2026-10-08, Phase 4) — "주의 필요" Task 목록(막힌 작업 +
+        """2026-10-08, Phase 4 — "주의 필요" Task 목록(막힌 작업 +
         2회 이상 반려된 작업)."""
         return dashboard.bottlenecks(conn)
+
+    @app.get("/api/dashboard/agent-bottlenecks")
+    def get_dashboard_agent_bottlenecks(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 1번)
+        — 최근 Gate 평가가 연속으로 실패한 Agent 목록("주의 필요"의
+        Agent 버전). `GET /api/dashboard`에도 `agent_bottlenecks`로
+        포함돼 있지만(요약 화면용), `bottlenecks`/`workload`가 이미
+        각자 독립 엔드포인트를 갖는 것과 같은 이유로 그대로 둔다."""
+        return dashboard.agents_with_repeated_gate_failures(conn)
 
     @app.get("/api/fairness-report")
     def get_fairness_report(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """Phase 4 검증 — 배정 공정성 지표(NF4). 사람·Agent 반려율 격차를 계산한다."""
+        """Phase 4 검증 — 배정 공정성 지표. 사람·Agent 반려율 격차를 계산한다."""
         return fairness.report(conn)
 
     @app.get("/api/org-chart")
     def get_org_chart(user: sqlite3.Row = Depends(get_current_user)):
-        """F5 — 조직도 조회. `confirmed` 배정만 노출한다(F5·F6 공유 assignments 테이블).
+        """조직도 조회. `confirmed` 배정만 노출한다(조직도·배정이 공유하는 assignments 테이블).
 
         코드 재점검(2026-09-26)에서 발견: Agent 배정은 `human_pool` LEFT JOIN이
         전부 NULL이라 `manager_id=None` 버킷에 뭉뚱그려져 "사람과 Agent를 하나의
@@ -2725,7 +2850,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             SELECT a.id AS assignment_id, a.task_id, a.resource_type, a.resource_id,
                    a.requested_by, t.role_name,
                    hp.name AS human_name, hp.manager_id AS human_manager_id,
-                   ap.role_name AS agent_role_name
+                   COALESCE(ap.name, ap.role_name) AS agent_role_name
             FROM assignments a
             JOIN tasks t ON t.id = a.task_id
             LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
@@ -2770,20 +2895,35 @@ def create_app(db_path: str | None = None) -> FastAPI:
         user: sqlite3.Row = Depends(get_current_user),
     ):
         """코드 재점검(2026-09-26)에서 발견한 누락 보완 — 승인권자가 자신에게 무엇이
-        결재 대기 중인지 조회할 API가 전무했다(F7이 이론상으로만 동작). `decide_approval`
+        결재 대기 중인지 조회할 API가 전무했다(결재 체인이 이론상으로만 동작). `decide_approval`
         의 권한 로직과 동일한 기준으로 "내가 지금 결정할 수 있는 건"만 보여준다.
 
         - `scope=mine`(누구나): 내가 요청한 승인 전체(상태 무관).
         - `scope=inbox`(Admin/매니저 전용, 기본값): 아직 `pending`이고, 내가
-          요청자가 아니며(self-approval 제외, ADR 결정 3-A), Admin이면 전부,
+          요청자가 아니며(self-approval 제외), Admin이면 전부,
           매니저면 승인자 미지정이거나 나로 지정된 건만.
+
+        사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나
+        에이전트명이 표시되지 않는 경우도 있어") — 응답의 `subject_type`/
+        `subject_id`는 `assignments.id`/`deliverables.id`일 뿐이라 그
+        자체로는 승인권자가 "무엇을 승인하는지" 알 길이 없었다.
+        `approvals_mod.describe_subject()`로 업무 역할명·대상 이름을
+        함께 내려준다(대상이 지워졌으면 전부 None — 에러로 막지 않음).
         """
         if scope == "mine":
             rows = conn.execute(
                 "SELECT * FROM approvals WHERE requested_by = ? ORDER BY id DESC",
                 (user["id"],),
             ).fetchall()
-            return [dict(row) for row in rows]
+            return [
+                {
+                    **dict(row),
+                    **approvals_mod.describe_subject(
+                        conn, row["subject_type"], row["subject_id"]
+                    ),
+                }
+                for row in rows
+            ]
         if scope != "inbox":
             raise HTTPException(
                 status_code=400, detail="scope는 inbox 또는 mine이어야 합니다"
@@ -2793,7 +2933,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=403,
                 detail="승인 대기함은 Admin/매니저만 조회할 수 있습니다",
             )
-        return approvals_mod.list_inbox(conn, user["id"], user["role"])
+        return [
+            {
+                **row,
+                **approvals_mod.describe_subject(
+                    conn, row["subject_type"], row["subject_id"]
+                ),
+            }
+            for row in approvals_mod.list_inbox(conn, user["id"], user["role"])
+        ]
 
     @app.post("/api/approvals", status_code=201)
     def create_approval(
@@ -2803,24 +2951,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
             require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
         ),
     ):
-        """F1(브리프) 최소 단일승인 워크플로우 전용(ADR.md v0 범위, ADR 결정 3-A).
+        """브리프 최소 단일승인 워크플로우 전용(v0 범위).
 
         코드 재점검(2026-09-26)에서 발견한 심각한 우회 경로 수정: 이전엔 role
         제한이 전혀 없고(get_current_user만) `subject_type`도 검증하지 않아,
         VIEWER를 포함한 아무 로그인 사용자가 `subject_type=assignment`로 진행 중인
-        F7 다단계 결재라인과 무관한 rogue 승인 레코드(step=1, approver_id=NULL)를
+        다단계 결재라인과 무관한 rogue 승인 레코드(step=1, approver_id=NULL)를
         만들 수 있었다 — `decide_approval`의 "지정된 승인자만" 체크는
         approver_id가 NULL일 때 통과되므로, 체인 밖의 아무 Admin/Manager가 이
         rogue 레코드를 승인하면 `resolve_assignment_decision`이 subject_id만 보고
-        배정을 조기 확정/반려시킬 수 있었다. 이 엔드포인트는 설계상 F1(브리프)
+        배정을 조기 확정/반려시킬 수 있었다. 이 엔드포인트는 설계상 브리프
         단일승인 전용이었으므로 subject_type을 그 범위로 고정해 우회로를 닫는다.
-        `assignment` 승인은 `POST /api/tasks/{task_id}/assignments`(F6)가 만드는
+        `assignment` 승인은 `POST /api/tasks/{task_id}/assignments`가 만드는
         정식 체인으로만 생성되게 한다.
         """
         if subject_type != "brief":
             raise HTTPException(
                 status_code=400,
-                detail="이 엔드포인트는 brief 승인 전용입니다(assignment는 F6 배정 "
+                detail="이 엔드포인트는 brief 승인 전용입니다(assignment는 배정 "
                 "요청을 통해서만 결재라인이 생성됩니다)",
             )
         brief = conn.execute(
@@ -2847,16 +2995,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if approval is None:
             raise HTTPException(status_code=404, detail="승인 요청을 찾을 수 없습니다")
         if approval["status"] == "waiting":
-            # F7 다단계 결재라인: 이전 단계가 아직 안 끝났다(ADR 결정 3).
+            # 다단계 결재라인: 이전 단계가 아직 안 끝났다.
             raise HTTPException(status_code=409, detail="이전 단계 승인이 필요합니다")
         if approval["status"] != "pending":
-            # NF3: 이미 처리된 승인을 재처리해 결재라인을 우회하지 못하게 막는다.
+            # 이미 처리된 승인을 재처리해 결재라인을 우회하지 못하게 막는다.
             raise HTTPException(status_code=409, detail="이미 처리된 승인입니다")
         if approval["requested_by"] == user["id"]:
-            # ADR 결정 3-A: self-approval 방지
+            # self-approval 방지
             raise HTTPException(
                 status_code=403,
-                detail="본인이 요청한 건은 승인할 수 없습니다(ADR 결정 3-A)",
+                detail="본인이 요청한 건은 승인할 수 없습니다",
             )
         if (
             approval["approver_id"] is not None
@@ -2883,14 +3031,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     conn, subject_type, subject_id, approval["step"]
                 )
                 if not next_step_pending and subject_type == "assignment":
-                    # ADR 결정 7: 체인의 마지막 단계 통과 시에만 최종 확정한다.
+                    # 체인의 마지막 단계 통과 시에만 최종 확정한다.
                     assignment_result = assignments.resolve_assignment_decision(
                         conn, subject_id, True, user["id"]
                     )
                 elif not next_step_pending and subject_type == "deliverable":
                     # Phase 2 — 체인의 마지막 단계 통과 시에만 산출물을 확정한다
-                    # (assignment와 같은 원리, docs/PHASE1_DELIVERABLE_SPEC.md
-                    # 후속 — deliverables.py docstring "Phase 2 설계" 참고).
+                    # (assignment와 같은 원리 — deliverables.py docstring
+                    # "Phase 2 설계" 참고).
                     deliverable_result = deliverables.resolve_deliverable_decision(
                         conn, subject_id, True
                     )
@@ -2944,7 +3092,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index():
-        """F11 — Web UI 셸(코드 재점검 R4). 위 JSON API를 그대로 호출하는 단일
+        """Web UI 셸(코드 재점검 R4). 위 JSON API를 그대로 호출하는 단일
         페이지 바닐라 JS 앱이다 — 새 비즈니스 로직은 없다(webui.py)."""
         return webui.INDEX_HTML
 

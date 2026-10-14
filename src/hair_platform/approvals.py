@@ -1,4 +1,4 @@
-"""F7 — 다단계 결재라인(조직도 매니저 관계 기반 자동 라우팅, ADR 결정 3·SPEC.md §10).
+"""다단계 결재라인(조직도 매니저 관계 기반 자동 라우팅).
 
 `users.manager_id` 체인을 따라 승인 단계를 구성한다. 매니저 체인이 없으면(예: Admin
 본인 요청) 단일 단계로 폴백하고 그 단계는 특정 승인자를 지정하지 않는다
@@ -88,12 +88,91 @@ def skip_remaining_steps(
     )
 
 
+def describe_subject(conn: sqlite3.Connection, subject_type: str, subject_id: int) -> dict:
+    """결재 대상을 사람이 알아볼 수 있는 정보로 풀어준다.
+
+    사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나
+    에이전트명이 표시되지 않는 경우도 있어... 사람이 활용하는 관점으로
+    개선") — `approvals.subject_type`/`subject_id`는 `assignments.id`
+    또는 `deliverables.id`일 뿐이라(그 자체로는 사람이 읽을 수 없는
+    내부 FK), 승인권자가 "결재 대기 #12"만 보고는 무엇을 승인하는지
+    전혀 알 수 없었다 — 다른 탭을 또 열어 역추적해야 했다. `assignments`/
+    `deliverables`를 각각 `tasks`+사람/Agent 이름까지 조인해, "무슨
+    업무에 누구를/누가 쓴 결과물을" 즉시 보여준다.
+
+    대상이 이미 지워졌으면(브리프 삭제 등) 전부 `None`으로 돌아간다 —
+    존재하지 않는 레코드를 에러로 막지 않고 화면에서 "정보 없음"으로
+    자연스럽게 떨어지게 한다."""
+    empty = {
+        "task_id": None,
+        "task_role_name": None,
+        "resource_type": None,
+        "resource_name": None,
+    }
+    if subject_type == "assignment":
+        row = conn.execute(
+            """
+            SELECT a.task_id, a.resource_type, a.resource_id, t.role_name,
+                   hp.name AS human_name,
+                   COALESCE(ap.name, ap.role_name) AS agent_role_name,
+                   tm.name AS team_name
+            FROM assignments a
+            JOIN tasks t ON t.id = a.task_id
+            LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
+            LEFT JOIN agent_pool ap ON ap.id = a.resource_id AND a.resource_type = 'agent'
+            LEFT JOIN teams tm ON tm.id = a.resource_id AND a.resource_type = 'team'
+            WHERE a.id = ?
+            """,
+            (subject_id,),
+        ).fetchone()
+        if row is None:
+            return empty
+        resource_names = {
+            "human": row["human_name"],
+            "agent": row["agent_role_name"],
+            "team": row["team_name"],
+        }
+        return {
+            "task_id": row["task_id"],
+            "task_role_name": row["role_name"],
+            "resource_type": row["resource_type"],
+            "resource_name": resource_names.get(row["resource_type"]),
+        }
+    if subject_type == "deliverable":
+        row = conn.execute(
+            """
+            SELECT d.task_id, d.author_type, d.author_id, t.role_name,
+                   u.username AS human_username,
+                   COALESCE(ap.name, ap.role_name) AS agent_role_name
+            FROM deliverables d
+            JOIN tasks t ON t.id = d.task_id
+            LEFT JOIN users u ON u.id = d.author_id AND d.author_type = 'human'
+            LEFT JOIN agent_pool ap ON ap.id = d.author_id AND d.author_type = 'agent'
+            WHERE d.id = ?
+            """,
+            (subject_id,),
+        ).fetchone()
+        if row is None:
+            return empty
+        resource_names = {
+            "human": row["human_username"],
+            "agent": row["agent_role_name"],
+        }
+        return {
+            "task_id": row["task_id"],
+            "task_role_name": row["role_name"],
+            "resource_type": row["author_type"],
+            "resource_name": resource_names.get(row["author_type"]),
+        }
+    return empty
+
+
 def list_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
-    """Phase 5(통합 인박스, `docs/HAIR_MASTER_PLAN.md` §6)를 위해
+    """Phase 5(통합 인박스)를 위해
     `app.py`의 `GET /api/approvals?scope=inbox`에 있던 로직을 재사용
     가능하게 뽑아냈다(동작 변경 없음, 순수 추출) — "내가 지금 결정할 수
     있는 건"만 보여준다: 아직 `pending`이고, 내가 요청자가 아니며
-    (self-approval 제외, ADR 결정 3-A), Admin이면 전부, 매니저면 승인자
+    (self-approval 제외), Admin이면 전부, 매니저면 승인자
     미지정이거나 나로 지정된 건만. Admin/매니저가 아니면 빈 리스트."""
     if role == "admin":
         rows = conn.execute(

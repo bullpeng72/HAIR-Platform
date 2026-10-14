@@ -92,7 +92,7 @@ def context_for_prompt(query: str, top_k: int = 3, lang: str = DEFAULT_LANG) -> 
 
 def as_crewai_tool(conn=None, top_k: int = 3):
     """외부 자료 검색을 실제 CrewAI Tool로 감싼다(`vectorstore.py`/
-    `graphquery.py`와 같은 패턴 — ADR 결정 12). `conn`은 다른 native
+    `graphquery.py`와 같은 패턴). `conn`은 다른 native
     tool과 시그니처를 맞추기 위한 것뿐 실제로 쓰지 않는다(외부 API
     호출이라 DB가 필요 없다) — `pool_registry.resolve_pool_tools()`가
     모든 native factory를 `factory(conn)`으로 동일하게 호출하기

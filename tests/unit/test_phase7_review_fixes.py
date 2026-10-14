@@ -1,11 +1,11 @@
 """Phase 7 코드 재점검(2026-09-26, R3) 골든셋 — R1/R2 수정 이후 남아있던 3건을
 발견·수정하고 회귀 테스트로 고정한다.
 
-1. GC51: 가중치 스코어링이 role 관련성을 전혀 필터링하지 않아 role이 완전히
+1. 가중치 스코어링이 role 관련성을 전혀 필터링하지 않아 role이 완전히
    다른 후보까지 "매칭 결과"로 추천되던 핵심 매칭 로직 버그를 고쳤다.
-2. GC52/53: `users` 테이블이 비어 있으면 아무도 로그인할 수 없던 콜드스타트
+2. `users` 테이블이 비어 있으면 아무도 로그인할 수 없던 콜드스타트
    불가 상태를 `hair_platform.bootstrap` CLI로 해결했다.
-3. GC54/55: Agent Pool엔 onboard/deprecate 라이프사이클이 있는데 Human Pool은
+3. Agent Pool엔 onboard/deprecate 라이프사이클이 있는데 Human Pool은
    생성 후 수정·오프보딩할 방법이 없던 비대칭을 `PATCH /api/human-pool/{id}`·
    `POST /api/human-pool/{id}/offboard`로 해소했다.
 """
@@ -110,7 +110,7 @@ def test_gc54_human_pool_update_endpoint(client_and_conn):
     row = conn.execute("SELECT * FROM human_pool WHERE id = ?", (human_id,)).fetchone()
     assert "fastapi" in row["skill_tags"]
 
-    # 사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 2,
+    # 사용자 결정(2026-09-29,
     # "(b) Human Pool도 admin 전용으로 좁히기") — cost_estimate는 이제
     # 매니저가 이 일반 PATCH로 못 고친다.
     resp = client.patch(f"/api/human-pool/{human_id}", json={"cost_estimate": 150.0})

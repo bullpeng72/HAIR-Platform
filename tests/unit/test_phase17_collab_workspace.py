@@ -4,33 +4,33 @@
 사람-에이전트협업 프로세스로 펼쳐지고" → "사람이 하는 업무의 경우...
 simple_llm 호출... skill을 사용할 수 있도록").
 
-`docs/PHASE1_DELIVERABLE_SPEC.md`의 GC127-137(Phase 1)에 더해, Phase 2
-(산출물 승인 게이트, 사용자 요청 2026-09-28 "다음 단계 진행해줘")의
-GC138-142, Phase 3(Agent 평가 인라인 연결, 사용자 요청 2026-09-28
-"Phase 3 진행해줘")의 GC143-145, Phase 4(execute-agent 비동기화, 사용자
-요청 2026-09-28 "Phase 4 진행해줘")의 GC146-148, Phase 1-4 리뷰(사용자
-요청 2026-09-28 "Phase1~4까지... 분석하고 개선해줘")의 GC149-152도 이
-파일에 담는다(GC153은 `test_phase15_data_deletion.py`에 있다 — 그
-파일의 `delete_task()`를 고치는 내용이라 그쪽에 뒀다).
+Phase 1에 더해, Phase 2
+(산출물 승인 게이트, 사용자 요청 2026-09-28 "다음 단계 진행해줘"),
+Phase 3(Agent 평가 인라인 연결, 사용자 요청 2026-09-28
+"Phase 3 진행해줘"), Phase 4(execute-agent 비동기화, 사용자
+요청 2026-09-28 "Phase 4 진행해줘"), Phase 1-4 리뷰(사용자
+요청 2026-09-28 "Phase1~4까지... 분석하고 개선해줘")도 이
+파일에 담는다(마지막 리뷰 항목 하나는 `test_phase15_data_deletion.py`에
+있다 — 그 파일의 `delete_task()`를 고치는 내용이라 그쪽에 뒀다).
 
 **실측으로 발견한 진짜 크로스-Phase 버그(리뷰 중)**: `assignments.
 resolve_assignment_decision()`은 원래 `resource_type` 구분 없이 같은
 task의 confirmed 배정을 전부 supersede했다 — Phase 1 이전엔 "task 하나엔
 활성 배정 하나"만 있던 시절이라 문제가 없었지만, 협업 워크스페이스가
 "사람 당사자 + Agent 요청자가 같은 task에 함께 confirmed"를 전제로
-하면서 먼저 확정된 쪽이 나중 확정에 조용히 superseded되는 버그가 됐다
-(`docs/LIMITS.md` §26 참고). GC149로 재현·수정 확인.
+하면서 먼저 확정된 쪽이 나중 확정에 조용히 superseded되는 버그가 됐다.
+아래 테스트로 재현·수정 확인.
 
 **Phase 4 테스트 관례**: `TestClient`는 FastAPI `BackgroundTasks`를 응답
 반환 *전에* 동기로 실행한다는 것을 별도 probe 스크립트로 실측 확인했다
-(`docs/LIMITS.md` §25) — 그래서 `client.post(".../execute-agent")`가
+— 그래서 `client.post(".../execute-agent")`가
 돌아온 시점에 이미 job이 끝나 있고, 곧바로 `GET .../agent-execution-jobs`
 로 최종 상태를 조회할 수 있다. 실제 배포 환경(uvicorn)에서는 HTTP
 응답이 먼저 나가고 그 뒤에 백그라운드 작업이 실행되므로, 이 테스트들이
 확인하는 건 "로직이 맞다"이지 "실제로 응답이 빨리 온다"가 아니다 —
 후자는 라이브 서버 실측으로 별도 확인했다.
 
-**실측으로 발견한 진짜 선행 버그**: `human_pool.user_id`(F8
+**실측으로 발견한 진짜 선행 버그**: `human_pool.user_id`(
 `review_for_member()`가 이미 참조하던 컬럼)를 채울 API가 이 작업 전까지
 전혀 없었다 — `HumanPoolUpdate`에 `user_id` 필드를 추가해서 메웠다. 이게
 없으면 이 파일의 어떤 "사람 당사자(assignee)" 테스트도 통과할 수 없다
@@ -65,7 +65,7 @@ def _make_brief_and_task(client, task_name="백엔드 개발자", skills=None):
 def _confirm_assignment(
     client, task_id, resource_type, resource_id, requester, replaces_assignment_id=None
 ):
-    """요청자를 명시적으로 지정해 로그인한다 — self-approval 방지(ADR 3-A) 때문에
+    """요청자를 명시적으로 지정해 로그인한다 — self-approval 방지 때문에
     반드시 admin1이 아닌 계정으로 요청해야 admin1이 승인할 수 있다.
 
     `replaces_assignment_id`(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
@@ -286,7 +286,7 @@ def test_gc135_execute_agent_includes_latest_human_deliverable(client_and_conn):
         f"/api/tasks/{task_id}/deliverables", json={"content": "요구사항 메모"}
     )
     # manager1은 requester지 assignee가 아니라 사람 작성 deliverable은 못 올린다
-    # (참가자 관계는 있지만 §2-3은 human 작성만 허용 — requester도 참가자이므로
+    # (참가자 관계는 있지만 human 작성만 허용 — requester도 참가자이므로
     # 실제로는 허용된다).
     assert resp.status_code == 201, resp.text
 
@@ -372,9 +372,8 @@ def _execute_agent_and_get_deliverable(
     client, task_id, requester=("manager1", "managerpass")
 ):
     """Phase 4 — execute-agent는 202+job_id만 즉시 돌려준다. TestClient는
-    BackgroundTasks를 응답 반환 전에 동기로 실행하므로(실측 확인,
-    docs/LIMITS.md §25) 이 시점엔 이미 job이 끝나 있다 — job을 조회해
-    deliverable_id를 얻는다."""
+    BackgroundTasks를 응답 반환 전에 동기로 실행하므로(실측 확인) 이
+    시점엔 이미 job이 끝나 있다 — job을 조회해 deliverable_id를 얻는다."""
     _login(client, *requester)
     with patch("hair_platform.llm.call_llm", return_value="Agent 산출물"):
         resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
@@ -411,7 +410,7 @@ def test_gc138_execute_agent_creates_approval_chain_for_deliverable(client_and_c
 
 def test_gc139_self_approval_blocked_then_admin_approves(client_and_conn):
     """manager1이 execute-agent를 트리거했으므로(requested_by=manager1)
-    본인은 그 산출물을 승인할 수 없다(ADR 3-A 재사용) — 다른 승인자(admin1)
+    본인은 그 산출물을 승인할 수 없다(self-approval 방지 재사용) — 다른 승인자(admin1)
     는 승인할 수 있고, 승인되면 deliverable.status='approved'로 바뀌며
     approval_id는 다시 null이 된다."""
     client, _conn = client_and_conn
@@ -471,7 +470,7 @@ def test_gc141_deliverable_approval_appears_in_admin_inbox(client_and_conn):
 def test_gc142_human_draft_deliverable_never_has_approval_id(client_and_conn):
     """사람이 작성한 deliverable은 생성 직후(아직 'draft')엔 승인 게이트
     대상이 아니다 — approval_id가 null이어야 한다. `submit_deliverable()`로
-    명시적으로 제출해야만 결재 체인이 붙는다(GC172 이하)."""
+    명시적으로 제출해야만 결재 체인이 붙는다(아래 테스트들)."""
     client, conn = client_and_conn
     _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
 
@@ -488,7 +487,7 @@ def test_gc142_human_draft_deliverable_never_has_approval_id(client_and_conn):
 
 
 # ---------- Phase 2 후속 — 사람 deliverable 제출/승인(라이브 시나리오 실행에서
-# 발견한 갭 보완, `docs/LIMITS.md` §33-34) ----------
+# 발견한 갭 보완) ----------
 
 
 def test_gc172_submit_human_deliverable_creates_approval_chain(client_and_conn):
@@ -584,7 +583,7 @@ def test_gc175_agent_deliverable_cannot_be_submitted(client_and_conn):
 
 def test_gc176_cannot_resubmit_already_submitted_deliverable(client_and_conn):
     """제출→승인 체인을 우회해 같은 deliverable을 두 번 제출할 수 없다
-    (NF3와 같은 원칙 — 이미 처리된 것의 재처리 금지)."""
+    (같은 원칙 — 이미 처리된 것의 재처리 금지)."""
     client, conn = client_and_conn
     _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
 
@@ -838,7 +837,7 @@ def test_gc148_execution_jobs_endpoint_respects_participant_rbac(client_and_conn
 def test_gc149_human_assignee_and_agent_requester_coexist_confirmed(client_and_conn):
     """실측으로 발견한 크로스-Phase 버그 — 사람 당사자를 먼저 confirmed한
     뒤 같은 task에 Agent 배정도 confirmed하면(협업 워크스페이스의 핵심
-    시나리오), 예전 F5/F6 "재배치" 로직이 resource_type을 구분하지 않아
+    시나리오), 예전 "재배치" 로직이 resource_type을 구분하지 않아
     먼저 확정된 사람 배정이 조용히 superseded 됐었다 — 이제는 서로 다른
     resource_type끼리는 supersede하지 않아야 한다."""
     client, conn = client_and_conn
@@ -890,7 +889,7 @@ def test_gc150_explicit_replace_within_same_resource_type_still_supersedes(
     """**정정(2026-10-06, 다자간 팀 협업 기획 Phase 1+2)**: 같은
     resource_type을 다시 confirmed해도 더 이상 자동으로는 supersede
     안 된다("다중 confirmed 허용" 사용자 결정) — 명시적으로
-    `replaces_assignment_id`를 줘야만 교체된다. 원래 GC150은 "자동으로
+    `replaces_assignment_id`를 줘야만 교체된다. 원래 이 테스트는 "자동으로
     여전히 supersede되는지"였지만, 이제는 "명시하면 여전히 supersede
     가능한지"로 의미가 바뀌었다."""
     client, conn = client_and_conn
@@ -1098,11 +1097,11 @@ def test_gc155_failed_job_shows_friendly_message_for_known_errors(client_and_con
 
 
 def test_gc156_failed_execution_is_recorded_in_audit_log(client_and_conn):
-    """실측으로 발견한 갭(리뷰 3회차) — F13 관례상 `decide_approval()`은
+    """실측으로 발견한 갭(리뷰 3회차) — 관례상 `decide_approval()`은
     승인/반려 둘 다 감사로그에 남기는데(`f"approval_{new_status}"`),
     Agent 실행 실패는 성공(`deliverable_created`)과 달리 감사로그가
     전혀 없었다 — HOTL 감독자가 "이 Agent 실행이 왜/언제 실패했는지"를
-    F13(감사로그) 화면에서 볼 방법이 없었다."""
+    감사로그 화면에서 볼 방법이 없었다."""
     client, conn = client_and_conn
     _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
 
@@ -1128,7 +1127,7 @@ def test_gc156_failed_execution_is_recorded_in_audit_log(client_and_conn):
 
 def _setup_human_assignee_and_agent_requester_task(client, conn):
     """member1이 사람 당사자(assignee)이고 manager1이 Agent 배정을
-    요청(requester)한 task를 만든다 — GC149와 같은 협업 구조지만, 이번엔
+    요청(requester)한 task를 만든다 — 위와 같은 협업 구조지만, 이번엔
     "human assignee가 Agent 실행 버튼을 눌러도 되는가"를 확인하는 데
     쓴다(사람 당사자는 Agent 요청자가 아니므로 실행 권한이 없어야 함)."""
     brief_id, task_id = _make_brief_and_task(client, "겸용 업무 2")
@@ -1235,7 +1234,7 @@ def _fake_openai_embeddings(vectors: dict[str, list[float]]):
 
 
 def test_gc189_execute_agent_records_and_exposes_retrieved_context(client_and_conn):
-    """실측으로 발견한 갭 — VectorDB 그라운딩(ADR 결정 11)이 실제로 뭘
+    """실측으로 발견한 갭 — VectorDB 그라운딩이 실제로 뭘
     검색해 프롬프트에 넣었는지 실행 후엔 어디서도 확인할 수 없었다.
     `agent_execution_jobs.retrieved_context`에 남기고 job 조회 응답으로
     노출해야 한다."""
@@ -1299,7 +1298,7 @@ def test_gc190_execute_agent_without_matching_skill_leaves_retrieved_context_nul
 # ---------- Human Pool 등록 시점 계정 연결(사용자 보고, 2026-10-06) ----------
 # "사람 인력으로 등록되어 있지만 사용자 관리에 등록되지 않은 경우 로그인도
 # 안 돼 일을 할 수 없다" — Human Pool 등록이 로그인 계정과 완전히 무관해서
-# 매칭·배정·승인이 경고 없이 다 통과되던 구조적 갭(docs/LIMITS.md §50)을
+# 매칭·배정·승인이 경고 없이 다 통과되던 구조적 갭을
 # 메운다. "사용자 관리"로 계정을 먼저 만들고, "사람 인력 등록"에서 그
 # 계정을 골라 바로 연결하는 흐름을 지원한다.
 

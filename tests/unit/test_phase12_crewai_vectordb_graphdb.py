@@ -1,5 +1,5 @@
 """Phase 12 — 실제 CrewAI 연동 + VectorDB/GraphDB 기반 Agent 구현
-(사용자 요청, 2026-09-26, "실제 구현해줘" — ADR.md 결정 10·11의 실제 구현).
+(사용자 요청, 2026-09-26, "실제 구현해줘").
 
 **비용/네트워크 발생 방지(중요)**: 이 세션에서 CrewAI 검증 중 실제로 한 번
 비용이 발생하는 사고가 있었다 — `crewai.LLM.call`을 patch해도 CrewAI 내부
@@ -39,7 +39,7 @@ def _crew_output(raw: str, task_raws: list[str]):
     return CrewOutput(raw=raw, tasks_output=tasks_output)
 
 
-# ---------- crew_runtime: 단일 Agent 생성(ADR 결정 10) ----------
+# ---------- crew_runtime: 단일 Agent 생성 ----------
 
 
 def test_gc77_crewai_agent_generator_shapes_result_like_other_generators(
@@ -87,7 +87,7 @@ def test_gc78_generate_with_framework_crewai_records_framework_column(client_and
     assert row["last_output"] == "설계 문서"
 
 
-# ---------- crew_runtime: 다중 Agent 협업(ADR 결정 11) ----------
+# ---------- crew_runtime: 다중 Agent 협업 ----------
 
 
 def _make_two_active_agents(conn):
@@ -292,8 +292,8 @@ def test_gc81_run_crew_captures_real_delegation_events():
     캡처하는지 확인한다(추측이 아니라 실제 이벤트 기반).
 
     **정정(2026-10-06, 사용자 요청 "묶인 Agent간 협업 관계를 다이어그램
-    으로 표시")** — ADR 결정 11이 애초에 "누가 누구에게 무엇을
-    위임했는지" 기록을 약속했는데(`docs/ADR.md:324`), 실제 구현은 "누구
+    으로 표시")** — "누가 누구에게 무엇을
+    위임했는지" 기록을 약속했는데, 실제 구현은 "누구
     에게"(`event.tool_args`의 `coworker`)를 읽지도 않고 버리고 있었다 —
     다이어그램에 화살표 대상이 필요해 다시 보니 발견한 문서-코드
     불일치였다. `to_agent_role`을 추가해 메운다."""
@@ -451,7 +451,7 @@ def test_gc98_run_crew_hierarchical_with_manager_agent_id_does_not_crash(
     crew = captured["crew"]
     assert len(crew.agents) == 1  # 매니저(agent1)는 agents 목록에서 빠졌다
     assert crew.manager_agent is not None
-    assert crew.memory is True  # ADR 결정 10 약속(memory=True) 반영 확인
+    assert crew.memory is True  # memory=True 반영 확인
 
     outputs = {a["agent_id"]: a["output"] for a in result["agents"]}
     assert outputs[agent2] == "분석서"
@@ -494,8 +494,8 @@ def test_gc99_run_crew_validates_manager_agent_id_usage(client_and_conn):
 
 
 def test_gc100_run_crew_sets_max_iter_and_memory_by_default(client_and_conn):
-    """ADR 결정 11이 스스로 "반드시 걸어야 한다"고 적어뒀던 max_iter 상한과,
-    결정 10이 약속한 memory=True가 실제로 세팅되는지 확인한다(둘 다 이전에는
+    """설계 문서가 스스로 "반드시 걸어야 한다"고 적어뒀던 max_iter 상한과,
+    약속한 memory=True가 실제로 세팅되는지 확인한다(둘 다 이전에는
     코드에 반영되지 않았던 문서-코드 불일치였다)."""
     _client, conn = client_and_conn
     admin_id = conn.execute(
@@ -524,8 +524,8 @@ def test_gc101_run_crew_records_audit_log_per_task_via_task_callback(client_and_
     Task 완료마다 감사로그를 남기는지 확인한다. `crewai.Crew.kickoff`를
     실제 CrewAI가 하는 것과 동일하게 각 Task 완료 시점마다
     `self.task_callback(task_output)`을 호출하는 side_effect로 대체해
-    콜백 배선 자체가 진짜로 동작하는지 검증한다(추측 아님, GC81과 같은
-    정신)."""
+    콜백 배선 자체가 진짜로 동작하는지 검증한다(추측 아님, 위임 이벤트
+    캡처 테스트와 같은 정신)."""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
@@ -609,7 +609,7 @@ def test_gc102_task_callback_attributes_hierarchical_output_to_real_worker(
     assert outputs[agent1] is None
 
 
-# ---------- crew_runtime: MCP 연동(ADR 결정 10, 사용자 요청 2026-09-27,
+# ---------- crew_runtime: MCP 연동(사용자 요청 2026-09-27,
 # "crewai-tools의 MCPServerAdapter... 참조해 mcp 기능을 구현해줘") ----------
 
 
@@ -778,7 +778,7 @@ def test_gc106_run_crew_attaches_real_crewai_tool_for_graphdb_agent(client_and_c
     Tool을 붙이는 방식으로 바꿨다 — description은 원문 그대로 두고,
     Agent의 `tools`에 실제 "org_relationship_query" Tool이 붙어서 Agent가
     스스로 호출 여부를 판단하게 한다. (CrewAI Tool 함수명은 2026-10-06에
-    한글→ASCII로 변경됨, docs/LIMITS.md §54 — 설치된 crewai 버전이 함수명을
+    한글→ASCII로 변경됨 — 설치된 crewai 버전이 함수명을
     ASCII로 정규화하며 비-ASCII 문자를 전부 지워 한글 전용 이름이 빈
     문자열이 되는 크래시를 막기 위함.)"""
     _client, conn = client_and_conn
@@ -824,11 +824,11 @@ def test_gc106_run_crew_attaches_real_crewai_tool_for_graphdb_agent(client_and_c
 
 
 def test_gc107_crewai_agent_generator_attaches_vectordb_tool(client_and_conn):
-    """F4 생성 시점(`crewai_agent_generator`)에도 rag 스킬을 요청하면
+    """생성 시점(`crewai_agent_generator`)에도 rag 스킬을 요청하면
     실제 CrewAI Tool이 붙는지 확인한다(사용자 요청, 2026-09-27 — "이미
     생성된 또는 생성하는 AI Agent"에서 둘 다 동작해야 한다는 요구).
     (원래 "vectordb" 별칭으로도 됐으나 자동완성 중복 정리로 2026-10-06에
-    "rag"로 통합됨, docs/LIMITS.md §49.)"""
+    "rag"로 통합됨.)"""
     _client, conn = client_and_conn
     captured = {}
 
@@ -907,11 +907,49 @@ def test_gc85_embed_text_rejects_non_openai_provider():
         vectorstore.embed_text("텍스트", provider="anthropic")
 
 
-# ---------- graphquery(GraphDB 관계분석 Agent) + NF9 경계 ----------
+def test_gc87_truncate_for_embedding_leaves_short_text_untouched():
+    short = "짧은 텍스트"
+    assert vectorstore._truncate_for_embedding(short) == short
+
+
+def test_gc87_truncate_for_embedding_caps_long_text_to_the_tail():
+    long_text = "가" * (vectorstore._MAX_EMBED_CHARS + 500)
+    truncated = vectorstore._truncate_for_embedding(long_text)
+    assert len(truncated) == vectorstore._MAX_EMBED_CHARS
+    assert truncated == long_text[-vectorstore._MAX_EMBED_CHARS :]
+
+
+def test_gc87_embed_text_sends_truncated_input_to_openai():
+    """사용자 보고(2026-10-14, "Error code: 400 - ... maximum context
+    length is 8192 tokens") 재현 — 대화 transcript처럼 아주 긴 텍스트를
+    그대로 넘겨도 실제 API 호출에는 잘린 입력만 전달돼야 한다."""
+    captured = {}
+
+    def _create(model, input):
+        captured["input"] = input
+        item = MagicMock()
+        item.embedding = [0.1, 0.2]
+        resp = MagicMock()
+        resp.data = [item]
+        return resp
+
+    client = MagicMock()
+    client.embeddings.create.side_effect = _create
+
+    huge_text = "질문입니다 " * 3000  # _MAX_EMBED_CHARS(6000)보다 한참 긺
+    assert len(huge_text) > vectorstore._MAX_EMBED_CHARS
+    with patch("openai.OpenAI", return_value=client):
+        vectorstore.embed_text(huge_text)
+
+    assert len(captured["input"]) == vectorstore._MAX_EMBED_CHARS
+    assert captured["input"] == huge_text[-vectorstore._MAX_EMBED_CHARS :]
+
+
+# ---------- graphquery(GraphDB 관계분석 Agent) + 성과 데이터 경계 ----------
 
 
 def test_gc86_graphquery_never_selects_performance_columns():
-    """NF9 경계를 소스 레벨에서 강제한다 — 실제 SQL 쿼리 문자열만 검사한다
+    """경계를 소스 레벨에서 강제한다 — 실제 SQL 쿼리 문자열만 검사한다
     (docstring 설명 문구에 컬럼명이 언급되는 것과는 별개로, 진짜 SELECT
     구문에 성과 컬럼이 들어가면 이 테스트가 잡는다)."""
     import inspect
@@ -988,7 +1026,7 @@ def test_gc89_context_for_prompt_handles_empty_org(client_and_conn):
 def test_gc90_execute_agent_augments_prompt_for_vectordb_role(client_and_conn):
     """(원래 "vectordb"/"rag" 두 별칭을 같이 넣어 테스트했으나, 자동완성
     중복 정리로 2026-10-06에 "vectordb"가 "rag"로 통합돼 "rag" 하나만
-    남음, docs/LIMITS.md §49.)"""
+    남음.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
@@ -1072,10 +1110,10 @@ def test_gc92_execute_agent_does_not_augment_normal_role(client_and_conn):
 def test_gc195_execute_agent_augments_prompt_for_websearch_role(client_and_conn):
     """사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
     API를... 추가해줘") — "외부검색" skill_tags를 가진 Agent는
-    GC90(vectordb)·GC91(graphdb)과 같은 방식으로 실행 전에
+    vectordb·graphdb와 같은 방식으로 실행 전에
     `websearch.search()` 결과를 프롬프트에 덧붙여야 한다. (원래
     "websearch" 별칭으로도 됐으나 자동완성 중복 리포트로 2026-10-06에
-    "외부검색"으로 통합됨, docs/LIMITS.md §49.)"""
+    "외부검색"으로 통합됨.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"

@@ -1,11 +1,11 @@
-"""F5/F6 — 배정 요청·승인 확정 처리(ADR 결정 7: 3중 기록 트랜잭션 원자성).
+"""배정 요청·승인 확정 처리(3중 기록 트랜잭션 원자성).
 
-`assignments`·`assignment_history`·`approvals`(F7 다단계 결재라인, `approvals.py`)는
+`assignments`·`assignment_history`·`approvals`(다단계 결재라인, `approvals.py`)는
 이 모듈이 하나의 트랜잭션으로 묶는다(commit은 호출자가 한다 — decide_approval에서
 audit_log 기록까지 같은 트랜잭션으로 커밋).
 
-F5(조직도)·F6(배분)은 이 모듈이 공유하는 `assignments` 테이블 하나를 통해서만
-데이터를 주고받는다(SPEC.md §10 — 이중 쓰기 방지).
+조직도·배분은 이 모듈이 공유하는 `assignments` 테이블 하나를 통해서만
+데이터를 주고받는다(이중 쓰기 방지).
 """
 
 from __future__ import annotations
@@ -42,14 +42,14 @@ def create_assignment_request(
 ) -> dict:
     """배정 요청(assignments.status='requested') + 결재라인(approvals) + 이력을 커밋한다.
 
-    결재라인은 요청자의 조직도 매니저 체인을 따라 다단계로 구성된다(F7, ADR 결정 3).
+    결재라인은 요청자의 조직도 매니저 체인을 따라 다단계로 구성된다.
     반환하는 `approval_id`는 체인의 1단계(즉시 결정 가능한 단계) id다 — 하위 호환용.
 
     사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
-    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md`. `resource_type="team"`
+    `resource_type="team"`
     이면 `resource_id`는 `teams.id`이고, 결재라인은 **팀 리더**(`team_
     leader_id`, 비워두면 `requested_by`가 기본값)의 매니저 체인을 따른다
-    — "팀의 F7 승인 주체는 팀 리더"라는 사용자 결정을 그대로 반영한다
+    — "팀의 승인 주체는 팀 리더"라는 사용자 결정을 그대로 반영한다
     (요청을 대신 제출한 관리자가 아니라 리더의 조직도 위치가 결재
     경로를 결정). `replaces_assignment_id`를 주면 그 배정이 같은
     `task_id`를 가리키는지 미리 검증한다 — 승인 시점에야 틀렸다는 걸
@@ -124,10 +124,10 @@ def create_assignment_request(
 def create_delegation(
     conn: sqlite3.Connection, task_id: int, agent_id: int, delegated_by: int
 ) -> dict:
-    """SCREEN_UX_BENCHMARK_PROPOSAL.md §4-D(2026-10-12, "Task 카드에 위임/
+    """사용자 요청(2026-10-12, "Task 카드에 위임/
     배정 버튼 분리") — Linear의 "위임(delegation)"/"배정(ownership)" 분리,
     Devin의 Ask/Agent 모드 착안. `create_assignment_request()`("배정",
-    F7 결재 체인 필수)와 달리 **결재 없이 즉시 `status='confirmed'`로
+    결재 체인 필수)와 달리 **결재 없이 즉시 `status='confirmed'`로
     만든다** — `approval_id`는 NULL로 남는다(결재 체인 자체가 없다).
 
     사용자 결정(2026-10-12, "위임은 Gate A-G 그대로 타고, audit_log에도
@@ -142,9 +142,9 @@ def create_delegation(
     알 수 있어야 한다.
 
     agent 전용이다(resource_type='human'/'team'은 이 경량 경로를 쓸
-    이유가 없다 — 사람/팀은 원래부터 F6 배정·F7 결재가 "무겁다"는
-    불만의 대상이 아니었다, §4-D 원문 "Linear 위임/배정 분리"도 AI
-    Agent 전용 개념이다). self-approval 방지(ADR 3-A)는 적용하지
+    이유가 없다 — 사람/팀은 원래부터 배정·결재가 "무겁다"는
+    불만의 대상이 아니었다, "Linear 위임/배정 분리"도 AI
+    Agent 전용 개념이다). self-approval 방지는 적용하지
     않는다 — 승인 단계 자체가 없어 "누가 승인하는지"가 성립하지 않는다
     (위임은 요청자 본인이 즉시 확정한다는 게 설계 그 자체)."""
     task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -194,7 +194,7 @@ def resolve_assignment_decision(
     **정정(2026-10-06, 사용자 요청 — "다중 confirmed 허용의 경우 개별
     배정에도")**: 2026-09-28 수정까지는 "같은 task·같은 resource_type에
     이미 confirmed인 배정이 있으면 자동으로 superseded"였다(재배치
-    전제) — `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 1+2로
+    전제) — 다자간 팀 협업 기획 Phase 1+2로
     "복수의 사람 + 복수의 Agent가 한 task에 동시에 confirmed"를 정식
     지원하면서 이 자동 supersede를 **완전히 없앴다**. 이제 승인은
     기본적으로 아무것도 밀어내지 않고 기존 confirmed 배정들과 공존한다

@@ -1,9 +1,8 @@
-"""Phase 37 — SCREEN_UX_BENCHMARK_PROPOSAL.md §4-D(2026-10-12, "Task 카드에
-위임/배정 버튼 분리" → 사용자 결정 "위임은 Gate A-G 그대로 타고, audit_log에도
-남겨줘").
+"""Phase 37 — "Task 카드에 위임/배정 버튼 분리"(2026-10-12) → 사용자 결정
+"위임은 Gate A-G 그대로 타고, audit_log에도 남겨줘".
 
 "위임"(`POST /api/tasks/{id}/delegate`)은 "배정"(`POST /api/tasks/{id}/
-assignments`)과 달리 F7 결재 체인 없이 즉시 `status='confirmed'`가 된다 —
+assignments`)과 달리 결재 체인 없이 즉시 `status='confirmed'`가 된다 —
 그 결과 (1) `execute-agent`가 평소처럼 바로 쓸 수 있고(Gate A-G는 기존
 `run_agent_execution_job()` 경로가 그대로 매긴다, 이 기능이 추가로 할 일
 없음), (2) `assignment_requested`/`assignment_confirmed`가 아니라 별도
@@ -54,7 +53,7 @@ def test_gc_delegate_confirms_immediately_without_approval_chain(client_and_conn
     assert row["status"] == "confirmed"
     assert row["approval_id"] is None  # 결재 체인 없음
 
-    # 결재 테이블에 이 배정을 가리키는 행이 전혀 없어야 한다(F7을 완전히
+    # 결재 테이블에 이 배정을 가리키는 행이 전혀 없어야 한다(결재를 완전히
     # 건너뛰었다는 것의 직접적인 증거).
     approvals = conn.execute(
         "SELECT * FROM approvals WHERE subject_type = 'assignment' "

@@ -6,7 +6,7 @@ HITL/HOTL로 AI Agent 업무 감독 등이 가능해야해" → "팀이 승인�
 입출력을 처리할 수 있도록" → "사람이 하는 업무의 경우 단순 simple_llm 호출을
 포함하고... skill을 사용할 수 있도록").
 
-`docs/PHASE1_DELIVERABLE_SPEC.md`의 Phase 1 범위(결과물 엔티티 + 내 업무
+Phase 1 범위(결과물 엔티티 + 내 업무
 진입 흐름 + Skill/Tool 역할 재정의)에 더해, Phase 2(산출물 승인 게이트,
 사용자 요청 2026-09-28 "다음 단계 진행해줘")·Phase 3(Agent 평가 인라인
 연결, 사용자 요청 2026-09-28 "Phase 3 진행해줘", 실제 측정 로직은
@@ -18,15 +18,14 @@ HITL/HOTL로 AI Agent 업무 감독 등이 가능해야해" → "팀이 승인�
 동기, `agent_execution_jobs`에 `status='running'` 행을 만들고 즉시
 반환)과 `run_agent_execution_job()`(실제 LLM 호출+평가+deliverable
 생성, `app.py`가 FastAPI `BackgroundTasks`로 응답 전송 후 실행)으로
-쪼갰다. 원래 설계(`docs/COLLABORATION_PLATFORM_PLAN.md` Phase C)는
+쪼갰다. 원래 설계(Phase C)는
 `crew_runtime.run_crew()`(다중 Task Crew)를 대상으로 CrewAI
 `register_before_tool_call_hook()` 기반 도구 호출 단위 일시정지까지
 그렸지만, 실제로 협업 워크스페이스가 쓰는 경로는 단일 LLM 호출인
 `agent_runtime.execute_agent()`라 "실행 중간에 멈출 지점"이 없다 — 그래서
 사용자 결정(2026-09-28)에 따라 스코프를 "비동기 실행+상태 폴링"으로
 좁혔다. 도구 호출 단위 일시정지는 `crew_runtime.run_crew()`용으로 남겨둔
-별도 항목이다(`docs/LIMITS.md` §25, `docs/COLLABORATION_PLATFORM_PLAN.md`
-Phase C).
+별도 항목이다(Phase C).
 
 **`deliverables.status`에 'generating' 상태를 추가하지 않은 이유**:
 SQLite는 기존 테이블의 CHECK 제약을 `ALTER TABLE`로 바꿀 수 없다(테이블
@@ -40,7 +39,7 @@ CHECK을 안전하게 넓힐 방법이 없어, 진행 중 상태는 완전히 �
 `human_pool.id`가 아니라 **`users.id`**다(실제로 글을 쓴 로그인 계정 —
 `audit.record()`의 `actor_id` 관례와 통일). `'agent'`면 `agent_pool.id`.
 
-**구현 시 스펙에서 조정한 것**: §2-6(execute-agent)은 스펙 초안엔
+**구현 시 스펙에서 조정한 것**: execute-agent는 스펙 초안엔
 `crew_runtime.run_crew()`라고 적었으나, 그건 여러 Agent를 Crew로 묶는
 함수라 "이 task에 배정된 Agent 하나를 실행"하는 이번 용도와 안 맞는다 —
 이미 있는 단일 Agent 온디맨드 실행 경로 `agent_runtime.execute_agent()`
@@ -49,14 +48,14 @@ CHECK을 안전하게 넓힐 방법이 없어, 진행 중 상태는 완전히 �
 **Phase 2 설계**: Agent가 만든 deliverable(`status='pending_review'`)이
 생기는 즉시 `approvals.create_approval_chain()`으로 결재 체인을 만든다
 (`requested_by`=execute-agent를 트리거한 사람, `subject_type=
-'deliverable'`) — F7의 다단계 결재라인·ADR 3-A 자기승인 방지를 그대로
+'deliverable'`) — 다단계 결재라인·자기승인 방지를 그대로
 재사용한다(새 승인 로직을 따로 만들지 않는다). 사람이 작성한
 deliverable(`'draft'`)은 자동으로는 승인 대상이 아니다 — Agent 산출물만
 생성 즉시 게이트를 탄다. "수정 후 재제출"(`revises_id`)은 Phase 2
-스코프 밖으로 남긴다(`docs/LIMITS.md` 참고).
+스코프 밖으로 남긴다.
 
-**Phase 2 후속(2026-09-29, 라이브 시나리오 실행에서 발견, `docs/LIMITS.md`
-§33-34)**: 사람 deliverable이 'draft'에 영영 머물고 완료 판정 경로가
+**Phase 2 후속(2026-09-29, 라이브 시나리오 실행에서 발견)**: 사람
+deliverable이 'draft'에 영영 머물고 완료 판정 경로가
 전혀 없다는 갭이 드러나, `submit_deliverable()`로 본인이 명시적으로
 "검토해달라"고 제출하면 그때 같은 결재 체인이 붙도록 했다 — Agent
 경로와 대칭이지만 자동이 아니라 사람이 스스로 트리거해야 한다는 점만
@@ -75,6 +74,7 @@ from hair_platform import (
     audit,
     crew_runtime,
     llm,
+    pool_registry,
     teams,
 )
 
@@ -94,7 +94,7 @@ def task_participant_relationship(
     """이 task의 confirmed 배정에서 user_id가 사람 당사자("assignee")이거나
     Agent 배정 요청자("requester")인지 판정한다. 둘 다 아니면 None —
     `human_pool.user_id`가 없는(로그인 계정 미연결) 사람은 구조적으로 여기
-    걸리지 않는다(`docs/PHASE1_DELIVERABLE_SPEC.md` §1 "알려진 한계").
+    걸리지 않는다(알려진 한계).
 
     사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
     `resource_type='team'`도 판정한다: 그 팀의 **리더**("team_leader")
@@ -130,10 +130,10 @@ def task_participant_relationship(
 
 
 def can_comment_on_task(conn: sqlite3.Connection, task_id: int, actor_id: int) -> bool:
-    """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2) — 댓글
+    """2026-10-08, Phase 2 — 댓글
     작성·열람 권한은 `task_participant_relationship()`보다 넓다: 결재
     없이 "초대"만 된 사람도 댓글은 달 수 있다(결과물 작성·실행 트리거는
-    여전히 기존 참가자 판정만 통과시킨다 — F15 설계 §1 "초대만으로
+    여전히 기존 참가자 판정만 통과시킨다 — "초대만으로
     작성자 자격이 생기진 않는다" 원칙 유지, `task_participant_
     relationship()` 자체는 손대지 않는다). Agent 초대는 이 함수의
     대상이 아니다(Agent는 댓글을 사람처럼 "달 수 있는지" 판정받는
@@ -155,7 +155,7 @@ def invite_participant(
     participant_type: str,
     participant_id: int,
 ) -> dict:
-    """`POST /api/tasks/{task_id}/participants`(F15, Phase 2) — 결재가
+    """`POST /api/tasks/{task_id}/participants`(Phase 2) — 결재가
     필요 없는 가벼운 초대. 누가 초대할 수 있는지(admin/manager 또는
     기존 참가자)는 RBAC role 분기라 `app.py` 라우트에서 판정한다(이
     파일의 기존 관례 — 참가자 전용 판정은 여기, role 분기는 라우트)."""
@@ -207,14 +207,18 @@ def invite_participant(
 
 
 def list_participants(conn: sqlite3.Connection, task_id: int) -> list[dict]:
-    """`GET /api/tasks/{task_id}/participants`(F15, Phase 2).
+    """`GET /api/tasks/{task_id}/participants`(Phase 2).
 
-    `display_name`(Phase 3 추가) — Agent는 `agent_pool.role_name`(댓글
-    `@멘션`에 실제로 써야 하는 정확한 문자열, `detect_mentioned_agents()`
-    와 일치해야 하므로 그대로 노출), 사람은 `users.username`. `GET
-    /api/agent-pool`은 admin/manager 전용이라 일반 참가자는 멘션 대상의
-    정확한 이름을 알 방법이 이것뿐이다 — 참가자 카드에서 그대로
-    보여주기 위해 여기서 조인해 내려준다."""
+    `display_name`(Phase 3 추가) — Agent는 `agent_pool.name`(지정한
+    이름이 있으면 그걸, 없으면 `role_name` — 댓글 `@멘션`에 실제로 써야
+    하는 정확한 문자열, `detect_mentioned_agents()`와 일치해야 하므로
+    그대로 노출), 사람은 `users.username`. `GET /api/agent-pool`은
+    admin/manager 전용이라 일반 참가자는 멘션 대상의 정확한 이름을 알
+    방법이 이것뿐이다 — 참가자 카드에서 그대로 보여주기 위해 여기서
+    조인해 내려준다.
+
+    사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... 호출시
+    (채팅 포함)에도 활용될 수 있도록")로 `name`을 우선한다."""
     rows = conn.execute(
         "SELECT * FROM task_participants WHERE task_id = ? "
         "ORDER BY invited_at ASC, id ASC",
@@ -225,10 +229,10 @@ def list_participants(conn: sqlite3.Connection, task_id: int) -> list[dict]:
         entry = dict(row)
         if entry["participant_type"] == "agent":
             agent = conn.execute(
-                "SELECT role_name FROM agent_pool WHERE id = ?",
+                "SELECT role_name, name FROM agent_pool WHERE id = ?",
                 (entry["participant_id"],),
             ).fetchone()
-            entry["display_name"] = agent["role_name"] if agent else None
+            entry["display_name"] = (agent["name"] or agent["role_name"]) if agent else None
         else:
             user = conn.execute(
                 "SELECT username FROM users WHERE id = ?", (entry["participant_id"],)
@@ -270,10 +274,9 @@ def task_completion_summary(conn: sqlite3.Connection, task_id: int) -> dict:
 def list_all_work(
     conn: sqlite3.Connection, limit: int = 50, offset: int = 0
 ) -> list[dict]:
-    """`GET /api/all-work` — SCREEN_UX_BENCHMARK_PROPOSAL.md §4-B(2026-10-12,
-    "Phase 1 (A)(B)(H1)(H2)(I5)부터 구현 시작해줘") — 할 일 보드가 지금까지
+    """`GET /api/all-work`(2026-10-12) — 할 일 보드가 지금까지
     "내 업무"(`list_my_work()`, user_id로 좁힘)만 보여줄 수 있어 admin/
-    manager가 조직 전체 현황을 한 보드에서 못 봤다(§3 "진짜 갭"). 같은
+    manager가 조직 전체 현황을 한 보드에서 못 봤다("진짜 갭"). 같은
     `tasks`+`assignments` 조인·같은 `task_completion_summary()`를 그대로
     쓰고, `WHERE user_id = ?` 좁힘만 뺐다 — 새 쿼리 로직을 만들지 않는다.
     ADMIN/MANAGER 전용(app.py에서 role 체크, 조직 전체 데이터라 민감)."""
@@ -311,10 +314,10 @@ def list_all_work(
 def list_my_work(
     conn: sqlite3.Connection, user_id: int, limit: int = 50, offset: int = 0
 ) -> list[dict]:
-    """`GET /api/my-work`(§2-1) — 확정된 배정 중 user_id가 사람 당사자이거나
+    """`GET /api/my-work` — 확정된 배정 중 user_id가 사람 당사자이거나
     Agent 배정 요청자인 task 목록. rbac 제약 없음(자기 관련 것만 나온다).
 
-    실측으로 발견한 갭(2026-10-07, SCENARIOS.md 시나리오 5를 "팀 Crew
+    실측으로 발견한 갭(2026-10-07, 시나리오 5를 "팀 Crew
     그룹 실행"만으로 재작성해 라이브 실행하다 발견 — 개별 사람/Agent
     배정 없이 **팀 배정 하나만** 있는 task는 team_leader/team_member
     둘 다 "내 업무"에 전혀 안 떴다) — 이 함수는 `resource_type='team'`
@@ -375,7 +378,7 @@ def list_my_work(
 
 
 def list_deliverables(conn: sqlite3.Connection, task_id: int) -> list[dict]:
-    """`GET /api/tasks/{task_id}/deliverables`(§2-2) — 타임라인 순서(시간순).
+    """`GET /api/tasks/{task_id}/deliverables` — 타임라인 순서(시간순).
 
     Phase 2: `pending_review`인 deliverable엔 지금 결정 가능한(`status=
     'pending'`) 결재 건의 id를 `approval_id`로 함께 내려준다 — 웹 UI가
@@ -384,7 +387,7 @@ def list_deliverables(conn: sqlite3.Connection, task_id: int) -> list[dict]:
 
     Phase 3: `author_type='agent'`인 deliverable엔 `evaluation`(Gate A-G
     점수 + TCR, 없으면 None)도 같이 내려준다 — 결재자가 승인/반려 전에
-    측정치를 볼 수 있어야 한다(`docs/HAIR_MASTER_PLAN.md` §5)."""
+    측정치를 볼 수 있어야 한다."""
     task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
@@ -439,7 +442,7 @@ def create_deliverable(
     content: str,
     content_type: str = "text",
 ) -> int:
-    """`POST /api/tasks/{task_id}/deliverables`(§2-3) — 그 task의 사람
+    """`POST /api/tasks/{task_id}/deliverables` — 그 task의 사람
     당사자/Agent 요청자 본인만 작성할 수 있다(대리 작성 금지 — 관리자/매니저도
     이 함수로는 남 대신 못 쓴다, `app.py`도 role 우회를 안 줌).
 
@@ -478,7 +481,7 @@ def submit_deliverable(
     conn: sqlite3.Connection, deliverable_id: int, actor_id: int
 ) -> dict:
     """`POST /api/deliverables/{id}/submit` — 라이브 시나리오 실행에서 드러난
-    갭(`docs/LIMITS.md` §33)을 메운다: 사람이 작성한 deliverable은 지금까지
+    갭을 메운다: 사람이 작성한 deliverable은 지금까지
     'draft'에 영영 머물렀고 완료 판정 경로가 API에 전혀 없었다. Agent
     산출물이 이미 쓰는 결재 체인(`approvals.create_approval_chain()`)을
     그대로 재사용해 "다 됐으니 검토해달라"는 명시적 제출을 추가한다 — 새
@@ -518,7 +521,7 @@ def submit_deliverable(
 
 
 def list_comments(conn: sqlite3.Connection, deliverable_id: int) -> list[dict]:
-    """`GET /api/deliverables/{id}/comments`(§2-4)."""
+    """`GET /api/deliverables/{id}/comments`."""
     d = conn.execute(
         "SELECT id FROM deliverables WHERE id = ?", (deliverable_id,)
     ).fetchone()
@@ -535,32 +538,41 @@ def list_comments(conn: sqlite3.Connection, deliverable_id: int) -> list[dict]:
 def detect_mentioned_agents(
     conn: sqlite3.Connection, task_id: int, content: str
 ) -> list[dict]:
-    """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) — 댓글 본문에
+    """2026-10-08, Phase 3 — 댓글 본문에
     `@에이전트이름`이 있는지 찾는다. "이름"은 `agent_pool.role_name`이고,
     이 task에 **초대된(task_participants) Agent만** 대상이다(배정
-    여부와 무관 — 가벼운 호출이 F15의 핵심). 한국어 텍스트엔 영어
+    여부와 무관 — 가벼운 호출이 핵심). 한국어 텍스트엔 영어
     `\\b` 같은 단어 경계가 없어 정규식 토큰화 대신 "@역할명" 부분
     문자열 포함 여부로 단순하게 판정한다(역할명에 공백이 있어도
-    문제없다)."""
+    문제없다).
+
+    사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... 호출시
+    (채팅 포함)에도 활용될 수 있도록") — `@role_name`(기존)과
+    `@지정한이름`(신규) 둘 다 인정해 하위 호환을 유지한다."""
     rows = conn.execute(
         """
-        SELECT ap.id, ap.role_name FROM task_participants tp
+        SELECT ap.id, ap.role_name, ap.name FROM task_participants tp
         JOIN agent_pool ap ON ap.id = tp.participant_id
         WHERE tp.task_id = ? AND tp.participant_type = 'agent'
         """,
         (task_id,),
     ).fetchall()
-    return [dict(r) for r in rows if ("@" + r["role_name"]) in content]
+    return [
+        {"id": r["id"], "role_name": r["name"] or r["role_name"]}
+        for r in rows
+        if ("@" + r["role_name"]) in content
+        or (r["name"] and ("@" + r["name"]) in content)
+    ]
 
 
 def create_comment(
     conn: sqlite3.Connection, deliverable_id: int, actor_id: int, content: str
 ) -> dict:
-    """`POST /api/deliverables/{id}/comments`(§2-4) — 부모 task 기준으로
-    참가자 판정(§2-2)을 재사용한다. Phase 1에서는 항상 author_type='human'
+    """`POST /api/deliverables/{id}/comments` — 부모 task 기준으로
+    참가자 판정을 재사용한다. Phase 1에서는 항상 author_type='human'
     (Agent가 댓글을 남기는 경로는 없음).
 
-    ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 2) — 판정을
+    2026-10-08, Phase 2 — 판정을
     `task_participant_relationship()`(결재 거친 정식 참가자만)에서
     `can_comment_on_task()`(정식 참가자 **또는** 초대만 된 사람)로
     넓혔다. 결과물 작성·실행 트리거는 여전히 다른 함수들이 기존의
@@ -614,12 +626,12 @@ def start_comment_triggered_execution(
     actor_id: int,
     prompt: str,
 ) -> int:
-    """ASANA_PARITY_DESIGN_PLAN.md F15(2026-10-08, Phase 3) — 댓글
+    """2026-10-08, Phase 3 — 댓글
     `@멘션`으로 가볍게 Agent를 불러 물어본다. `start_agent_execution()`
     과 달리 confirmed 배정도, Gate 평가도, 결재 체인도 거치지 않는다
     — **사용자 결정(a)**: 결과는 항상 댓글로만 남고, 정식 결과물로
-    승격하려면 사람이 별도로 "결과물로 제출"을 눌러야 한다(F7 우회
-    뒷문을 막기 위한 구조적 선택, 설계 §5 리스크 참고).
+    승격하려면 사람이 별도로 "결과물로 제출"을 눌러야 한다(결재 우회
+    뒷문을 막기 위한 구조적 선택).
 
     `agent_already_running` 가드는 `start_agent_execution()`과 같은
     이유로 재사용한다 — 버튼 실행이든 댓글 트리거든 같은
@@ -716,11 +728,11 @@ def record_decision_comment(
 ) -> int:
     """승인/반려 시 남긴 선택적 사유를 댓글 타임라인에 남긴다(2026-10-07,
     실사용 리뷰로 발견한 갭) — `create_comment()`와 거의 같지만 참가자
-    판정(`task_participant_relationship()`)을 **일부러 건너뛴다**: F7
+    판정(`task_participant_relationship()`)을 **일부러 건너뛴다**:
     결재 체인은 조직도 매니저 체인 기준이라 결재자가 그 task의 참가자가
     아닌 경우가 흔한데(예: 시나리오 3 CS — 다른 task에 배정된 매니저가
     결재), 그 경우 반려해도 "왜"를 시스템에 남길 방법이 전혀 없었다.
-    호출자(`app.py::decide_approval`)가 이미 F7 승인/반려 권한 자체를
+    호출자(`app.py::decide_approval`)가 이미 승인/반려 권한 자체를
     확인했으므로 여기서 다시 참가자 여부를 확인할 필요가 없다 — 오히려
     참가자가 아닌 결재자야말로 이 함수가 메우려는 정확한 사용자층이다."""
     d = conn.execute(
@@ -768,20 +780,18 @@ _CONTENT_TYPE_INSTRUCTIONS = {
 def skill_grounded_system_prompt(
     conn: sqlite3.Connection, role_name: str, required_skills: list[str]
 ) -> str:
-    """§4 — Agent의 skill_tags 매칭과 같은 조회 로직(`skill_pool WHERE name
-    IN (...)`)을 재사용하되, 도구를 붙이는 대신 지식 텍스트를 프롬프트에
-    주입한다."""
-    rows: list[sqlite3.Row] = []
-    if required_skills:
-        placeholders = ",".join("?" * len(required_skills))
-        rows = conn.execute(
-            f"SELECT description FROM skill_pool WHERE name IN ({placeholders})",
-            required_skills,
-        ).fetchall()
-    knowledge = "\n".join(f"- {r['description']}" for r in rows if r["description"])
+    """Agent의 skill_tags 매칭과 같은 조회 로직을 재사용하되, 도구를
+    붙이는 대신 지식 텍스트를 프롬프트에 주입한다(`pool_registry.
+    skill_knowledge_text()`로 공용화 — 2026-10-13, Agent 자율 실행
+    경로에도 같은 지식 주입을 적용하면서 중복 로직을 하나로 모았다)."""
+    knowledge = pool_registry.skill_knowledge_text(conn, required_skills)
     base = llm.system_prompt_for_human_assist(role_name, required_skills)
     if knowledge:
-        return base + "\n\n참고 지식:\n" + knowledge
+        return (
+            base
+            + f"\n\n참고 지식({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n"
+            + knowledge
+        )
     return base
 
 
@@ -794,7 +804,7 @@ def assist(
     model: str | None,
     content_type: str = "text",
 ) -> str:
-    """`POST /api/tasks/{task_id}/assist`(§2-5) — "LLM으로 도와줘". 결과는
+    """`POST /api/tasks/{task_id}/assist` — "LLM으로 도와줘". 결과는
     저장하지 않는다(사람이 검토·편집 후 `create_deliverable()`로 별도
     제출). provider/model이 팀원 요청인지 확인하는 RBAC은 `app.py`가
     한다(이 함수는 role을 모른다 — 참가자 여부만 확인).
@@ -861,14 +871,14 @@ def start_agent_execution(
     agent_id: int | None = None,
     content_type: str = "text",
 ) -> dict:
-    """`POST /api/tasks/{task_id}/execute-agent`(§2-6, Phase 4로 비동기화) —
+    """`POST /api/tasks/{task_id}/execute-agent`(Phase 4로 비동기화) —
     이 task의 confirmed agent 배정을 찾아 검증·프롬프트 구성까지만
     동기로 마치고 `agent_execution_jobs`에 `status='running'` 행을 만든
     뒤 즉시 반환한다. 실제 LLM 호출은 `run_agent_execution_job()`이
     `app.py`의 `BackgroundTasks`로 응답 전송 후 처리한다 — 요청자 본인
     이거나(`allow_supervisor_override=False`) 매니저/관리자(`True`)면
-    통과. 가장 최근 사람 작성 deliverable을 Task 입력에 포함시킨다(§1
-    "출력 처리" — "결과물 전달" 갭을 메우는 지점).
+    통과. 가장 최근 사람 작성 deliverable을 Task 입력에 포함시킨다
+    ("출력 처리" — "결과물 전달" 갭을 메우는 지점).
 
     `agent_id`는 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2)
     으로 추가했다 — "다중 confirmed 허용"으로 한 task에 confirmed agent
@@ -920,7 +930,7 @@ def start_agent_execution(
 
     # 실측으로 발견한 갭(2026-09-28, 리뷰 2회차) — 이 함수는 원래 같은
     # task에 이미 'running' job이 있어도 확인 없이 새 job을 또 만들었다.
-    # Web UI는 버튼을 비활성화해 막지만(§25), 빠른 연속 클릭이나 여러
+    # Web UI는 버튼을 비활성화해 막지만, 빠른 연속 클릭이나 여러
     # 탭/직접 API 호출은 이 검증을 우회한다 — 그러면 같은 트리거로 두
     # 번의 실제 LLM 호출(비용 이중 지출)과 두 개의 독립된 deliverable+
     # 결재 체인이 생긴다. Web UI 가드에만 기대지 않고 서버 쪽에서도
@@ -975,6 +985,24 @@ def start_agent_execution(
     }
 
 
+def _prompt_snapshot_json(retrieval_sink: dict) -> str | None:
+    """`agent_runtime.execute_agent()`가 side-channel로 채워준
+    system_prompt/augmented_prompt/llm_provider/llm_model을 `agent_
+    execution_jobs.prompt_snapshot`에 저장할 JSON으로 묶는다(사용자
+    요청, 2026-10-13, "문서 내용에서 얻을 인사이트" → 재현 가능한
+    감사로그). 아무것도 안 채워졌으면(예: Agent 조회 자체가 실패해
+    `execute_agent()` 본문에 못 들어간 경우) `None` — 빈 JSON 문자열을
+    남겨 "시도는 했지만 내용이 없다"처럼 보이게 하지 않는다."""
+    if not retrieval_sink:
+        return None
+    snapshot = {
+        k: retrieval_sink[k]
+        for k in ("system_prompt", "augmented_prompt", "llm_provider", "llm_model")
+        if k in retrieval_sink
+    }
+    return json.dumps(snapshot, ensure_ascii=False) if snapshot else None
+
+
 def run_agent_execution_job(
     conn: sqlite3.Connection,
     job_id: int,
@@ -1000,11 +1028,16 @@ def run_agent_execution_job(
     # 그라운딩이 실제로 뭘 검색해 프롬프트에 넣었는지 사후 확인할 방법이
     # 없었다(결재자가 "실제 근거 기반 답변인지" 검증 불가). side-channel
     # dict로 받아 job에 같이 남긴다.
+    #
+    # 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 재현
+    # 가능한 감사로그) — 같은 side-channel에 system_prompt·증강된
+    # 프롬프트·그 시점 provider/model까지 추가로 실어 `prompt_snapshot`
+    # JSON으로 저장한다(성공/실패 둘 다 — 실패도 "무엇을 시도했는지"는
+    # 남겨야 사후 재현·디버깅이 된다).
     retrieval_sink: dict = {}
     try:
         # Phase 3 — 실제 LLM 호출을 agent_evaluation.run_and_score()로
-        # 감싸 Gate A-G를 그 자리에서 측정한다(docs/HAIR_MASTER_PLAN.md
-        # §5).
+        # 감싸 Gate A-G를 그 자리에서 측정한다.
         eval_result = agent_evaluation.run_and_score(
             role_name,
             lambda: agent_runtime.execute_agent(
@@ -1031,8 +1064,14 @@ def run_agent_execution_job(
         approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
         conn.execute(
             "UPDATE agent_execution_jobs SET status = 'succeeded', deliverable_id = ?, "
-            "retrieved_context = ?, finished_at = datetime('now') WHERE id = ?",
-            (deliverable_id, retrieval_sink.get("retrieved_context"), job_id),
+            "retrieved_context = ?, prompt_snapshot = ?, finished_at = datetime('now') "
+            "WHERE id = ?",
+            (
+                deliverable_id,
+                retrieval_sink.get("retrieved_context"),
+                _prompt_snapshot_json(retrieval_sink),
+                job_id,
+            ),
         )
         audit.record(
             conn,
@@ -1054,14 +1093,14 @@ def run_agent_execution_job(
         friendly_error = _friendly_execution_error(exc)
         conn.execute(
             "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "
-            "finished_at = datetime('now') WHERE id = ?",
-            (friendly_error, job_id),
+            "prompt_snapshot = ?, finished_at = datetime('now') WHERE id = ?",
+            (friendly_error, _prompt_snapshot_json(retrieval_sink), job_id),
         )
-        # 실측으로 발견한 갭(리뷰 3회차) — F13("모든 쓰기 액션... 조회")
+        # 실측으로 발견한 갭(리뷰 3회차) — "모든 쓰기 액션... 조회"
         # 관례상 `decide_approval()`은 approved/rejected 둘 다 감사로그에
         # 남기는데(`f"approval_{new_status}"`), 이 실패 경로만 감사로그가
         # 없었다 — HOTL 감독자가 "이 Agent 실행이 왜/언제 실패했는지"를
-        # F13 화면에서 못 보고 있었다. 성공 경로(`deliverable_created`)와
+        # 감사로그 화면에서 못 보고 있었다. 성공 경로(`deliverable_created`)와
         # 대칭으로 남긴다.
         audit.record(
             conn,
@@ -1085,7 +1124,7 @@ def start_team_crew_execution(
     """`POST /api/tasks/{task_id}/execute-team-crew` — 사용자 요청
     (2026-10-07, "crew 실행에서... 복수 그룹 가능하도록 개선, 이 그룹이
     전체 업무에서 사람-에이전트 연동이 가능한 구조인지 확인") —
-    `docs/MULTI_PARTY_TEAM_COLLABORATION_PLAN.md` Phase 3. 이 할 일에
+    Phase 3. 이 할 일에
     confirmed로 배정된 **팀 하나**의 Agent 멤버 전원을 실제 CrewAI
     Crew로 묶어 실행한다(사용자 결정 — 한 할 일에 팀이 여러 개 배정돼
     있어도 "팀 하나를 골라서 실행", 전부 동시 실행 아님).
@@ -1167,7 +1206,7 @@ def run_team_crew_job(
     """`start_team_crew_execution()`이 만든 job들을 실제로 실행한다 —
     `run_agent_execution_job()`과 같은 백그라운드 경계(예외가 여기서
     끝난다, 실패도 job 행에 기록). 팀의 Agent별 산출물 각각을
-    `deliverables`(author_type='agent') + F7 결재 체인으로 만든다 —
+    `deliverables`(author_type='agent') + 결재 체인으로 만든다 —
     이 순간부터 팀 리더·팀원(사람)이 협업 워크스페이스에서 그 결과물을
     보고 댓글·승인/반려할 수 있다(이 함수가 Crew를 업무 파이프라인에
     연결하는 지점)."""
@@ -1265,7 +1304,16 @@ def list_execution_jobs(conn: sqlite3.Connection, task_id: int) -> list[dict]:
         "ORDER BY created_at DESC, id DESC",
         (task_id,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    jobs = [dict(r) for r in rows]
+    for job in jobs:
+        # 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 재현
+        # 가능한 감사로그) — skill_tags/mcp_servers와 같은 관례로, JSON
+        # 컬럼은 저장만 하지 않고 여기서 파싱해 돌려준다(화면이 직접
+        # JSON.parse 안 해도 되게).
+        job["prompt_snapshot"] = (
+            json.loads(job["prompt_snapshot"]) if job["prompt_snapshot"] else None
+        )
+    return jobs
 
 
 def reap_orphaned_execution_jobs(conn: sqlite3.Connection) -> int:
@@ -1276,8 +1324,8 @@ def reap_orphaned_execution_jobs(conn: sqlite3.Connection) -> int:
     실행 도중 죽으면(배포 재시작, 크래시) 그 job은 영원히 `running`으로
     남고, Web UI는 그 task의 "AI 에이전트 실행" 버튼을 계속 비활성화한
     채로 막아버린다(재시작해도 절대 안 풀림 — 새로고침을 아무리 해도
-    복구 불가능한 UI 먹통 상태였다). `docs/LIMITS.md` §3이 이미 이
-    앱을 "단일 프로세스" 전제로 명시하므로, `create_app()` 기동 시점에
+    복구 불가능한 UI 먹통 상태였다). 이 앱은 "단일 프로세스" 전제이므로,
+    `create_app()` 기동 시점에
     `running`으로 남은 job은 전부 이전 프로세스의 잔재로 확정할 수
     있다 — 그래서 앱 기동 시 이 함수로 전부 `failed`로 정리한다."""
     rows = conn.execute(
@@ -1296,7 +1344,7 @@ def reap_orphaned_execution_jobs(conn: sqlite3.Connection) -> int:
 
 
 def get_task_detail(conn: sqlite3.Connection, task_id: int) -> dict | None:
-    """ASANA_PARITY_DESIGN_PLAN.md F17/F19(2026-10-08) — `GET /api/tasks/
+    """2026-10-08 — `GET /api/tasks/
     {task_id}`. 지금까지 Task 단건을 직접 조회하는 엔드포인트가 없었다
     (`GET /api/briefs/{brief_id}/tasks`로 간접 조회만 가능 — `app.py`가
     명시적 dict를 만들어 반환하는 곳이라 `notes` 같은 새 컬럼이 추가돼도
@@ -1313,7 +1361,7 @@ def get_task_detail(conn: sqlite3.Connection, task_id: int) -> dict | None:
 def update_task_notes(
     conn: sqlite3.Connection, task_id: int, actor_id: int, notes: str
 ) -> dict:
-    """`PATCH /api/tasks/{task_id}/notes`(F17) — `create_comment()`와 같은
+    """`PATCH /api/tasks/{task_id}/notes` — `create_comment()`와 같은
     참가자 판정(`task_participant_relationship()`)을 재사용한다. 결재가
     필요 없는 가벼운 메모라 승인 체인을 타지 않는다."""
     task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -1335,9 +1383,9 @@ def update_task_notes(
 def update_task_status(
     conn: sqlite3.Connection, task_id: int, actor_id: int, status: str
 ) -> dict:
-    """`PATCH /api/tasks/{task_id}/status`(F16, Phase 4) — 할 일 보드
+    """`PATCH /api/tasks/{task_id}/status`(Phase 4) — 할 일 보드
     칸반 상태 이동. `update_task_notes()`와 같은 참가자 전용 판정(admin/
-    manager도 이 task의 참가자가 아니면 못 바꾼다 — F17 때 정한 관례를
+    manager도 이 task의 참가자가 아니면 못 바꾼다 — 그때 정한 관례를
     그대로 따른다, 조직도 감독 권한과 "이 업무를 직접 진행 중인지"는
     별개 개념)."""
     task = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -1365,7 +1413,7 @@ def update_task_status(
 def update_task_priority(
     conn: sqlite3.Connection, task_id: int, actor_id: int, priority: str
 ) -> dict:
-    """`PATCH /api/tasks/{task_id}/priority`(F16, Phase 4) — `update_task_
+    """`PATCH /api/tasks/{task_id}/priority`(Phase 4) — `update_task_
     status()`와 같은 참가자 전용 판정."""
     task = conn.execute(
         "SELECT priority FROM tasks WHERE id = ?", (task_id,)
@@ -1401,7 +1449,7 @@ def _would_create_cycle(
     `task_id`에 의존하고 있으면 — 거기에 "`task_id`가 `depends_on_
     task_id`에 의존한다"는 edge까지 더하는 순간 고리가 닫힌다. Task
     개수가 많지 않은 전제라 인덱스 없는 순수 DFS로 충분하다(설계 문서
-    §2 F16 그대로)."""
+    그대로)."""
     if task_id == depends_on_task_id:
         return True
     visited: set[int] = set()
@@ -1424,7 +1472,7 @@ def _would_create_cycle(
 def add_task_dependency(
     conn: sqlite3.Connection, task_id: int, actor_id: int, depends_on_task_id: int
 ) -> dict:
-    """`POST /api/tasks/{task_id}/dependencies`(F16, Phase 4) —
+    """`POST /api/tasks/{task_id}/dependencies`(Phase 4) —
     참가자 전용(위와 같은 관례). 자기참조는 DB CHECK로도 막혀 있지만
     (`db.py`), 더 명확한 에러 메시지를 위해 여기서도 먼저 본다. 간접
     순환은 `_would_create_cycle()`로 애플리케이션 레벨에서 검사한다
@@ -1473,7 +1521,7 @@ def remove_task_dependency(
     conn: sqlite3.Connection, task_id: int, actor_id: int, depends_on_task_id: int
 ) -> None:
     """`DELETE /api/tasks/{task_id}/dependencies/{depends_on_task_id}`
-    (F16, Phase 4) — 설계 문서엔 명시되지 않았지만, 잘못 추가한 의존
+    (Phase 4) — 설계 문서엔 명시되지 않았지만, 잘못 추가한 의존
     관계를 되돌릴 방법이 전혀 없으면 이 기능 자체가 위험해진다(한 번
     실수하면 영구히 그 task가 막힌 것처럼 보임) — POST의 자연스러운
     대칭으로 추가했다."""
@@ -1499,7 +1547,7 @@ def remove_task_dependency(
 
 
 def task_dependency_graph(conn: sqlite3.Connection, task_id: int) -> dict:
-    """`GET /api/tasks/{task_id}/dependencies`(F16, Phase 4) — **사용자
+    """`GET /api/tasks/{task_id}/dependencies`(Phase 4) — **사용자
     결정**(2026-10-08, "Riido 수준의 그래프 시각화로"): 이 task 하나의
     직접 선행/후행 목록이 아니라, 이 task가 속한 의존관계 그래프의
     **연결된 컴포넌트 전체**(양방향 BFS/DFS)를 반환한다 — 그래야
@@ -1621,15 +1669,15 @@ ORDER BY created_at DESC, id DESC
 
 
 def task_activity(conn: sqlite3.Connection, task_id: int) -> list[dict]:
-    """`GET /api/tasks/{task_id}/activity`(F19) — 배정·결과물·댓글·Agent
+    """`GET /api/tasks/{task_id}/activity` — 배정·결과물·댓글·Agent
     실행·결재·Task 자체 변경을 한 타임라인으로 합친다. 지금까지는 이
     흐름을 보려면 협업 워크스페이스 화면 여러 섹션(배정 이력, 결과물
     목록, 댓글, 실행 Job, 결재)을 전부 직접 스캔해야 했다.
 
-    `audit_log`는 엔티티별로 제각각인 `subject_type`을 쓰므로(§
+    `audit_log`는 엔티티별로 제각각인 `subject_type`을 쓰므로(
     `audit.record()` 호출부 전수조사로 확정: 'assignment'/'deliverables'/
     'deliverable_comments'/'agent_execution_jobs'/'approval'/'tasks'/
-    'task_dependencies'(F16, Phase 4 추가)), task_id로 되짚어가는 경로가
+    'task_dependencies'(Phase 4 추가)), task_id로 되짚어가는 경로가
     엔티티마다 다르다 — `UNION ALL`로 전부 모은다. 한 가지 예외:
     `team_crew_execution_started`(`deliverables.start_team_crew_
     execution()`)는 `subject_id=None`으로 기록되고 대신 `after_value`

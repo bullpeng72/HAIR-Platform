@@ -2,14 +2,14 @@
 "각 메뉴에서 데이터 삭제나, 초기화 기능 추가").
 
 범위(사용자가 명시적으로 선택): 도구/스킬 Pool + 사람/AI 에이전트 Pool +
-업무 요청/할 일(brief/task)까지. 활동 기록(감사로그)은 NF10(append-only)에
+업무 요청/할 일(brief/task)까지. 활동 기록(감사로그)은 append-only 원칙에
 따라 DB 트리거가 삭제를 막고 있어 제외한다.
 
 전부 `PRAGMA foreign_keys=ON`(`db.get_connection`)이 걸린 채로 테스트해
 FK 순서를 어기면 `sqlite3.IntegrityError`가 실제로 나는 것까지 확인한다
 (추측이 아니라 진짜 제약 위반 여부를 실측).
 
-GC153(Phase 1-4 리뷰, 사용자 요청 2026-09-28 "Phase1~4까지... 분석하고
+Phase 1-4 리뷰(사용자 요청 2026-09-28 "Phase1~4까지... 분석하고
 개선해줘")도 이 파일에 담는다 — `delete_task()`가 이 파일 작성 당시엔
 없던 `deliverables`/`agent_evaluations`/`agent_execution_jobs`(Phase
 1/3/4)를 몰라 FK 위반을 냈던 갭을 재현·검증한다.
@@ -45,7 +45,7 @@ def _make_task_with_candidate(client, task_name="백엔드 개발자"):
 
 def _confirm_assignment(client, task_id, resource_type, resource_id):
     """요청자(manager1)와 승인자(admin1)를 명시적으로 분리한다 — self-
-    approval 방지(ADR 결정 3-A) 때문에 호출 시점에 이미 admin1으로
+    approval 방지 때문에 호출 시점에 이미 admin1으로
     로그인돼 있으면(예: 직전에 다른 admin 전용 API를 호출한 뒤) 요청 자체가
     admin1 명의로 나가 승인이 403으로 막힌다(실제로 겪은 테스트 버그)."""
     _login(client, "manager1", "managerpass")
@@ -119,7 +119,7 @@ def test_gc118_delete_brief_cascades_everything_below_it(client_and_conn):
     )
     assert resp.status_code == 201
 
-    # F4 생성으로 jobs/job_items도 만들어 브리프 아래 전부 걸리게 한다.
+    # 생성으로 jobs/job_items도 만들어 브리프 아래 전부 걸리게 한다.
     resp2 = client.post(
         f"/api/briefs/{brief_id}/tasks",
         json={"tasks": [{"role_name": "다른역할", "required_skills": []}]},
@@ -158,7 +158,7 @@ def test_gc118_delete_brief_cascades_everything_below_it(client_and_conn):
         ).fetchone()["c"]
         == 0
     )
-    # F4가 만든 agent_pool 행 자체는 살아있어야 한다(source_job_item_id만 NULL로).
+    # 생성이 만든 agent_pool 행 자체는 살아있어야 한다(source_job_item_id만 NULL로).
     agent_row = conn.execute(
         "SELECT * FROM agent_pool WHERE role_name = '다른역할'"
     ).fetchone()
@@ -321,13 +321,13 @@ def test_gc153_delete_task_cascades_deliverables_after_assignment_superseded(
     client_and_conn,
 ):
     """실측으로 발견한 갭(사용자 요청, 2026-09-28, "Phase1~4까지...
-    분석하고 개선해줘") — 이 함수는 §19(Phase 15) 때 작성돼 그 뒤에
+    분석하고 개선해줘") — 이 함수는 Phase 15 때 작성돼 그 뒤에
     생긴 `deliverables`/`deliverable_comments`/`agent_evaluations`/
     `agent_execution_jobs`(Phase 1/3/4)를 몰랐다. Agent 배정이
     confirmed였다가 재배치로 superseded되면(더 이상 `confirmed`가
     아니므로 `_confirmed_assignment_exists`를 통과) task를 지울 때
     남아있는 deliverable이 FK 위반(`sqlite3.IntegrityError`)을 일으켰다
-    — 이제는 §19 설계 원칙 1번("완전한 연쇄 삭제")대로 전부 같이
+    — 이제는 설계 원칙 1번("완전한 연쇄 삭제")대로 전부 같이
     지워져야 한다."""
     from unittest.mock import patch
 

@@ -1,4 +1,4 @@
-"""Phase 3 v4 골든셋 10건 — F8 성과리뷰(동의기반), F10 비용 조회(SPEC.md §9)."""
+"""Phase 3 v4 골든셋 10건 — 성과리뷰(동의기반), 비용 조회."""
 
 from __future__ import annotations
 
@@ -17,12 +17,11 @@ def _make_human(client, name="후보A", role="백엔드 개발자", cost=100.0):
     return resp.json()["id"]
 
 
-# ---- F8: 성과리뷰(동의 기반) ------------------------------------------------
+# ---- 성과리뷰(동의 기반) ------------------------------------------------
 
 
 def test_gc27_performance_score_rejected_without_consent(client_and_conn):
-    """사용자 결정(2026-09-29, `docs/ROLE_TASK_CLASSIFICATION.md` 갭 2,
-    "(b) Human Pool도 admin 전용으로 좁히기")로 이 엔드포인트가 admin
+    """사용자 결정(2026-09-29)로 이 엔드포인트가 admin
     전용이 됐다 — 동의 거부를 실제로 테스트하려면 admin으로 호출해야
     role 403이 아니라 consent 403을 확인할 수 있다."""
     client, _ = client_and_conn
@@ -191,7 +190,7 @@ def test_gc33_review_includes_confirmed_assignment_count(client_and_conn):
     assert row["confirmed_assignments"] == 1
 
 
-# ---- F10: 비용 조회 ----------------------------------------------------------
+# ---- 비용 조회 ----------------------------------------------------------
 
 
 def test_gc34_cost_report_rbac_admin_manager_only(client_and_conn):

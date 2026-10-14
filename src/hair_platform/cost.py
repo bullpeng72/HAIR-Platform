@@ -1,5 +1,5 @@
-"""F10 — 비용 조회. 1차 범위: 사람·Agent 비용 모두 수동 입력이다(HR 연동·실 LLM
-과금 연동은 SPEC.md §12 오픈 이슈로 이월). Admin·매니저만 조회 가능(RBAC 매트릭스).
+"""비용 조회. 1차 범위: 사람·Agent 비용 모두 수동 입력이다(HR 연동·실 LLM
+과금 연동은 오픈 이슈로 이월). Admin·매니저만 조회 가능(RBAC 매트릭스).
 """
 
 from __future__ import annotations
@@ -56,7 +56,9 @@ def report(conn: sqlite3.Connection) -> dict:
             {
                 "type": "agent",
                 "id": row["id"],
-                "name": None,
+                # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
+                # 전엔 Agent는 이름 개념 자체가 없어 항상 None이었다.
+                "name": row["name"],
                 "role": row["role_name"],
                 "cost_estimate": row["cost_estimate"],
                 "confirmed_assignments": count,

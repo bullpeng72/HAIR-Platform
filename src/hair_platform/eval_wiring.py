@@ -1,8 +1,8 @@
-"""Gate A–G 평가 배선 — SPEC.md §12 오픈 이슈였던 agent-evaluator SDK 통합.
+"""Gate A–G 평가 배선 — 오픈 이슈였던 agent-evaluator SDK 통합.
 
 **배선만 되어 있다(사용자 선택, 2026-09-25)**: `evaluate_generation()`을 호출하면
 실제로 Gate 측정이 실행된다. 이 함수가 감싸는 `jobs.create_and_run_job()`은
-결정론적 스텁(`default_stub_generator`, LLM 미사용 — ADR 결정 2)만 호출하고,
+결정론적 스텁(`default_stub_generator`, LLM 미사용)만 호출하고,
 아래 설정도 `llm_judge`·환각탐지를 켜지 않았으므로 **호출해도 Anthropic/OpenAI
 API를 부르지 않는다 — 이 배선 자체는 비용이 들지 않을 것으로 보인다**(단, 이건
 이 세션의 판단이지 실측은 아니다 — 실행 전 `agent-eval check`로 직접 확인 권장).
@@ -21,12 +21,12 @@ API를 부르지 않는다 — 이 배선 자체는 비용이 들지 않을 것�
 추가했다 — 이전까지는 "배선 완료"라고 해놓고 실제로 끝까지 실행해본
 적이 없어서 이 갭이 발견되지 않았었다.
 
-한계(정직하게 명시, docs/LIMITS.md §1 참고): `default_stub_generator`는
+한계(정직하게 명시): `default_stub_generator`는
 "역할명·스킬을 그대로 되돌려주는" 규칙기반 스텁이라 Gate A(응답품질)·G(설명가능성)
 가 요구하는 "실제 판단 근거"가 없다. 이 배선으로 처음 측정하면 낮은 점수가 나올
 가능성이 높다 — 이건 버그가 아니라 스텁의 정직한 한계를 드러내는 것이다.
-AgentForge의 Spec Interpreter/Code Generator가 실제로 vendor/import되면(SPEC.md
-§12 남은 일) 그때 이 배선이 의미 있는 점수를 낸다. Gate C(재현성)는 스텁이
+AgentForge의 Spec Interpreter/Code Generator가 실제로 vendor/import되면
+그때 이 배선이 의미 있는 점수를 낸다. Gate C(재현성)는 스텁이
 결정론적이라 항상 100%로 나와 정보가 없고, Gate F(멀티에이전트 조율)는 에이전트
 간 위임이 없어 애초에 해당 사항이 없다 — 둘 다 이 배선 대상에서 제외했다.
 """
@@ -122,7 +122,7 @@ def _run_generation(
 def evaluate_generation(
     role_name: str, required_skills: list[str]
 ) -> tuple[str, EvalMetadata]:
-    """F4 생성 파이프라인 Gate A/B/D/E/G 측정용. 호출하면 실제로 실행된다."""
+    """Agent 생성 파이프라인 Gate A/B/D/E/G 측정용. 호출하면 실제로 실행된다."""
     return _run_generation(role_name, required_skills)
 
 

@@ -1,4 +1,4 @@
-"""Skill Pool·Tool Pool — ADR.md 결정 12(사용자 요청, 2026-09-27, "tool_pool·
+"""Skill Pool·Tool Pool — 사용자 요청(2026-09-27, "tool_pool·
 skill_pool 테이블도 실제로 구현해줘").
 
 이전까지 "어떤 skill_tags를 가진 Agent가 어떤 도구를 쓰는지"는 두 곳에
@@ -28,7 +28,7 @@ import json
 import sqlite3
 from contextlib import ExitStack
 
-from hair_platform import audit, graphquery, vectorstore, websearch
+from hair_platform import audit, graphquery, sandbox, vectorstore, websearch
 
 NATIVE_TOOL_FACTORIES = {
     "vectordb_search": vectorstore.as_crewai_tool,
@@ -40,7 +40,7 @@ NATIVE_TOOL_FACTORIES = {
 def mcp_serverparams(cfg: dict):
     """MCP 서버 접속 파라미터를 만든다 — `command`가 있으면 stdio(로컬
     프로세스), 없으면 `url` 기반 SSE/streamable-http로 판별한다(`crewai-
-    tools`/`mcpadapt` 실제 소스로 확인한 형태, ADR 결정 10)."""
+    tools`/`mcpadapt` 실제 소스로 확인한 형태)."""
     if cfg.get("command"):
         from mcp import StdioServerParameters  # 지연 import — crewai-tools[mcp] 필요
 
@@ -65,6 +65,73 @@ def connect_mcp_tools(stack: ExitStack, cfg: dict) -> list:
     return list(adapter)
 
 
+# 사용자 요청(2026-10-13, "@데코레이터 툴을 추가 생성할 수 있는 기능을
+# 제공해줘") — 지금까지 `NATIVE_TOOL_FACTORIES`가 하드코딩 dict라
+# 관리자가 새 `@tool` 함수를 쓰려면 반드시 개발자가 코드를 고쳐야 했다
+# (자유도 낮음, 직전 분석에서 지적한 지점). `tool_pool.kind=
+# 'custom_python'`으로 Python 함수 소스를 등록하면 코드 수정 없이 새
+# 도구를 추가할 수 있게 한다.
+#
+# **신뢰 경계를 솔직히 기록한다**: 이건 테넌트 격리가 아니라 admin
+# 신뢰다 — admin은 이미 `mcp_stdio` 도구로 임의 명령을 서버에서 띄울 수
+# 있으므로(`app.py`의 "(a) MCP 종류만 admin 전용으로 좁히기" 결정 참고),
+# 이 기능이 admin에게 새로 주는 권한은 사실상 없다(그래서 같은 등급으로
+# admin 전용으로 묶는다 — 아래 `app.py` 쪽 게이팅 참고). Docker가 있으면
+# `--network=none`으로 격리 실행하고, 없으면 평범한 subprocess로
+# 폴백한다(`sandbox.run_python_script()`) — smoke-test와 달리 "조용히
+# 건너뛰기"는 못 한다. 실행 중인 Agent가 그 턴을 완료하려면 이 호출이
+# 실제 값을 반환해야 하기 때문이다.
+_CUSTOM_TOOL_MAX_OUTPUT_CHARS = 4000
+
+
+def _validate_custom_python_source(source: str) -> None:
+    """등록 시점에 최소한의 안전성(문법 오류·함수 존재)만 확인한다 —
+    실제 실행은 호출 시점에 샌드박스/서브프로세스에서 한다(등록 시점에
+    미리 돌려보지 않는다 — 등록 자체는 부작용이 없어야 한다)."""
+    if not source or not source.strip():
+        raise ValueError("empty_function_source")
+    if "def tool_fn(" not in source:
+        raise ValueError("function_source_must_define_tool_fn")
+    try:
+        compile(source, "<custom_tool>", "exec")
+    except SyntaxError as exc:
+        raise ValueError(f"function_source_syntax_error:{exc}") from None
+
+
+def _run_custom_python_tool(source: str, query: str, timeout: int) -> str:
+    runner_script = (
+        source + "\nimport sys, json\nprint(json.dumps(tool_fn(sys.argv[1])))\n"
+    )
+    result = sandbox.run_python_script(runner_script, [query], timeout=timeout)
+    if not result.ok:
+        return f"(도구 실행 오류: {(result.stderr or '알 수 없는 오류').strip()[:300]})"
+    try:
+        output = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        output = result.stdout.strip()
+    return str(output)[:_CUSTOM_TOOL_MAX_OUTPUT_CHARS]
+
+
+def _custom_python_crewai_tool(row: sqlite3.Row):
+    from crewai.tools import tool  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
+
+    config = json.loads(row["config"])
+    source = config.get("function_source", "")
+    timeout = int(config.get("timeout_seconds") or 10)
+    description = row["description"] or "관리자가 등록한 커스텀 도구"
+    # ASCII 전용 함수명 필요(2026-10-06 실측 버그 — vectorstore.as_crewai_tool()
+    # 참고) — 한글 이름을 그대로 쓰면 crewai의 sanitize_tool_name()이 전부
+    # 날려 빈 함수명 예외가 난다. tool_pool.id가 유일하므로 ASCII로
+    # 안전하다.
+    ascii_tool_name = f"custom_tool_{row['id']}"
+
+    def _dynamic(query: str) -> str:
+        return _run_custom_python_tool(source, query, timeout)
+
+    _dynamic.__doc__ = description
+    return tool(ascii_tool_name)(_dynamic)
+
+
 def create_tool(
     conn: sqlite3.Connection,
     actor_id: int,
@@ -74,10 +141,12 @@ def create_tool(
     config: dict,
     tool_names: list[str] | None = None,
 ) -> int:
-    if kind not in ("mcp_stdio", "mcp_remote", "native"):
+    if kind not in ("mcp_stdio", "mcp_remote", "native", "custom_python"):
         raise ValueError(f"unsupported_kind:{kind}")
     if kind == "native" and config.get("native_id") not in NATIVE_TOOL_FACTORIES:
         raise ValueError(f"unknown_native_id:{config.get('native_id')}")
+    if kind == "custom_python":
+        _validate_custom_python_source(config.get("function_source", ""))
     cur = conn.execute(
         "INSERT INTO tool_pool (name, description, kind, config, tool_names) "
         "VALUES (?, ?, ?, ?, ?)",
@@ -333,6 +402,52 @@ def resolve_static_augmentation_targets(
     return native_ids
 
 
+def skill_knowledge_text(conn: sqlite3.Connection, skills: list[str]) -> str:
+    """`skill_tags`에 담긴 이름과 일치하는 `skill_pool.description`을
+    모아 프롬프트에 그대로 끼워 넣을 수 있는 텍스트로 만든다.
+
+    사용자 요청(2026-10-13, "Harness Methodology 기준 개발 단계별
+    에이전트 생성... skill을 적극 활용") 전까지는 `tdd-ai-workflow-
+    checklist`·`spec-driven-artifacts` 같은 절차 스킬이 `skill_pool`에
+    등록돼 있어도 **이름만** Agent의 역할/백스토리에 나열될 뿐, 그 스킬이
+    실제로 무엇을 하라는 것인지(`description`)는 어디에도 전달되지
+    않았다(실측 확인) — `augmentation_mode='tool'`은 실행 가능한 CrewAI
+    Tool을 붙여줄 뿐 설명 문구를 전달하지 않고, `'always'`는 vectordb/
+    graphdb/web_search 3종 native 검색에만 쓰이는 특수 경로였다.
+    `deliverables.skill_grounded_system_prompt()`(사람의 LLM 활용 업무
+    지원 경로)만 이 조회 로직을 갖고 있었던 것을 여기로 공용화해 Agent
+    자율 실행 경로(`llm.system_prompt_for_role()`, `crew_runtime.
+    _agent_backstory()`)에도 똑같이 적용한다 — `augmentation_mode`
+    값과 무관하게 이름이 일치하는 모든 스킬의 설명을 모은다(설명 자체가
+    '이 스킬이 왜/언제 필요한지' 안내문 역할을 하므로, 'tool' 모드처럼
+    실행 가능한 Tool이 이미 붙어 있어도 중복이 아니다)."""
+    if not skills:
+        return ""
+    placeholders = ",".join("?" * len(skills))
+    rows = conn.execute(
+        f"SELECT description FROM skill_pool WHERE name IN ({placeholders})",
+        skills,
+    ).fetchall()
+    return "\n".join(f"- {r['description']}" for r in rows if r["description"])
+
+
+# 사용자 보고(2026-10-14, "개발자 Agent의 결과가 게임 코드가 아닌 이상한
+# 내용이 출력되고 있어") — 실제 재현 확인: 절차 스킬(tdd-ai-workflow-
+# checklist 등)의 description("...체크리스트로 따라간다")이 아무 안내 없이
+# "참고 지식:" 뒤에 그대로 붙다 보니, 로컬 모델(qwen3-coder:latest, Ollama)이
+# 그 체크리스트/커밋 규칙 설명 자체를 "산출물"로 착각해 그대로 되풀이해
+# 출력했다(실제 게임 코드는 전혀 생성 안 함). 세 호출부(`llm.
+# system_prompt_for_role()`, `deliverables.skill_grounded_system_prompt()`,
+# `crew_runtime._agent_backstory()`) 모두 "참고 지식"을 같은 방식으로
+# 이어붙이므로, 이 안내문 하나를 공용 상수로 만들어 세 곳에 동일하게 적용한다.
+SKILL_KNOWLEDGE_GUIDANCE = (
+    "아래는 작업 수행 방식에 대한 내부 참고 지침일 뿐입니다 — 이 설명 문구나 "
+    "체크리스트 형식 자체를 최종 산출물로 출력하지 마세요. 반드시 사용자가 "
+    "실제로 요청한 결과물로 응답하세요(예: 코드를 요청받았다면 설명이 아니라 "
+    "실행 가능한 코드로 답하세요)."
+)
+
+
 def resolve_pool_tools(
     conn: sqlite3.Connection,
     stack: ExitStack,
@@ -345,7 +460,7 @@ def resolve_pool_tools(
     skill 기반 매칭은 매번 다시 계산한다(연결을 미리 저장해두지 않는다) —
     그래야 기존에 만들어진 Agent도 `skill_pool`이 나중에 갱신되면 재실행
     시점에 바로 반영된다. `agent_id`가 있으면(이미 온보딩된 Agent) 명시적
-    연결도 함께 합친다 — F4 생성 시점(`crewai_agent_generator`)에는 아직
+    연결도 함께 합친다 — Agent 생성 시점(`crewai_agent_generator`)에는 아직
     `agent_pool` row가 없어 `agent_id=None`으로 스킬 매칭만 적용된다."""
     tool_pool_ids: set[int] = set()
     skill_set = set(skills)
@@ -370,6 +485,8 @@ def resolve_pool_tools(
             if factory is None:
                 continue
             tools.append(factory(conn))
+        elif row["kind"] == "custom_python":
+            tools.append(_custom_python_crewai_tool(row))
         else:
             tools.extend(connect_mcp_tools(stack, config))
     return tools

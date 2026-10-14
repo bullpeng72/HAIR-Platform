@@ -79,7 +79,7 @@ def test_gc210_init_schema_merges_duplicate_skill_alias(
     "graphdb"/"관계질의"도 동일하게 통합) — 이미 제거 대상 skill_pool 행과
     그 이름을 쓰는 할 일/Agent가 있던 기존 DB에서도, init_schema()를 다시
     돌리면 그 행이 지워지고 그걸 쓰던 데이터가 남기는 쪽 이름으로
-    안전하게 옮겨가야 한다(docs/LIMITS.md §49)."""
+    안전하게 옮겨가야 한다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     # 통합 전 상태를 흉내낸다: 제거 대상 skill_pool 행을 되살리고,

@@ -1,10 +1,9 @@
 """Phase 23 — 실사용 리뷰(2026-10-07, 사용자 요청 "HAIR-Platform 위 시나리오를
 하나씩 실행하며... 실용성 및 품질 향상이 되도록 개선해줘")로 발견·수정한
-갭 검증. `docs/SCENARIOS.md` 5개 시나리오를 실제 서버(uvicorn, Playwright로
-화면까지 확인)에 라이브로 실행하며 찾았다 — 자세한 경위는
-`docs/LIMITS.md` §63 참고.
+갭 검증. 5개 시나리오를 실제 서버(uvicorn, Playwright로
+화면까지 확인)에 라이브로 실행하며 찾았다.
 
-GC235-236: 결재 사유(`ApprovalDecision.reason`) — F7 결재 체인은 조직도
+결재 사유(`ApprovalDecision.reason`) — 결재 체인은 조직도
 매니저 체인 기준이라 결재자가 그 task의 참가자가 아닌 경우가 흔한데
 (예: 시나리오 3에서 다른 task 담당 매니저가 CS 응답 초안을 결재),
 참가자 전용 댓글 기능으로는 반려 사유를 시스템에 전혀 남길 수 없었다.
@@ -33,7 +32,7 @@ def _make_task_with_candidate(client, task_name="백엔드 개발자"):
 def test_gc235_non_participant_decider_can_attach_reason_as_deliverable_comment(
     client_and_conn,
 ):
-    """시나리오 3 실행 중 실측으로 발견 — F7 결재 체인은 조직도 매니저
+    """시나리오 3 실행 중 실측으로 발견 — 결재 체인은 조직도 매니저
     체인 기준이지 task 참가 여부와 무관하다. 그래서 그 deliverable이
     속한 task의 참가자가 전혀 아닌 다른 매니저가 결재하는 일이 흔한데,
     `POST /api/deliverables/{id}/comments`는 참가자 전용이라 그 매니저는

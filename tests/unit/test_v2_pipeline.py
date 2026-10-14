@@ -1,4 +1,4 @@
-"""Phase 3 v2 골든셋 8건 — F5/F6 assignments 공유, assignment_history, 재배치(SPEC.md §9)."""
+"""Phase 3 v2 골든셋 8건 — 조직도·배분이 공유하는 assignments, assignment_history, 재배치."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def test_gc12_member_cannot_request_assignment(client_and_conn):
     허용")으로 MEMBER 자체는 이 엔드포인트를 더 이상 role 자체로 차단
     당하지 않는다 — 대신 "본인이 아닌 자원"을 요청하면 여전히 403이다
     (이름은 유지하되 검증 대상이 role 차단 → 본인 확인으로 바뀌었다).
-    본인 자원 요청이 실제로 성공하는 경로는 GC200이 검증한다."""
+    본인 자원 요청이 실제로 성공하는 경로는 다른 테스트가 검증한다."""
     client, _ = client_and_conn
     _login(client, "manager1", "managerpass")
     task_id, resource_id = _make_task_with_candidate(client)
@@ -108,7 +108,7 @@ def test_gc14_self_approval_blocked_for_assignment_subject(client_and_conn):
     )
     approval_id = resp.json()["approval_id"]
 
-    # manager1 본인이 자기 배정 요청을 승인하려 하면 거부된다(ADR 결정 3-A)
+    # manager1 본인이 자기 배정 요청을 승인하려 하면 거부된다(self-approval 방지)
     resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
     assert resp.status_code == 403
 
@@ -129,7 +129,7 @@ def test_gc15_rejected_assignment_never_confirms(client_and_conn):
     assert resp.status_code == 200
     assert resp.json()["assignment"]["status"] == "rejected"
 
-    # 이미 처리된 승인을 다시 결정하려 하면 거부된다(NF3: 결재라인 우회 방지)
+    # 이미 처리된 승인을 다시 결정하려 하면 거부된다(결재라인 우회 방지)
     resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
     assert resp.status_code == 409
 
