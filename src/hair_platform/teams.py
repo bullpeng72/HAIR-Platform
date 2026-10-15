@@ -196,6 +196,35 @@ def human_members_with_accounts(conn: sqlite3.Connection, team_id: int) -> list[
     return [{"user_id": r["user_id"]} for r in rows]
 
 
+def manager_agent_id_for_team(conn: sqlite3.Connection, team_id: int) -> int | None:
+    """사용자 보고(2026-10-15, "@자율 개발 크루... 일부 응답이 실패했습니다:
+    Expecting value: line 1 column 1 (char 0)") 원인 분석 — 이 팀(12명:
+    매니저 1 + 워커 11)은 `test_phase47_autonomous_dev_crew.py`가 검증하는
+    hierarchical 구조(매니저가 `team_members.role_label`에 "매니저"를
+    달고 등록됨, `reference_pipeline_seeds.py` 시드 참고)로 설계됐는데도
+    `conversations.run_team_mention_job()`은 이 구분 없이 항상
+    `crew_runtime.run_crew()`를 `process="sequential"` 기본값으로
+    호출했다 — 매니저까지 포함한 12명 전원이 **동일한 전체 대화록을
+    각자 처음부터 끝까지 수행**하며 서로 자유롭게 위임/질의할 수 있는
+    상태가 됐다(의도한 "매니저 1명이 조율하고 11명에게 나눠 위임"이
+    아니라 "12명이 중복으로 전부 수행 + 전원이 전원에게 위임 가능").
+    이 쪽이 호출/위임 트래픽이 훨씬 크고 체이닝된 컨텍스트도 더 빨리
+    불어나, CrewAI/litellm이 위임 도구 호출 인자를 JSON으로 파싱하다
+    실패하는 조건(모델이 빈/깨진 응답을 낼 때)에 더 쉽게 걸린다 —
+    이 함수가 그 매니저를 식별해 `run_team_mention_job()`이 설계된
+    대로 hierarchical로 라우팅할 수 있게 한다."""
+    row = conn.execute(
+        """
+        SELECT ap.id AS agent_id
+        FROM team_members tm
+        JOIN agent_pool ap ON ap.id = tm.member_id AND tm.member_type = 'agent'
+        WHERE tm.team_id = ? AND ap.status = 'active' AND tm.role_label LIKE '%매니저%'
+        """,
+        (team_id,),
+    ).fetchone()
+    return row["agent_id"] if row is not None else None
+
+
 def active_agent_member_ids(conn: sqlite3.Connection, team_id: int) -> list[int]:
     """이 팀의 Agent 멤버 중 온보딩(active)된 것만 — `run_crew()`는
     active 상태만 받는다(Phase 3에서 쓸 예정)."""

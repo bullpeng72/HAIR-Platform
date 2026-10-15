@@ -418,6 +418,108 @@ def test_gc_team_mention_skips_manager_with_no_output(client_and_conn):
     assert len(agent_messages) == 0  # 매니저는 산출물이 없어 메시지가 안 생긴다
 
 
+def test_gc_team_mention_routes_hierarchical_when_team_has_manager_role_label(
+    client_and_conn,
+):
+    """사용자 보고(2026-10-15, "@자율 개발 크루... 일부 응답이 실패했습니다:
+    Expecting value: line 1 column 1 (char 0)") 재발 방지 — "자율 개발
+    크루" 같은 매니저+워커 hierarchical 팀(`team_members.role_label`에
+    "매니저"가 들어감, `test_phase47_autonomous_dev_crew.py` 참고)이
+    Team 멘션으로 실행될 때도 설계된 대로 `process="hierarchical"` +
+    `manager_agent_id`로 라우팅되는지 확인한다 — 이전에는 이 구분 없이
+    항상 sequential 기본값으로 넘어가 매니저까지 포함한 전원이 동일한
+    작업을 중복 수행하며 서로 자유롭게 위임했다(위임/체이닝 트래픽
+    과다가 CrewAI/litellm의 JSON 파싱 실패 확률을 키운 근본 원인)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    manager_id = _make_agent(conn, "매니저")
+    worker_id = _make_agent(conn, "워커")
+    cur = conn.execute("INSERT INTO teams (name) VALUES ('자율 개발 크루 테스트')")
+    conn.commit()
+    team_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO team_members (team_id, member_type, member_id, role_label) "
+        "VALUES (?, 'agent', ?, '매니저(조율자)')",
+        (team_id, manager_id),
+    )
+    conn.execute(
+        "INSERT INTO team_members (team_id, member_type, member_id, role_label) "
+        "VALUES (?, 'agent', ?, '워커')",
+        (team_id, worker_id),
+    )
+    conn.commit()
+
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "team", "participant_id": team_id},
+    )
+
+    crew_result = {
+        "agents": [
+            {"agent_id": manager_id, "role_name": "매니저", "output": None},
+            {"agent_id": worker_id, "role_name": "워커", "output": "워커의 답변"},
+        ],
+        "token_usage": {},
+        "delegation_count": 0,
+    }
+    with patch(
+        "hair_platform.crew_runtime.run_crew", return_value=crew_result
+    ) as mock_crew:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@자율 개발 크루 테스트 테트리스 게임을 작성해줘"},
+        )
+        assert resp.status_code == 201, resp.text
+        mock_crew.assert_called_once()
+        _, kwargs = mock_crew.call_args
+        assert kwargs["process"] == "hierarchical"
+        assert kwargs["manager_agent_id"] == manager_id
+
+
+def test_gc_team_mention_translates_json_decode_error_for_user(client_and_conn):
+    """사용자 보고(2026-10-15) 재발 방지 — CrewAI/litellm 내부에서 새어나온
+    raw `json.JSONDecodeError`("Expecting value: line 1 column 1 (char 0)")가
+    그대로 화면에 노출되지 않고, 원인 유형과 행동 지침이 담긴 메시지로
+    바뀌어야 한다. 원본 문자열은 진단을 위해 `audit_log`에는 그대로
+    남아야 한다."""
+    import json as _json
+
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent_id = _make_agent(conn)
+    team_id = _make_team_with_agent(conn, agent_id, "실패팀")
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "team", "participant_id": team_id},
+    )
+
+    broken_json_error = _json.JSONDecodeError("Expecting value", "", 0)
+    with patch(
+        "hair_platform.crew_runtime.run_crew", side_effect=broken_json_error
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@실패팀 테트리스 게임을 작성해줘"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    jobs = client.get(f"/api/conversations/{conv_id}/jobs").json()
+    assert jobs[0]["status"] == "failed"
+    assert "Expecting value" not in jobs[0]["error"]
+    assert "다시 시도" in jobs[0]["error"]
+
+    audit_rows = conn.execute(
+        "SELECT after_value FROM audit_log WHERE action = 'conversation_job_failed' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchall()
+    assert audit_rows
+    assert "Expecting value" in audit_rows[0]["after_value"]
+
+
 # ---------- skill 사용 ----------
 
 
