@@ -23,10 +23,17 @@ NULL이면 완전히 독립된 "내 대화"다.
 - 특정 Agent 멘션 → 그 Agent 자신의 저장된 provider/model
   (`agent_runtime.execute_agent()` 재사용, Phase 3와 같은 패턴 —
   `start_agent_execution()`의 confirmed 배정 요구를 우회).
-- 특정 Team 멘션 → 팀 멤버 Agent들 각자의 저장된 provider/model로
-  CrewAI 실행(`crew_runtime.run_crew()` 직접 호출 — `run_crew_for_
+- 특정 Team 멘션 → `crew_runtime.run_crew()` 직접 호출(`run_crew_for_
   team()`은 Task에 confirmed 배정이 있어야만 호출 가능해 대화에는
-  안 맞는다, 그 함수가 내부에서 쓰는 저수준 함수를 그대로 가져온다).
+  안 맞는다, 그 함수가 내부에서 쓰는 저수준 함수를 그대로 가져온다) —
+  **정정(2026-10-15)**: 이 줄은 원래 "팀 멤버 Agent들 각자의 저장된
+  provider/model로 실행"이라고 적었으나 사실이 아니었다. `run_crew()`는
+  Crew 전체가 공유하는 단일 provider/model만 받으므로(혼합 provider
+  자체를 지원하지 않는다), 실제로는 호출 시점에 넘긴(또는 자동 판별된)
+  **하나의** provider/model을 팀 멤버 전원이 공유한다(`run_team_mention_
+  job()`의 2026-10-15 분석 주석 참고). hierarchical 구조로 설계된
+  팀(예: "자율 개발 크루")은 `teams.manager_agent_id_for_team()`으로
+  식별해 `process="hierarchical"`로 라우팅한다.
 - 멘션 없는 평범한 메시지(`ai_auto_reply=1`일 때) 또는 `skill` 명시
   → **대화 자체에 설정된** provider/model(`conversations.llm_provider`
   /`llm_model`)로 `llm.call_llm()` 직접 호출 — agent_pool을 전혀
@@ -879,11 +886,32 @@ def _finish_job_with_message(
     conn.commit()
 
 
+def _describe_job_failure(exc: Exception) -> str:
+    """사용자 보고(2026-10-15, "@자율 개발 크루... 일부 응답이 실패했습니다:
+    Expecting value: line 1 column 1 (char 0)") 재발 방지 — 이 메시지는
+    CrewAI/litellm 내부(에이전트 간 위임 도구 호출 인자를 JSON으로 파싱하는
+    지점 등 — `json.loads()`가 빈/깨진 완성 결과를 받으면 그대로 난다)에서
+    새어나온 raw `json.JSONDecodeError`를 그대로 화면에 띄운 것이었다 —
+    어느 Agent가 실패했는지도, 재시도하면 나아지는지도 알 수 없어
+    사용자가 아무 행동도 취할 수 없었다(`webui.py`가 `job.error`를 그대로
+    이어붙여 보여준다). 원본 예외 문자열은 `_fail_job()`이 `audit_log`에는
+    그대로 남긴다 — 여기서 바뀌는 건 화면에 노출되는 문구뿐이다."""
+    if isinstance(exc, json.JSONDecodeError):
+        return (
+            "AI 모델이 일부 작업에서 올바른 형식의 응답을 만들지 못했습니다"
+            "(여러 Agent가 협업·위임하는 과정에서 간헐적으로 발생할 수 있는 "
+            "일시적 오류입니다) — 잠시 후 다시 시도해 주세요. 반복되면 호출한 "
+            "Agent/Team 규모를 줄이거나 다른 LLM Provider로 바꿔보세요."
+        )
+    return str(exc)
+
+
 def _fail_job(
     conn: sqlite3.Connection, job_id: int, actor_id: int, exc: Exception
 ) -> None:
     conn.rollback()
-    error = str(exc)
+    raw_error = str(exc)
+    error = _describe_job_failure(exc)
     conn.execute(
         "UPDATE conversation_jobs SET status = 'failed', error = ?, "
         "finished_at = datetime('now') WHERE id = ?",
@@ -895,7 +923,7 @@ def _fail_job(
         "conversation_job_failed",
         "conversation_jobs",
         job_id,
-        after={"error": error},
+        after={"error": raw_error},
     )
     conn.commit()
 
@@ -1004,15 +1032,46 @@ def run_team_mention_job(
     결과 하나로 합치지 않는다). `crew_runtime.run_crew_for_team()`은
     Task에 confirmed 배정이 있어야만 호출 가능해 대화에는 안 맞는다
     — 그 함수가 내부적으로 쓰는 저수준 `run_crew()`를 직접 호출한다
-    (Task/배정 확인 전혀 없음, 팀 멤버 Agent들 각자의 저장된
-    provider/model로 CrewAI 실행)."""
+    (Task/배정 확인 전혀 없음). 정정(2026-10-15) — 바로 위 문단은
+    예전에 "팀 멤버 Agent들 각자의 저장된 provider/model로 CrewAI
+    실행"이라고 적었으나 사실이 아니었다(`run_crew()`는 Crew 전체가
+    공유하는 **단일** provider/model만 받는다, `memory=True` 임베더도
+    하나뿐이라 애초에 혼합 provider를 지원하는 구조가 아니다) — 실제
+    동작은 호출 시점에 넘긴 `provider`/`model`(없으면 환경변수/API
+    키로 자동 판별된 **하나의** 값)을 전원이 공유한다. 잘못된 기록을
+    남겨두면 다음에 또 이걸 "이미 되는 기능"으로 오해하므로 바로잡는다.
+
+    사용자 보고(2026-10-15, "@자율 개발 크루... 일부 응답이 실패했습니다:
+    Expecting value: line 1 column 1 (char 0)") 원인 분석 — "자율 개발
+    크루" 같은 매니저+워커 hierarchical 팀(`test_phase47_
+    autonomous_dev_crew.py` 참고)도 여기선 구분 없이 `process`
+    기본값(sequential)으로 넘어갔다. 매니저까지 포함한 전원이 동일한
+    전체 대화록을 중복으로 처음부터 수행하며 서로 자유롭게 위임할 수
+    있어, 설계된 "매니저 1명이 조율해 위임"보다 호출/위임 트래픽이
+    훨씬 크고 체이닝된 컨텍스트도 더 빨리 불어난다 — CrewAI/litellm이
+    위임 도구 호출 인자를 JSON으로 파싱하다 실패하는 조건(모델이 빈/
+    깨진 응답을 낼 때)에 더 쉽게 걸리는 근본 원인이었다.
+    `teams.manager_agent_id_for_team()`으로 매니저를 식별해, 있으면
+    설계된 대로 hierarchical로 라우팅한다(없는 팀은 기존 sequential
+    그대로 — 하위 호환)."""
     try:
         agent_ids = teams.active_agent_member_ids(conn, team_id)
         if not agent_ids:
             raise ValueError("team_has_no_active_agents")
         transcript = _build_transcript(conn, conversation_id)
         task_descriptions = [transcript or "대화를 시작합니다."] * len(agent_ids)
-        result = crew_runtime.run_crew(conn, agent_ids, task_descriptions, actor_id)
+        manager_agent_id = teams.manager_agent_id_for_team(conn, team_id)
+        if manager_agent_id is not None:
+            result = crew_runtime.run_crew(
+                conn,
+                agent_ids,
+                task_descriptions,
+                actor_id,
+                process="hierarchical",
+                manager_agent_id=manager_agent_id,
+            )
+        else:
+            result = crew_runtime.run_crew(conn, agent_ids, task_descriptions, actor_id)
         posted = 0
         for agent in result["agents"]:
             if agent["output"] is None:
