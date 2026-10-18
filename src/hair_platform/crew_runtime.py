@@ -188,6 +188,42 @@ def _static_augmentation(
     return "\n\n".join(parts) + f"\n\n요청: {description}"
 
 
+def _reset_crewai_local_task_output_storage() -> None:
+    """사용자 보고(2026-10-18, "@자율 개발 크루... 일부 응답이 실패했습니다:
+    AI 모델이 일부 작업에서 올바른 형식의 응답을 만들지 못했습니다") 원인
+    분석 — reasoning을 꺼도 재현돼 더 깊이 추적한 결과, LLM과는 전혀
+    무관했다. 실측(디버그 로깅 켜고 직접 재현, 전체 traceback 확보)으로
+    확인한 실제 원인: CrewAI가 **우리 hair.db와 완전히 별개로** 자기
+    OS 사용자 데이터 디렉터리(`~/Library/Application Support/
+    HAIR-Platform/latest_kickoff_task_outputs.db`, `crewai.utilities.
+    paths.db_storage_path()`)에 Task 실행마다 결과를 계속 쌓아두는
+    "replay(재실행)" 전용 캐시를 갖고 있다 — 이 플랫폼은 그 replay
+    기능을 쓰지 않는다. 두 번째 이후 Task가 끝날 때마다 `crewai/
+    utilities/task_output_storage_handler.py`의 `update()`가 그 캐시
+    테이블 전체를 `json.loads()`로 다시 읽어들이는데(`crewai/memory/
+    storage/kickoff_task_outputs_storage.py:183`), 이전에 서버를 강제
+    종료(`kill`)해 그 로컬 SQLite 쓰기가 트랜잭션 중간에 끊긴 적이
+    있으면 그 행 하나가 깨진 채로 영구히 남는다 — 그 뒤로는 Task가
+    둘 이상인 **모든** CrewAI 실행(이 함수를 쓰는 11인 크루든 단일
+    Agent 생성이든)이 그 깨진 행을 읽는 순간 똑같은
+    `json.JSONDecodeError("Expecting value: line 1 column 1 (char 0)")`
+    로 매번(간헐적이 아니라 결정적으로) 실패한다. 우리가 그 replay
+    캐시를 전혀 쓰지 않으므로, 매 실행 전에 통째로 비워 깨진 행이
+    쌓일 공간 자체를 없앤다 — "그 예외를 잡아서 재시도"가 아니라
+    애초에 못 깨지게 막는 쪽이 근본적인 해결이다."""
+    try:
+        from crewai.memory.storage.kickoff_task_outputs_storage import (
+            KickoffTaskOutputsSQLiteStorage,
+        )
+
+        KickoffTaskOutputsSQLiteStorage().delete_all()
+    except Exception:
+        # 이 캐시는 우리 기능에 전혀 쓰이지 않는 CrewAI 내부 전용
+        # replay 스토리지다 — 비우기 자체가 실패해도(예: 파일 권한)
+        # Crew 실행 자체를 막을 이유는 없다.
+        pass
+
+
 def _crewai_llm(provider: str, model: str, temperature: float | None = None):
     from crewai import LLM  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
 
@@ -319,6 +355,7 @@ def crewai_agent_generator(
             agent=agent,
             guardrail=_min_length_guardrail,
         )
+        _reset_crewai_local_task_output_storage()
         crew = Crew(
             agents=[agent], tasks=[task], process=Process.sequential, verbose=False
         )
@@ -484,21 +521,6 @@ def run_crew(
         # `'always'`의 존재 이유이므로, `_static_augmentation()`이
         # `'always'` 매칭분만 여기서 description 앞에 붙인다(기본 시드
         # 스킬은 전부 `'tool'`이라 이 변경은 기존 동작을 바꾸지 않는다).
-        tasks: list[Task] = []
-        for i, description in enumerate(task_descriptions):
-            context = [tasks[i - 1]] if i > 0 and process == "sequential" else None
-            tasks.append(
-                Task(
-                    description=_static_augmentation(
-                        conn, json.loads(rows[i]["skill_tags"]), description
-                    ),
-                    expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
-                    agent=crewai_agents[i],
-                    context=context,
-                    guardrail=_min_length_guardrail,
-                )
-            )
-
         # CrewAI는 manager_agent가 agents 목록에 함께 있으면
         # ValidationError(manager_agent_in_agents)를 던진다 — 매니저는 작업을
         # 직접 수행하지 않는다는 hierarchical 모델과 일치한다(2026-09-27 리뷰에서
@@ -507,8 +529,96 @@ def run_crew(
             agent_ids.index(manager_agent_id) if manager_agent_id is not None else None
         )
         worker_agents = [a for i, a in enumerate(crewai_agents) if i != manager_index]
-        worker_tasks = [t for i, t in enumerate(tasks) if i != manager_index]
         worker_rows = [r for i, r in enumerate(rows) if i != manager_index]
+
+        # 사용자 요청(2026-10-18, "매니저가 하위 과업을 실제로 쪼개서
+        # 위임하도록 개선해줘") — 실측으로 확인한 문제: CrewAI는 hierarchical
+        # 프로세스에서 `_get_agent_to_use()`가 `Task.agent`를 완전히
+        # 무시하고 **모든 Task를 매니저 자신이 실행**한다(crew.py:1183).
+        # 그런데 기존 코드는 (매니저 제외) 멤버 수만큼 **완전히 동일한
+        # 지시문**을 가진 Task를 미리 1:1로 만들어뒀었다 — 그 결과 매니저가
+        # "테트리스 게임을 만들어라"라는 똑같은 통짜 과업을 멤버 수만큼
+        # 반복해서 그때그때 아무 코워커에게나 통째로 떠넘기는 식으로
+        # 동작해, 역할별로 쪼개지지 않은 거의 동일한 완성품이 멤버
+        # 수만큼(실측: "자율 개발 크루" 11명 → 완성된 테트리스 HTML
+        # 11개) 쏟아졌다.
+        #
+        # 진짜 분업이 되려면 Task를 **하나만** 주고 "코워커들에게 역할에
+        # 맞는 하위 과업을 나눠 위임한 뒤 결과를 통합해 하나의 최종
+        # 산출물로 제출하라"고 명시해, 몇 명에게 어떻게 나눌지는 매니저
+        # LLM이 `allow_delegation` 도구(Delegate work to coworker/Ask
+        # question to coworker)를 스스로 필요한 만큼 호출해 그때그때
+        # 정하게 둔다 — Task 개수를 멤버 수에 맞춰 미리 고정하지 않는다.
+        hierarchical_with_manager = (
+            process == "hierarchical" and manager_agent_id is not None
+        )
+        # 실측(2026-10-18) — 처음엔 "위임 도구를 안 쓰면 거부"하는 하드
+        # guardrail을 걸어봤는데, gpt-4o-mini가 위임 자체는 제대로
+        # 시도했지만(백엔드 개발자 2에게 게임 로직, 프론트엔드 개발자 3에게
+        # UI처럼 실제로 역할에 맞게 쪼갰다) 한 번의 Action에 "Delegate
+        # work to coworker" 호출 여러 건을 배열로 묶어 보내는 잘못된
+        # 형식으로 호출해 CrewAI의 ReAct 파서가 이를 인식하지 못했고,
+        # guardrail이 재시도 한도(3회)를 다 쓰고도 계속 실패해 Crew 실행
+        # 전체가 예외로 **크래시**했다(이번 세션에 고친 JSONDecodeError
+        # 크래시와 같은 종류의 "통째로 실패" 리스크를 새로 만드는 셈이라
+        # 받아들일 수 없다). 그래서 위임 여부를 강제로 검사해 반려하는
+        # 하드 guardrail은 빼고, 프롬프트로만 유도한다 — 위임을 안 하거나
+        # 형식이 어긋나도 최소한 Crew 실행 자체는 항상 끝까지 성공해야
+        # 한다는 게 우선이다. 대신 "한 번에 한 코워커씩만" 명시해 그
+        # 배열-묶음 호출 실수를 줄인다.
+        delegations: list[dict] = []
+        if hierarchical_with_manager:
+            manager_row = rows[manager_index]
+            coworker_roles = ", ".join(r["role_name"] for r in worker_rows)
+            base_description = task_descriptions[0] if task_descriptions else ""
+            hierarchical_description = (
+                f"{base_description}\n\n"
+                "[진행 방식] 당신은 이 팀의 매니저입니다. 혼자 처음부터 "
+                "끝까지 구현하지 말고, 아래 코워커들에게 역할에 맞는 "
+                f"하위 과업을 직접 쪼개서 위임하세요(코워커: "
+                f"{coworker_roles}). 한 코워커에게 전체 작업을 통째로 "
+                "떠넘기지 말고, 최소 2명 이상에게 서로 다른 하위 과업"
+                "(예: 화면/UI, 핵심 로직, 데이터/검증 등 역할에 맞는 "
+                "부분)을 나눠 맡긴 뒤, 돌아온 결과물들을 모두 모아 하나의 "
+                "완성된 최종 산출물로 통합해 제출하세요. 'Delegate work "
+                "to coworker' 도구는 **한 번 호출에 코워커 한 명씩만** "
+                "입력하세요 — 여러 코워커를 배열이나 목록으로 한 번에 "
+                "묶어서 호출하지 말고, 코워커 수만큼 호출을 여러 번 "
+                "나눠서 하세요."
+            )
+
+            worker_tasks = [
+                Task(
+                    description=_static_augmentation(
+                        conn,
+                        json.loads(manager_row["skill_tags"]),
+                        hierarchical_description,
+                    ),
+                    expected_output=(
+                        "코워커들에게 위임한 하위 과업들의 결과를 모두 "
+                        "통합한, 실무에 바로 쓸 수 있는 하나의 완성된 최종 산출물"
+                    ),
+                    guardrail=_min_length_guardrail,
+                )
+            ]
+        else:
+            tasks: list[Task] = []
+            for i, description in enumerate(task_descriptions):
+                context = (
+                    [tasks[i - 1]] if i > 0 and process == "sequential" else None
+                )
+                tasks.append(
+                    Task(
+                        description=_static_augmentation(
+                            conn, json.loads(rows[i]["skill_tags"]), description
+                        ),
+                        expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
+                        agent=crewai_agents[i],
+                        context=context,
+                        guardrail=_min_length_guardrail,
+                    )
+                )
+            worker_tasks = [t for i, t in enumerate(tasks) if i != manager_index]
 
         task_completions: list[dict] = []
 
@@ -524,12 +634,20 @@ def run_crew(
             # 구성한 순서이고 CrewAI는 `self.tasks`를 그 순서 그대로 순차
             # 실행하므로(`_execute_tasks`), 콜백이 몇 번째 호출됐는지로
             # `worker_rows`를 인덱싱하면 실제 담당 Agent를 정확히 알 수 있다.
+            #
+            # hierarchical_with_manager(2026-10-18 추가)일 때는 Task가 단
+            # 하나뿐이고 그 결과가 "매니저가 코워커들에게 위임해 통합한
+            # 최종 산출물" 자체이므로 — 어느 특정 워커의 몫이 아니라 —
+            # `worker_rows` 인덱싱 대신 매니저 본인의 role_name을 쓴다.
             idx = len(task_completions)
-            agent_role = (
-                worker_rows[idx]["role_name"]
-                if idx < len(worker_rows)
-                else task_output.agent
-            )
+            if hierarchical_with_manager:
+                agent_role = rows[manager_index]["role_name"]
+            else:
+                agent_role = (
+                    worker_rows[idx]["role_name"]
+                    if idx < len(worker_rows)
+                    else task_output.agent
+                )
             task_completions.append(
                 {
                     "agent_role": agent_role,
@@ -560,9 +678,9 @@ def run_crew(
         else:
             raise ValueError(f"지원하지 않는 process입니다: {process!r}")
 
+        _reset_crewai_local_task_output_storage()
         crew = Crew(**crew_kwargs)
 
-        delegations: list[dict] = []
         known_roles = [r["role_name"] for r in rows]
 
         def _capture_delegation(source, event) -> None:
@@ -591,48 +709,62 @@ def run_crew(
             result = eval_result["output"]
 
     per_agent = []
-    for row, task_output in zip(worker_rows, result.tasks_output, strict=False):
-        # 사용자 요청(2026-10-06, "model provider/모델명이 AI 생성·관리·Crew
-        # 실행 단계에 모두 있는데 최종 어떻게 적용되는지 분석" → "(b)
-        # 실행 후 덮어쓰기만이라도 막는 방향으로 수정") — Crew 실행은 참여
-        # Agent 전원에게 요청 시점의 provider/model **하나**를 똑같이
-        # 적용한다(개별 Agent의 "모델 설정" 저장값은 애초에 안 읽음,
-        # `_crewai_llm()` 호출부 참고). 그런데 실행이 끝나면 그 하나의
-        # 값을 모든 참여 Agent의 `llm_provider`/`llm_model`에 그대로
-        # 덮어써 와서, "AI 에이전트 관리"에서 Agent별로 따로 설정해둔
-        # 기본값(단일 실행 경로 `agent_runtime.execute_agent()`가 쓰는
-        # 그 값)이 Crew 실행 한 번으로 조용히 사라지는 문제가 있었다.
-        # `last_output`/`framework`(이번 실행이 실제로 crewai였다는
-        # 사실)는 그대로 갱신하되, llm_provider/llm_model은 더 이상
-        # 건드리지 않는다 — "모델 설정"은 사용자가 명시적으로
-        # 바꾸기 전까지는 Crew 실행과 무관하게 유지된다.
+    if hierarchical_with_manager:
+        # 매니저가 코워커들에게 하위 과업을 쪼개 위임하고 통합한 결과이므로
+        # Task가 1개뿐이고, 그 결과물은 특정 워커의 몫이 아니라 매니저가
+        # 제출한 **최종 통합 산출물**이다(위 `delegations`에 실제로 누구에게
+        # 무엇을 위임했는지가 별도로 남는다). 그래서 워커별 산출물이 아니라
+        # 매니저 1건만 돌려준다 — 예전처럼 "매니저는 산출물 없음(None)"으로
+        # 두면 안 된다, 이제는 매니저 자신이 통합한 진짜 결과물이 있다.
+        manager_row = rows[manager_index]
+        final_output_text = (
+            result.tasks_output[0].raw if result.tasks_output else result.raw
+        )
         conn.execute(
             "UPDATE agent_pool SET last_output = ?, framework = 'crewai' WHERE id = ?",
-            (task_output.raw, row["id"]),
+            (final_output_text, manager_row["id"]),
         )
-        per_agent.append(
-            {
-                "agent_id": row["id"],
-                "role_name": row["role_name"],
-                # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
-                # CrewAI에 실제로 넘기는 `role=`(위 Agent() 생성부)은
-                # 그대로 role_name을 쓴다(위임 라우팅·known_roles 매칭이
-                # 이 문자열 그대로와 일치해야 해서 건드리면 안 됨).
-                # 화면 표시용으로만 지정한 이름을 따로 얹는다.
-                "name": row["name"],
-                "output": task_output.raw,
-            }
-        )
-    if manager_index is not None:
-        manager_row = rows[manager_index]
         per_agent.append(
             {
                 "agent_id": manager_row["id"],
                 "role_name": manager_row["role_name"],
                 "name": manager_row["name"],
-                "output": None,  # 매니저는 조율·위임만 하고 자기 몫의 산출물은 없다
+                "output": final_output_text,
             }
         )
+    else:
+        for row, task_output in zip(worker_rows, result.tasks_output, strict=False):
+            # 사용자 요청(2026-10-06, "model provider/모델명이 AI 생성·관리·Crew
+            # 실행 단계에 모두 있는데 최종 어떻게 적용되는지 분석" → "(b)
+            # 실행 후 덮어쓰기만이라도 막는 방향으로 수정") — Crew 실행은 참여
+            # Agent 전원에게 요청 시점의 provider/model **하나**를 똑같이
+            # 적용한다(개별 Agent의 "모델 설정" 저장값은 애초에 안 읽음,
+            # `_crewai_llm()` 호출부 참고). 그런데 실행이 끝나면 그 하나의
+            # 값을 모든 참여 Agent의 `llm_provider`/`llm_model`에 그대로
+            # 덮어써 와서, "AI 에이전트 관리"에서 Agent별로 따로 설정해둔
+            # 기본값(단일 실행 경로 `agent_runtime.execute_agent()`가 쓰는
+            # 그 값)이 Crew 실행 한 번으로 조용히 사라지는 문제가 있었다.
+            # `last_output`/`framework`(이번 실행이 실제로 crewai였다는
+            # 사실)는 그대로 갱신하되, llm_provider/llm_model은 더 이상
+            # 건드리지 않는다 — "모델 설정"은 사용자가 명시적으로
+            # 바꾸기 전까지는 Crew 실행과 무관하게 유지된다.
+            conn.execute(
+                "UPDATE agent_pool SET last_output = ?, framework = 'crewai' WHERE id = ?",
+                (task_output.raw, row["id"]),
+            )
+            per_agent.append(
+                {
+                    "agent_id": row["id"],
+                    "role_name": row["role_name"],
+                    # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
+                    # CrewAI에 실제로 넘기는 `role=`(위 Agent() 생성부)은
+                    # 그대로 role_name을 쓴다(위임 라우팅·known_roles 매칭이
+                    # 이 문자열 그대로와 일치해야 해서 건드리면 안 됨).
+                    # 화면 표시용으로만 지정한 이름을 따로 얹는다.
+                    "name": row["name"],
+                    "output": task_output.raw,
+                }
+            )
 
     audit.record(
         conn,
@@ -759,6 +891,23 @@ def run_crew_for_team(
     agent_ids = teams.active_agent_member_ids(conn, team_id)
     if not agent_ids:
         raise ValueError("team_has_no_active_agents")
+
+    # 사용자 요청(2026-10-18, "기존 개발자 크루 팀을... 업무 할당시
+    # 배정하면 위 변경 내용을 모두 적용할 수 있는지 확인해줘") — 실측으로
+    # 확인한 gap: 이 함수는 `manager_agent_id`를 호출자가 명시적으로
+    # 넘겨야만 쓰는데, Task 협업 워크스페이스의 "팀 Agent 실행(Crew)"
+    # 화면에는 매니저를 고르는 UI 자체가 없어서 늘 `None`으로 호출됐다
+    # — hierarchical을 선택해도 CrewAI 자신의 익명 매니저(`manager_llm`)
+    # 로 떨어져, `conversations.run_team_mention_job()` 쪽에서 이미 고친
+    # "매니저가 실제로 역할별 하위 과업을 쪼개 위임"하는 경로를 전혀 못
+    # 탔다. 그 함수와 똑같이 `teams.manager_agent_id_for_team()`(팀
+    # 멤버의 `role_label`에 "매니저"가 들어간 활성 Agent)으로 자동
+    # 탐지한다 — 호출자가 이미 명시적으로 지정했으면 그 값을 존중하고,
+    # 사용자가 "sequential"을 고른 경우는 건드리지 않는다(원래 그대로
+    # 릴레이로 동작해야 하는 선택이라 매니저가 있어도 강제로 바꾸지
+    # 않는다).
+    if process == "hierarchical" and manager_agent_id is None:
+        manager_agent_id = teams.manager_agent_id_for_team(conn, team_id)
 
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:

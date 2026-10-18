@@ -50,6 +50,7 @@ from hair_platform import (
     jobs,
     model_registry,
     performance,
+    pipeline_runtime,
     pool,
     pool_registry,
     retention,
@@ -97,6 +98,12 @@ from hair_platform.models import (
     ModelActiveUpdate,
     ModelRegistryCreate,
     PerformanceScoreRequest,
+    PipelineExecuteRequest,
+    PipelineStageCreate,
+    PipelineStageReorder,
+    PipelineStageUpdate,
+    PipelineTemplateActiveUpdate,
+    PipelineTemplateCreate,
     SkillPoolCreate,
     TaskDecomposition,
     TaskDependencyCreate,
@@ -1880,6 +1887,67 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
         return deliverables.list_execution_jobs(conn, task_id)
 
+    @app.post("/api/tasks/{task_id}/execute-pipeline", status_code=202)
+    def trigger_pipeline_execution(
+        task_id: int,
+        payload: PipelineExecuteRequest,
+        background_tasks: BackgroundTasks,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-10-18, "BMAD-METHOD와 하네스 방법론을 참조해...
+        개발 Agent 팀을 구성... 각 단계별 단독 또는 복수의 에이전트가
+        순차/병행 처리") — 할 일 하나에 단계형 파이프라인을 실행한다.
+        `execute-team-crew`와 같은 비동기 2단계 패턴(동기로 run 행만
+        만들고, 실제 단계 실행은 BackgroundTasks)."""
+        task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        try:
+            run_id = pipeline_runtime.start_pipeline_run(
+                conn, user["id"], payload.pipeline_template_id, task_id
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        except ValueError as exc:
+            detail = {
+                "pipeline_template_not_found": "파이프라인 템플릿을 찾을 수 없습니다",
+                "pipeline_template_inactive": "비활성화된 파이프라인 템플릿입니다",
+                "task_not_found": "할 일을 찾을 수 없습니다",
+                "pipeline_template_has_no_stages": "단계가 없는 파이프라인 템플릿입니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from None
+        background_tasks.add_task(
+            pipeline_runtime.run_pipeline_stage_job, conn, run_id, user["id"]
+        )
+        return {"run_id": run_id, "status": "running"}
+
+    @app.get("/api/tasks/{task_id}/pipeline-runs")
+    def list_task_pipeline_runs(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """파이프라인 진행상황 카드가 폴링한다 — 권한은 위 Agent 실행 잡
+        목록 조회와 동일하다."""
+        task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return pipeline_runtime.list_pipeline_runs_for_task(conn, task_id)
+
     @app.get("/api/tasks/{task_id}/execution-permission")
     def get_execution_permission(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)
@@ -2443,6 +2511,141 @@ def create_app(db_path: str | None = None) -> FastAPI:
             ) from exc
         return {"id": member_row_id, "deleted": True}
 
+    # ---------- 파이프라인 빌더(사용자 요청 2026-10-18) ----------
+
+    @app.get("/api/pipeline-templates")
+    def list_pipeline_templates_endpoint(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        return pipeline_runtime.list_pipeline_templates(conn)
+
+    @app.get("/api/pipeline-templates/{template_id}")
+    def get_pipeline_template_endpoint(
+        template_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        template = pipeline_runtime.get_pipeline_template(conn, template_id)
+        if template is None:
+            raise HTTPException(status_code=404, detail="파이프라인 템플릿을 찾을 수 없습니다")
+        return template
+
+    @app.post("/api/pipeline-templates", status_code=201)
+    def create_pipeline_template_endpoint(
+        payload: PipelineTemplateCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            template_id = pipeline_runtime.create_pipeline_template(
+                conn, user["id"], payload.name, payload.description, payload.domain
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": template_id, "name": payload.name}
+
+    @app.patch("/api/pipeline-templates/{template_id}/active")
+    def set_pipeline_template_active_endpoint(
+        template_id: int,
+        payload: PipelineTemplateActiveUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            pipeline_runtime.set_pipeline_template_active(
+                conn, user["id"], template_id, payload.is_active
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="파이프라인 템플릿을 찾을 수 없습니다"
+            ) from exc
+        return {"id": template_id, "is_active": payload.is_active}
+
+    @app.delete("/api/pipeline-templates/{template_id}")
+    def delete_pipeline_template_endpoint(
+        template_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        try:
+            pipeline_runtime.delete_pipeline_template(conn, user["id"], template_id)
+        except ValueError as exc:
+            detail = (
+                "실행 이력이 있는 파이프라인 템플릿은 삭제할 수 없습니다"
+                if str(exc) == "pipeline_template_has_run_history"
+                else "파이프라인 템플릿을 찾을 수 없습니다"
+            )
+            status_code = 409 if str(exc) == "pipeline_template_has_run_history" else 404
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        return {"id": template_id, "deleted": True}
+
+    @app.post("/api/pipeline-templates/{template_id}/stages", status_code=201)
+    def add_pipeline_stage_endpoint(
+        template_id: int,
+        payload: PipelineStageCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            stage_id = pipeline_runtime.add_stage(
+                conn,
+                user["id"],
+                template_id,
+                payload.name,
+                payload.mode,
+                [(a.role_name, a.instructions) for a in payload.agents],
+                lead_role_name=payload.lead_role_name,
+                instructions=payload.instructions,
+                gate_ids=payload.gate_ids,
+                min_gate_pass_ratio=payload.min_gate_pass_ratio,
+                max_retry=payload.max_retry,
+                requires_human_approval=payload.requires_human_approval,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": stage_id}
+
+    @app.patch("/api/pipeline-templates/{template_id}/stages/{stage_id}")
+    def update_pipeline_stage_endpoint(
+        template_id: int,
+        stage_id: int,
+        payload: PipelineStageUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            pipeline_runtime.update_stage(
+                conn, user["id"], stage_id, **payload.model_dump(exclude_unset=True)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": stage_id}
+
+    @app.delete("/api/pipeline-templates/{template_id}/stages/{stage_id}")
+    def delete_pipeline_stage_endpoint(
+        template_id: int,
+        stage_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            pipeline_runtime.delete_stage(conn, user["id"], stage_id)
+        except ValueError as exc:
+            detail = (
+                "실행 이력이 있는 단계는 삭제할 수 없습니다"
+                if str(exc) == "pipeline_stage_has_run_history"
+                else "단계를 찾을 수 없습니다"
+            )
+            status_code = 409 if str(exc) == "pipeline_stage_has_run_history" else 404
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        return {"id": stage_id, "deleted": True}
+
+    @app.post("/api/pipeline-templates/{template_id}/stages/{stage_id}/reorder")
+    def reorder_pipeline_stage_endpoint(
+        template_id: int,
+        stage_id: int,
+        payload: PipelineStageReorder,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            pipeline_runtime.reorder_stage(conn, user["id"], stage_id, payload.direction)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": stage_id}
+
     @app.patch("/api/assignments/{assignment_id}/team-leader")
     def update_team_leader_endpoint(
         assignment_id: int,
@@ -2987,6 +3190,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def decide_approval(
         approval_id: int,
         payload: ApprovalDecision,
+        background_tasks: BackgroundTasks,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         approval = conn.execute(
@@ -3025,6 +3229,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
             assignment_result = None
             deliverable_result = None
+            pipeline_run_id = None
             next_step_pending = False
             if payload.approve:
                 next_step_pending = approvals_mod.activate_next_step(
@@ -3042,6 +3247,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     deliverable_result = deliverables.resolve_deliverable_decision(
                         conn, subject_id, True
                     )
+                elif not next_step_pending and subject_type == "pipeline_run_stage":
+                    # 사용자 요청(2026-10-18, "최소 HITL/HOTL") — 계획
+                    # 확정 체크포인트 또는 반복 실패 에스컬레이션을 사람이
+                    # 승인하면, 파이프라인이 다음 단계로 이어서 진행된다
+                    # (LLM 호출이 들어가므로 여기선 DB 상태만 바꾸고
+                    # BackgroundTasks로 이어서 돌린다).
+                    pipeline_run_id = pipeline_runtime.resolve_stage_decision(
+                        conn, user["id"], subject_id, True, payload.reason
+                    )
             else:
                 approvals_mod.skip_remaining_steps(
                     conn, subject_type, subject_id, approval["step"]
@@ -3053,6 +3267,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 elif subject_type == "deliverable":
                     deliverable_result = deliverables.resolve_deliverable_decision(
                         conn, subject_id, False
+                    )
+                elif subject_type == "pipeline_run_stage":
+                    # 반려 = "다시 해와"(human-approval-loop 스킬 안내와
+                    # 일치) — 재시도 여력이 남아 있으면 파이프라인은
+                    # 'running'으로 돌아가 같은 단계를 재시도한다.
+                    pipeline_run_id = pipeline_runtime.resolve_stage_decision(
+                        conn, user["id"], subject_id, False, payload.reason
                     )
             audit.record(
                 conn,
@@ -3082,12 +3303,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except Exception:
             conn.rollback()
             raise
+        if pipeline_run_id is not None:
+            run_status = conn.execute(
+                "SELECT status FROM pipeline_runs WHERE id = ?", (pipeline_run_id,)
+            ).fetchone()["status"]
+            if run_status == "running":
+                background_tasks.add_task(
+                    pipeline_runtime.run_pipeline_stage_job,
+                    conn,
+                    pipeline_run_id,
+                    user["id"],
+                )
         return {
             "id": approval_id,
             "status": new_status,
             "next_step_pending": next_step_pending,
             "assignment": assignment_result,
             "deliverable": deliverable_result,
+            "pipeline_run_id": pipeline_run_id,
         }
 
     @app.get("/", response_class=HTMLResponse)

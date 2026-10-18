@@ -87,9 +87,7 @@ def test_gc_hierarchical_crew_excludes_manager_from_worker_agents_and_allows_del
 
     def _kickoff_capture(self, *args, **kwargs):
         captured["crew"] = self
-        return _crew_output(
-            "자율 개발 크루 실행 완료", [f"{role} 산출물" for role in _WORKER_ROLE_NAMES]
-        )
+        return _crew_output("자율 개발 크루 실행 완료", ["자율 개발 크루 실행 완료"])
 
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         result = crew_runtime.run_crew(
@@ -118,11 +116,25 @@ def test_gc_hierarchical_crew_excludes_manager_from_worker_agents_and_allows_del
     # 한다(`run_crew()`의 기존 전역 기본값이 이 규모에서도 유지되는지 확인).
     assert all(a.allow_delegation is True for a in crew.agents)
 
-    # 매니저를 제외한 11명 전원의 산출물이 정확히 매핑됐는지 확인한다.
+    # 정정(2026-10-18, "매니저가 하위 과업을 실제로 쪼개서 위임하도록
+    # 개선해줘") — 예전엔 11명 워커 전원에게 완전히 동일한 Task를 1:1로
+    # 미리 만들어줬었다. 그런데 CrewAI hierarchical은 Task.agent를 무시하고
+    # 항상 매니저가 직접 실행하므로(`_get_agent_to_use`), 그 구조로는
+    # 매니저가 "똑같은 통짜 과업"을 11번 반복해서 그때그때 아무 코워커
+    # 에게나 떠넘기는 식으로 동작해 거의 동일한 완성품이 11개나 쏟아졌다
+    # (실측 재현). 이제는 Task를 하나만 주고 매니저가 코워커들에게 역할별
+    # 하위 과업을 실제로 쪼개 위임한 뒤 통합하게 하므로, Crew에 전달하는
+    # Task도 하나뿐이고 그 결과도 매니저 1건(통합 산출물)만 남는다.
+    assert len(crew.tasks) == 1
+    assert crew.tasks[0].agent is None  # 특정 워커에 미리 고정하지 않음
+    coworker_mention = crew.tasks[0].description
+    for role in _WORKER_ROLE_NAMES:
+        assert role in coworker_mention  # 매니저가 위임할 수 있는 코워커 목록 안내
+
     outputs = {a["agent_id"]: a["output"] for a in result["agents"]}
-    assert outputs[manager_id] is None  # 매니저는 조율만, 자기 몫 산출물 없음
-    for role, worker_id in zip(_WORKER_ROLE_NAMES, worker_ids, strict=True):
-        assert outputs[worker_id] == f"{role} 산출물"
+    assert outputs[manager_id] == "자율 개발 크루 실행 완료"
+    for worker_id in worker_ids:
+        assert worker_id not in outputs  # 워커별 개별 산출물이 아니라 매니저 통합본 하나
 
 
 def test_gc_autonomous_dev_crew_team_is_visible_and_has_twelve_members():

@@ -164,6 +164,32 @@ def describe_subject(conn: sqlite3.Connection, subject_type: str, subject_id: in
             "resource_type": row["author_type"],
             "resource_name": resource_names.get(row["author_type"]),
         }
+    if subject_type == "pipeline_run_stage":
+        # 사용자 요청(2026-10-18, "최소 HITL/HOTL" 파이프라인) — 결재함에
+        # "어느 할 일의 몇 번째 단계(파이프라인 이름)"가 떠야 결재자가
+        # 무엇을 보는지 알 수 있다(assignment/deliverable과 같은 원칙).
+        row = conn.execute(
+            """
+            SELECT pr.task_id, t.role_name, pt.name AS pipeline_name,
+                   ps.name AS stage_name, ps.seq_order AS stage_seq_order
+            FROM pipeline_run_stages prs
+            JOIN pipeline_runs pr ON pr.id = prs.pipeline_run_id
+            JOIN pipeline_templates pt ON pt.id = pr.pipeline_template_id
+            JOIN pipeline_stages ps ON ps.id = prs.stage_id
+            JOIN tasks t ON t.id = pr.task_id
+            WHERE prs.id = ?
+            """,
+            (subject_id,),
+        ).fetchone()
+        if row is None:
+            return empty
+        return {
+            "task_id": row["task_id"],
+            "task_role_name": row["role_name"],
+            "resource_type": "pipeline_run_stage",
+            "resource_name": f"{row['pipeline_name']} — {row['stage_seq_order']}단계 "
+            f"({row['stage_name']})",
+        }
     return empty
 
 

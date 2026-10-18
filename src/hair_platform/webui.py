@@ -91,6 +91,31 @@ INDEX_HTML = """<!DOCTYPE html>
   .pending-indicator { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; margin-top: 0.5rem; background: #f5f7fa; border: 1px solid #e2e4e8; border-radius: 6px; color: #555; font-size: 0.9rem; }
   .spinner { width: 14px; height: 14px; border: 2px solid #c7d2e0; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* 사용자 요청(2026-10-18, "어떤 에이전트가 어떤 동작을 하고 있는지
+     알 수 있도록... 펼침/닫힘 UI로 표시") — 메시지 하나로 여러 Job이
+     한꺼번에 트리거될 수 있어(복수 @멘션, Team은 멤버 전원을 한
+     Job으로 묶어 실행) 그 목록을 펼침/닫힘 패널로 보여준다. CrewAI
+     Crew(그룹) 실행은 동기 호출이라 "그룹 안에서 지금 누가 뭘 하는지"
+     까지는 실시간으로 못 보여준다(이벤트 스트리밍 없음) — 있는
+     그대로 "그룹 전체 실행 중/완료"로만 정직하게 표시한다.
+     `_renderConversationPendingPanel()`/`_updateConversationJobStatus()`
+     참고. */
+  .pending-indicator-panel { margin-top: 0.5rem; background: #f5f7fa; border: 1px solid #e2e4e8; border-radius: 6px; padding: 0.4rem 0.75rem; font-size: 0.9rem; }
+  .pending-indicator-panel summary { cursor: pointer; display: flex; align-items: center; gap: 0.5rem; color: #555; padding: 0.15rem 0; }
+  .pending-indicator-panel summary::-webkit-details-marker { display: none; }
+  /* 사용자 보고(2026-10-18, 스크린샷 — 실패 메시지 노출 시 깨져 보임) —
+     실측 원인: 실패 배지(.job-status-badge)에 flex-shrink:0을 건 채로
+     긴 에러 안내문 전체를 그 작은 알약(pill) 안에 통째로 넣어서, 줄바꿈
+     없이 화면 밖으로 흘러넘쳤다. 배지는 "✗ 실패"처럼 짧게만 유지하고
+     (flex-shrink:0 유지해도 안전), 자세한 에러 문구는 flex-basis:100%로
+     다음 줄에 떨어뜨려 폭 안에서 자연스럽게 줄바꿈되게 한다. */
+  .job-progress-list { list-style: none; margin: 0.4rem 0 0.1rem; padding: 0 0 0 1.4rem; }
+  .job-progress-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.15rem 0; }
+  .job-status-badge { font-size: 0.8em; border-radius: 3px; padding: 0.05rem 0.4rem; flex-shrink: 0; white-space: nowrap; }
+  .job-status-badge.running { background: #eef2ff; color: #4338ca; }
+  .job-status-badge.succeeded { background: var(--status-success-bg); color: var(--status-success-fg); }
+  .job-status-badge.failed { background: var(--status-warn-bg); color: var(--status-warn-fg); }
+  .job-error-detail { flex-basis: 100%; font-size: 0.85em; color: var(--status-warn-fg); margin-left: 1.6rem; word-break: break-word; }
   .gate-badge { display: inline-block; padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.85em; }
   .gate-badge.gate-ok { background: var(--status-success-bg); color: var(--status-success-fg); }
   .gate-badge.gate-warn { background: var(--status-warn-bg); color: var(--status-warn-fg); }
@@ -1104,6 +1129,7 @@ const TABS = [
   { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "poolregistry", label: "도구/스킬 Pool", group: "admin", roles: ["admin", "manager"], render: renderPoolRegistry },
   { id: "teams", label: "팀 관리", group: "admin", roles: ["admin", "manager"], render: renderTeams },
+  { id: "pipelines", label: "파이프라인 관리", group: "admin", roles: ["admin", "manager"], render: renderPipelines },
   { id: "modelregistry", label: "모델 레지스트리", group: "admin", roles: ["admin", "manager"], render: renderModelRegistry },
   { id: "crew", label: "Crew 실행", group: "admin", roles: ["admin", "manager"], render: renderCrew },
   { id: "admin", label: "사용자 관리", group: "admin", roles: ["admin"], adminOnly: true, render: renderAdmin },
@@ -1257,22 +1283,91 @@ function _stopConversationPolling() {
 // 수 없음) — 기존 "응답을 기다리는 중…"은 `#global-msg`(페이지 맨
 // 위)에만 떴다. 대화를 스크롤해 입력창 근처를 보고 있는 사용자에게는
 // 화면 밖이라 안 보였다 — 메시지 목록 바로 아래, 입력창 바로 위에
-// 똑같은 역할을 하는 인라인 표시(+ 전송 버튼 비활성화)를 추가한다.
-function _setConversationPending(pending, count) {
+// 똑같은 역할을 하는 인라인 표시(+ 전송 버튼 비활성화)를 추가했다.
+//
+// 사용자 요청(2026-10-18, "에이전트가 실행되는 경우 어떤 에이전트가
+// 어떤 동작을 하고 있는지 알 수 있도록... 펼침/닫힘 UI로... 에이전트
+// 그룹 포함") — 메시지 하나로 여러 Job이 한꺼번에 트리거될 수 있다
+// (복수 @멘션, 또는 @Team 멘션 하나가 그 팀 전원을 한 Job으로 묶어
+// 실행). "N건 진행 중"이라는 뭉뚱그린 문구 대신, 어떤 Agent/Team이
+// 각각 실행 중/완료/실패인지 펼쳐 볼 수 있는 목록으로 바꾼다. 다만
+// CrewAI Crew(그룹) 실행은 `crew.kickoff()` 자체가 동기 호출이라
+// 중간 단계 이벤트를 스트리밍해주지 않는다 — "그룹 안에서 지금 어느
+// 멤버가 뭘 하는지"까지는 실측으로 확인 불가능해서, 있는 그대로
+// "그룹 전체가 실행 중/완료"로만 정직하게 보여준다(없는 정보를
+// 지어내지 않는다).
+function _conversationJobLabel(triggered, participants) {
+  if (triggered.trigger_type === "agent_mention") {
+    const p = participants.find(p => p.participant_type === "agent" && p.participant_id === triggered.agent_id);
+    return { icon: "🤖", text: (p && p.display_name) ? p.display_name : "Agent #" + triggered.agent_id };
+  }
+  if (triggered.trigger_type === "team_mention") {
+    const p = participants.find(p => p.participant_type === "team" && p.participant_id === triggered.team_id);
+    const name = (p && p.display_name) ? p.display_name : "Team #" + triggered.team_id;
+    return { icon: "👥", text: name + " (그룹 전체 실행 — 멤버별 진행 상황은 CrewAI가 제공하지 않음)" };
+  }
+  return { icon: "🧠", text: "기본 AI" };
+}
+
+function _renderConversationPendingPanel(jobMeta) {
   const indicator = document.getElementById("conv-pending-indicator");
   if (!indicator) return;
-  if (pending) {
-    indicator.style.display = "";
-    indicator.innerHTML =
-      '<div class="pending-indicator"><span class="spinner"></span>' +
-      '응답 생성 중' + (count > 1 ? " (" + count + "건)" : "") +
-      '… Agent/Team 호출은 몇 분 걸릴 수 있습니다</div>';
-  } else {
-    indicator.style.display = "none";
-    indicator.innerHTML = "";
+  indicator.style.display = "";
+  const rows = jobMeta.map(m =>
+    '<li data-job-progress-id="' + m.jobId + '">' +
+    '<span class="job-status-badge running">● 실행 중</span>' +
+    m.icon + ' ' + esc(m.text) +
+    '</li>'
+  ).join("");
+  indicator.innerHTML =
+    '<details class="pending-indicator-panel" open>' +
+    '<summary><span class="spinner"></span>응답 생성 중(' + jobMeta.length +
+    '건)… Agent/Team 호출은 몇 분 걸릴 수 있습니다</summary>' +
+    '<ul class="job-progress-list">' + rows + '</ul>' +
+    '</details>';
+  const sendBtn = document.querySelector('#conv-message-form button[type="submit"]');
+  if (sendBtn) sendBtn.disabled = true;
+}
+
+function _updateConversationJobStatus(jobId, status, error) {
+  const li = document.querySelector('[data-job-progress-id="' + jobId + '"]');
+  if (!li) return;
+  const badge = li.querySelector(".job-status-badge");
+  if (!badge) return;
+  if (status === "succeeded") {
+    badge.className = "job-status-badge succeeded";
+    badge.textContent = "✓ 완료";
+    return;
+  }
+  // 사용자 보고(2026-10-18, "실패 메시지 노출시 깨져 보임") — 배지에
+  // 에러 문구 전체를 넣지 않는다(배지는 "✗ 실패"로 짧게 유지). 자세한
+  // 내용은 별도 줄(.job-error-detail, CSS에서 flex-basis:100%)로
+  // 떨어뜨려 폭 안에서 정상적으로 줄바꿈되게 한다.
+  badge.className = "job-status-badge failed";
+  badge.textContent = "✗ 실패";
+  if (error) {
+    const detail = document.createElement("div");
+    detail.className = "job-error-detail";
+    detail.textContent = error;
+    li.appendChild(detail);
+  }
+}
+
+// 전부 끝나면 접어서(펼침/닫힘의 "닫힘") 이번 메시지에 어떤 Agent/Team이
+// 관여했는지 기록만 남긴다 — 다음 메시지를 보내면 이 패널 전체가
+// 새로 교체된다(무한히 쌓이지 않음).
+function _finalizeConversationPendingPanel(allSucceeded) {
+  const indicator = document.getElementById("conv-pending-indicator");
+  const details = indicator && indicator.querySelector("details");
+  if (details) {
+    details.open = false;
+    const summary = details.querySelector("summary");
+    if (summary) {
+      summary.textContent = (allSucceeded ? "✓ 응답 완료" : "⚠ 일부 실패") + " — 펼쳐서 진행 내역 보기";
+    }
   }
   const sendBtn = document.querySelector('#conv-message-form button[type="submit"]');
-  if (sendBtn) sendBtn.disabled = !!pending;
+  if (sendBtn) sendBtn.disabled = false;
 }
 
 // 사용자 보고(2026-10-08, "응답을 기다리는 중…으로 나오고 대화에
@@ -1734,25 +1829,39 @@ async function renderConversationDetail(conversationId, containerId) {
       document.getElementById("conv-skill-select").value = "";
       await refreshConversationMessages(conversationId, participants, conv);
       if (result.triggered_jobs && result.triggered_jobs.length) {
-        showMsg("global-msg", "응답을 기다리는 중…(Agent/Team 호출은 몇 분 걸릴 수 있습니다)", "ok");
-        _setConversationPending(true, result.triggered_jobs.length);
-        Promise.all(
-          result.triggered_jobs.map(j => pollConversationJob(conversationId, j.job_id))
-        ).then((jobs) => {
-          _setConversationPending(false);
+        // 사용자 요청(2026-10-18, "어떤 에이전트가 어떤 동작을 하고
+        // 있는지... 펼침/닫힘 UI로") — 뭉뚱그린 "N건 진행 중" 대신
+        // Agent/Team 이름별로 펼쳐 볼 수 있는 목록을 띄운다. 완료되는
+        // 작업마다(전부 끝날 때까지 기다리지 않고) 그 자리에서 상태를
+        // 갱신하고 메시지 목록도 바로 반영한다 — 먼저 끝난 결과를
+        // 늦게 끝나는 Job 때문에 못 보고 기다리지 않게.
+        const jobMeta = result.triggered_jobs.map(j => {
+          const label = _conversationJobLabel(j, participants);
+          return { jobId: j.job_id, icon: label.icon, text: label.text };
+        });
+        _renderConversationPendingPanel(jobMeta);
+        Promise.allSettled(
+          jobMeta.map(m =>
+            pollConversationJob(conversationId, m.jobId).then(job => {
+              _updateConversationJobStatus(m.jobId, job.status, job.error);
+              refreshConversationMessages(conversationId, participants, conv);
+              return job;
+            }).catch(e => {
+              _updateConversationJobStatus(m.jobId, "failed", e.message);
+              throw e;
+            })
+          )
+        ).then((settled) => {
+          const failed = settled.filter(s => s.status === "rejected" || (s.value && s.value.status === "failed"));
+          _finalizeConversationPendingPanel(failed.length === 0);
           refreshConversationMessages(conversationId, participants, conv);
-          const failed = jobs.filter(j => j.status === "failed");
           showMsg(
             "global-msg",
             failed.length
-              ? "일부 응답이 실패했습니다: " + failed.map(j => j.error).join(", ")
+              ? "일부 응답이 실패했습니다 — 위 진행 내역을 펼쳐서 확인하세요."
               : "응답이 도착했습니다.",
             failed.length ? "error" : "ok"
           );
-        }).catch((e) => {
-          _setConversationPending(false);
-          refreshConversationMessages(conversationId, participants, conv);
-          showMsg("global-msg", e.message, "error");
         });
       }
     } catch (e) { showMsg("global-msg", e.message, "error"); }
@@ -2147,6 +2256,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = isSupervisor ? await fetchModelsByProvider() : {};
   let items, jobs, permission, confirmedAgents, confirmedTeams, taskDetail, activity, depGraph, siblingTasks;
+  let pipelineTemplates, pipelineRuns;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
     jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
@@ -2190,6 +2300,14 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     // 실행하는 섹션을 보여준다(팀이 여러 개면 드롭다운으로 하나를
     // 고른다 — 사용자 결정, 전부 동시 실행 아님).
     confirmedTeams = assignments.filter(a => a.resource_type === "team" && a.status === "confirmed");
+    // 사용자 요청(2026-10-18, "BMAD-METHOD와 하네스 방법론을 참조해...
+    // 최소 HITL/HOTL... 단계별 단독 또는 복수의 에이전트가 순차/병행
+    // 처리") — 팀 Crew 실행과 같은 자리에, 단계형 파이프라인 실행
+    // 섹션을 추가한다. 권한은 위 permission 조회와 동일한 Task이므로
+    // 별도 403 분기 없이 그대로 보여준다(서버가 다시 검사한다).
+    pipelineTemplates = (await api("GET", "/api/pipeline-templates").catch(() => []))
+      .filter(t => t.is_active);
+    pipelineRuns = await api("GET", "/api/tasks/" + taskId + "/pipeline-runs").catch(() => []);
   } catch (e) {
     detail.innerHTML = "";
     showMsg("global-msg", e.message, "error");
@@ -2394,6 +2512,64 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         : '<p class="muted">팀의 온보딩된(active) Agent 멤버 전원이 CrewAI로 함께 실행되고, 각자의 산출물이 이 할 일의 결과물로 쌓입니다.</p>')
     : '';
 
+  // 사용자 요청(2026-10-18, "BMAD-METHOD와 하네스 방법론을 참조해...
+  // 최소 HITL/HOTL... 단계별 단독 또는 복수의 에이전트가 순차/병행
+  // 처리") — 파이프라인 실행 섹션. 실행 중인 run이 있으면 새로 시작하는
+  // 버튼은 숨기고(서버도 같은 이유로 409를 던진다) 진행상황 타임라인만
+  // 보여준다 — 승인 대기 중이면 결재함으로 가라는 안내를 덧붙인다.
+  const PIPELINE_RUN_STATUS_LABEL = {
+    running: "진행 중", paused_for_approval: "승인 대기", completed: "완료",
+    failed: "실패", cancelled: "취소",
+  };
+  const PIPELINE_STAGE_BADGE_CLASS = {
+    running: "running", passed: "succeeded", approved: "succeeded",
+    failed_retrying: "running", escalated: "failed", rejected: "failed",
+  };
+  const PIPELINE_STAGE_LABEL = {
+    running: "진행 중", passed: "통과", approved: "승인됨",
+    failed_retrying: "재시도 중", escalated: "승인 대기(반복 실패)", rejected: "반려됨",
+  };
+  const latestPipelineRun = pipelineRuns[0];
+  const pipelineRunActive = latestPipelineRun &&
+    ["running", "paused_for_approval"].includes(latestPipelineRun.status);
+  const pipelineTimelineHtml = (run) => {
+    if (!run) return "";
+    const rows = run.stage_results.map(sr => {
+      const gateSummary = sr.gate_scores
+        ? Object.entries(sr.gate_scores)
+            .filter(([, g]) => !g.not_measured)
+            .map(([gid, g]) => '<span class="gate-badge ' + (g.passed ? "gate-ok" : "gate-warn") + '">' + gid + "</span>")
+            .join(" ")
+        : "";
+      return '<li>' +
+        '<span class="job-status-badge ' + (PIPELINE_STAGE_BADGE_CLASS[sr.status] || "") + '">' +
+        esc(PIPELINE_STAGE_LABEL[sr.status] || sr.status) + "</span> " +
+        esc(sr.stage_seq_order + ". " + sr.stage_name) +
+        (sr.attempt > 1 ? " (시도 " + sr.attempt + ")" : "") + " " + gateSummary +
+        "</li>";
+    }).join("");
+    return '<details class="card" open><summary>' +
+      esc(run.pipeline_template_name || "파이프라인") + " — " +
+      esc(PIPELINE_RUN_STATUS_LABEL[run.status] || run.status) + "</summary>" +
+      '<ul class="job-progress-list">' + rows + "</ul>" +
+      (run.status === "paused_for_approval"
+        ? '<p class="muted">사람 승인이 필요한 단계입니다 — "결재/승인" 메뉴에서 처리하세요.</p>'
+        : "") +
+      "</details>";
+  };
+  const pipelineExecuteHtml = (pipelineTemplates.length && !pipelineRunActive)
+    ? '<select id="ws-pipeline-template-picker" style="margin-right:0.5rem">' +
+      pipelineTemplates.map(t => '<option value="' + t.id + '">' + esc(t.name) + " (" + t.stage_count + "단계)</option>").join("") +
+      '</select>' +
+      '<button class="small" id="ws-execute-pipeline-btn">파이프라인 실행(비용 발생)</button>' +
+      '<p class="muted">선택한 파이프라인의 1단계부터 순서대로 진행됩니다 — "사람 승인 필요"로 표시된 단계가 아니면 Gate 기준 통과 시 자동으로 다음 단계로 넘어갑니다.</p>'
+    : (pipelineRunActive ? "" : '<p class="muted">등록된(활성) 파이프라인이 없습니다 — "파이프라인 관리" 탭에서 먼저 만드세요.</p>');
+  const pipelineSectionHtml =
+    '<section class="card"><h4>파이프라인 실행</h4>' +
+    pipelineExecuteHtml +
+    pipelineTimelineHtml(latestPipelineRun) +
+    '</section>';
+
   // 2026-10-08 — 결과물이 아직 없는
   // 단계에서도 참가자들이 맥락/의사결정을 적어두는 자유 텍스트 공간.
   // 마크다운으로 렌더링(결과물 content_type='markdown'과 같은 렌더러
@@ -2537,11 +2713,25 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       ? '<section class="card"><h4>팀 Agent 실행(Crew)</h4>' +
         contentTypeSelectHtml("ws-team-crew-content-type") + ' ' + teamCrewBtnHtml + '</section>'
       : '') +
+    pipelineSectionHtml +
     '<div id="ws-result"></div>';
 
   if (isSupervisor) wireProviderModelSelect("ws-provider", "ws-model", modelsByProvider);
   if (isSupervisor && confirmedTeams.length) {
     wireProviderModelSelect("ws-team-crew-provider", "ws-team-crew-model", modelsByProvider);
+  }
+  const executePipelineBtn = document.getElementById("ws-execute-pipeline-btn");
+  if (executePipelineBtn) {
+    executePipelineBtn.onclick = async () => {
+      const templateId = Number(document.getElementById("ws-pipeline-template-picker").value);
+      try {
+        await api("POST", "/api/tasks/" + taskId + "/execute-pipeline", {
+          pipeline_template_id: templateId,
+        });
+        showMsg("global-msg", "파이프라인 실행을 시작했습니다.", "ok");
+        renderCollabWorkspace(taskId, containerId);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
   }
   items.forEach(d => loadDeliverableComments(d.id, taskId, containerId));
   _loadTaskConversation(taskId);
@@ -4463,6 +4653,234 @@ async function renderTeams(content) {
       if (!window.confirm("이 팀을 완전히 지웁니다(되돌릴 수 없음). 과거 배정 이력은 남습니다. 계속할까요?")) return;
       try {
         await api("DELETE", "/api/teams/" + btn.dataset.deleteTeam);
+        showMsg("global-msg", "삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+}
+
+/* ---------- 파이프라인 빌더(사용자 요청, 2026-10-18, "BMAD-METHOD와
+   하네스 방법론을 참조해... 개발 Agent 팀을 구성(기존의 개발팀 갱신)...
+   각 단계별 단독 또는 복수의 에이전트가 순차/병행 처리... 다른
+   업무(시장조사-전략/기획 수립 등)에도 적용될 수 있도록 일반화") ----------
+   엔진은 "단계 + 역할"만 안다(도메인 무관) — 그래서 이 화면 하나로
+   SW개발 파이프라인도, 다른 업무 파이프라인도 똑같이 만들 수 있다. */
+
+const PIPELINE_MODE_LABEL = {
+  single: "단독(1명)",
+  sequential_relay: "순차 릴레이(N명, 앞사람 결과를 이어받음)",
+  parallel_delegated: "병행 위임(리드 1명이 코워커에게 실제로 위임)",
+};
+
+function pipelineStageAgentRowHtml(activeAgents) {
+  return '<div class="inline pipeline-agent-row" style="margin-bottom:0.3rem">' +
+    '<select class="pipeline-agent-role" style="min-width:200px"><option value="">— 역할 선택 —</option>' +
+    activeAgents.map(a => '<option value="' + esc(a.role_name) + '">' + agentDisplayLabel(a) + '</option>').join("") +
+    '</select>' +
+    '<input class="pipeline-agent-instructions" placeholder="이 역할만의 구체 지시(선택)" style="flex:1;min-width:200px">' +
+    '<button type="button" class="small danger pipeline-agent-row-remove">×</button>' +
+    '</div>';
+}
+
+function wirePipelineAgentRowRemovers(scope) {
+  scope.querySelectorAll(".pipeline-agent-row-remove").forEach(btn => {
+    btn.onclick = () => {
+      const rows = scope.querySelectorAll(".pipeline-agent-row");
+      if (rows.length <= 1) { showMsg("global-msg", "최소 역할 1개는 있어야 합니다.", "error"); return; }
+      btn.closest(".pipeline-agent-row").remove();
+    };
+  });
+}
+
+function pipelineStageCardHtml(templateId, stage, index, total) {
+  const agentsText = stage.agents.map(a =>
+    esc(a.role_name) + (a.role_name === stage.lead_role_name ? " (리드)" : "")
+  ).join(", ");
+  return '<div class="card" style="margin-bottom:0.5rem" data-pipeline-stage-card="' + stage.id + '">' +
+    '<div class="inline" style="justify-content:space-between">' +
+    '<b>' + stage.seq_order + ". " + esc(stage.name) + "</b>" +
+    '<span class="muted">' + (PIPELINE_MODE_LABEL[stage.mode] || stage.mode) + "</span>" +
+    "</div>" +
+    (stage.instructions ? '<p class="muted">' + esc(stage.instructions) + "</p>" : "") +
+    "<p>참여 역할: " + agentsText + "</p>" +
+    '<p class="muted">Gate 통과 기준 ' + Math.round(stage.min_gate_pass_ratio * 100) + "% · 최대 재시도 " +
+    stage.max_retry + "회 · 사람 승인 " + (stage.requires_human_approval ? "필요" : "불필요") + "</p>" +
+    '<div class="actions">' +
+    (index > 0 ? '<button class="small" data-reorder-stage="' + stage.id + ':up">↑</button>' : "") +
+    (index < total - 1 ? '<button class="small" data-reorder-stage="' + stage.id + ':down">↓</button>' : "") +
+    '<button class="small danger" data-delete-stage="' + stage.id + '">단계 삭제</button>' +
+    "</div></div>";
+}
+
+function pipelineAddStageFormHtml(templateId, activeAgents) {
+  return '<form class="card" data-add-stage-form="' + templateId + '" style="margin-top:0.5rem">' +
+    "<h4>+ 단계 추가</h4>" +
+    '<div class="inline">' +
+    '<input class="stage-name" placeholder="단계 이름" required style="min-width:140px">' +
+    '<select class="stage-mode">' +
+    Object.keys(PIPELINE_MODE_LABEL).map(m => '<option value="' + m + '">' + PIPELINE_MODE_LABEL[m] + "</option>").join("") +
+    "</select>" +
+    "</div>" +
+    '<textarea class="stage-instructions" placeholder="이 단계 공통 지시문(선택 — 예: &quot;설계 산출물을 검증하세요&quot;)" style="width:100%;margin-top:0.3rem;min-height:2.2rem"></textarea>' +
+    '<p class="muted" style="margin:0.3rem 0 0">역할을 추가한 순서가 "순차 릴레이"의 처리 순서입니다. "병행 위임"에서는 <b>첫 번째로 추가한 역할이 리드(위임하는 쪽)</b>가 됩니다.</p>' +
+    '<div class="stage-agent-rows">' + pipelineStageAgentRowHtml(activeAgents) + "</div>" +
+    '<button type="button" class="small stage-add-agent-row">+ 역할 추가</button>' +
+    '<div class="inline" style="margin-top:0.4rem">' +
+    '<label class="inline" style="gap:0.3rem"><input type="checkbox" class="stage-requires-approval"> 사람 승인 필요(계획 확정 체크포인트)</label>' +
+    '</div>' +
+    '<div class="inline" style="margin-top:0.3rem">' +
+    '<label>최대 재시도 <input type="number" class="stage-max-retry" value="2" min="1" max="10" style="width:60px"></label>' +
+    '<label>Gate 통과 기준 <input type="number" class="stage-min-gate-ratio" value="0" min="0" max="100" style="width:60px">%</label>' +
+    "</div>" +
+    '<button class="primary small" type="submit" style="margin-top:0.4rem">이 단계 추가</button>' +
+    "</form>";
+}
+
+function pipelineTemplateCardHtml(t, detail, activeAgents) {
+  const stages = detail ? detail.stages : [];
+  return '<section class="card" data-pipeline-template-card="' + t.id + '">' +
+    '<h3>#' + t.id + " " + esc(t.name) +
+    (t.is_active ? "" : ' <span class="gate-badge gate-warn">비활성</span>') +
+    ' <span class="muted">(' + esc(t.domain) + ")</span></h3>" +
+    (t.description ? '<p class="muted">' + esc(t.description) + "</p>" : "") +
+    (stages.length
+      ? stages.map((s, i) => pipelineStageCardHtml(t.id, s, i, stages.length)).join("")
+      : '<p class="muted">아직 단계가 없습니다 — 아래에서 추가하세요.</p>') +
+    pipelineAddStageFormHtml(t.id, activeAgents) +
+    '<div class="actions" style="margin-top:0.5rem">' +
+    '<button class="small" data-toggle-pipeline-active="' + t.id + '" data-next-active="' + (t.is_active ? "0" : "1") + '">' +
+    (t.is_active ? "비활성화" : "활성화") + "</button>" +
+    (ME.role === "admin" ? '<button class="small danger" data-delete-pipeline-template="' + t.id + '">템플릿 삭제</button>' : "") +
+    "</div></section>";
+}
+
+async function renderPipelines(content) {
+  const [templates, agents] = await Promise.all([
+    api("GET", "/api/pipeline-templates"),
+    api("GET", "/api/agent-pool"),
+  ]);
+  const activeAgents = agents.filter(a => a.status === "active");
+  const details = await Promise.all(
+    templates.map(t => api("GET", "/api/pipeline-templates/" + t.id))
+  );
+  const detailById = {};
+  templates.forEach((t, i) => { detailById[t.id] = details[i]; });
+
+  content.innerHTML =
+    '<section class="card"><h2>파이프라인 관리 — 단계형 개발/업무 Agent 팀</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>"단계(stage)"를 순서대로 쌓아 파이프라인을 만듭니다 — 각 단계는 <b>단독(1명)</b>, <b>순차 릴레이(N명이 순서대로 이어받음)</b>, <b>병행 위임(리드 1명이 코워커들에게 실제로 하위 과업을 쪼개 위임)</b> 중 하나로 동작합니다.</li>' +
+    '<li>단계별로 Gate A-G 통과 기준·최대 재시도·"사람 승인 필요" 여부를 정할 수 있습니다 — 승인이 필요 없는 단계는 Gate만 통과하면 자동으로 다음 단계로 넘어갑니다(최소 HITL). 반복해도 기준을 못 넘기면 그때만 결재함으로 올라갑니다(최소 HOTL).</li>' +
+    '<li>실행은 할 일(Task)의 협업 워크스페이스에서 "파이프라인 실행"으로 시작합니다 — 이 화면은 템플릿(설계도)만 관리합니다.</li>' +
+    '<li>SW 개발뿐 아니라 시장조사-분석(3C/SWOT)-전략/기획 같은 다른 업무도 같은 방식으로 만들 수 있습니다(역할만 다를 뿐 엔진은 동일).</li>' +
+    "</ul>" +
+    '<form class="inline" id="pipeline-template-create-form">' +
+    '<input id="pipeline-template-name" placeholder="파이프라인 이름" required>' +
+    '<input id="pipeline-template-description" placeholder="설명(선택)" style="flex:1;min-width:160px">' +
+    '<input id="pipeline-template-domain" placeholder="도메인(선택, 예: software_dev)" style="width:180px">' +
+    '<button class="primary" type="submit">파이프라인 등록</button></form>' +
+    "</section>" +
+    (templates.length
+      ? templates.map(t => pipelineTemplateCardHtml(t, detailById[t.id], activeAgents)).join("")
+      : '<p class="muted">등록된 파이프라인이 없습니다.</p>');
+
+  document.getElementById("pipeline-template-create-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      await api("POST", "/api/pipeline-templates", {
+        name: document.getElementById("pipeline-template-name").value,
+        description: document.getElementById("pipeline-template-description").value,
+        domain: document.getElementById("pipeline-template-domain").value || "general",
+      });
+      showMsg("global-msg", "파이프라인을 등록했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  content.querySelectorAll("[data-add-stage-form]").forEach(form => {
+    wirePipelineAgentRowRemovers(form);
+    form.querySelector(".stage-add-agent-row").onclick = () => {
+      form.querySelector(".stage-agent-rows").insertAdjacentHTML("beforeend", pipelineStageAgentRowHtml(activeAgents));
+      wirePipelineAgentRowRemovers(form);
+    };
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const templateId = form.dataset.addStageForm;
+      const mode = form.querySelector(".stage-mode").value;
+      const rows = Array.from(form.querySelectorAll(".pipeline-agent-row"));
+      const roleAgents = rows.map(r => ({
+        role_name: r.querySelector(".pipeline-agent-role").value,
+        instructions: r.querySelector(".pipeline-agent-instructions").value,
+      }));
+      if (roleAgents.some(a => !a.role_name)) {
+        showMsg("global-msg", "모든 역할 줄에서 역할을 선택하세요.", "error"); return;
+      }
+      if (mode === "single" && roleAgents.length !== 1) {
+        showMsg("global-msg", "단독 모드는 역할이 정확히 1개여야 합니다.", "error"); return;
+      }
+      if (mode === "parallel_delegated" && roleAgents.length < 2) {
+        showMsg("global-msg", "병행 위임 모드는 리드 포함 최소 2개 역할이 필요합니다.", "error"); return;
+      }
+      const payload = {
+        name: form.querySelector(".stage-name").value,
+        mode,
+        agents: roleAgents,
+        instructions: form.querySelector(".stage-instructions").value,
+        max_retry: Number(form.querySelector(".stage-max-retry").value) || 2,
+        min_gate_pass_ratio: (Number(form.querySelector(".stage-min-gate-ratio").value) || 0) / 100,
+        requires_human_approval: form.querySelector(".stage-requires-approval").checked,
+      };
+      if (mode === "parallel_delegated") payload.lead_role_name = roleAgents[0].role_name;
+      try {
+        await api("POST", "/api/pipeline-templates/" + templateId + "/stages", payload);
+        showMsg("global-msg", "단계를 추가했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  });
+
+  content.querySelectorAll("[data-reorder-stage]").forEach(btn => {
+    btn.onclick = async () => {
+      const [stageId, direction] = btn.dataset.reorderStage.split(":");
+      const templateId = btn.closest("[data-pipeline-template-card]").dataset.pipelineTemplateCard;
+      try {
+        await api("POST", "/api/pipeline-templates/" + templateId + "/stages/" + stageId + "/reorder", { direction });
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  content.querySelectorAll("[data-delete-stage]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 단계를 지웁니다. 계속할까요?")) return;
+      const stageId = btn.dataset.deleteStage;
+      const templateId = btn.closest("[data-pipeline-template-card]").dataset.pipelineTemplateCard;
+      try {
+        await api("DELETE", "/api/pipeline-templates/" + templateId + "/stages/" + stageId);
+        showMsg("global-msg", "단계를 삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  content.querySelectorAll("[data-toggle-pipeline-active]").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        await api("PATCH", "/api/pipeline-templates/" + btn.dataset.togglePipelineActive + "/active", {
+          is_active: btn.dataset.nextActive === "1",
+        });
+        showMsg("global-msg", "변경했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  content.querySelectorAll("[data-delete-pipeline-template]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 파이프라인 템플릿을 완전히 지웁니다(실행 이력이 있으면 지울 수 없습니다). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/pipeline-templates/" + btn.dataset.deletePipelineTemplate);
         showMsg("global-msg", "삭제했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }

@@ -106,7 +106,15 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     (
         "개발자",
         ["tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        # 사용자 보고(2026-10-18, "@자율 개발 크루... 일부 응답이
+        # 실패했습니다") 원인 분석 후 조치 — "자율 개발 크루" 12명
+        # 전원이 reasoning=True라 Crew 실행 한 번에 LLM 왕복 호출이
+        # 수십 번 체인으로 걸렸고, CrewAI 소스까지 추적해 그중 하나가
+        # 빈 완성 응답을 내면 json.JSONDecodeError로 전체가 실패하는
+        # 걸 확인했다(실측: 2026-10-15~18 사이 동일 원인으로 5회+
+        # 재현). 사용자 결정으로 이 팀 12명 전원 reasoning을 끈다 —
+        # 호출 수가 절반 이하로 줄어 실패 표면적이 그만큼 작아진다.
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "코드 검증가",
@@ -176,12 +184,13 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     (
         "개발 계획 수립가",
         ["module-decomposition-and-task-assignment", "adr-template"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2},
+        # "자율 개발 크루" 매니저 — 아래 reasoning 끄기 조치 참고(25번 줄).
+        {"temperature": 0.2},
     ),
     (
         "프론트엔드 개발자",
         ["frontend-ui-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     # --- "자율 개발 크루" 확장(10인 개발자 풀, 2026-10-14) — 사용자 요청:
     # "기획서가 제시되면 이를 받아 자율적으로 개발을 완료할 복수의
@@ -196,47 +205,47 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     (
         "백엔드 개발자 2",
         ["tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "백엔드 개발자 3",
         ["tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "백엔드 개발자 4",
         ["tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "프론트엔드 개발자 2",
         ["frontend-ui-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "프론트엔드 개발자 3",
         ["frontend-ui-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "데이터/인프라 개발자 1",
         ["data-infra-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "데이터/인프라 개발자 2",
         ["data-infra-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "풀스택 개발자",
         ["tdd-ai-workflow-checklist", "commit-pr-message-rules", "frontend-ui-implementation-guide"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2, "max_retry_limit": 3},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "UI 기획자",
         ["ui-ux-planning-guide", "docs-style-guide"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.4},
+        {"temperature": 0.4},
     ),
     (
         "테스트 계획 수립가",
@@ -366,4 +375,165 @@ def seed(conn: sqlite3.Connection) -> None:
                 "(team_id, member_type, member_id, role_label) "
                 "VALUES (?, 'agent', ?, ?)",
                 (team_id, agent_row["id"], role_label),
+            )
+
+    _seed_dev_pipeline(conn)
+
+
+# 사용자 요청(2026-10-18, "BMAD-METHOD(https://github.com/bmad-code-org/
+# bmad-method)와 하네스 방법론을 참조해, 최소의 HITL, HOTL으로 수준높은
+# 개발 결과물 생성 가능한 개발 Agent 팀을 구성(기존의 개발팀 갱신)하고
+# 각 agent가 역할을 구분해 각 개발 단계별 단독 또는 복수의 에이전트가
+# 순차/병행 처리하며 개발 진행") — 직전 분석에서 확인한 두 문제(①
+# "자율 개발 크루"에 PM/AA/DA/요구분석/코드검증/QA/테스트계획/품질관리
+# 10개 역할이 전혀 안 들어가 있음, ② Gate A-G 측정이 대화창 경로에서는
+# 저장·활용되지 않고 버려짐)를 이 7단계 파이프라인이 메운다. BMAD의
+# "계획(PRD+Architecture) 승인은 1회, 그 뒤 Dev→QA Gate 반복"을 그대로
+# 반영해 1단계만 `requires_human_approval=1`이다. "자율 개발 크루" 팀은
+# 그대로 두고(하위 호환, 수동 Crew 실행용) 이 파이프라인이 정식 개발
+# 진행 경로로 추가된다 — 새 Agent는 전혀 만들지 않고 기존 22개 역할 중
+# 10개를 그대로 재사용한다.
+DEV_PIPELINE_NAME = "소프트웨어 개발 파이프라인"
+DEV_PIPELINE_DESCRIPTION = (
+    "기획서 → 요구분석(계획 확정, 사람 승인 1회) → 설계(AA→DA) → 개발 계획 수립 → "
+    "구현(매니저가 10명+UI기획자에게 실제 위임) → 코드 검증 → QA 기능테스트 → "
+    "품질 관리 최종 판정까지, Gate A-G 기준으로 자동 반복하며 진행하는 정식 "
+    "개발 파이프라인(BMAD-METHOD 대응 — 계획 확정 시점에만 사람이 개입한다)."
+)
+# (name, mode, lead_role_name, instructions, requires_human_approval,
+#  agents=[(role_name, instructions), ...])
+DEV_PIPELINE_STAGES: list[tuple[str, str, str | None, str, bool, list[tuple[str, str]]]] = [
+    (
+        "요구분석/계획 확정",
+        "single",
+        None,
+        "요구사항을 EARS 표기(WHEN/IF/WHILE ... THE SYSTEM SHALL ...)로 정리하고, "
+        "[NEEDS CLARIFICATION]이 남아있지 않은지 스스로 점검하세요.",
+        True,
+        [("요구사항 분석가", "")],
+    ),
+    (
+        "설계",
+        "sequential_relay",
+        None,
+        "앞 단계의 요구사항을 바탕으로 설계하세요.",
+        False,
+        [
+            ("AA", "모듈 경계와 모듈 간 인터페이스를 설계하세요."),
+            ("DA", "앞서 나온 아키텍처를 바탕으로 데이터 모델(ERD)을 설계하세요."),
+        ],
+    ),
+    (
+        "개발 계획 수립",
+        "single",
+        None,
+        "설계 산출물을 독립적으로 개발 가능한 모듈 단위로 쪼개고 선행조건·완료기준을 정하세요.",
+        False,
+        [("개발 계획 수립가", "")],
+    ),
+    (
+        "구현",
+        "parallel_delegated",
+        "개발 계획 수립가",
+        "앞 단계의 개발 계획에 따라 모듈을 구현하세요.",
+        False,
+        [
+            ("개발 계획 수립가", ""),
+            ("개발자", "백엔드 모듈을 구현하세요."),
+            ("백엔드 개발자 2", "백엔드 모듈을 구현하세요."),
+            ("백엔드 개발자 3", "백엔드 모듈을 구현하세요."),
+            ("백엔드 개발자 4", "백엔드 모듈을 구현하세요."),
+            ("프론트엔드 개발자", "프론트엔드 모듈을 구현하세요."),
+            ("프론트엔드 개발자 2", "프론트엔드 모듈을 구현하세요."),
+            ("프론트엔드 개발자 3", "프론트엔드 모듈을 구현하세요."),
+            ("데이터/인프라 개발자 1", "데이터/인프라 모듈을 구현하세요."),
+            ("데이터/인프라 개발자 2", "데이터/인프라 모듈을 구현하세요."),
+            ("풀스택 개발자", "필요한 쪽을 유동적으로 구현하세요."),
+            ("UI 기획자", "구현에 필요한 화면 흐름/인터랙션을 정리해 전달하세요."),
+        ],
+    ),
+    (
+        "코드 검증",
+        "single",
+        None,
+        "구현 산출물을 code-review-checklist 기준으로 검증하세요.",
+        False,
+        [("코드 검증가", "")],
+    ),
+    (
+        "QA 기능테스트",
+        "sequential_relay",
+        None,
+        "구현 산출물을 테스트하세요.",
+        False,
+        [
+            ("테스트 계획 수립가", "요구사항별 테스트 케이스(정상/예외/경계값)를 설계하세요."),
+            ("QA 기능테스터", "앞서 설계된 테스트 케이스로 실제 기능을 검증하세요."),
+        ],
+    ),
+    (
+        "품질 관리 최종 판정",
+        "single",
+        None,
+        "지금까지의 전체 산출물을 종합해 품질/인수 기준(치명적 결함 0건, 핵심 요구사항 "
+        "커버리지 등)으로 최종 판정하세요.",
+        False,
+        [("품질 관리자", "")],
+    ),
+]
+
+
+def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
+    """`seed()`가 마지막에 호출한다 — `pipeline_templates.name`은 UNIQUE
+    제약이 없어 이름으로 존재를 확인한다(teams와 같은 패턴). 아직 사용자가
+    하나도 없는 빈 DB에서도 호출되므로 `audit.record()`(actor_id FK 필요)
+    없이 직접 INSERT한다.
+
+    **`min_gate_pass_ratio`를 전부 0.0(기본값, 미지정)으로 둔 이유** —
+    실측(2026-10-18, 실제 "자율 개발 크루" 실행)으로 확인한 바 Gate C/D/G는
+    이 플랫폼의 단순한 휴리스틱 채점 특성상 구조적으로 자주 fail하거나
+    not_measured로 나온다(`agent_evaluation.py` docstring의 기존 한계
+    설명과 일치). 기본 시드에서부터 통과 기준을 걸면 첫 실행부터 거의
+    매 단계가 에스컬레이션돼 "최소 HITL"의 의도와 반대로 동작한다 —
+    Gate 측정·기록 자체는 전 단계에서 그대로 하되(감사·가시성 목적),
+    실제로 진행을 막을지는 관리자가 빌더 UI에서 단계별로 직접 올리도록
+    남겨둔다."""
+    existing = conn.execute(
+        "SELECT id FROM pipeline_templates WHERE name = ?", (DEV_PIPELINE_NAME,)
+    ).fetchone()
+    if existing is not None:
+        return
+    cur = conn.execute(
+        "INSERT INTO pipeline_templates (name, description, domain) VALUES (?, ?, ?)",
+        (DEV_PIPELINE_NAME, DEV_PIPELINE_DESCRIPTION, "software_dev"),
+    )
+    template_id = cur.lastrowid
+    for seq, (name, mode, lead_role_name, instructions, requires_approval, agents) in enumerate(
+        DEV_PIPELINE_STAGES, start=1
+    ):
+        cur = conn.execute(
+            "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
+            "lead_role_name, instructions, requires_human_approval) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                template_id,
+                seq,
+                name,
+                mode,
+                lead_role_name,
+                instructions,
+                1 if requires_approval else 0,
+            ),
+        )
+        stage_id = cur.lastrowid
+        for agent_seq, (role_name, agent_instructions) in enumerate(agents, start=1):
+            agent_row = conn.execute(
+                "SELECT 1 FROM agent_pool WHERE role_name = ?", (role_name,)
+            ).fetchone()
+            if agent_row is None:
+                continue  # 방어적 처리 — AGENT_SPECS에 이미 다 있어 정상 경로에선 안 탐.
+            conn.execute(
+                "INSERT INTO pipeline_stage_agents (stage_id, role_name, seq_order, "
+                "instructions) VALUES (?, ?, ?, ?)",
+                (stage_id, role_name, agent_seq, agent_instructions),
             )

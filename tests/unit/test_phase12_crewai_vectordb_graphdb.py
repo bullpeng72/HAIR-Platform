@@ -422,7 +422,19 @@ def test_gc98_run_crew_hierarchical_with_manager_agent_id_does_not_crash(
     가리키는 Agent가 Crew(agents=...)에도 같이 들어가면 CrewAI 자체
     validator(check_manager_llm)가 ValidationError(manager_agent_in_agents)를
     던졌다. 매니저는 agents/tasks 목록에서 빠지고 manager_agent로만
-    지정돼야 한다."""
+    지정돼야 한다.
+
+    정정(2026-10-18, "매니저가 하위 과업을 실제로 쪼개서 위임하도록
+    개선해줘") — 예전엔 (매니저 제외) 멤버 수만큼 완전히 동일한 Task를
+    1:1로 미리 만들어뒀었다. 그런데 CrewAI는 hierarchical에서
+    `_get_agent_to_use()`가 Task.agent를 무시하고 항상 매니저가 직접
+    실행하므로(crew.py:1183), 그 구조로는 매니저가 "똑같은 통짜 과업"을
+    멤버 수만큼 반복해서 아무 코워커에게나 떠넘기는 식으로 동작해 거의
+    동일한 완성품이 멤버 수만큼 쏟아졌다(실측: 11명 팀 → 완성품 11개).
+    이제는 Task를 하나만 만들어 매니저가 코워커들에게 역할별 하위 과업을
+    실제로 쪼개 위임하고, 그 결과를 통합한 **하나의** 최종 산출물을
+    내도록 바꿨다 — 그래서 `result["agents"]`는 이제 매니저 1건만
+    돌려주고, 그 `output`은 더 이상 None이 아니라 통합된 실제 결과물이다."""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
@@ -435,7 +447,7 @@ def test_gc98_run_crew_hierarchical_with_manager_agent_id_does_not_crash(
 
     def _kickoff_capture(self, *args, **kwargs):
         captured["crew"] = self
-        return _crew_output("최종 산출물", ["분석서"])
+        return _crew_output("최종 산출물", ["최종 산출물"])
 
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         result = crew_runtime.run_crew(
@@ -452,15 +464,17 @@ def test_gc98_run_crew_hierarchical_with_manager_agent_id_does_not_crash(
     assert len(crew.agents) == 1  # 매니저(agent1)는 agents 목록에서 빠졌다
     assert crew.manager_agent is not None
     assert crew.memory is True  # memory=True 반영 확인
+    assert len(crew.tasks) == 1  # 코워커에게 쪼개 위임할 Task가 하나뿐
+    assert crew.tasks[0].agent is None  # 특정 워커에 미리 고정하지 않음
 
     outputs = {a["agent_id"]: a["output"] for a in result["agents"]}
-    assert outputs[agent2] == "분석서"
-    assert outputs[agent1] is None  # 매니저는 자기 몫의 산출물이 없다
+    assert agent2 not in outputs  # 워커별 개별 산출물이 아니라 매니저 통합본 하나
+    assert outputs[agent1] == "최종 산출물"  # 매니저가 위임·통합한 최종 결과물
 
     row1 = conn.execute("SELECT * FROM agent_pool WHERE id = ?", (agent1,)).fetchone()
     row2 = conn.execute("SELECT * FROM agent_pool WHERE id = ?", (agent2,)).fetchone()
-    assert row2["last_output"] == "분석서"
-    assert row1["last_output"] is None  # 매니저 행은 실행되지 않았으니 갱신 안 됨
+    assert row1["last_output"] == "최종 산출물"
+    assert row2["last_output"] is None  # 분석가 행은 이 경로에서 갱신되지 않음
 
 
 def test_gc99_run_crew_validates_manager_agent_id_usage(client_and_conn):
@@ -562,13 +576,23 @@ def test_gc102_task_callback_attributes_hierarchical_output_to_real_worker(
     client_and_conn,
 ):
     """실사용 중 발견한 버그 회귀 테스트(2026-09-27, 사용자가 Web UI에서
-    manager_agent_id=1(기획자)로 hierarchical 실행 후 재현). CrewAI 소스
-    확인 결과 hierarchical에서는 `TaskOutput.agent`가 **항상 매니저의
-    role**로 채워진다(`crew.py`의 `_get_agent_to_use`) — 매니저가 실제로는
-    분석가 몫의 작업을 만들어냈어도 `task_output.agent == "기획자"`로
-    온다. 이 테스트는 그 왜곡된 값을 그대로 감사로그에 쓰지 않고,
-    `worker_rows` 순서로 실제 담당 Agent(분석가)를 정확히 귀속시키는지
-    확인한다."""
+    manager_agent_id=1(기획자)로 hierarchical 실행 후 재현) — 원래는
+    (매니저 제외) 멤버 수만큼 완전히 동일한 Task를 1:1로 미리 만들어둔
+    구조였다. CrewAI 소스 확인 결과 hierarchical에서는 `TaskOutput.agent`가
+    **항상 매니저의 role**로 채워지는데(`crew.py`의 `_get_agent_to_use`),
+    그 구조에서는 매니저가 실제로는 분석가 몫의 작업을 만들어냈어도
+    `task_output.agent == "기획자"`로 와서 감사로그가 실제 담당자를
+    놓쳤다 — 그래서 당시엔 `worker_rows` 순서로 실제 담당 Agent(분석가)를
+    되찾아 귀속시켰다.
+
+    정정(2026-10-18, "매니저가 하위 과업을 실제로 쪼개서 위임하도록
+    개선해줘") — 이제는 Task가 하나뿐이고, 그 결과는 매니저가 코워커들
+    에게 위임해 받은 결과를 **직접 통합**한 진짜 매니저 자신의 산출물
+    이다(어느 특정 워커가 혼자 몰래 떠안은 게 아니다 — 실제로 누구에게
+    무엇을 위임했는지는 `delegations`/`agent_delegation_occurred`
+    감사로그에 별도로 남는다). 그래서 이제는 "기획자"로 귀속되는 게
+    왜곡이 아니라 정답이다 — 더 이상 `worker_rows`로 되돌릴 대상이
+    없다."""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
@@ -577,16 +601,14 @@ def test_gc102_task_callback_attributes_hierarchical_output_to_real_worker(
         conn
     )  # agent1=기획자(매니저), agent2=분석가
 
-    def _kickoff_with_misattributed_task_callback(self, *args, **kwargs):
+    def _kickoff_single_integrated_task(self, *args, **kwargs):
         from crewai.tasks.task_output import TaskOutput
 
-        # CrewAI 실측 동작 재현: hierarchical에서는 실제 워커(분석가)가 한
-        # 일인데도 TaskOutput.agent가 매니저(기획자)로 온다.
         output = TaskOutput(description="task-0", agent="기획자", raw="데이터 정의서")
         self.task_callback(output)
         return _crew_output("데이터 정의서", ["데이터 정의서"])
 
-    with patch("crewai.Crew.kickoff", new=_kickoff_with_misattributed_task_callback):
+    with patch("crewai.Crew.kickoff", new=_kickoff_single_integrated_task):
         result = crew_runtime.run_crew(
             conn,
             [agent1, agent2],
@@ -601,12 +623,12 @@ def test_gc102_task_callback_attributes_hierarchical_output_to_real_worker(
         "SELECT after_value FROM audit_log WHERE action = 'crew_task_completed'"
     ).fetchone()
     logged = json.loads(row["after_value"])
-    assert logged["agent_role"] == "분석가"  # "기획자"(왜곡값)가 아니라 실제 담당자
+    assert logged["agent_role"] == "기획자"  # 매니저 본인이 통합한 결과물
     assert logged["output_preview"] == "데이터 정의서"
 
     outputs = {a["agent_id"]: a["output"] for a in result["agents"]}
-    assert outputs[agent2] == "데이터 정의서"
-    assert outputs[agent1] is None
+    assert outputs[agent1] == "데이터 정의서"
+    assert agent2 not in outputs
 
 
 # ---------- crew_runtime: MCP 연동(사용자 요청 2026-09-27,

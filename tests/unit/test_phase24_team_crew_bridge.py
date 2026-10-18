@@ -385,3 +385,83 @@ def test_gc249_my_work_lists_team_only_assignment_for_leader_and_member(
     _login(client, "admin1", "adminpass")
     resp = client.get("/api/my-work")
     assert task_id not in [r["task_id"] for r in resp.json()]
+
+
+def test_gc250_run_crew_for_team_auto_detects_manager_when_hierarchical_and_unset(
+    client_and_conn,
+):
+    """사용자 요청(2026-10-18, "기존 개발자 크루 팀을... 업무 할당시
+    배정하면 위 변경 내용을 모두 적용할 수 있는지 확인해줘") 후속 — 실측
+    으로 확인한 gap: 이 함수는 `manager_agent_id`를 호출자가 명시적으로
+    넘겨야만 썼는데, Task 협업 워크스페이스의 "팀 Agent 실행(Crew)"
+    화면에는 매니저를 고르는 UI가 없어 항상 `None`으로 호출돼
+    `conversations.run_team_mention_job()` 쪽에서 이미 고친 "매니저가
+    실제로 역할별 하위 과업을 쪼개 위임"하는 경로를 전혀 못 탔다.
+    `teams.manager_agent_id_for_team()`으로 자동 탐지하도록 고친 뒤의
+    동작을 확인한다."""
+    from hair_platform import crew_runtime
+
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_id = _make_task(client, "자동 매니저 탐지 업무")
+    manager_agent = _make_active_agent(conn, "개발 계획 수립가")
+    worker_agent = _make_active_agent(conn, "개발자")
+
+    resp = client.post("/api/teams", json={"name": "자동탐지팀"})
+    team_id = resp.json()["id"]
+    resp = client.post(
+        f"/api/teams/{team_id}/members",
+        json={"member_type": "agent", "member_id": manager_agent, "role_label": "매니저"},
+    )
+    assert resp.status_code == 201, resp.text
+    resp = client.post(
+        f"/api/teams/{team_id}/members",
+        json={"member_type": "agent", "member_id": worker_agent, "role_label": "워커"},
+    )
+    assert resp.status_code == 201, resp.text
+
+    resp = client.post(
+        f"/api/tasks/{task_id}/assignments",
+        json={"resource_type": "team", "resource_id": team_id},
+    )
+    approval_id = resp.json()["approval_id"]
+    _login(client, "admin1", "adminpass")
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
+    assert resp.json()["assignment"]["status"] == "confirmed", resp.text
+
+    captured = {}
+
+    def _capture_run_crew(conn, agent_ids, task_descriptions, actor_id, process="sequential",
+                           provider=None, model=None, manager_agent_id=None):
+        captured["process"] = process
+        captured["manager_agent_id"] = manager_agent_id
+        return _crew_output("최종", ["x"] * len(agent_ids))
+
+    # hierarchical을 골랐는데 manager_agent_id는 안 넘김(UI에 선택
+    # 수단이 없는 실제 상황과 동일) — 팀의 "매니저" 라벨 멤버가 자동으로
+    # 채워져야 한다.
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_capture_run_crew):
+        crew_runtime.run_crew_for_team(
+            conn, team_id, task_id, admin_id, process="hierarchical"
+        )
+    assert captured["manager_agent_id"] == manager_agent
+
+    # sequential을 고른 경우는 건드리지 않는다(매니저가 있어도 그대로
+    # None) — 사용자가 릴레이를 의도적으로 고른 선택을 존중한다.
+    captured.clear()
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_capture_run_crew):
+        crew_runtime.run_crew_for_team(
+            conn, team_id, task_id, admin_id, process="sequential"
+        )
+    assert captured["manager_agent_id"] is None
+
+    # 호출자가 이미 명시적으로 manager_agent_id를 지정했으면 자동
+    # 탐지로 덮어쓰지 않는다.
+    captured.clear()
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_capture_run_crew):
+        crew_runtime.run_crew_for_team(
+            conn, team_id, task_id, admin_id, process="hierarchical",
+            manager_agent_id=worker_agent,
+        )
+    assert captured["manager_agent_id"] == worker_agent

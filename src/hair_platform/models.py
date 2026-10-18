@@ -415,6 +415,69 @@ class TeamCrewExecuteRequest(BaseModel):
     content_type: ContentType = "text"
 
 
+PipelineStageMode = Literal["single", "sequential_relay", "parallel_delegated"]
+GateId = Literal["A", "B", "C", "D", "E", "F", "G"]
+
+
+class PipelineTemplateCreate(BaseModel):
+    """사용자 요청(2026-10-18, "BMAD-METHOD와 하네스 방법론을 참조해...
+    개발 Agent 팀을 구성... 일반화") — "단계(stage) + 역할"만 아는 범용
+    파이프라인 템플릿. `domain`은 UI 분류용 자유 텍스트일 뿐 엔진 동작에
+    영향 없다(예: "software_dev"/"business_strategy")."""
+
+    name: str
+    description: str = ""
+    domain: str = "general"
+
+
+class PipelineTemplateActiveUpdate(BaseModel):
+    is_active: bool
+
+
+class PipelineStageAgentSpec(BaseModel):
+    role_name: str
+    instructions: str = ""
+
+
+class PipelineStageCreate(BaseModel):
+    """`mode`가 "단독 또는 복수의 에이전트가 순차/병행 처리" 요구를 그대로
+    반영한다 — `single`(역할 1개) / `sequential_relay`(역할 N개가 순서대로
+    앞 사람 결과를 이어받음) / `parallel_delegated`(`lead_role_name` 1명이
+    나머지 코워커들에게 실제로 역할별 하위 과업을 쪼개 위임,
+    `crew_runtime.run_crew()`의 hierarchical 경로)."""
+
+    name: str
+    mode: PipelineStageMode
+    agents: list[PipelineStageAgentSpec]
+    lead_role_name: str | None = None
+    instructions: str = ""
+    gate_ids: list[GateId] | None = None
+    min_gate_pass_ratio: float = 0.0
+    max_retry: int = 2
+    requires_human_approval: bool = False
+
+
+class PipelineStageUpdate(BaseModel):
+    """부분 갱신 — 보낸 필드만 반영한다(`exclude_unset=True`로 읽는다).
+    `mode`/`agents`는 구조가 바뀌므로 지원하지 않는다(단계를 지우고 새로
+    만드는 쪽이 실행 이력과의 정합성을 지킨다)."""
+
+    name: str | None = None
+    instructions: str | None = None
+    gate_ids: list[GateId] | None = None
+    min_gate_pass_ratio: float | None = None
+    max_retry: int | None = None
+    requires_human_approval: bool | None = None
+
+
+class PipelineStageReorder(BaseModel):
+    direction: Literal["up", "down"]
+
+
+class PipelineExecuteRequest(BaseModel):
+    pipeline_template_id: int
+
+
 class KnowledgeIndexRequest(BaseModel):
     """지식검색 Agent(VectorDB)가 검색할 수 있도록 텍스트를
     임베딩해 저장한다. `text`를 안 주면 그 Agent의 현재 `last_output`을

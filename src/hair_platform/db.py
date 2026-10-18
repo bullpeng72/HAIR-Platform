@@ -383,6 +383,88 @@ CREATE TABLE IF NOT EXISTS agent_execution_jobs (
 CREATE INDEX IF NOT EXISTS idx_agent_execution_jobs_task_id
     ON agent_execution_jobs(task_id);
 
+-- 사용자 요청(2026-10-18, "BMAD-METHOD와 하네스 방법론을 참조해... 개발
+-- Agent 팀을 구성하고... 단계별 단독 또는 복수의 에이전트가 순차/병행
+-- 처리하며... 다른 업무에도 적용될 수 있도록 일반화") — 단계(stage) 1개
+-- 는 "역할 1명(single)" 또는 "역할 N명이 순서대로 이어받아 처리
+-- (sequential_relay)" 또는 "리드 1명이 코워커 N명에게 실제로 위임
+-- (parallel_delegated, crew_runtime.run_crew()의 hierarchical_with_manager
+-- 경로 재사용)" 중 하나다. 이 엔진은 SW 개발인지 시장조사-전략인지
+-- 전혀 모른다(역할 이름만 참조) — 그래서 같은 스키마로 다른 업무
+-- 파이프라인도 그대로 만들 수 있다(범용화).
+CREATE TABLE IF NOT EXISTS pipeline_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    domain TEXT NOT NULL DEFAULT 'general',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_stages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_template_id INTEGER NOT NULL REFERENCES pipeline_templates(id),
+    seq_order INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'single'
+        CHECK (mode IN ('single', 'sequential_relay', 'parallel_delegated')),
+    lead_role_name TEXT,
+    instructions TEXT NOT NULL DEFAULT '',
+    gate_ids TEXT NOT NULL DEFAULT '["A","B","C","D","E","F","G"]',
+    min_gate_pass_ratio REAL NOT NULL DEFAULT 0.0,
+    max_retry INTEGER NOT NULL DEFAULT 2,
+    requires_human_approval INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(pipeline_template_id, seq_order)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_stages_template_id
+    ON pipeline_stages(pipeline_template_id);
+
+CREATE TABLE IF NOT EXISTS pipeline_stage_agents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stage_id INTEGER NOT NULL REFERENCES pipeline_stages(id),
+    role_name TEXT NOT NULL,
+    seq_order INTEGER NOT NULL DEFAULT 1,
+    instructions TEXT NOT NULL DEFAULT '',
+    UNIQUE(stage_id, role_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_stage_agents_stage_id
+    ON pipeline_stage_agents(stage_id);
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_template_id INTEGER NOT NULL REFERENCES pipeline_templates(id),
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    actor_id INTEGER NOT NULL REFERENCES users(id),
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'paused_for_approval', 'completed', 'failed', 'cancelled')),
+    current_stage_seq INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_task_id
+    ON pipeline_runs(task_id);
+
+CREATE TABLE IF NOT EXISTS pipeline_run_stages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_run_id INTEGER NOT NULL REFERENCES pipeline_runs(id),
+    stage_id INTEGER NOT NULL REFERENCES pipeline_stages(id),
+    attempt INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'passed', 'failed_retrying', 'escalated', 'approved', 'rejected')),
+    output TEXT,
+    gate_scores TEXT,
+    tcr REAL,
+    deliverable_id INTEGER REFERENCES deliverables(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_run_stages_run_id
+    ON pipeline_run_stages(pipeline_run_id);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id INTEGER NOT NULL REFERENCES users(id),
