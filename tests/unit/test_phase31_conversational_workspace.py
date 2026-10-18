@@ -478,6 +478,69 @@ def test_gc_team_mention_routes_hierarchical_when_team_has_manager_role_label(
         assert kwargs["manager_agent_id"] == manager_id
 
 
+def test_gc_team_mention_persists_gate_scores_and_delegation_count_and_warns_against_copying_old_output(
+    client_and_conn,
+):
+    """사용자 요청(2026-10-18, "@자율 개발 크루" 결과물 품질 분석 후속) —
+    실측(대화 7의 "위 spec을 준수해 게임을 개발해줘" 실행)으로 확인한
+    두 문제의 회귀 테스트:
+    1) Gate A-G가 fail해도 이 경로는 측정만 하고 버려졌다 — 메시지에
+       gate_scores/delegation_count가 저장되고 API로 그대로 내려오는지.
+    2) 매니저가 과거 거대한 코드 산출물에 "앵커링"돼 새 지시를 무시하고
+       그대로 베끼는 문제 — `run_crew()`에 넘기는 task_description에
+       "그대로 복사하지 말라"는 명시적 경고가 포함되는지."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    manager_id = _make_agent(conn, "매니저")
+    worker_id = _make_agent(conn, "워커")
+    team_id = _make_team_with_agent(conn, manager_id, "Gate테스트팀")
+    conn.execute(
+        "UPDATE team_members SET role_label = '매니저' WHERE team_id = ? AND member_id = ?",
+        (team_id, manager_id),
+    )
+    conn.execute(
+        "INSERT INTO team_members (team_id, member_type, member_id, role_label) "
+        "VALUES (?, 'agent', ?, '워커')",
+        (team_id, worker_id),
+    )
+    conn.commit()
+
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "Gate 테스트방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "team", "participant_id": team_id},
+    )
+
+    bad_gate_scores = {
+        "A": {"score": 0.8, "passed": True},
+        "C": {"score": 0.4, "passed": False},
+        "B": {"not_measured": True},
+    }
+    crew_result = {
+        "agents": [{"agent_id": manager_id, "role_name": "매니저", "output": "통합 결과물"}],
+        "token_usage": {},
+        "gate_scores": bad_gate_scores,
+        "delegations": [{"from_agent_role": "매니저", "to_agent_role": "워커", "tool": "Delegate work to coworker"}],
+    }
+    with patch(
+        "hair_platform.crew_runtime.run_crew", return_value=crew_result
+    ) as mock_crew:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@Gate테스트팀 새 spec을 준수해 다시 작성해줘"},
+        )
+        assert resp.status_code == 201, resp.text
+        task_descriptions = mock_crew.call_args[0][2]
+        assert "그대로 복사하거나 재사용하지 마세요" in task_descriptions[0]
+        assert "구현하지 않은 기능을 구현했다고 설명하지 마세요" in task_descriptions[0]
+
+    messages = client.get(f"/api/conversations/{conv_id}/messages").json()
+    agent_msg = next(m for m in messages if m["author_type"] == "agent")
+    assert agent_msg["gate_scores"] == bad_gate_scores
+    assert agent_msg["delegation_count"] == 1
+
+
 def test_gc_team_mention_translates_json_decode_error_for_user(client_and_conn):
     """사용자 보고(2026-10-15) 재발 방지 — CrewAI/litellm 내부에서 새어나온
     raw `json.JSONDecodeError`("Expecting value: line 1 column 1 (char 0)")가

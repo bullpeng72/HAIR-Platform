@@ -77,7 +77,17 @@ INDEX_HTML = """<!DOCTYPE html>
   .nav-group.admin-group button { border-color: var(--color-admin-border); }
   .nav-group.admin-group button.active { background: var(--color-admin); border-color: var(--color-admin); }
   .badge-adminonly { font-size: 0.65rem; background: var(--color-admin); color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
-  main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
+  /* 사용자 보고(2026-10-18, 스크린샷 — 넓은 화면에서도 "이용 가이드"
+     본문이 좁은 고정폭에 갇혀 오른쪽이 텅 비어 보임) — 기존엔
+     `max-width: 1100px`로 **고정**돼 있어 화면이 아무리 넓어도 딱
+     1100px만 썼다(docs/OVERVIEW.md "알려진 한계"에도 "고정 1100px
+     레이아웃이 기본"이라고 명시돼 있던 의도된 설계였다). 뷰포트 폭에
+     반응하도록 `width: min(94%, 1400px)`로 바꾼다 — 좁은 화면에서는
+     뷰포트의 94%를 쓰고(기존 모바일 미디어쿼리의 "여백 최소화" 의도와
+     같은 방향), 넓은 화면에서는 1400px까지 늘어나 공간을 더 쓰되(기존
+     1100px보다 넉넉), 읽기 힘들 만큼 줄 길이가 길어지지 않도록 상한은
+     그대로 둔다. */
+  main { padding: 1rem; width: min(94%, 1400px); margin: 0 auto; box-sizing: border-box; }
   section.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
   .deliverable-card { background: #f9fafb; border: 1px solid var(--color-border); border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 0.6rem; }
   .deliverable-card + .deliverable-card { margin-top: 0; }
@@ -242,7 +252,7 @@ INDEX_HTML = """<!DOCTYPE html>
      실질적 진입점)만 좁게 고친다 — 표가 많은 관리자 화면은 건드리지
      않는다(그 화면들까지 좁히면 표가 깨질 위험이 더 크다). */
   @media (max-width: 640px) {
-    main { max-width: 100%; padding: 0.6rem; }
+    main { width: 96%; padding: 0.6rem; }
     header { padding: 0.6rem; gap: 0.5rem; }
     header h1 { font-size: 1rem; }
     .deliverable-card.chat-human { margin-right: 4%; }
@@ -433,27 +443,73 @@ function stripOuterFence(raw) {
 // 않고 그대로 둔다 — "전체화면" 오버레이가 아직 렌더 중인 블록을
 // innerHTML로 복제해가면(드문 경쟁 상태) 그 복제본은 아직 렌더
 // 전이므로 옵저버가 다시 잡아 독립적으로 렌더해준다.
+// 사용자 보고(2026-10-18, "Syntax error in text / mermaid version 10.9.1"가
+// 대화에 반복 노출됨) 원인 분석 — mermaid.js v10은 다이어그램 문법이
+// 깨지면 `render()`의 Promise를 **reject하지 않는다**. 대신 내부
+// "error diagram" 렌더러가 "Syntax error in text"+버전 문구를 큼직하게
+// 그린 SVG를 **resolve**로 돌려준다(실측: mermaid.min.js 안에
+// `.text("Syntax error in text")` 렌더러가 그대로 있음) — 그래서 아래
+// `.catch()`가 한 번도 안 불리고, 그 못생긴 에러 그림이 `svg` 그대로
+// 들어갔다. 메시지 목록을 다시 그릴 때마다(새 메시지 전송 등) 이
+// DOM 노드가 통째로 재생성돼 같은 실패를 매번 새로 반복한 것도
+// 그래서다. `mermaid.render()` 전에 `mermaid.parse(src, {suppressErrors:
+// true})`로 먼저 검사해 — 이 함수는 실패해도 그 보기 흉한 SVG를 만들지
+// 않고 그냥 `false`만 돌려준다 — 실패 시 우리가 직접 깔끔한 안내 +
+// 원본 소스를 보여준다.
+function _mermaidFallbackHtml(src) {
+  return '<p class="muted">⚠ 다이어그램 문법 오류로 그릴 수 없습니다 — 원본 코드:</p>' +
+    '<pre style="white-space:pre-wrap;text-align:left">' + esc(src) + "</pre>";
+}
+
+// 사용자 보고(2026-10-18, "대화 내용에 머메이드 그래프가 보이지 않아")
+// 재현으로 확인한 원인 — `root.querySelectorAll(selector)`는 root
+// 자신은 절대 대상에 포함하지 않고 **후손만** 검사한다(DOM 표준
+// 동작). `detail.innerHTML = ...`로 메시지 목록을 한 번에 갈아끼우면
+// MutationObserver의 addedNodes가 그 최상위 형제 노드들을 하나씩
+// 넘겨주는데, 마크다운 코드펜스가 문단에 안 감싸인 채 메시지 바로
+// 아래 최상위 블록으로 나오면(ADR처럼 코드펜스가 통째로 한 줄만 있는
+// 경우) `.mermaid-block` div 자체가 그 "최상위로 추가된 노드"가 된다
+// — 그러면 `root`가 바로 그 블록이라 `root.querySelectorAll(...)`가
+// 후손에서만 찾느라 자기 자신을 영영 못 찾아 "다이어그램 렌더링
+// 중…" 플레이스홀더에 멈춰 있었다(실제 마크다운+DOMPurify+mermaid
+// CDN 조합으로 재현해 확인). root 자신이 선택자와 일치하는 경우도
+// 포함해야 한다.
+function _selfAndDescendants(root, selector) {
+  const out = root.matches && root.matches(selector) ? [root] : [];
+  return out.concat(Array.from(root.querySelectorAll(selector)));
+}
 function _activateRichBlocks(root) {
-  root.querySelectorAll(".mermaid-block[data-mermaid-src]").forEach(el => {
+  _selfAndDescendants(root, ".mermaid-block[data-mermaid-src]").forEach(el => {
     if (el.dataset.mermaidRendering === "1") return;
     if (typeof mermaid === "undefined") {
       el.innerHTML = '<p class="muted">다이어그램 라이브러리를 불러오지 못했습니다.</p>';
       return;
     }
     el.dataset.mermaidRendering = "1";
+    const src = el.dataset.mermaidSrc;
     const id = "mmd-" + (++_artifactSeq);
-    mermaid.render(id, el.dataset.mermaidSrc).then(({ svg }) => {
-      el.innerHTML = svg;
-    }).catch(e => {
-      el.innerHTML = '<p class="muted">다이어그램 렌더링 실패: ' + esc(e.message || String(e)) + "</p>";
-    });
+    Promise.resolve(mermaid.parse(src, { suppressErrors: true }))
+      .then(ok => {
+        if (!ok) {
+          el.innerHTML = _mermaidFallbackHtml(src);
+          return;
+        }
+        return mermaid.render(id, src).then(({ svg }) => { el.innerHTML = svg; });
+      })
+      .catch(e => {
+        // parse()가 suppressErrors에도 예상 밖으로 던지거나, render()
+        // 자체가 실패하는 그 외의 경우(예: 라이브러리 내부 런타임 오류)
+        // 를 위한 마지막 방어선 — 이 경로는 실제로는 거의 안 탄다.
+        el.innerHTML = _mermaidFallbackHtml(src) +
+          '<p class="muted">(' + esc(e.message || String(e)) + ")</p>";
+      });
   });
   // Chart.js는 <canvas> DOM 노드 자체에 차트 인스턴스를 붙인다 — innerHTML
   // 복제(전체화면 오버레이)는 마크업만 복사하고 그 붙은 상태는 복사하지
   // 않으므로, data-* 플래그가 아니라 `Chart.getChart(canvas)`로 "이
   // 정확한 노드에 이미 차트가 있는지"를 확인해야 복제본도 올바르게
   // 다시 그려진다.
-  root.querySelectorAll("canvas[data-chart-config]").forEach(canvas => {
+  _selfAndDescendants(root, "canvas[data-chart-config]").forEach(canvas => {
     if (typeof Chart === "undefined" || Chart.getChart(canvas)) return;
     try {
       new Chart(canvas, JSON.parse(canvas.dataset.chartConfig));
@@ -612,6 +668,71 @@ document.addEventListener("click", (ev) => {
   const sortTh = ev.target.closest("[data-sort-col]");
   if (sortTh) {
     _sortTableByColumn(sortTh);
+  }
+  // LLM 설정 최적화 추천(2026-10-18) — "AI 에이전트 관리" 화면의 버튼은
+  // 클릭 시점에 비동기로 결과 패널을 새로 주입하므로(최초 렌더 때는
+  // 존재하지 않음), 복사/삭제 버튼과 같은 전역 위임으로 처리한다.
+  const recommendOptBtn = ev.target.closest("[data-recommend-optimize]");
+  if (recommendOptBtn) {
+    const id = recommendOptBtn.dataset.recommendOptimize;
+    const resultEl = document.getElementById("optimize-result-" + id);
+    if (!resultEl) return;
+    resultEl.innerHTML = '<p class="muted">추천 계산 중…</p>';
+    api("GET", "/api/agent-pool/" + id + "/optimize-recommendation")
+      .then(rec => { resultEl.innerHTML = _renderOptimizeRecommendation(id, rec, "rule"); })
+      .catch(e => { resultEl.innerHTML = '<p class="msg error">' + esc(e.message) + "</p>"; });
+    return;
+  }
+  const refineOptBtn = ev.target.closest("[data-refine-optimize]");
+  if (refineOptBtn) {
+    const id = refineOptBtn.dataset.refineOptimize;
+    const resultEl = document.getElementById("optimize-result-" + id);
+    if (!resultEl) return;
+    if (!window.confirm("AI에게 추천을 보정받습니다 — 실제 LLM API 호출로 비용이 발생합니다. 계속할까요?")) return;
+    resultEl.innerHTML = '<p class="muted">AI 의견 요청 중…(실제 LLM 호출)</p>';
+    api("POST", "/api/agent-pool/" + id + "/optimize-recommendation/refine", {})
+      .then(rec => {
+        resultEl.innerHTML = _renderOptimizeRecommendation(id, rec, rec.source === "llm_refined" ? "llm" : "rule");
+      })
+      .catch(e => { resultEl.innerHTML = '<p class="msg error">' + esc(e.message) + "</p>"; });
+    return;
+  }
+  const fillOptBtn = ev.target.closest("[data-fill-optimize]");
+  if (fillOptBtn) {
+    const id = fillOptBtn.dataset.fillOptimize;
+    const payload = JSON.parse(fillOptBtn.dataset.optimizePayload || "{}");
+    const providerSel = document.getElementById("provider-" + id);
+    const modelSel = document.getElementById("model-" + id);
+    if (providerSel && payload.provider) {
+      providerSel.value = payload.provider;
+      providerSel.dispatchEvent(new Event("change"));
+    }
+    if (modelSel && payload.model) {
+      const hasOption = Array.from(modelSel.options).some(o => o.value === payload.model);
+      if (hasOption) {
+        modelSel.value = payload.model;
+      } else {
+        modelSel.value = "__custom__";
+        const customInput = document.getElementById("model-" + id + "-custom");
+        if (customInput) { customInput.style.display = ""; customInput.value = payload.model; }
+      }
+    }
+    const t = payload.tuning_config || {};
+    const setVal = (elId, v) => {
+      const el = document.getElementById(elId);
+      if (el && v !== undefined && v !== null) el.value = String(v);
+    };
+    setVal("tune-maxiter-" + id, t.max_iter);
+    setVal("tune-maxrpm-" + id, t.max_rpm);
+    setVal("tune-maxtime-" + id, t.max_execution_time);
+    setVal("tune-maxretry-" + id, t.max_retry_limit);
+    setVal("tune-temp-" + id, t.temperature);
+    setVal("tune-reasoning-" + id, t.reasoning);
+    setVal("tune-maxreasonattempts-" + id, t.max_reasoning_attempts);
+    setVal("tune-codeexec-" + id, t.allow_code_execution);
+    setVal("tune-respectctx-" + id, t.respect_context_window);
+    showMsg("global-msg", "추천값을 입력란에 채웠습니다 — '모델 설정'/'파인튜닝 저장' 버튼을 눌러야 실제로 적용됩니다.", "ok");
+    return;
   }
 });
 
@@ -773,7 +894,13 @@ const LABELS = {
 function label(v) { return LABELS[v] || v; }
 
 function headerColClass(h) {
-  if (h === "동작") return "col-actions";
+  // 사용자 보고(2026-10-18, 스크린샷 — "사용자 관리" 화면의 "상사 지정"/
+  // "비밀번호 재설정"/"계정 상태 변경" 열에서 select·input·button이 서로
+  // 겹쳐 보임) — 원인은 "동작" 열과 똑같다: table-layout:fixed에서 폭을
+  // 안 정해주면 짧은 열(ID/권한 등)과 균등하게 나눠 가져가 버려, 그 안의
+  // select/input/button이 셀 폭을 넘기고(overflow: visible 기본값) 옆
+  // 칸 위로 그대로 흘러나온다. "동작"과 같은 폭(col-actions)을 준다.
+  if (h === "동작" || h === "상사 지정" || h === "비밀번호 재설정" || h === "계정 상태 변경") return "col-actions";
   // 사용자 보고(2026-10-14, 스크린샷 — "스킬" 열이 단어 하나씩
   // 줄바꿈될 만큼 좁게 눌려 있음) — table-layout:fixed에서 폭을
   // 안 정해주면 ID/상태처럼 짧은 열과 똑같이 나눠 가져가 버린다.
@@ -1119,6 +1246,7 @@ const TABS = [
   { id: "performance", label: "성과 리뷰", group: "user", roles: ["admin", "manager", "member"], render: renderPerformance },
   { id: "search", label: "인력 검색", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
   { id: "orgchart", label: "조직도", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
+  { id: "manual", label: "이용 가이드", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderManual },
   { id: "dashboard", label: "대시보드", group: "admin", roles: ["admin", "manager"], render: renderDashboard },
   { id: "cost", label: "비용", group: "admin", roles: ["admin", "manager"], render: renderCost },
   { id: "fairness", label: "공정성 지표", group: "admin", roles: ["admin", "manager"], render: renderFairness },
@@ -1126,6 +1254,7 @@ const TABS = [
   { id: "match", label: "인력 매칭/배정", group: "admin", roles: ["admin", "manager"], render: renderMatch },
   { id: "jobs", label: "AI 에이전트 생성", group: "admin", roles: ["admin", "manager"], render: renderJobs },
   { id: "agentpool", label: "AI 에이전트 관리", group: "admin", roles: ["admin", "manager"], render: renderAgentPool },
+  { id: "agentoptimize", label: "LLM 설정 최적화", group: "admin", roles: ["admin", "manager"], render: renderAgentOptimization },
   { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "poolregistry", label: "도구/스킬 Pool", group: "admin", roles: ["admin", "manager"], render: renderPoolRegistry },
   { id: "teams", label: "팀 관리", group: "admin", roles: ["admin", "manager"], render: renderTeams },
@@ -1591,6 +1720,34 @@ const conversationsDefaultAiAuthorId = 0;
 // 메시지는 본인이, 그 외(AI/Agent 응답 포함)는 대화 생성자가 지울 수
 // 있다(`conversations.delete_message()`와 같은 권한 — 서버가 최종
 // 검증하므로 여기선 버튼 노출 여부만 결정한다).
+// 사용자 요청(2026-10-18, "@자율 개발 크루" 결과물 품질 분석 후속) —
+// Gate A-G가 fail해도 대화창 경로에서는 조용히 버려지던 문제의 최소
+// 안전장치. 측정된 Gate 중 몇 개가 통과했는지만 간단히 보여준다(상세
+// 점수는 과하다 — "Crew 실행" 관리자 화면에만 그 수준 상세를 둔다).
+function _conversationGateBadge(m) {
+  if (!m.gate_scores) return "";
+  const measured = Object.values(m.gate_scores).filter(g => !g.not_measured);
+  if (!measured.length) return "";
+  const passed = measured.filter(g => g.passed).length;
+  const allPass = passed === measured.length;
+  return ' <span class="gate-badge ' + (allPass ? "gate-ok" : "gate-warn") + '" ' +
+    'title="측정된 Gate A-G 중 통과한 비율(참고용 — Task 협업워크스페이스의 정식 Gate 기록과는 별개)">' +
+    (allPass ? "Gate " : "⚠ Gate ") + passed + "/" + measured.length + " 통과" +
+    "</span>";
+}
+
+// 실측으로 확인한 문제(2026-10-18) — "자율 개발 크루"가 매니저를 통해
+// 실행됐는데도 매니저가 위임 없이 혼자 처리한 경우가 있었다("자율
+// 개발"이라는 이름과 달리 실제로는 1인 작업). 몇 건 위임됐는지를
+// 투명하게 보여준다.
+function _conversationDelegationBadge(m) {
+  if (m.delegation_count === null || m.delegation_count === undefined) return "";
+  if (m.delegation_count > 0) {
+    return ' <span class="gate-badge gate-ok">위임 ' + m.delegation_count + '건</span>';
+  }
+  return ' <span class="muted" style="font-size:0.85em">위임 0건</span>';
+}
+
 function _renderConversationMessage(m, participants, conv) {
   const side = m.author_type === "agent" ? "chat-agent" : "chat-human";
   const who = _conversationAuthorLabel(m, participants, conv ? conv.llm_model : null);
@@ -1605,7 +1762,8 @@ function _renderConversationMessage(m, participants, conv) {
       m.conversation_id + ':' + m.id + '">삭제</button>'
     : '';
   return '<div class="deliverable-card ' + side + '">' +
-    '<div class="muted">' + who + skillBadge + ' · ' + esc(m.created_at) + deleteBtn + '</div>' +
+    '<div class="muted">' + who + skillBadge + _conversationGateBadge(m) +
+    _conversationDelegationBadge(m) + ' · ' + esc(m.created_at) + deleteBtn + '</div>' +
     '<div>' + renderContent(m.content) + '</div>' +
     '</div>';
 }
@@ -4081,6 +4239,44 @@ function _tuneTriStateHtml(id, current) {
     '<option value="false"' + (value === "false" ? " selected" : "") + '>끄기</option>' +
     '</select>';
 }
+// 사용자 요청(2026-10-18, "Agent의 목표, 기능, 입출력 등을 고려해 가용한
+// LLM 모델에서 종류 및 설정 등을 최적화 setting 하는 admin 기능") — 규칙
+// 기반 추천(비용 없음, `GET .../optimize-recommendation`)과 선택적 LLM
+// 보정(비용 발생, `POST .../optimize-recommendation/refine`)의 결과를
+// 같은 모양으로 렌더링한다. 전역 위임 클릭 리스너(아래, "최적화 추천"/
+// "AI 의견 보기"/"추천값 입력란에 채우기" 버튼)와 `renderAgentOptimization()`
+// 둘 다 재사용한다.
+const _OPTIMIZE_TIER_LABELS = {
+  deep_reasoning: "심층추론(기획/분석/설계)",
+  precision_fast: "정밀·신속(구현/리뷰/QA)",
+  standard: "표준(작성/조정)",
+};
+function _renderOptimizeRecommendation(agentId, rec, source) {
+  const target = (source === "llm" && rec.llm_refined) ? rec.llm_refined : rec.recommended;
+  const tuningText = Object.keys(target.tuning_config || {}).length
+    ? Object.entries(target.tuning_config).map(([k, v]) => k + "=" + v).join(", ")
+    : "(변경 없음)";
+  let html = '<div class="msg ' + (rec.changed ? "warn" : "ok") + '" style="margin-top:0.5rem">' +
+    '<div><span class="gate-badge">' + esc(_OPTIMIZE_TIER_LABELS[rec.tier] || rec.tier) + "</span> " +
+    '<small class="muted">' + esc(rec.classification_source) + "</small></div>" +
+    "<p>" + esc(rec.rationale) + "</p>" +
+    "<p><b>추천:</b> " + esc(target.provider || "(현재 유지)") + " / " + esc(target.model || "(현재 유지)") +
+    "<br><small>" + esc(tuningText) + "</small></p>";
+  if (source === "llm" && rec.llm_rationale) {
+    html += '<p class="muted"><b>AI 보정 근거:</b> ' + esc(rec.llm_rationale) + "</p>";
+  }
+  if (source === "llm" && rec.source === "rule_based_fallback") {
+    html += '<p class="muted">⚠ AI 보정 실패 — 규칙 기반 추천을 그대로 유지합니다(' +
+      esc(rec.llm_error || "") + ")</p>";
+  }
+  html += '<button class="small" data-fill-optimize="' + agentId + '" data-optimize-payload="' +
+    escAttr(JSON.stringify(target)) + '">추천값 입력란에 채우기</button> ';
+  if (source !== "llm") {
+    html += '<button class="small" data-refine-optimize="' + agentId + '">AI 의견 보기(비용 발생)</button>';
+  }
+  html += "</div>";
+  return html;
+}
 function tuningFormHtml(a) {
   const t = a.tuning_config || {};
   const num = (id, value, placeholder) =>
@@ -4200,6 +4396,8 @@ async function renderAgentPool(content) {
       }
       if (canExecute) {
         settings += tuningFormHtml(a);
+        settings += '<div><button class="small" data-recommend-optimize="' + a.id +
+          '">⚡ 최적화 추천</button><div id="optimize-result-' + a.id + '"></div></div>';
       }
       if (settings) {
         actions += '<details><summary>⚙ 설정</summary><div class="inline" style="flex-wrap:wrap;align-items:center">' + settings + '</div></details>';
@@ -4397,6 +4595,69 @@ async function renderAgentPool(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+}
+
+/* ---------- LLM 설정 최적화(일괄) ---------- */
+
+async function renderAgentOptimization(content) {
+  content.innerHTML = '<section class="card"><h2>LLM 설정 최적화 추천</h2><p class="muted">불러오는 중…</p></section>';
+  let recs;
+  try {
+    recs = await api("GET", "/api/agent-pool-optimization/recommendations");
+  } catch (e) {
+    content.innerHTML = "";
+    showMsg("global-msg", e.message, "error");
+    return;
+  }
+  const changedCount = recs.filter(r => r.changed).length;
+  content.innerHTML = '<section class="card"><h2>LLM 설정 최적화 추천</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>모델 등급 추정은 모델명 패턴 기반이며 실제 벤치마크 데이터가 아닙니다 — 참고용으로만 쓰세요.</li>' +
+    '<li>이 화면은 <b>일괄 적용</b> 화면입니다 — 체크한 Agent는 "선택 적용"을 누르면 미리보기 없이 바로 모델/파인튜닝 설정이 저장됩니다. 하나씩 검토하려면 "AI 에이전트 관리" 화면의 "⚡ 최적화 추천" 버튼을 쓰세요(그쪽은 입력란에 채우기만 하고 저장은 admin이 직접 합니다).</li>' +
+    "</ul>" +
+    '<button id="apply-selected-optimize" class="small">선택 적용</button> ' +
+    '<span class="muted">변경 필요 ' + changedCount + "/" + recs.length + "건</span>" +
+    table(["적용", "역할", "분류", "현재 Provider/Model", "추천 Provider/Model", "tuning 변경 필드", "근거"], recs.map(r => [
+      r.changed
+        ? '<input type="checkbox" class="optimize-apply-check" data-agent-id="' + r.agent_id +
+          '" data-payload="' + escAttr(JSON.stringify({
+            provider: r.recommended.provider,
+            model: r.recommended.model,
+            tuning_config: r.recommended.tuning_config,
+          })) + '">'
+        : '<span class="muted">—</span>',
+      esc(r.role_name),
+      esc(_OPTIMIZE_TIER_LABELS[r.tier] || r.tier),
+      esc(r.current.provider || "(기본값)") + " / " + esc(r.current.model || "(기본값)"),
+      esc(r.recommended.provider || "(기본값)") + " / " + esc(r.recommended.model || "(기본값)"),
+      Object.keys(r.tuning_diff).length ? esc(Object.keys(r.tuning_diff).join(", ")) : "(없음)",
+      '<span class="muted">' + esc(r.rationale) + "</span>",
+    ])) +
+    "</section>";
+
+  document.getElementById("apply-selected-optimize").onclick = async () => {
+    const checks = Array.from(content.querySelectorAll(".optimize-apply-check:checked"));
+    if (!checks.length) { showMsg("global-msg", "적용할 Agent를 선택하세요.", "error"); return; }
+    if (!window.confirm(checks.length + "개 Agent에 추천 설정을 적용합니다. 계속할까요?")) return;
+    let ok = 0, fail = 0;
+    for (const chk of checks) {
+      const id = chk.dataset.agentId;
+      const payload = JSON.parse(chk.dataset.payload);
+      try {
+        if (payload.provider) {
+          await api("PATCH", "/api/agent-pool/" + id + "/model", { provider: payload.provider, model: payload.model });
+        }
+        await api("PATCH", "/api/agent-pool/" + id + "/tuning", Object.assign({
+          max_iter: null, max_rpm: null, max_execution_time: null, max_retry_limit: null,
+          temperature: null, reasoning: null, max_reasoning_attempts: null,
+          allow_code_execution: null, respect_context_window: null,
+        }, payload.tuning_config || {}));
+        ok++;
+      } catch (e) { fail++; }
+    }
+    showMsg("global-msg", ok + "개 적용 완료" + (fail ? ", " + fail + "개 실패" : "") + ".", fail ? "error" : "ok");
+    renderAgentOptimization(content);
+  };
 }
 
 /* ---------- 도구/스킬 Pool ---------- */
@@ -5827,6 +6088,217 @@ async function renderAdmin(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+}
+
+/* ---------- 이용 가이드(사용자 요청, 2026-10-18, "대화를 진행하면서
+   사람이나 에이전트를 호출해 업무를 수행하는 방식, 사람-에이전트(에이전트
+   그룹) N:N 조합으로 복잡한 업무 및 개발을 수행하는 절차, 파이프라인
+   구성 및 활용법, Agent 및 Agent 그룹 생성 절차 등... 실용적인 메뉴얼을
+   작성해 메뉴로 접근할 수 있도록") ----------
+   전부 "common" 탭(4개 역할 모두 접근 가능)으로 둔다 — admin 전용 기능
+   (Agent 생성·파이프라인 빌더 등)도 설명 대상이지만, 그 기능이 실제로
+   왜/어떻게 쓰이는지는 member/viewer도 알아야 결과를 이해할 수 있다
+   (admin 전용 버튼은 본문에서 그때그때 "admin/manager 전용"이라고
+   표시한다). 내용은 전부 이 코드베이스에 실제로 있는 메뉴 이름·버튼
+   문구·동작 순서를 그대로 옮긴 것이다(가상의 기능 설명 금지) — marked.js
+   가 raw HTML(`<h2 id="...">`)을 그대로 통과시키고 DOMPurify가 id
+   속성을 허용하므로, 섹션 제목만 raw HTML로 써서 목차 앵커 링크가
+   동작하게 한다(marked v13은 기본적으로 헤더에 id를 안 붙인다). */
+const MANUAL_MARKDOWN = [
+'<h2 id="toc">목차</h2>',
+'',
+'1. [개요](#ov) — 이 플랫폼이 뭘 하는 도구인지',
+'2. [가장 빠른 시작 — 대화로 바로 호출하기](#chat)',
+'3. [정식 업무(Task) 경로 — 요청부터 결재까지](#task)',
+'4. [N:N 조합 — 사람+Agent 여러 명이 함께 일하기](#nn)',
+'5. [Agent / Agent 그룹 만들기](#agent)',
+'6. [파이프라인 — 단계형 자동 진행 엔진](#pipeline)',
+'7. [실전 시나리오 4가지](#scenario)',
+'8. [메뉴 전체 지도](#menu)',
+'9. [자주 겪는 문제](#trouble)',
+'',
+'<h2 id="ov">1. 개요</h2>',
+'',
+'HAIR(Human-AI Resource Management)는 **사람과 AI Agent를 하나의 조직도 위에서 같은 방식으로 배치·배분·승인·실행**시키는 협업 플랫폼입니다.',
+'핵심 원칙 3가지만 기억하면 나머지는 전부 그 응용입니다.',
+'',
+'- **사람과 Agent는 같은 테이블, 다른 역할입니다** — "Agent 전용 화면"과 "사람 전용 화면"이 따로 있지 않고, 배치·배분·승인·팀 구성이 전부 같은 절차를 씁니다.',
+'- **승인 없이 조직에 반영되는 변화는 없습니다(HITL)** — Agent가 뭘 만들어도 그게 "확정된 결과"가 되려면 결재를 거칩니다.',
+'  단, 파이프라인의 자동 진행 단계는 Gate A-G 기준을 통과하면 "통과 자체가 곧 승인"이라 사람 개입이 최소화됩니다.',
+'- **측정 없이 신뢰하지 않습니다** — Agent가 만든 모든 결과물은 Gate A-G(목표달성·행동무결성·신뢰성·성능계약·보안경계·다중에이전트협업·관측성)로 자동 채점됩니다.',
+'',
+'업무를 시키는 방법은 크게 두 갈래입니다 — **가벼운 대화**(3절)와 **정식 업무 절차**(4절).',
+'둘 다 같은 Agent/팀 등록을 공유하므로 아무 때나 오갈 수 있습니다.',
+'',
+'<h2 id="chat">2. 가장 빠른 시작 — 대화로 바로 호출하기</h2>',
+'',
+'가장 가벼운 방법입니다.',
+'결재 없이 즉시 답을 받고 싶을 때 씁니다.',
+'',
+'1. 왼쪽 메뉴에서 **"대화"** 탭을 엽니다.',
+'   로그인 직후에도 독립 대화가 바로 시작됩니다(업무에 종속되지 않은 자유 대화).',
+'2. 메시지 입력창에 **`@`를 입력**하면 사람·Agent·Team 검색 자동완성이 뜹니다 — 아직 이 대화에 초대 안 된 대상도 검색되고, 목록에서 고르면 **그 자리에서 자동으로 초대된 뒤** 멘션이 끼워 넣어집니다(따로 "참가자 초대" 화면을 거칠 필요가 없습니다).',
+'3. 메시지를 보내면:',
+'   - **특정 Agent를 `@역할명` 또는 `@지정한이름`으로 멘션**하면 그 Agent만 실행됩니다(예: `@DA 이 기능의 데이터 모델을 설계해줘`).',
+'   - **Team을 `@팀이름`으로 멘션**하면 그 팀의 Agent 멤버 전원이 실행됩니다(4절 "N:N 조합" 참고 — 매니저가 있으면 자동으로 위임 구조로 돕니다).',
+'   - **사람을 `@아이디`로 멘션**하면 AI가 끼어들지 않고 그 사람이 직접 답해야 하는 대화로 남습니다.',
+'   - **아무도 멘션하지 않으면** 대화의 "기본 AI 자동응답" 설정에 따라 기본 모델이 대신 답합니다(대화 상세 화면에서 켜고 끌 수 있습니다).',
+'4. 실행에는 실제 LLM API 호출이 들어가므로 **비용이 발생**합니다 — 결과는 잠시 뒤 메시지로 도착하고(비동기 처리), 실패하면 원인이 메시지로 안내됩니다.',
+'5. 결과가 마음에 들면 그 대화를 **"업무로 승격"**해 정식 절차(3절)로 넘길 수 있습니다 — 처음부터 다시 설명할 필요 없이 대화 맥락이 그대로 이어집니다.',
+'',
+'> 실수하기 쉬운 점: Agent/Team을 멘션했는데 반응이 없다면, 그 대상이 아직 **이 대화의 참가자가 아닐 가능성**이 가장 큽니다 — 자동완성 목록에서 골라 초대부터 된 상태인지 확인하세요(9절 "자주 겪는 문제" 참고).',
+'',
+'<h2 id="task">3. 정식 업무(Task) 경로 — 요청부터 결재까지</h2>',
+'',
+'승인 이력·Gate 채점·결과물 타임라인이 전부 필요한 "진짜 업무"는 이 경로를 씁니다.',
+'',
+'1. **"업무 요청"** 탭 — 하고 싶은 일을 한 줄에 역할 하나씩 적어 제출합니다(예: "백엔드 개발자 1명" / "UI/UX 디자이너 1명").',
+'   비용 없는 규칙 기반 처리라 즉시 끝납니다 — 이건 "제안"일 뿐입니다.',
+'2. 그 업무 요청에서 **"할 일로 나누기"**를 눌러 실제 배분 단위인 **할 일(Task)**을 만듭니다(역할명 + 필요 스킬 지정).',
+'   이후 모든 배정·Agent 생성·실행은 이 할 일 단위로 이뤄집니다.',
+'3. 할 일에 사람/Agent/Team을 연결하는 방법은 둘 중 하나입니다:',
+'   - **"인력 매칭/배정"** 탭에서 후보를 찾아 배정 요청 → 조직도 매니저 체인을 따라 결재 → 승인되면 확정(confirmed).',
+'     **같은 할 일에 여러 건의 확정 배정이 공존**할 수 있습니다(사람 여러 명 + Agent 여러 개가 같이 일하는 게 기본값).',
+'   - 아직 쓸 Agent가 없다면 **"AI 에이전트 생성"**에서 바로 만듭니다(5절).',
+'4. 배정이 확정되면 그 할 일의 **협업 워크스페이스**가 열립니다 — 여기서:',
+'   - **"이 업무의 AI 에이전트 실행(비용 발생)"**: Agent 1명에게 온디맨드로 맡깁니다.',
+'   - **"팀 Agent 실행(Crew, 비용 발생)"**: 배정된 팀의 Agent 멤버 전원을 실제 CrewAI Crew로 함께 실행합니다(4절).',
+'   - **"파이프라인 실행(비용 발생)"**: 등록된 파이프라인 템플릿을 골라 처음부터 끝까지 단계별로 자동 진행시킵니다(6절).',
+'   - 사람이 직접 쓴 결과물도 "검토 요청"을 누르면 Agent 결과물과 같은 결재 체인을 거칩니다.',
+'5. 결과물은 Gate A-G 자동 채점이 붙고, 결재(승인/반려)를 거쳐야 "확정된 결과"가 됩니다 — **"결재"** 탭에서 본인 차례의 승인 요청을 처리합니다(자기 자신이 요청한 건 자기가 승인할 수 없습니다).',
+'',
+'<h2 id="nn">4. N:N 조합 — 사람+Agent 여러 명이 함께 일하기</h2>',
+'',
+'한 업무에 사람 여러 명과 Agent 여러 개를 동시에 묶는 두 가지 방법입니다.',
+'',
+'### 방법 A — 팀(Team) 등록(재사용 가능, 정식 경로에 적합)',
+'',
+'1. **"팀 관리"** 탭(admin/manager 전용) → "팀 등록"에 이름·설명을 넣습니다.',
+'2. 만든 팀 카드에서 **"멤버 추가"** — 사람(human_pool)과 Agent를 역할 라벨과 함께 몇 명이든 추가합니다(예: 사람 2명 + Agent 10명을 한 팀에).',
+'3. **위임형(hierarchical) 협업을 원하면**, 매니저를 맡을 Agent를 추가할 때 역할 라벨에 **"매니저"라는 단어를 포함**시키세요(예: "매니저(hierarchical 실행 시 지정)").',
+'   그러면 이 팀을 실행할 때 그 Agent가 자동으로 매니저로 지정돼, 나머지 팀원에게 하위 과업을 실제로 쪼개 위임합니다.',
+'   역할 라벨에 "매니저"가 없으면 전원이 순차(sequential)로 각자 수행합니다.',
+'4. 이 팀은 두 군데서 실행할 수 있습니다:',
+'   - 대화에서 **`@팀이름`** 멘션(2절) — 매니저가 있으면 위임형, 없으면 전원 실행 후 각자 결과를 메시지로 올립니다.',
+'   - 업무(Task)에 팀을 배정한 뒤 협업 워크스페이스의 **"팀 Agent 실행"** 버튼 — 결과가 Agent별 결과물+결재 체인으로 그 업무에 그대로 쌓입니다.',
+'5. 기본 제공 예시: **"자율 개발 크루"** 팀(매니저 1명 "개발 계획 수립가" + 개발자 10명 + UI 기획자, 총 12명)이 이미 등록돼 있어 바로 써볼 수 있습니다.',
+'',
+'### 방법 B — Crew 실행(즉석 1회성, 재사용 등록 없이)',
+'',
+'**"Crew 실행"** 탭(admin/manager 전용)에서 매번 Agent를 직접 골라 그 자리에서 협업시킵니다 — 팀으로 등록해둘 필요가 없는 일회성 조합에 적합합니다.',
+'여러 Agent를 고르고, 처리 방식(sequential/hierarchical)과 hierarchical일 때의 매니저 Agent를 직접 선택합니다.',
+'',
+'<h2 id="agent">5. Agent / Agent 그룹 만들기</h2>',
+'',
+'### 단일 Agent 만들기(admin/manager 전용, "AI 에이전트 생성" 탭)',
+'',
+'1. 먼저 **업무 요청 → 할 일**이 있어야 합니다(3절 1-2단계) — Agent는 "어떤 할 일을 맡을지" 역할명을 가지고 태어납니다.',
+'2. 할 일을 하나 이상 고르고, 생성 방식을 고릅니다:',
+'   - **stub**(무료): LLM 호출 없는 규칙 기반 자리표시자 — 흐름만 비용 없이 채워볼 때.',
+'   - **simple_llm**(비용 발생): 실제 LLM을 한 번만 호출하는 가장 가벼운 실제 Agent.',
+'   - **crewai**(비용 발생): 실제 CrewAI Agent로 만듭니다 — 이후 "Crew 실행"/"팀 Agent 실행"/파이프라인에서 다른 Agent와 실제로 협업·위임할 수 있는 건 이 방식뿐입니다.',
+'     필요 스킬에 vectordb/graphdb 등이 있으면 관련 Tool이 생성 시점부터 자동으로 붙습니다.',
+'3. 만든 Agent는 **"AI 에이전트 관리"**에서 **온보딩 승인**(pending_onboarding → active)을 눌러야 실제 배정·실행·대화 호출에 쓸 수 있습니다.',
+'4. 같은 탭에서 Agent별로:',
+'   - **모델 설정**: 기본 LLM provider/model(비용 없음, 설정만 저장).',
+'   - **파인튜닝**: temperature·reasoning on/off·재시도 횟수 등 CrewAI 동작 파라미터(비용 없음, 설정만 저장 — "Crew 실행"에 투입될 때만 반영).',
+'   - **⚡ 최적화 추천**: 이 Agent의 역할 특성에 맞는 provider/model/파인튜닝을 추천받습니다(규칙 기반, 비용 없음) — 추천값은 입력란에 채워지기만 하고 저장은 직접 눌러야 합니다.',
+'     "AI 의견 보기"를 누르면 LLM에게 추가로 검토받을 수 있습니다(이건 비용 발생).',
+'5. 여러 Agent를 한꺼번에 최적화하려면 **"LLM 설정 최적화"** 탭(admin/manager 전용)에서 전체 목록을 보고 체크한 Agent에 바로 적용합니다.',
+'',
+'### Agent 그룹(팀) 만들기',
+'',
+'4절 "N:N 조합 — 방법 A"를 참고하세요.',
+'"AI 에이전트 생성"에서 여러 할 일을 한 번에 골라 만든 직후에는 그 결과 화면에 **"팀으로 묶기"** 단축 버튼도 있어, "팀 관리" 탭을 따로 열지 않고도 바로 팀을 만들 수 있습니다.',
+'',
+'<h2 id="pipeline">6. 파이프라인 — 단계형 자동 진행 엔진</h2>',
+'',
+'사람이 **계획 확정 시점에 한 번만 승인**하면, 그 뒤로는 구현 → 검증 → 품질 관리가 Gate A-G 기준으로 자동 반복되는 엔진입니다(BMAD-METHOD 방법론 대응, "최소 HITL/HOTL").',
+'개발 외 업무(시장조사·전략 등)에도 역할만 바꿔 그대로 재사용할 수 있는 범용 엔진입니다.',
+'',
+'### 개념',
+'',
+'파이프라인은 **단계(stage)의 순서 있는 목록**입니다.',
+'각 단계는 셋 중 하나로 동작합니다:',
+'',
+'| 모드 | 동작 | 예 |',
+'|---|---|---|',
+'| 단독(single) | Agent 1명이 혼자 처리 | 요구사항 분석가 1명 |',
+'| 순차 릴레이(sequential_relay) | N명이 순서대로 앞 사람 결과를 이어받음 | AA → DA |',
+'| 병행 위임(parallel_delegated) | 리드 1명이 코워커들에게 실제로 과업을 쪼개 위임 | 개발 계획 수립가 → 개발자 10명 |',
+'',
+'단계마다 **Gate A-G 통과 기준·최대 재시도 횟수·"사람 승인 필요" 여부**를 정합니다.',
+'승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어가고(최소 HITL), 기준 미달이면 "어떤 Gate가 왜 부족한지" 피드백을 반영해 자동 재시도합니다.',
+'재시도를 다 써도 못 넘기면 그때만 결재함으로 올라옵니다(최소 HOTL — 자동 반복이 완전히 실패했을 때만 사람에게 옵니다).',
+'',
+'### 바로 써보기 — 기본 제공 "소프트웨어 개발 파이프라인"',
+'',
+'아래 7단계가 이미 등록돼 있어 템플릿을 새로 만들 필요 없이 바로 실행할 수 있습니다.',
+'',
+'| # | 단계 | 모드 | 참여 | 사람 승인 |',
+'|---|---|---|---|---|',
+'| 1 | 요구분석/계획 확정 | 단독 | 요구사항 분석가 | **필요**(여기서만 사람이 1회 개입) |',
+'| 2 | 설계 | 순차 릴레이 | AA → DA | 불필요 |',
+'| 3 | 개발 계획 수립 | 단독 | 개발 계획 수립가 | 불필요 |',
+'| 4 | 구현 | 병행 위임 | 개발 계획 수립가(리드) → 개발자 10명+UI 기획자 | 불필요 |',
+'| 5 | 코드 검증 | 단독 | 코드 검증가 | 불필요 |',
+'| 6 | QA 기능테스트 | 순차 릴레이 | 테스트 계획 수립가 → QA 기능테스터 | 불필요 |',
+'| 7 | 품질 관리 최종 판정 | 단독 | 품질 관리자 | 불필요(반복 실패 시에만 자동 에스컬레이션) |',
+'',
+'실행은 **업무(Task)의 협업 워크스페이스**에서 이 템플릿을 고르고 "파이프라인 실행(비용 발생)"을 누르면 시작됩니다(3절 4단계).',
+'진행 상황은 같은 화면에서 단계별 배지(대기/진행중/통과/재시도N/승인대기/반려)로 실시간 확인합니다.',
+'',
+'### 새 파이프라인 만들기(admin/manager 전용, "파이프라인 관리" 탭)',
+'',
+'1. "파이프라인 등록"으로 이름·설명·도메인(예: software_dev, biz_strategy)을 정합니다.',
+'2. "단계 추가"로 단계를 하나씩 쌓습니다 — 이름, 모드(단독/순차 릴레이/병행 위임)를 고르면 그 모드에 맞는 역할 선택 UI가 바뀝니다(단독=1명, 순차 릴레이=N명+순서, 병행 위임=리드 1명+코워커 여러 명).',
+'   공통 지시문, Gate 통과 비율(%), 최대 재시도, "사람 승인 필요" 체크박스도 이때 정합니다.',
+'3. 단계 순서는 카드의 위/아래 이동 버튼으로 나중에도 바꿀 수 있습니다.',
+'4. 예시(시장조사-전략, 참고용): 자료조사 → 3C/SWOT 분석 → **사람 승인** → 사업전략 수립 → 기획서 작성 → 경영보고(순차 릴레이: C-level 보고서 작성자 → 프레젠테이션 자료 작성자) — 똑같은 빌더로 그대로 만들 수 있습니다(역할만 다를 뿐 엔진은 동일).',
+'',
+'<h2 id="scenario">7. 실전 시나리오 4가지</h2>',
+'',
+'**시나리오 A — 가벼운 질문 하나**',
+'"대화" 탭 → 독립 대화에서 `@코드 검증가 이 함수 리뷰해줘`처럼 바로 멘션.',
+'결재·Gate 없이 가장 빠르게 답을 받습니다.',
+'',
+'**시나리오 B — 작은 기능 하나 개발**',
+'업무 요청 제출 → 할 일로 나누기 → "AI 에이전트 생성"(crewai 방식) → 온보딩 승인 → 협업 워크스페이스에서 "이 업무의 AI 에이전트 실행" → 결과물 결재.',
+'',
+'**시나리오 C — 복잡한 신규 기능/게임 개발(여러 역할 협업 필요)**',
+'둘 중 하나를 고릅니다 — (1) "자율 개발 크루" 팀을 대화에서 `@자율 개발 크루 ...`로 멘션해 매니저가 즉석에서 위임하게 하거나, (2) 정식 업무로 만들어 "소프트웨어 개발 파이프라인"을 실행해 요구분석부터 품질 판정까지 Gate 기준 자동 진행시킵니다.',
+'품질·추적성이 중요하면 (2)를, 속도가 중요하면 (1)을 권장합니다.',
+'',
+'**시나리오 D — 시장조사·전략 보고서**',
+'경영/사업전략 역할군(외부 자료 조사가·3C4P SWOT 분석가·사업전략 수립가 등, 이미 기본 등록됨)을 팀으로 묶거나, 6절의 시장조사-전략 파이프라인 예시대로 빌더에서 새 템플릿을 만들어 실행합니다.',
+'',
+'<h2 id="menu">8. 메뉴 전체 지도</h2>',
+'',
+'**오늘 할 일(user)**: 대화 · 인박스(결재 대기+실행 실패+낮은 Gate 경고 모음) · 내 업무 · 할 일 보드 · 업무 요청 · 결재 · 성과 리뷰',
+'',
+'**조회(common, 전원 접근)**: 인력 검색 · 조직도 · 이용 가이드(이 화면)',
+'',
+'**설정/운영(admin·manager 전용, 일부 admin 전용)**: 대시보드 · 비용 · 공정성 지표 · 활동 기록 · 인력 매칭/배정 · AI 에이전트 생성 · AI 에이전트 관리 · LLM 설정 최적화 · 사람 인력 관리 · 도구/스킬 Pool · 팀 관리 · 파이프라인 관리 · 모델 레지스트리 · Crew 실행 · 사용자 관리(admin 전용)',
+'',
+'<h2 id="trouble">9. 자주 겪는 문제</h2>',
+'',
+'- **`@멘션`했는데 아무 반응이 없다** → 그 Agent/Team/사람이 이 대화의 참가자가 아닐 가능성이 가장 큽니다.',
+'  메시지창에서 `@`를 다시 입력해 자동완성 목록에서 직접 골라 초대부터 되게 하세요.',
+'- **방금 만든 Agent가 배정/실행 목록에 안 보인다** → "AI 에이전트 관리"에서 온보딩 승인(pending_onboarding → active)을 먼저 눌러야 합니다.',
+'- **"AI 에이전트 생성"에서 새 Agent가 안 만들어지고 재사용 배지만 뜬다** → 같은 할 일(역할)에 이미 Agent가 있으면 새로 안 만들고 기존 것을 재사용합니다 — 의도한 동작입니다.',
+'  새로 만들려면 다른 할 일을 고르세요.',
+'- **팀/파이프라인 실행이 너무 오래 걸리거나 실패한다** → 참여 인원이 많을수록(특히 병행 위임 단계) LLM 왕복 호출이 많아져 시간이 걸립니다.',
+'  "자율 개발 크루"처럼 구현 단계 Agent들은 이미 `reasoning`을 꺼둬 호출 수를 줄인 상태입니다 — "AI 에이전트 관리"의 파인튜닝에서 비슷하게 조정할 수 있습니다.',
+'  (또는 5절의 "⚡ 최적화 추천"을 먼저 써보세요.)',
+'- **실행 버튼을 눌렀는데 비용이 걱정된다** → "실행"이라는 이름이 붙은 버튼(AI 에이전트 실행 / 팀 Agent 실행 / 파이프라인 실행 / Crew 실행 / AI 의견 보기)은 전부 실제 LLM API를 호출해 비용이 발생합니다.',
+'  설정 저장(모델 설정·파인튜닝·팀/파이프라인 등록 자체)은 비용이 없습니다.',
+'- **자기 자신이 요청한 걸 자기가 승인하고 싶다** → 의도적으로 막혀 있습니다(self-approval 방지) — 다른 관리자가 대신 승인해야 합니다.',
+].join("\\n");
+
+async function renderManual(content) {
+  content.innerHTML = '<section class="card">' +
+    '<div class="md-content">' + _renderMarkdown(MANUAL_MARKDOWN) + '</div>' +
+    '</section>';
 }
 
 boot();

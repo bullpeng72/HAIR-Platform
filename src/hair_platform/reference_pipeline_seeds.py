@@ -119,12 +119,18 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     (
         "코드 검증가",
         ["harness-gate-ci", "gate-improvement-loop", "evidence-based-gate-fix", "recommend-fix-workflow", "code-review-checklist"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2},
+        # 사용자 보고(2026-10-18, "@자율 개발 크루" 품질 분석 중 실측) —
+        # 이 역할이 파이프라인(run_crew() 경로)에서 길어진 대화/산출물
+        # 맥락을 받아 표가 많은 긴 검증 보고서를 쓸 때 reasoning의 "계획
+        # 수립용 추가 LLM 호출"까지 겹쳐 응답이 매우 느려지고, 실제로
+        # QA/품질관리자 호출에서 타임아웃까지 발생했다 — 아래 세 역할과
+        # 함께 끈다(14번째 줄 "개발자" 12명 reasoning 끄기와 같은 원칙).
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "QA 기능테스터",
         ["tdd-ai-workflow-checklist", "golden-set-coverage-check", "human-approval-loop"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
+        {"temperature": 0.3, "max_retry_limit": 3},
     ),
     # --- 경영/사업 전략 파이프라인(2026-10-14) ---
     (
@@ -250,12 +256,12 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     (
         "테스트 계획 수립가",
         ["test-plan-and-case-design-guide", "test-case-mechanical-derivation", "spec-ears-lint"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
+        {"temperature": 0.3, "max_retry_limit": 3},
     ),
     (
         "품질 관리자",
         ["quality-acceptance-criteria-guide", "harness-gate-ci", "gate-improvement-loop", "evidence-based-gate-fix"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2},
+        {"temperature": 0.2, "max_retry_limit": 3},
     ),
 ]
 

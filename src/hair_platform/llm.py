@@ -75,10 +75,22 @@ def call_llm(provider: str, model: str, system: str, prompt: str) -> str:
     raise ValueError(f"지원하지 않는 provider입니다: {provider!r}")
 
 
+# 사용자 보고(2026-10-18, "@자율 개발 크루" 품질 분석 중 실측) — QA
+# 기능테스터/품질 관리자처럼 긴 대화 맥락을 받아 표가 많은 긴 응답을
+# 만드는 Agent가 OpenAI SDK **기본** 타임아웃(600초)에 걸려 "timed out"
+# 으로 조용히 실패했다. 이 파일엔 Ollama용 `timeout=600`만 명시돼 있고
+# OpenAI/Anthropic 호출에는 타임아웃을 전혀 지정하지 않아 SDK 기본값에
+# 그대로 노출돼 있었다 — 아래처럼 명시적으로 넉넉하게(900초) 잡아
+# 같은 급으로 느린 정상 응답을 더 받아줄 여지를 둔다(Ollama 타임아웃을
+# 120→300→600초로 올린 것과 같은 원칙 — "멈춘 게 아니라 느린 것"일
+# 때까지는 끊지 않는다).
+_CLOUD_LLM_TIMEOUT_SECONDS = 900.0
+
+
 def _call_anthropic(model: str, system: str, prompt: str) -> str:
     import anthropic  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
-    client = anthropic.Anthropic()  # ANTHROPIC_API_KEY 환경변수를 사용한다.
+    client = anthropic.Anthropic(timeout=_CLOUD_LLM_TIMEOUT_SECONDS)  # ANTHROPIC_API_KEY 환경변수를 사용한다.
     resp = client.messages.create(
         model=model,
         max_tokens=1024,
@@ -91,7 +103,7 @@ def _call_anthropic(model: str, system: str, prompt: str) -> str:
 def _call_openai(model: str, system: str, prompt: str) -> str:
     import openai  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
-    client = openai.OpenAI()  # OPENAI_API_KEY 환경변수를 사용한다.
+    client = openai.OpenAI(timeout=_CLOUD_LLM_TIMEOUT_SECONDS)  # OPENAI_API_KEY 환경변수를 사용한다.
     resp = client.chat.completions.create(
         model=model,
         messages=[

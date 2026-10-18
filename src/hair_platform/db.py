@@ -808,6 +808,16 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 화면에 정확히 보여줄 수 있어 대화 설정이 아니라 메시지 단위로 둔다.
     _ensure_column(conn, "conversation_messages", "llm_provider", "TEXT")
     _ensure_column(conn, "conversation_messages", "llm_model", "TEXT")
+    # 사용자 요청(2026-10-18, "@자율 개발 크루... 생성 결과물의 품질을
+    # 개선하기 위해... 어떤 개선이 필요할지") 분석 후속 — 실측으로 확인한
+    # "Gate가 fail해도 대화창 경로에서는 측정만 하고 버려진다" 문제를
+    # 메우는 최소한의 안전장치. `run_crew()`가 이미 계산해서 반환하는
+    # gate_scores/delegations 개수를 메시지에 같이 저장해, 화면에서
+    # "이 결과가 Gate 기준을 통과했는지"·"매니저가 실제로 위임했는지"를
+    # 바로 보여준다(Task 협업워크스페이스 경로의 agent_evaluations/
+    # 결재 체인만큼 엄격하진 않지만, 적어도 조용히 사라지진 않는다).
+    _ensure_column(conn, "conversation_messages", "gate_scores", "TEXT")
+    _ensure_column(conn, "conversation_messages", "delegation_count", "INTEGER")
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:

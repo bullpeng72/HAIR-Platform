@@ -117,7 +117,17 @@ def _resolve_delegation_target(tool_args, known_roles: list[str]) -> str | None:
 # 2026-09-27, "crewai 기능 적절히 적용됐는지 분석" 리뷰에서 실제로 미반영 상태를
 # 발견해 반영함). CrewAI Agent 기본값(25)보다 보수적으로 잡는다 — 우리는 Crew
 # 전체 Agent에 allow_delegation=True를 켜서 위임 왕복이 겹칠 수 있기 때문이다.
-DELEGATION_MAX_ITER = 10
+#
+# 정정(2026-10-18, "@자율 개발 크루" 품질 분석 실측 — 10명 코워커가 있는
+# 실제 파이프라인 구현 단계에서 매니저가 위임 호출을 배열로 묶어 보내다
+# 파싱 실패 → 복구 시도로 반복 소모 → 10회를 다 쓰고 "Maximum iterations
+# reached"로 강제 종료돼 혼자 급하게 마무리한 산출물(spec 핵심 요구사항
+# 누락)을 냈다. "한 번에 한 명씩" 프롬프트 유도는 유지하되(아래
+# `hierarchical_description`), 코워커가 많을 때 실수로 한 번 배열로
+# 묶어 보내 몇 번 허비해도 이후 한 명씩 다시 시도할 여유가 남도록
+# 10 → 16으로 올린다(위임 왕복이 그만큼 더 길어질 수 있다는 뜻이라
+# 비용은 늘지만, 중간에 끊겨 핵심 요구사항을 누락하는 쪽이 더 나쁘다).
+DELEGATION_MAX_ITER = 16
 
 
 def _mcp_tools(stack: ExitStack, mcp_servers: list[dict]) -> list:
@@ -584,7 +594,15 @@ def run_crew(
                 "to coworker' 도구는 **한 번 호출에 코워커 한 명씩만** "
                 "입력하세요 — 여러 코워커를 배열이나 목록으로 한 번에 "
                 "묶어서 호출하지 말고, 코워커 수만큼 호출을 여러 번 "
-                "나눠서 하세요."
+                "나눠서 하세요.\n\n"
+                "올바른 Action Input 예시(코워커 한 명당 정확히 이 형태로, "
+                "한 번에 하나씩):\n"
+                '{"task": "로그인 화면의 입력 검증 로직을 구현하세요", '
+                '"context": "이메일 형식과 비밀번호 길이를 검사해야 합니다", '
+                '"coworker": "' + (worker_rows[0]["role_name"] if worker_rows else "") + '"}\n'
+                "절대 금지(이렇게 배열로 여러 명을 한 번에 묶어 보내면 "
+                "형식 오류로 위임 자체가 실패합니다): "
+                '[{"task": "...", "coworker": "A"}, {"task": "...", "coworker": "B"}]'
             )
 
             worker_tasks = [

@@ -53,6 +53,20 @@ _DEFAULT_SYSTEM_PROMPT = (
     "최종 결정과 책임은 사람에게 있다는 점을 기억하세요."
 )
 _CONTEXT_MESSAGE_LIMIT = 10
+# 사용자 요청(2026-10-18, "@자율 개발 크루" 품질 분석 후속) — 실측으로
+# 확인한 "앵커링" 문제(최근 10건 안에 과거 생성 코드가 여러 건 있으면
+# 새 spec보다 그 과거 코드를 거의 그대로 재사용함)를 프롬프트로 명시
+# 차단한다. `run_team_mention_job()`에서만 쓴다(그 문제가 실제로
+# 재현된 경로).
+_ANTI_ANCHORING_NOTE = (
+    "\n\n[중요] 위 대화 기록에 이전에 생성된 코드나 산출물이 포함돼 "
+    "있어도, 그것을 그대로 복사하거나 재사용하지 마세요. 가장 최근 "
+    "사용자 요청과 그 요청이 참조하는 가장 최근의 스펙/요구사항 "
+    "문서를 기준으로 처음부터 다시 작성하세요. 과거 산출물은 참고 "
+    "자료일 뿐이며, 새 요구사항과 다르면 전부 새로 작성해야 합니다. "
+    "구현하지 않은 기능을 구현했다고 설명하지 마세요 — 실제로 작성한 "
+    "코드에 있는 것만 설명하세요."
+)
 # agent_pool.id는 AUTOINCREMENT라 1부터 시작 — 0은 "실존하는 agent_pool
 # 행이 없는 대화 자체의 기본 AI"를 가리키는 예약 sentinel로 안전하게
 # 쓸 수 있다(deliverable_comments.author_id와 같은, FK 없는 다형 컬럼
@@ -561,7 +575,13 @@ def list_messages(conn: sqlite3.Connection, conversation_id: int) -> list[dict]:
         "ORDER BY created_at ASC, id ASC",
         (conversation_id,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    messages = [dict(r) for r in rows]
+    # Gate A-G 안전장치(2026-10-18) — 저장은 JSON 문자열이지만 화면이
+    # 바로 쓸 수 있게 파싱해서 내려준다(없으면 None 그대로).
+    for m in messages:
+        if m.get("gate_scores"):
+            m["gate_scores"] = json.loads(m["gate_scores"])
+    return messages
 
 
 def delete_message(
@@ -903,6 +923,18 @@ def _describe_job_failure(exc: Exception) -> str:
             "일시적 오류입니다) — 잠시 후 다시 시도해 주세요. 반복되면 호출한 "
             "Agent/Team 규모를 줄이거나 다른 LLM Provider로 바꿔보세요."
         )
+    # 사용자 보고(2026-10-18, "@자율 개발 크루" 품질 분석 중 실측) — 대화가
+    # 길어진 상태에서 QA/품질 관리자처럼 표가 많은 긴 응답을 요구하는
+    # Agent를 멘션하면, 응답 생성이 `llm.py`의 넉넉해진 타임아웃(900초)
+    # 조차 넘기는 경우가 있다(raw 예외 문자열이 그냥 "timed out"이라
+    # 어느 Agent가, 왜 실패했는지 사용자가 알 길이 없었다).
+    if "timed out" in str(exc).lower() or isinstance(exc, TimeoutError):
+        return (
+            "AI 모델의 응답 생성이 시간 제한(15분)을 넘겨 중단됐습니다 — 대화가 "
+            "길어졌거나 요청한 내용이 복잡할 때 발생할 수 있는 문제입니다. "
+            "요청을 더 간결하게 나눠서 다시 시도하거나, 대화가 많이 길어졌다면 "
+            "새 대화를 시작해 보세요."
+        )
     return str(exc)
 
 
@@ -1053,13 +1085,28 @@ def run_team_mention_job(
     깨진 응답을 낼 때)에 더 쉽게 걸리는 근본 원인이었다.
     `teams.manager_agent_id_for_team()`으로 매니저를 식별해, 있으면
     설계된 대로 hierarchical로 라우팅한다(없는 팀은 기존 sequential
-    그대로 — 하위 호환)."""
+    그대로 — 하위 호환).
+
+    사용자 요청(2026-10-18, "@자율 개발 크루... 생성 결과물의 품질을
+    개선하기 위해... 어떤 개선이 필요할지 분석") 후속 — 실측(실제 대화
+    7의 "위 spec을 준수해 게임을 개발해줘" 실행)으로 확인한 두 문제를
+    메운다:
+    1) `_build_transcript()`가 최근 10건을 원문 그대로 넣는데, 그
+       10건 안에 과거에 생성된 거대한 코드 산출물(수천 자)이 여러 건
+       섞여 있으면 매니저가 방금 받은 새 spec보다 그 과거 코드에
+       "앵커링"돼 거의 그대로 재사용했다(ARIA·localStorage 등 구현
+       안 한 기능을 구현했다고 거짓 서술까지 했다). 과거 코드를
+       맹목적으로 베끼지 말라는 지시를 명시적으로 추가한다
+       (`_ANTI_ANCHORING_NOTE`).
+    2) Gate A-G가 fail해도 이 경로는 측정만 하고 버려졌다 — 메시지에
+       `gate_scores`/`delegation_count`를 같이 저장해 화면에서 바로
+       보이게 한다(아래 INSERT)."""
     try:
         agent_ids = teams.active_agent_member_ids(conn, team_id)
         if not agent_ids:
             raise ValueError("team_has_no_active_agents")
-        transcript = _build_transcript(conn, conversation_id)
-        task_descriptions = [transcript or "대화를 시작합니다."] * len(agent_ids)
+        transcript = (_build_transcript(conn, conversation_id) or "대화를 시작합니다.") + _ANTI_ANCHORING_NOTE
+        task_descriptions = [transcript] * len(agent_ids)
         manager_agent_id = teams.manager_agent_id_for_team(conn, team_id)
         if manager_agent_id is not None:
             result = crew_runtime.run_crew(
@@ -1072,19 +1119,24 @@ def run_team_mention_job(
             )
         else:
             result = crew_runtime.run_crew(conn, agent_ids, task_descriptions, actor_id)
+        gate_scores_json = json.dumps(result.get("gate_scores"), ensure_ascii=False)
+        delegation_count = len(result.get("delegations") or [])
         posted = 0
         for agent in result["agents"]:
             if agent["output"] is None:
                 continue  # 매니저 역할 — 산출물 없음(run_crew()의 기존 관례)
             conn.execute(
                 "INSERT INTO conversation_messages (conversation_id, author_type, "
-                "author_id, content, llm_provider, llm_model) VALUES (?, 'agent', ?, ?, ?, ?)",
+                "author_id, content, llm_provider, llm_model, gate_scores, "
+                "delegation_count) VALUES (?, 'agent', ?, ?, ?, ?, ?, ?)",
                 (
                     conversation_id,
                     agent["agent_id"],
                     agent["output"],
                     result.get("resolved_provider"),
                     result.get("resolved_model"),
+                    gate_scores_json,
+                    delegation_count,
                 ),
             )
             posted += 1

@@ -35,6 +35,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from hair_platform import (
     agent_evaluation,
+    agent_optimizer,
     agent_runtime,
     assignments,
     audit,
@@ -2157,6 +2158,47 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=404, detail="Agent를 찾을 수 없습니다"
             ) from exc
         return {"id": agent_id, "tuning_config": saved}
+
+    @app.get("/api/agent-pool/{agent_id}/optimize-recommendation")
+    def get_agent_optimize_recommendation(
+        agent_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-18, "Agent의 목표, 기능, 입출력 등을 고려해
+        가용한 LLM 모델에서 종류 및 설정 등을 최적화 setting 하는 admin
+        기능") — 규칙 기반 1차 추천(비용 없음, `agent_optimizer.py`).
+        저장은 하지 않는다 — admin이 검토 후 기존 모델/파인튜닝 저장
+        버튼으로 직접 적용한다."""
+        try:
+            return agent_optimizer.recommend_for_agent(conn, agent_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="Agent를 찾을 수 없습니다"
+            ) from exc
+
+    @app.post("/api/agent-pool/{agent_id}/optimize-recommendation/refine")
+    def refine_agent_optimize_recommendation(
+        agent_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """규칙 기반 추천을 LLM에게 검토·보정받는다 — **실제 LLM API를
+        호출해 비용이 발생한다**(명시적으로 이 엔드포인트를 호출했을 때만).
+        LLM이 레지스트리에 없는 모델을 환각하거나 잘못된 JSON을 내면
+        규칙 기반 추천으로 안전하게 되돌아간다(`source` 필드로 구분)."""
+        try:
+            return agent_optimizer.refine_with_llm(conn, agent_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="Agent를 찾을 수 없습니다"
+            ) from exc
+
+    @app.get("/api/agent-pool-optimization/recommendations")
+    def list_agent_optimize_recommendations(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """"LLM 설정 최적화" 일괄 화면용 — 전체 Agent(deprecated 제외)의
+        규칙 기반 추천을 한 번에 반환한다(비용 없음)."""
+        return agent_optimizer.recommend_all(conn)
 
     @app.post("/api/agent-pool/{agent_id}/index-knowledge")
     def index_agent_knowledge(

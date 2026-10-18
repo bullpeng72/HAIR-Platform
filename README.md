@@ -10,9 +10,12 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 타임라인·참가자 초대+댓글 `@멘션`·상태/우선순위/의존관계 그래프
 시각화·운영 가시성·탭 재구성), **대화 중심 작업공간**(로그인 직후
 독립 대화 + 기본 AI 자동응답/특정 Agent·Team 멘션/skill 그라운딩 +
-Task 종속 대화 흡수 + Brief 승격 공존), **통합 CLI**(`hair serve`/
-`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로 쓸 수 있다. `pytest`
-432건 통과, API 엔드포인트 116개. 개념·아키텍처 전체 설명은
+Task 종속 대화 흡수 + Brief 승격 공존), 단계형 개발 파이프라인 엔진
+(Gate A-G 기준 자동 재시도/에스컬레이션, BMAD-METHOD식 계획 승인
+1회 + 최소 HITL), Agent별 LLM 모델/설정 최적화 추천(admin), **통합
+CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
+쓸 수 있다. `pytest` 467건 통과, API 엔드포인트 130개. 개념·아키텍처
+전체 설명은
 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은 `git log`
 (커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를 참고.
 
@@ -84,7 +87,7 @@ Task 종속 대화 흡수 + Brief 승격 공존), **통합 CLI**(`hair serve`/
 - 데이터 삭제/초기화(도구·스킬·사람·Agent·brief/task, confirmed 배정이
   있는 대상은 보호) + 보관기간 정책(`retention.py`, assignment_history
   1년 — audit_log는 append-only 트리거를 이 모듈만 통제된 방식으로 해제)
-- Web UI 22개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
+- Web UI 24개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
   분리(원래 "내 업무"/"공용 조회"/"운영 관리" 3구역이었으나 이후
   2구역으로 재편)
 
@@ -99,7 +102,7 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 432건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 467건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -181,7 +184,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(116개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(130개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   approvals.py       # 다단계 결재라인(조직도 매니저 체인)
@@ -198,7 +201,7 @@ src/hair_platform/
   agent_evaluation.py # Gate A-G 평가를 Agent 실행 경로에 상시 연결(agent_evaluations 테이블)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
   cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/eval
-  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 22개 탭)
+  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 24개 탭)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
   model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용")
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
@@ -212,11 +215,14 @@ src/hair_platform/
   inbox.py           # 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고)
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이)
   conversations.py   # 대화 중심 작업공간 — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩, Brief 승격
+  pipeline_runtime.py # 단계형 개발 파이프라인 엔진(단독/순차 릴레이/병행 위임 단계, Gate A-G 기준 자동 재시도·에스컬레이션)
+  reference_pipeline_seeds.py # 레퍼런스 Agent 28종 + Skill/Tool Pool + 소프트웨어 개발 파이프라인 기본 시드
+  agent_optimizer.py # Agent별 LLM provider/model/tuning_config 최적화 추천(규칙 기반 + 선택적 LLM 보정, admin)
 docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 432건 통과(1건은 무관한 사전 실패 — 재현 확인됨)
+tests/unit/                            # 골든셋 467건 통과(1건은 무관한 사전 실패 — 재현 확인됨)
 ```
 
 ## 로드맵
