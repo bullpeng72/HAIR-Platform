@@ -420,6 +420,7 @@ def run_crew(
     planning: bool = False,
     manager_provider: str | None = None,
     manager_model: str | None = None,
+    parallel_agent_ids: list[int] | None = None,
 ) -> dict:
     """여러 온보딩된 Agent를 CrewAI Crew로 묶어 실제 협업
     실행한다. N번째 `agent_ids`가 N번째 `task_descriptions`를 맡는다.
@@ -467,11 +468,27 @@ def run_crew(
     단계의 `expected_output`) → 그 Agent의 저장된 기본값(`agent_pool.
     expected_output`, `PATCH .../persona`로 설정) → 플랫폼 공통 기본
     문구. `None`이면(기본값) 전부 두 번째 단계부터 평가한다.
+
+    `parallel_agent_ids`(사용자 요청, 2026-10-20, "독립 작업 병렬 실행"
+    — Crew 빌더 로드맵 5단계) — `process="sequential"`에서, 여기 담긴
+    Agent id의 Task는 CrewAI의 `async_execution=True`로 표시돼 바로
+    앞 Task를 기다리지 않고 즉시 병렬로 시작한다(`context` 체이닝도
+    끊는다 — 독립적이라는 선언 자체가 "앞 결과를 안 본다"는 뜻이므로).
+    `crew.kickoff()`는 끝나기 전에 전부 join하므로 반환값(`agents`)엔
+    평소처럼 전원의 산출물이 들어있다. hierarchical(매니저가 조율/자동
+    위임)은 Task 구성 방식이 달라(단일 매니저 Task이거나 CrewAI가
+    `Task.agent` 배정을 무시) 이 플래그가 적용될 지점이 없으므로,
+    `process != "sequential"`인데 지정하면 조용히 무시하지 않고 즉시
+    거부한다.
     """
     if len(agent_ids) != len(task_descriptions):
         raise ValueError("agent_ids와 task_descriptions의 개수가 같아야 합니다")
     if not agent_ids:
         raise ValueError("agent_ids가 비어 있습니다")
+    if parallel_agent_ids and process != "sequential":
+        raise ValueError(
+            "parallel_agent_ids는 process='sequential'에서만 지정할 수 있습니다"
+        )
     if manager_agent_id is not None:
         if process != "hierarchical":
             raise ValueError(
@@ -669,8 +686,11 @@ def run_crew(
         else:
             tasks: list[Task] = []
             for i, description in enumerate(task_descriptions):
+                is_parallel = agent_ids[i] in (parallel_agent_ids or [])
                 context = (
-                    [tasks[i - 1]] if i > 0 and process == "sequential" else None
+                    None
+                    if is_parallel
+                    else ([tasks[i - 1]] if i > 0 and process == "sequential" else None)
                 )
                 tasks.append(
                     Task(
@@ -682,6 +702,7 @@ def run_crew(
                         ),
                         agent=crewai_agents[i],
                         context=context,
+                        async_execution=is_parallel,
                         guardrail=_min_length_guardrail,
                     )
                 )
@@ -709,15 +730,24 @@ def run_crew(
             idx = len(task_completions)
             if hierarchical_with_manager:
                 agent_role = rows[manager_index]["role_name"]
+                agent_id = None  # 위임 통합 결과 — 특정 워커 한 명의 몫이 아니다
             else:
                 agent_role = (
                     worker_rows[idx]["role_name"]
                     if idx < len(worker_rows)
                     else task_output.agent
                 )
+                agent_id = worker_rows[idx]["id"] if idx < len(worker_rows) else None
+            # output_raw(사용자 요청, 2026-10-20, "실패 시 일부 재시도") —
+            # 기존 output_preview(200자)는 화면 표시용이라 자르지만,
+            # 부분 성공분을 실제 deliverable로 저장하려면 전체 텍스트가
+            # 필요하다. agent_id가 있어야 어느 Agent의 산출물인지
+            # DB(deliverables.author_id)에 연결할 수 있다.
             completion = {
                 "agent_role": agent_role,
+                "agent_id": agent_id,
                 "output_preview": (task_output.raw or "")[:200],
+                "output_raw": task_output.raw or "",
             }
             task_completions.append(completion)
             # 사용자 요청(2026-10-20, "Crew 빌더... 실행 이력 + 진행
@@ -939,6 +969,7 @@ def run_crew_for_team(
     planning: bool = False,
     manager_provider: str | None = None,
     manager_model: str | None = None,
+    parallel_agent_ids: list[int] | None = None,
 ) -> dict:
     """사용자 요청(2026-10-07, "crew 실행에서 묶인 에이전트 그룹의 경우
     하나의 그룹만 가능한 구조인데, 복수 그룹 가능하도록 개선, 이 그룹이
@@ -1035,4 +1066,5 @@ def run_crew_for_team(
         planning=planning,
         manager_provider=manager_provider,
         manager_model=manager_model,
+        parallel_agent_ids=parallel_agent_ids,
     )

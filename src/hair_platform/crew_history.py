@@ -35,12 +35,20 @@ def create_run(
     process: str,
     manager_agent_id: int | None = None,
     team_id: int | None = None,
+    task_descriptions: list[str] | None = None,
 ) -> int:
+    """`task_descriptions`(사용자 요청, 2026-10-20, "실패 시 일부
+    재시도") — Agent별 원본 지시문을 그대로 보존해둔다. 실행이 중간에
+    실패했을 때 `start_crew_run_retry()`가 이미 끝난 Agent를 제외한
+    나머지만으로 새 adhoc 실행을 다시 구성하려면, 원래 각 Agent에게
+    어떤 task description을 줬는지가 필요하기 때문이다(팀 실행은 전원
+    같은 문구를 쓰지만 즉석 실행은 Agent별로 다를 수 있다 — 어느 쪽이든
+    그대로 저장)."""
     if kind not in ("team", "adhoc"):
         raise ValueError(f"unsupported_kind:{kind}")
     cur = conn.execute(
         "INSERT INTO crew_runs (task_id, kind, team_id, requested_by, agent_ids, "
-        "process, manager_agent_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "process, manager_agent_id, task_descriptions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             kind,
@@ -49,6 +57,9 @@ def create_run(
             json.dumps(agent_ids),
             process,
             manager_agent_id,
+            json.dumps(task_descriptions, ensure_ascii=False)
+            if task_descriptions is not None
+            else None,
         ),
     )
     run_id = cur.lastrowid
@@ -102,11 +113,21 @@ def complete_run(conn: sqlite3.Connection, run_id: int, result: dict) -> None:
     conn.commit()
 
 
-def fail_run(conn: sqlite3.Connection, run_id: int, error: str) -> None:
+def fail_run(
+    conn: sqlite3.Connection,
+    run_id: int,
+    error: str,
+    completed_agent_ids: list[int] | None = None,
+) -> None:
+    """`completed_agent_ids`(사용자 요청, 2026-10-20, "실패 시 일부
+    재시도") — 실패 시점까지 실제로 Task를 끝내 deliverable이 만들어진
+    Agent id 목록. `start_crew_run_retry()`가 `agent_ids`에서 이 목록을
+    뺀 나머지만 재시도 대상으로 삼는다. 생략하면(기본값) 빈 배열 그대로
+    — "아무도 안 끝남"과 같은 뜻이라 전원이 재시도 대상이 된다."""
     conn.execute(
-        "UPDATE crew_runs SET status = 'failed', error = ?, "
+        "UPDATE crew_runs SET status = 'failed', error = ?, completed_agent_ids = ?, "
         "finished_at = datetime('now') WHERE id = ?",
-        (error, run_id),
+        (error, json.dumps(completed_agent_ids or []), run_id),
     )
     conn.commit()
 
@@ -122,6 +143,10 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "process": row["process"],
         "manager_agent_id": row["manager_agent_id"],
         "status": row["status"],
+        "task_descriptions": (
+            json.loads(row["task_descriptions"]) if row["task_descriptions"] else None
+        ),
+        "completed_agent_ids": json.loads(row["completed_agent_ids"]),
         "progress": json.loads(row["progress"]),
         "gate_scores": json.loads(row["gate_scores"]) if row["gate_scores"] else None,
         "tcr": row["tcr"],

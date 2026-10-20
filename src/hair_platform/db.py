@@ -900,6 +900,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(
         conn, "pipeline_stages", "expected_output", "TEXT NOT NULL DEFAULT ''"
     )
+    # 사용자 요청(2026-10-20, "실패 시 일부 재시도") — 실패한 crew_run을
+    # 복구하려면 원본 Agent별 task description(재시도 시 복원용)과, 실제로
+    # Task를 끝내 deliverable이 만들어진 Agent 목록(남은 Agent만 추려
+    # 재시도하기 위함)이 필요하다. 둘 다 NULL/빈 배열이면 기존 run(이
+    # 마이그레이션 이전에 생성된 행)은 그냥 "재시도 불가"로 취급된다.
+    _ensure_column(conn, "crew_runs", "task_descriptions", "TEXT")
+    _ensure_column(
+        conn, "crew_runs", "completed_agent_ids", "TEXT NOT NULL DEFAULT '[]'"
+    )
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:

@@ -442,6 +442,11 @@ class CrewRunRequest(BaseModel):
     planning: bool = False
     manager_provider: LlmProvider | None = None
     manager_model: str | None = None
+    # 사용자 요청(2026-10-20, "독립 작업 병렬 실행" — Crew 빌더 로드맵
+    # 5단계) — `process="sequential"`에서만 의미 있다(검증은
+    # `crew_runtime.run_crew()`가 한다). 여기 담긴 Agent id의 Task는
+    # async_execution=True로 병렬 실행되고 context 체이닝에서 빠진다.
+    parallel_agent_ids: list[int] = []
 
 
 class AdhocCrewExecuteRequest(BaseModel):
@@ -465,6 +470,7 @@ class AdhocCrewExecuteRequest(BaseModel):
     planning: bool = False
     manager_provider: LlmProvider | None = None
     manager_model: str | None = None
+    parallel_agent_ids: list[int] = []
 
 
 class TeamCrewExecuteRequest(BaseModel):

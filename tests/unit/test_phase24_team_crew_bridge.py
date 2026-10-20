@@ -39,7 +39,10 @@ Agent 배정 없이 팀 배정 하나만으로 팀 Crew 실행" 흐름으로 다
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
+
+import pytest
 
 
 def _login(client, username, password):
@@ -695,7 +698,8 @@ def test_gc250_run_crew_for_team_auto_detects_manager_when_hierarchical_and_unse
     def _capture_run_crew(conn, agent_ids, task_descriptions, actor_id, process="sequential",
                            provider=None, model=None, manager_agent_id=None,
                            on_task_complete=None, memory=True, planning=False,
-                           manager_provider=None, manager_model=None):
+                           manager_provider=None, manager_model=None,
+                           parallel_agent_ids=None):
         captured["process"] = process
         captured["manager_agent_id"] = manager_agent_id
         return _crew_output("최종", ["x"] * len(agent_ids))
@@ -1062,3 +1066,272 @@ def test_execute_adhoc_crew_rejects_member_setting_planning_or_manager_llm(clien
             },
         )
         assert resp.status_code == 400, resp.text
+
+
+# ---------- Crew 빌더(2026-10-20) — 5단계: 실패 시 일부 재시도 +
+# Crew 구성 추천 + 독립 작업 병렬 실행 ----------
+
+
+def test_run_crew_parallel_agent_ids_marks_async_execution_and_skips_context(
+    client_and_conn,
+):
+    """지정한 Agent의 Task가 `async_execution=True`로 표시되고 context
+    체이닝(바로 앞 Agent의 산출물을 받는 것)에서 빠지는지 확인한다.
+    지정 안 한 Agent는 기존처럼 그대로 체이닝된다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    from hair_platform import crew_runtime
+
+    agent1 = _make_active_agent(conn, "백엔드 개발자")
+    agent2 = _make_active_agent(conn, "프론트엔드 개발자")
+    agent3 = _make_active_agent(conn, "통합 검증가")
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["async_flags"] = [t.async_execution for t in self.tasks]
+        captured["contexts"] = [t.context for t in self.tasks]
+        return _crew_output("최종", ["x", "y", "z"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.run_crew(
+            conn, [agent1, agent2, agent3], ["a", "b", "c"], admin_id,
+            process="sequential", parallel_agent_ids=[agent1, agent2],
+        )
+    assert captured["async_flags"] == [True, True, False]
+    assert captured["contexts"][0] is None  # 병렬 — 애초에 i=0이라 체이닝 대상 없음
+    assert captured["contexts"][1] is None  # 병렬 — 앞 Agent 결과를 안 받음
+    # 세 번째(비-병렬) Task는 바로 앞 Task(인덱스 1)를 context로 받는다
+    # — 기존 동작 그대로(병렬 Task를 건너뛰지 않는다, 그냥 평소처럼
+    # "바로 앞"만 본다).
+    assert captured["contexts"][2] is not None and len(captured["contexts"][2]) == 1
+
+
+def test_run_crew_parallel_agent_ids_rejected_when_not_sequential(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    from hair_platform import crew_runtime
+
+    agent1 = _make_active_agent(conn, "백엔드 개발자")
+    agent2 = _make_active_agent(conn, "프론트엔드 개발자")
+    with pytest.raises(ValueError, match="sequential"):
+        crew_runtime.run_crew(
+            conn, [agent1, agent2], ["a", "b"], admin_id,
+            process="hierarchical", parallel_agent_ids=[agent1],
+        )
+
+
+def test_execute_adhoc_crew_endpoint_rejects_parallel_agent_ids_when_not_sequential(
+    client_and_conn,
+):
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_id = _make_task(client)
+    agent_id = _make_active_agent(conn, "백엔드 개발자")
+    resp = client.post(
+        f"/api/tasks/{task_id}/execute-adhoc-crew",
+        json={
+            "agent_ids": [agent_id],
+            "task_descriptions": ["글을 쓰세요"],
+            "process": "hierarchical",
+            "parallel_agent_ids": [agent_id],
+        },
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_suggest_agents_for_task_ranks_role_match_then_skill_overlap(client_and_conn):
+    """역할 완전일치가 최우선, 그다음은 required_skills와의 교집합
+    개수 내림차순 — 무관한(교집합 0 + 역할도 다른) Agent는 후보에서
+    제외된다."""
+    client, conn = client_and_conn
+    from hair_platform import pool_registry
+
+    _login(client, "manager1", "managerpass")
+    resp = client.post("/api/briefs", json={"raw_text": "테스트 업무"})
+    brief_id = resp.json()["id"]
+    resp = client.post(
+        f"/api/briefs/{brief_id}/tasks",
+        json={
+            "tasks": [
+                {
+                    "role_name": "백엔드 개발자",
+                    "required_skills": ["python", "sql", "api설계"],
+                }
+            ]
+        },
+    )
+    task_id = resp.json()["tasks"][0]["id"]
+
+    def _agent(role_name, skill_tags):
+        cur = conn.execute(
+            "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, ?, 'active')",
+            (role_name, json.dumps(skill_tags, ensure_ascii=False)),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+    exact_role = _agent("백엔드 개발자", [])  # 역할 완전일치, 교집합 0
+    high_overlap = _agent("풀스택 개발자", ["python", "sql"])  # 교집합 2
+    low_overlap = _agent("데이터 엔지니어", ["python"])  # 교집합 1
+    unrelated = _agent("디자이너", ["figma"])  # 교집합 0 + 역할 불일치 → 제외
+
+    suggestions = pool_registry.suggest_agents_for_task(conn, task_id)
+    ids = [s["id"] for s in suggestions]
+    assert unrelated not in ids
+    assert ids == [exact_role, high_overlap, low_overlap]
+    assert suggestions[0]["exact_role_match"] is True
+    assert suggestions[1]["overlap_count"] == 2
+
+
+def test_suggested_agents_endpoint_requires_participant_or_supervisor(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_id = _make_task(client)
+    _make_active_agent(conn, "백엔드 개발자")
+
+    resp = client.get(f"/api/tasks/{task_id}/suggested-agents")
+    assert resp.status_code == 200, resp.text
+
+    _login(client, "member1", "memberpass")
+    resp = client.get(f"/api/tasks/{task_id}/suggested-agents")
+    assert resp.status_code == 403, resp.text
+
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/tasks/999999/suggested-agents")
+    assert resp.status_code == 404, resp.text
+
+
+def test_adhoc_crew_run_partial_failure_persists_completed_agent_with_not_measured_gates(
+    client_and_conn,
+):
+    """Crew 실행이 두 번째 Agent에서 예외로 죽어도, 첫 번째 Agent는
+    이미 Task를 끝냈으므로 그 결과물이 실제 deliverable(+결재 체인)로
+    저장되고, Gate A-G는 측정할 수 없어 전부 `not_measured`로 정직하게
+    남는지 확인한다. 두 번째 Agent의 job은 'failed'로 남는다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    task_id = _make_task(client, "부분 실패 업무")
+    agent1 = _make_active_agent(conn, "카피 초안")
+    agent2 = _make_active_agent(conn, "디자인 가이드")
+
+    def _kickoff_fail_midway(self, *args, **kwargs):
+        from crewai.tasks.task_output import TaskOutput
+
+        self.task_callback(TaskOutput(description="task-0", agent="agent", raw="카피 결과"))
+        raise RuntimeError("모의 위임 형식 오류")
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_fail_midway):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-adhoc-crew",
+            json={
+                "agent_ids": [agent1, agent2],
+                "task_descriptions": ["카피를 작성하세요", "디자인 가이드를 작성하세요"],
+            },
+        )
+    assert resp.status_code == 202, resp.text
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    agent_delivs = [d for d in resp.json() if d["author_type"] == "agent"]
+    assert len(agent_delivs) == 1
+    assert agent_delivs[0]["author_id"] == agent1
+    assert agent_delivs[0]["content"] == "카피 결과"
+
+    jobs = conn.execute(
+        "SELECT * FROM agent_execution_jobs WHERE task_id = ? ORDER BY id", (task_id,)
+    ).fetchall()
+    assert [j["status"] for j in jobs] == ["succeeded", "failed"]
+
+    run = conn.execute(
+        "SELECT * FROM crew_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1", (task_id,)
+    ).fetchone()
+    assert run["status"] == "failed"
+    assert json.loads(run["completed_agent_ids"]) == [agent1]
+
+    evaluation = conn.execute(
+        "SELECT gate_scores, tcr FROM agent_evaluations WHERE deliverable_id = ?",
+        (agent_delivs[0]["id"],),
+    ).fetchone()
+    gate_scores = json.loads(evaluation["gate_scores"])
+    assert all(g["not_measured"] is True for g in gate_scores.values())
+    assert evaluation["tcr"] is None
+
+
+def test_start_crew_run_retry_builds_adhoc_execution_for_remaining_agents_only(
+    client_and_conn,
+):
+    """`start_crew_run_retry()`가 이미 완료된 Agent는 빼고 남은 Agent
+    만으로 새 adhoc 실행을 구성하는지, 완료된 동료의 결과물이 맥락으로
+    붙는지 확인한다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    task_id = _make_task(client, "재시도 테스트 업무")
+    agent1 = _make_active_agent(conn, "카피 초안")
+    agent2 = _make_active_agent(conn, "디자인 가이드")
+
+    def _kickoff_fail_midway(self, *args, **kwargs):
+        from crewai.tasks.task_output import TaskOutput
+
+        self.task_callback(TaskOutput(description="task-0", agent="agent", raw="카피 결과 전문"))
+        raise RuntimeError("모의 실패")
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_fail_midway):
+        client.post(
+            f"/api/tasks/{task_id}/execute-adhoc-crew",
+            json={
+                "agent_ids": [agent1, agent2],
+                "task_descriptions": ["카피를 작성하세요", "디자인 가이드를 작성하세요"],
+            },
+        )
+    run = conn.execute(
+        "SELECT id FROM crew_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1", (task_id,)
+    ).fetchone()
+
+    from hair_platform import deliverables as deliverables_mod
+
+    retry = deliverables_mod.start_crew_run_retry(
+        conn, run["id"], admin_id, allow_supervisor_override=True
+    )
+    assert retry["agent_ids"] == [agent2]
+    assert "카피 결과 전문" in retry["task_descriptions"][0]
+    assert "디자인 가이드를 작성하세요" in retry["task_descriptions"][0]
+
+
+def test_start_crew_run_retry_rejects_non_failed_or_fully_completed(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    from hair_platform import deliverables as deliverables_mod
+
+    with pytest.raises(ValueError, match="run_not_found"):
+        deliverables_mod.start_crew_run_retry(conn, 999999, admin_id, True)
+
+
+def test_retry_crew_run_endpoint_404_for_missing_run(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.post("/api/crew-runs/999999/retry-remaining", json={})
+    assert resp.status_code == 404, resp.text
+
+
+def test_retry_crew_run_endpoint_400_when_run_not_failed(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    task_id = _make_task(client, "성공 실행 업무")
+    agent1 = _make_active_agent(conn, "카피 초안")
+
+    with patch(
+        "crewai.Crew.kickoff", return_value=_crew_output("최종", ["결과물"])
+    ):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-adhoc-crew",
+            json={"agent_ids": [agent1], "task_descriptions": ["카피를 작성하세요"]},
+        )
+    assert resp.status_code == 202, resp.text
+    run = conn.execute(
+        "SELECT id FROM crew_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1", (task_id,)
+    ).fetchone()
+    resp = client.post(f"/api/crew-runs/{run['id']}/retry-remaining", json={})
+    assert resp.status_code == 400, resp.text

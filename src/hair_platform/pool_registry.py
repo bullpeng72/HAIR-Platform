@@ -589,3 +589,54 @@ def resolve_pool_tools(
         else:
             tools.extend(connect_mcp_tools(stack, config))
     return tools
+
+
+def suggest_agents_for_task(
+    conn: sqlite3.Connection, task_id: int, limit: int = 5
+) -> list[dict]:
+    """사용자 요청(2026-10-20, "Crew 구성 추천/자동 채움" — Crew 빌더
+    로드맵 5단계) — "업무에 바로 실행" 모드가 빈 Agent 선택 행 하나로
+    시작해 매번 수동으로 찾아 추가해야 하던 수고를 줄인다.
+
+    `assignment.match_candidates()`는 **Task당 역할 하나**를 전제로
+    설계됐다(요청 역할과 완전 일치하는 후보만 스코어링 대상) — Crew는
+    여러 다른 역할을 한 Task에 묶는 게 핵심이라 그 함수를 그대로 못
+    쓴다. 대신 `required_skills` 교집합 기준으로 **역할이 달라도** 관련
+    있는 Agent를 전부 후보로 삼는 결정론적(LLM 미사용) 랭킹을 새로
+    둔다 — `assignment.py`와 같은 "완전일치 우선, 그 외엔 점수" 원칙을
+    공유하되 역할 다양성을 허용한다는 점만 다르다.
+
+    정렬: role_name 완전일치(대소문자 무시) 우선 → skill_tags와
+    required_skills의 교집합 개수 내림차순 → agent id 오름차순(동점일
+    때 결정론적 순서 보장). 교집합이 0개이면서 role도 다른 Agent는
+    애초에 후보에서 제외한다(무관한 Agent를 섞지 않는다)."""
+    task = conn.execute(
+        "SELECT role_name, required_skills FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    required_skills = set(json.loads(task["required_skills"]))
+    required_role = task["role_name"].strip().lower()
+
+    candidates = []
+    for row in conn.execute(
+        "SELECT * FROM agent_pool WHERE status = 'active'"
+    ).fetchall():
+        exact_role = row["role_name"].strip().lower() == required_role
+        overlap = len(required_skills & set(json.loads(row["skill_tags"])))
+        if overlap == 0 and not exact_role:
+            continue
+        candidates.append((exact_role, overlap, row))
+
+    candidates.sort(key=lambda t: (not t[0], -t[1], t[2]["id"]))
+    return [
+        {
+            "id": row["id"],
+            "role_name": row["role_name"],
+            "name": row["name"],
+            "skill_tags": json.loads(row["skill_tags"]),
+            "exact_role_match": exact_role,
+            "overlap_count": overlap,
+        }
+        for exact_role, overlap, row in candidates[:limit]
+    ]

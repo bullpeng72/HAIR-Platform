@@ -5818,13 +5818,48 @@ async function _renderCrewHistory(container) {
           return;
         }
         if (run.status === "failed") {
-          showMsg("global-msg", "이 실행은 실패했습니다: " + (run.error || "원인 미상"), "error");
+          _renderFailedCrewRun(document.getElementById("crew-result"), run, container);
           return;
         }
         renderCrewResult(run);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+}
+
+// 사용자 요청(2026-10-20, "실패 시 일부 재시도" — Crew 빌더 로드맵
+// 5단계) — 실패한 실행도 "아무 것도 안 남았다"가 아니라, 이미 완료된
+// Agent 수와 남은 Agent 수를 보여주고 재시도 버튼을 제공한다.
+function _renderFailedCrewRun(resultBox, run, historyContainer) {
+  const completedCount = run.completed_agent_ids.length;
+  const expected = run.manager_agent_id !== null ? run.agent_ids.length - 1 : run.agent_ids.length;
+  const remaining = expected - completedCount;
+  resultBox.innerHTML =
+    '<section class="card">' +
+    '<p class="msg error">이 실행은 실패했습니다: ' + esc(run.error || "원인 미상") + '</p>' +
+    '<p class="muted">' + completedCount + '/' + Math.max(expected, 1) + '명 완료 — ' +
+    (completedCount > 0 ? '완료된 Agent의 결과물은 이미 이 업무의 결과물로 저장됐습니다.' : '아무도 완료하지 못했습니다.') +
+    '</p>' +
+    (remaining > 0
+      ? '<button class="small" id="crew-run-retry-remaining">실패한 Agent만 재시도(' + remaining + '명)</button>'
+      : "") +
+    '</section>';
+  const retryBtn = document.getElementById("crew-run-retry-remaining");
+  if (!retryBtn) return;
+  retryBtn.onclick = async () => {
+    try {
+      const queued = await withBusy(retryBtn, "재시도 중…(시간이 걸릴 수 있습니다)", () =>
+        api("POST", "/api/crew-runs/" + run.id + "/retry-remaining", {}));
+      const jobs = await Promise.all(queued.job_ids.map(id => pollExecutionJob(run.task_id, id)));
+      if (jobs.every(j => j.status === "succeeded")) {
+        showMsg("global-msg", "재시도가 완료됐습니다(" + jobs.length + "건) — 이 업무의 결과물로 쌓였습니다.", "ok");
+      } else {
+        const failed = jobs.filter(j => j.status === "failed").length;
+        showMsg("global-msg", "재시도 중 " + failed + "건이 실패했습니다 — 실행 이력에서 다시 확인하세요.", "error");
+      }
+      await _renderCrewHistory(historyContainer);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  };
 }
 
 // 팀 사전 등록 없이, Task 하나를 고르고 → Agent를 즉석으로 골라 →
@@ -5864,15 +5899,33 @@ async function _renderAdhocCrewComposer(container, presetTaskId) {
   }
 }
 
+// 사용자 요청(2026-10-20, "Crew 구성 추천/자동 채움") — 추천 Agent가
+// 있으면 빈 행 1개 대신 추천된 조합으로 미리 채운 행 N개로 시작한다.
+// 역할명을 그대로 쓴 기본 지시문을 붙여주되 자유롭게 수정할 수 있다.
+async function _suggestedCrewRowsHtml(taskId, active, task) {
+  const suggestions = await api("GET", "/api/tasks/" + taskId + "/suggested-agents").catch(() => []);
+  if (!suggestions.length) return { html: crewRowHtml(active), suggested: false };
+  const html = suggestions.map(s =>
+    crewRowHtml(active, s.id, "'" + task.role_name + "' 업무를 수행하세요.")
+  ).join("");
+  return { html, suggested: true };
+}
+
 async function _renderAdhocCrewForm(formBox, taskId) {
   const agents = await api("GET", "/api/agent-pool");
   const active = agents.filter(a => a.status === "active");
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = isSupervisor ? await fetchModelsByProvider() : {};
+  const task = await api("GET", "/api/tasks/" + taskId);
+  const { html: rowsHtml, suggested } = await _suggestedCrewRowsHtml(taskId, active, task);
   formBox.innerHTML = active.length
     ? '<section class="card">' +
+      (suggested
+        ? '<p class="muted">이 업무에 적합해 보이는 Agent 조합을 미리 채웠습니다 — 자유롭게 수정/삭제/추가하세요. ' +
+          '<button type="button" class="small" id="crewbuilder-adhoc-clear-suggestion">추천 비우고 새로 시작</button></p>'
+        : "") +
       '<form id="crewbuilder-adhoc-form">' +
-      '<div id="crewbuilder-adhoc-rows">' + crewRowHtml(active) + '</div>' +
+      '<div id="crewbuilder-adhoc-rows">' + rowsHtml + '</div>' +
       '<button type="button" class="small" id="crewbuilder-adhoc-add-row">+ Agent 추가</button>' +
       '<div class="inline" style="margin-top:0.5rem">' +
       '<select id="crewbuilder-adhoc-process"><option value="sequential">sequential(순서대로 전달)</option>' +
@@ -5892,16 +5945,28 @@ async function _renderAdhocCrewForm(formBox, taskId) {
   if (isSupervisor) wireProviderModelSelect("crewbuilder-adhoc-provider", "crewbuilder-adhoc-model", modelsByProvider);
   wireCrewAdvancedOptions("crewbuilder-adhoc", modelsByProvider, isSupervisor);
   wireCrewRowRemovers();
+  wireCrewProcessToggle("crewbuilder-adhoc-process", "crewbuilder-adhoc-rows");
   document.getElementById("crewbuilder-adhoc-add-row").onclick = () => {
     document.getElementById("crewbuilder-adhoc-rows").insertAdjacentHTML("beforeend", crewRowHtml(active));
     wireCrewRowRemovers();
+    wireCrewProcessToggle("crewbuilder-adhoc-process", "crewbuilder-adhoc-rows");
   };
+  const clearBtn = document.getElementById("crewbuilder-adhoc-clear-suggestion");
+  if (clearBtn) {
+    clearBtn.onclick = () => {
+      document.getElementById("crewbuilder-adhoc-rows").innerHTML = crewRowHtml(active);
+      wireCrewRowRemovers();
+      wireCrewProcessToggle("crewbuilder-adhoc-process", "crewbuilder-adhoc-rows");
+      clearBtn.closest("p").remove();
+    };
+  }
   document.getElementById("crewbuilder-adhoc-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     showMsg("global-msg", "", "");
     const rows = Array.from(formBox.querySelectorAll(".crew-row"));
     const agentIds = [];
     const taskDescriptions = [];
+    const parallelAgentIds = [];
     for (const row of rows) {
       const agentId = Number(row.querySelector(".crew-row-agent").value);
       const taskDesc = row.querySelector(".crew-row-task").value.trim();
@@ -5909,6 +5974,7 @@ async function _renderAdhocCrewForm(formBox, taskId) {
       if (!taskDesc) { showMsg("global-msg", "모든 줄에서 할 일을 입력하세요.", "error"); return; }
       agentIds.push(agentId);
       taskDescriptions.push(taskDesc);
+      if (row.querySelector(".crew-row-parallel").checked) parallelAgentIds.push(agentId);
     }
     if (!agentIds.length) { showMsg("global-msg", "최소 한 Agent는 선택해야 합니다.", "error"); return; }
     if (!window.confirm(agentIds.length + "개 Agent로 이 업무에 바로 Crew를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
@@ -5918,6 +5984,7 @@ async function _renderAdhocCrewForm(formBox, taskId) {
       task_descriptions: taskDescriptions,
       process: document.getElementById("crewbuilder-adhoc-process").value,
       manager_agent_id: managerVal ? Number(managerVal) : null,
+      parallel_agent_ids: parallelAgentIds,
     }, crewAdvancedOptionsPayload("crewbuilder-adhoc", isSupervisor));
     if (isSupervisor) {
       const provider = document.getElementById("crewbuilder-adhoc-provider").value;
@@ -6105,13 +6172,45 @@ function crewAgentOptionsHtml(active) {
   ).join("");
 }
 
-function crewRowHtml(active) {
+// 사용자 요청(2026-10-20, "Crew 구성 추천/자동 채움" — Crew 빌더 로드맵
+// 5단계) — `presetAgentId`/`presetTaskDesc`가 주어지면(추천 결과로
+// 채울 때) 행이 그 값으로 미리 선택/입력된 채로 시작한다. 생략하면
+// 기존처럼 빈 행(수동 흐름 그대로 보존).
+//
+// 사용자 요청(2026-10-20, "독립 작업 병렬 실행") — 체크박스 1개 추가.
+// `process="sequential"`에서만 의미가 있어 hierarchical로 바뀌면
+// `wireCrewProcessToggle()`이 비활성화한다(아래 참고).
+function crewRowHtml(active, presetAgentId, presetTaskDesc) {
+  const agentOptions = active.map(a =>
+    '<option value="' + a.id + '"' + (presetAgentId === a.id ? " selected" : "") + '>#' + a.id + " " +
+    agentDisplayLabel(a) + (a.skill_tags.length ? " (" + esc(a.skill_tags.join(", ")) + ")" : "") + "</option>"
+  ).join("");
   return '<div class="inline crew-row" style="margin-bottom:0.3rem">' +
     '<select class="crew-row-agent" style="min-width:220px"><option value="">— Agent 선택 —</option>' +
-    crewAgentOptionsHtml(active) + "</select>" +
-    '<input class="crew-row-task" placeholder="이 Agent가 할 일" style="flex:1;min-width:200px">' +
+    agentOptions + "</select>" +
+    '<input class="crew-row-task" placeholder="이 Agent가 할 일" style="flex:1;min-width:200px"' +
+    (presetTaskDesc ? ' value="' + escAttr(presetTaskDesc) + '"' : "") + ">" +
+    '<label class="muted" style="white-space:nowrap"><input type="checkbox" class="crew-row-parallel"> 병렬(독립 작업)</label>' +
     '<button type="button" class="small danger crew-row-remove">×</button>' +
     "</div>";
+}
+
+// hierarchical(매니저 조율)에서는 "병렬" 지정이 적용될 지점이 없다
+// (`crew_runtime.run_crew()` 참고) — process select가 바뀔 때마다
+// 체크박스를 비활성화/활성화해 혼동을 막는다.
+function wireCrewProcessToggle(processSelectId, rowsContainerId) {
+  const select = document.getElementById(processSelectId);
+  const container = document.getElementById(rowsContainerId);
+  if (!select || !container) return;
+  const sync = () => {
+    const isSequential = select.value === "sequential";
+    container.querySelectorAll(".crew-row-parallel").forEach(cb => {
+      cb.disabled = !isSequential;
+      if (!isSequential) cb.checked = false;
+    });
+  };
+  select.addEventListener("change", sync);
+  sync();
 }
 
 function wireCrewRowRemovers() {
@@ -6164,11 +6263,13 @@ async function renderCrew(content) {
   wireProviderModelSelect("crew-provider", "crew-model", modelsByProvider);
   wireCrewAdvancedOptions("crew", modelsByProvider, true);
   wireCrewRowRemovers();
+  wireCrewProcessToggle("crew-process", "crew-rows");
   const addRowBtn = document.getElementById("crew-add-row");
   if (addRowBtn) {
     addRowBtn.onclick = () => {
       document.getElementById("crew-rows").insertAdjacentHTML("beforeend", crewRowHtml(active));
       wireCrewRowRemovers();
+      wireCrewProcessToggle("crew-process", "crew-rows");
     };
   }
 
@@ -6178,6 +6279,7 @@ async function renderCrew(content) {
     const rows = Array.from(document.querySelectorAll(".crew-row"));
     const agentIds = [];
     const taskDescriptions = [];
+    const parallelAgentIds = [];
     for (const row of rows) {
       const agentId = Number(row.querySelector(".crew-row-agent").value);
       const taskDesc = row.querySelector(".crew-row-task").value.trim();
@@ -6185,6 +6287,7 @@ async function renderCrew(content) {
       if (!taskDesc) { showMsg("global-msg", "모든 줄에서 할 일을 입력하세요.", "error"); return; }
       agentIds.push(agentId);
       taskDescriptions.push(taskDesc);
+      if (row.querySelector(".crew-row-parallel").checked) parallelAgentIds.push(agentId);
     }
     if (!agentIds.length) { showMsg("global-msg", "최소 한 Agent는 선택해야 합니다.", "error"); return; }
     const managerVal = document.getElementById("crew-manager").value;
@@ -6199,6 +6302,7 @@ async function renderCrew(content) {
         manager_agent_id: managerVal ? Number(managerVal) : null,
         provider: document.getElementById("crew-provider").value || null,
         model: modelSelectValue("crew-model"),
+        parallel_agent_ids: parallelAgentIds,
       }, crewAdvancedOptionsPayload("crew", true))));
       renderCrewResult(result);
     } catch (e) { showMsg("global-msg", e.message, "error"); }

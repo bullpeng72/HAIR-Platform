@@ -1925,6 +1925,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=400,
                 detail="agent_ids와 task_descriptions의 개수가 같아야 합니다",
             )
+        # 사용자 요청(2026-10-20, "독립 작업 병렬 실행") — 이 검증은
+        # `crew_runtime.run_crew()` 안에서도 하지만, 거기서 걸리면
+        # BackgroundTasks 안에서 조용히 'failed' job으로만 남는다(길이
+        # 불일치 검증을 여기서 미리 막는 것과 같은 이유 — 사용자가 즉시
+        # 알 수 있게 요청 시점에 400으로 막는다).
+        if payload.parallel_agent_ids and payload.process != "sequential":
+            raise HTTPException(
+                status_code=400,
+                detail="병렬 실행(parallel_agent_ids)은 process='sequential'에서만 지정할 수 있습니다",
+            )
         try:
             job = deliverables.start_adhoc_crew_execution(
                 conn,
@@ -1970,8 +1980,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
             planning=payload.planning,
             manager_provider=payload.manager_provider,
             manager_model=payload.manager_model,
+            parallel_agent_ids=payload.parallel_agent_ids,
         )
         return {"job_ids": list(job["job_by_agent_id"].values()), "status": "running"}
+
+    @app.get("/api/tasks/{task_id}/suggested-agents")
+    def suggest_agents_for_task_endpoint(
+        task_id: int, limit: int = 5, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """사용자 요청(2026-10-20, "Crew 구성 추천/자동 채움" — Crew
+        빌더 로드맵 5단계) — "업무에 바로 실행" 모드가 Task 선택 시
+        호출해 Agent 선택 행을 자동으로 채운다. 읽기 전용·비용 없음이라
+        `execute-adhoc-crew`와 같은 기준(이 Task의 참가자 또는 admin/
+        manager)으로 넓게 허용한다."""
+        task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return pool_registry.suggest_agents_for_task(conn, task_id, limit=limit)
 
     @app.get("/api/tasks/{task_id}/agent-execution-jobs")
     def list_task_agent_execution_jobs(
@@ -3034,6 +3067,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 planning=payload.planning,
                 manager_provider=payload.manager_provider,
                 manager_model=payload.manager_model,
+                parallel_agent_ids=payload.parallel_agent_ids,
             )
         except PermissionError as exc:
             raise HTTPException(
@@ -3077,6 +3111,70 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
             )
         return run
+
+    @app.post("/api/crew-runs/{run_id}/retry-remaining", status_code=202)
+    def retry_crew_run_remaining(
+        run_id: int,
+        background_tasks: BackgroundTasks,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-10-20, "실패 시 일부 재시도" — Crew 빌더
+        로드맵 5단계) — 실패한 Crew 실행에서 이미 완료된 Agent는
+        제외하고 남은 Agent만으로 새 즉석 Crew 실행을 시작한다. 권한은
+        `get_crew_run`과 동일(참가자 또는 admin/manager)."""
+        run = crew_history.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Crew 실행 이력을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(
+                conn, run["task_id"], user["id"]
+            )
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        try:
+            retry = deliverables.start_crew_run_retry(
+                conn,
+                run_id,
+                user["id"],
+                allow_supervisor_override=user["role"] in ("admin", "manager"),
+            )
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+        except LookupError as exc:
+            if str(exc) == "agent_already_running":
+                raise HTTPException(
+                    status_code=409,
+                    detail="이미 실행 중인 작업이 있습니다 — 완료를 기다려 주세요",
+                ) from None
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        except ValueError as exc:
+            detail = {
+                "run_not_found": "Crew 실행 이력을 찾을 수 없습니다",
+                "run_not_failed": "실패한 실행만 재시도할 수 있습니다",
+                "nothing_to_retry": "재시도할 Agent가 남아있지 않습니다(이미 전원 완료됨)",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from None
+        background_tasks.add_task(
+            deliverables.run_adhoc_crew_job,
+            conn,
+            retry["job_by_agent_id"],
+            retry["task_id"],
+            user["id"],
+            retry["agent_ids"],
+            retry["task_descriptions"],
+            "sequential",
+            None,
+            None,
+            None,
+        )
+        return {"job_ids": list(retry["job_by_agent_id"].values()), "status": "running"}
 
     @app.post("/api/agent-pool/{agent_id}/onboard")
     def onboard_agent(

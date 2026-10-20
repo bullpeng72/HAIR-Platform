@@ -1267,6 +1267,61 @@ def start_adhoc_crew_execution(
     return {"job_by_agent_id": job_by_agent_id, "agent_ids": agent_ids}
 
 
+def _persist_partial_crew_outputs(
+    conn: sqlite3.Connection,
+    task_id: int,
+    actor_id: int,
+    content_type: str,
+    partial_outputs: dict[int, str],
+    job_by_agent_id: dict[int, int],
+) -> None:
+    """사용자 요청(2026-10-20, "실패 시 일부 재시도") — `run_adhoc_crew_job()`/
+    `run_team_crew_job()`이 공유한다. Crew 실행이 중간에 실패해도
+    `partial_outputs`에 담긴(이미 Task를 끝낸) Agent만큼은 정상 성공
+    경로와 동일하게 `deliverables` INSERT+Gate 평가+결재 체인을
+    만든다. Gate A-G는 `agent_evaluation.run_and_score_crew()`가 실제
+    kickoff 호출을 감싸서 측정하는 구조라 실패한 실행에선 원천적으로
+    측정 불가능하다 — 거짓 점수를 채우지 않고 전부 `not_measured`로
+    정직하게 남긴다(이미 있는 Gate B/E "미평가" 배지 표시를 그대로
+    재사용)."""
+    not_measured_gate_scores = {gid: {"not_measured": True} for gid in agent_evaluation.GATE_IDS}
+    for agent_id, output_raw in partial_outputs.items():
+        job_id = job_by_agent_id.get(agent_id)
+        if job_id is None:
+            continue
+        cur = conn.execute(
+            "INSERT INTO deliverables (task_id, author_type, author_id, content, "
+            "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
+            (task_id, agent_id, output_raw, content_type),
+        )
+        deliverable_id = cur.lastrowid
+        assert deliverable_id is not None
+        agent_evaluation.record_evaluation(
+            conn, deliverable_id, not_measured_gate_scores, None
+        )
+        approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
+        conn.execute(
+            "UPDATE agent_execution_jobs SET status = 'succeeded', deliverable_id = ?, "
+            "finished_at = datetime('now') WHERE id = ?",
+            (deliverable_id, job_id),
+        )
+        audit.record(
+            conn,
+            actor_id,
+            "deliverable_created",
+            "deliverables",
+            deliverable_id,
+            after={
+                "task_id": task_id,
+                "author_type": "agent",
+                "agent_id": agent_id,
+                "gate_scores": not_measured_gate_scores,
+                "tcr": None,
+                "partial_recovery": True,
+            },
+        )
+
+
 def run_adhoc_crew_job(
     conn: sqlite3.Connection,
     job_by_agent_id: dict[int, int],
@@ -1283,6 +1338,7 @@ def run_adhoc_crew_job(
     planning: bool = False,
     manager_provider: str | None = None,
     manager_model: str | None = None,
+    parallel_agent_ids: list[int] | None = None,
 ) -> None:
     """`start_adhoc_crew_execution()`이 만든 job들을 실제로 실행한다 —
     `run_team_crew_job()`과 같은 백그라운드 경계·결과 저장 방식이지만,
@@ -1298,10 +1354,29 @@ def run_adhoc_crew_job(
     콜백으로 Task 완료마다 즉시 commit해 실행 중에도 폴링으로 진행
     상황을 볼 수 있게 하며, 끝나면 `complete_run()`/`fail_run()`으로
     협업 다이어그램·토큰 사용량·Gate 점수까지 영구 기록한다(이전엔
-    이 정보가 실행 직후 전부 사라졌다)."""
+    이 정보가 실행 직후 전부 사라졌다).
+
+    사용자 요청(2026-10-20, "실패 시 일부 재시도") — 지금까지는 Crew가
+    중간에 실패하면 이미 Task를 끝낸 Agent의 산출물까지 전부 버려지고
+    재시도 시 전원을 처음부터 다시 돌려야 했다. `on_task_complete`
+    콜백이 Task 완료마다 넘겨주는 `output_raw`(전체 텍스트)를
+    `partial_outputs`에 쌓아뒀다가, Crew 실행 자체가 예외로 끝나도
+    이미 완료된 Agent만큼은 정상 성공 경로와 동일하게 deliverable+
+    결재 체인을 만든다 — 다만 Gate A-G는 `run_and_score_crew()`가
+    실제 kickoff 호출을 감싸서 측정하는 구조라(호출이 예외로 끝났으니
+    평가 자체가 불가능) 전부 `not_measured`로 정직하게 남긴다(거짓
+    점수를 채우지 않는다 — 기존 Gate B/E "미평가" 배지 표시를 그대로
+    재사용, 새 UI 불필요)."""
+    partial_outputs: dict[int, str] = {}
+
+    def _on_task_complete(c: dict) -> None:
+        crew_history.append_progress(conn, run_id, c["agent_role"], c["output_preview"])
+        if c.get("agent_id") is not None:
+            partial_outputs[c["agent_id"]] = c["output_raw"]
+
     run_id = crew_history.create_run(
         conn, task_id, "adhoc", actor_id, agent_ids, process,
-        manager_agent_id=manager_agent_id,
+        manager_agent_id=manager_agent_id, task_descriptions=task_descriptions,
     )
     crew_run_completed = False
     try:
@@ -1314,13 +1389,12 @@ def run_adhoc_crew_job(
             provider=provider,
             model=model,
             manager_agent_id=manager_agent_id,
-            on_task_complete=lambda c: crew_history.append_progress(
-                conn, run_id, c["agent_role"], c["output_preview"]
-            ),
+            on_task_complete=_on_task_complete,
             memory=memory,
             planning=planning,
             manager_provider=manager_provider,
             manager_model=manager_model,
+            parallel_agent_ids=parallel_agent_ids,
         )
         # 실제 Crew 실행(`run_crew()`) 자체는 여기서 이미 끝났다 —
         # 아래 deliverable 저장 단계가 따로 실패해도(`agent_execution_
@@ -1369,8 +1443,15 @@ def run_adhoc_crew_job(
         conn.rollback()
         friendly_error = _friendly_execution_error(exc)
         if not crew_run_completed:
-            crew_history.fail_run(conn, run_id, friendly_error)
+            _persist_partial_crew_outputs(
+                conn, task_id, actor_id, content_type, partial_outputs, job_by_agent_id
+            )
+            crew_history.fail_run(
+                conn, run_id, friendly_error, completed_agent_ids=list(partial_outputs)
+            )
         for agent_id, job_id in job_by_agent_id.items():
+            if agent_id in partial_outputs:
+                continue  # 위에서 이미 'succeeded'로 처리됨
             conn.execute(
                 "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "
                 "finished_at = datetime('now') WHERE id = ?",
@@ -1416,10 +1497,24 @@ def run_team_crew_job(
     기록한다(`kind='team'`, `team_id` 포함). `agent_ids`는 `job_by_
     agent_id`의 키(워커)에 매니저를 더해 복원한다 — 이 함수는 전체
     목록을 따로 받지 않는다(`start_team_crew_execution()`이 반환했던
-    것을 호출부가 넘기지 않아서다)."""
+    것을 호출부가 넘기지 않아서다).
+
+    사용자 요청(2026-10-20, "실패 시 일부 재시도") — `run_adhoc_crew_
+    job()`과 같은 부분 복구 로직(`_persist_partial_crew_outputs()`
+    공유)을 쓴다. 다만 팀 실행은 전원이 같은 description을 받으므로
+    (`run_crew_for_team()`이 내부에서 구성) `task_descriptions`를
+    따로 안 받는다 — `crew_history`엔 `None`으로 남아, 이 run은
+    "재시도"가 항상 그 하나의 공통 description을 그대로 재사용한다."""
     agent_ids_for_history = list(job_by_agent_id.keys())
     if manager_agent_id is not None:
         agent_ids_for_history.append(manager_agent_id)
+    partial_outputs: dict[int, str] = {}
+
+    def _on_task_complete(c: dict) -> None:
+        crew_history.append_progress(conn, run_id, c["agent_role"], c["output_preview"])
+        if c.get("agent_id") is not None:
+            partial_outputs[c["agent_id"]] = c["output_raw"]
+
     run_id = crew_history.create_run(
         conn, task_id, "team", actor_id, agent_ids_for_history, process,
         manager_agent_id=manager_agent_id, team_id=team_id,
@@ -1436,9 +1531,7 @@ def run_team_crew_job(
             model=model,
             manager_agent_id=manager_agent_id,
             content_type=content_type,
-            on_task_complete=lambda c: crew_history.append_progress(
-                conn, run_id, c["agent_role"], c["output_preview"]
-            ),
+            on_task_complete=_on_task_complete,
             memory=memory,
             planning=planning,
             manager_provider=manager_provider,
@@ -1486,8 +1579,15 @@ def run_team_crew_job(
         conn.rollback()
         friendly_error = _friendly_execution_error(exc)
         if not crew_run_completed:
-            crew_history.fail_run(conn, run_id, friendly_error)
+            _persist_partial_crew_outputs(
+                conn, task_id, actor_id, content_type, partial_outputs, job_by_agent_id
+            )
+            crew_history.fail_run(
+                conn, run_id, friendly_error, completed_agent_ids=list(partial_outputs)
+            )
         for agent_id, job_id in job_by_agent_id.items():
+            if agent_id in partial_outputs:
+                continue  # 위에서 이미 'succeeded'로 처리됨
             conn.execute(
                 "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "
                 "finished_at = datetime('now') WHERE id = ?",
@@ -1502,6 +1602,89 @@ def run_team_crew_job(
                 after={"task_id": task_id, "agent_id": agent_id, "error": friendly_error},
             )
         conn.commit()
+
+
+def start_crew_run_retry(
+    conn: sqlite3.Connection,
+    run_id: int,
+    actor_id: int,
+    allow_supervisor_override: bool = False,
+) -> dict:
+    """사용자 요청(2026-10-20, "실패 시 일부 재시도" — Crew 빌더 로드맵
+    5단계) — 실패한 `crew_runs`에서 이미 Task를 끝낸(즉 deliverable이
+    만들어진) Agent는 제외하고, 남은 Agent만으로 새 즉석(adhoc) Crew
+    실행을 시작한다. 원래 팀 실행이었어도 재시도는 항상 adhoc 경로로
+    돌린다 — 팀 사전조건(confirmed 배정 등)을 재확인할 이유가 없고,
+    남은 인원만 골라 돌리는 건 애초에 adhoc 경로가 하는 일이라 더
+    단순하고 안전하다. hierarchical로 실행하다 실패한 경우, 재시도는
+    매니저 재위임 없이 남은 워커만 sequential로 돈다는 단순화도 같은
+    이유 — 의도적 설계 결정이다(매니저 자체는 산출물이 없어 "완료 못한
+    Agent"가 아니므로 재시도 대상에서 자연히 제외된다)."""
+    run = crew_history.get_run(conn, run_id)
+    if run is None:
+        raise ValueError("run_not_found")
+    if run["status"] != "failed":
+        raise ValueError("run_not_failed")
+
+    completed_agent_ids = set(run["completed_agent_ids"])
+    remaining_agent_ids = [
+        a
+        for a in run["agent_ids"]
+        if a not in completed_agent_ids and a != run["manager_agent_id"]
+    ]
+    if not remaining_agent_ids:
+        raise ValueError("nothing_to_retry")
+
+    original_descriptions = run["task_descriptions"]
+    if original_descriptions is None:
+        # 팀 실행은 전원이 같은 description을 받으므로 따로 저장하지
+        # 않는다(`run_team_crew_job()` 참고) — role_name 기반 공통
+        # 문구로 대신 복원한다.
+        task = conn.execute(
+            "SELECT role_name FROM tasks WHERE id = ?", (run["task_id"],)
+        ).fetchone()
+        description_by_agent_id = {
+            a: f"'{task['role_name']}' 업무를 수행하세요." for a in run["agent_ids"]
+        }
+    else:
+        description_by_agent_id = dict(zip(run["agent_ids"], original_descriptions))
+
+    # 완료된 동료의 실제 결과물 전문을 맥락으로 붙인다 — sequential
+    # relay가 중간에 끊긴 경우 남은 Agent가 앞 단계 맥락을 잃지 않게
+    # 하기 위함(완전히 새로 시작하는 것보다 더 자연스럽다).
+    completed_context = ""
+    if completed_agent_ids:
+        rows = conn.execute(
+            "SELECT author_id, content FROM deliverables WHERE task_id = ? "
+            "AND author_type = 'agent' AND author_id IN ({})".format(  # noqa: S608
+                ",".join("?" * len(completed_agent_ids))
+            ),
+            (run["task_id"], *completed_agent_ids),
+        ).fetchall()
+        if rows:
+            completed_context = "\n\n참고: 이미 완료된 동료 결과물\n" + "\n".join(
+                f"- {r['content'][:500]}" for r in rows
+            )
+
+    remaining_descriptions = [
+        description_by_agent_id.get(a, "이어서 업무를 수행하세요.") + completed_context
+        for a in remaining_agent_ids
+    ]
+
+    job = start_adhoc_crew_execution(
+        conn,
+        run["task_id"],
+        actor_id,
+        remaining_agent_ids,
+        manager_agent_id=None,
+        allow_supervisor_override=allow_supervisor_override,
+    )
+    return {
+        "job_by_agent_id": job["job_by_agent_id"],
+        "agent_ids": remaining_agent_ids,
+        "task_descriptions": remaining_descriptions,
+        "task_id": run["task_id"],
+    }
 
 
 # 실측으로 발견한 갭(리뷰 2회차) — start_agent_execution()이 확인한
