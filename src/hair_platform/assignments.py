@@ -241,6 +241,55 @@ def resolve_assignment_decision(
     return {"assignment_id": assignment_id, "status": new_status}
 
 
+def cancel_assignment(
+    conn: sqlite3.Connection, actor_id: int, assignment_id: int, reason: str | None = None
+) -> dict:
+    """사용자 보고(2026-10-19, "업무 요청 삭제가 '확정된 배정이 있어
+    삭제할 수 없습니다 — 먼저 정리하세요'로 막히는데, 정리할 방법(배정
+    취소)이 화면 어디에도 없다") — 지금까지 에러 메시지만 "먼저
+    정리하세요"라 안내하고 실제로 정리할 기능이 없었다. `requested`
+    (아직 결재 중)·`confirmed`(이미 확정) 배정을 `cancelled`로 되돌린다
+    — task/brief/deliverable은 건드리지 않는다(배정 취소와 산출물
+    삭제는 별개 결정이라, 산출물이 이미 있으면 관리자가 brief/task
+    삭제 시점에 그 사실을 보고 따로 판단하게 둔다).
+
+    `requested` 상태를 취소할 때는 아직 열려 있는 결재 체인 단계
+    (`pending`/`waiting`)도 함께 닫는다 — 안 닫으면 승인권자가 뒤늦게
+    그 결재를 승인했을 때 `resolve_assignment_decision()`이 이미
+    취소된 배정을 다시 `confirmed`로 되돌려버리는 경합이 생긴다."""
+    assignment = conn.execute(
+        "SELECT * FROM assignments WHERE id = ?", (assignment_id,)
+    ).fetchone()
+    if assignment is None:
+        raise ValueError("assignment_not_found")
+    if assignment["status"] not in ("requested", "confirmed"):
+        raise ValueError("assignment_not_cancellable")
+
+    conn.execute(
+        "UPDATE assignments SET status = 'cancelled' WHERE id = ?", (assignment_id,)
+    )
+    conn.execute(
+        "UPDATE approvals SET status = 'skipped' WHERE subject_type = 'assignment' "
+        "AND subject_id = ? AND status IN ('pending', 'waiting')",
+        (assignment_id,),
+    )
+    _record_history(
+        conn, assignment_id, assignment["status"], "cancelled", actor_id, reason=reason
+    )
+    result = {"assignment_id": assignment_id, "status": "cancelled"}
+    audit.record(
+        conn,
+        actor_id,
+        "assignment_cancelled",
+        "assignment",
+        assignment_id,
+        before={"status": assignment["status"]},
+        after=result,
+    )
+    conn.commit()
+    return result
+
+
 def update_team_leader(
     conn: sqlite3.Connection, actor_id: int, assignment_id: int, new_leader_id: int
 ) -> None:

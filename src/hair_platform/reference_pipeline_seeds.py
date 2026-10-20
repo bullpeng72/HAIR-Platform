@@ -69,7 +69,7 @@ KNOWLEDGE_SKILL_SPECS: list[tuple[str, str]] = [
     ("incident-postmortem", "작업 중 심각한 오류·회귀가 발생했을 때 원인·대응·재발 방지책을 비난 없이(blameless) 기록한다."),
     ("human-approval-loop", "Spec·ADR·설계 문서 등 HITL(Human-in-the-loop) 승인이 필요한 산출물은 사람이 승인할 때까지 피드백을 반영해 재작성한다 — HAIR의 결재함(approvals)을 통해 상신하고, 반려되면 반려 사유를 반영한 개정판을 다시 올린다(같은 사유가 반복되면 방향 자체를 재검토한다)."),
     ("3c-4p-swot-framework", "3C(자사·고객·경쟁사), 4P(제품·가격·유통·판촉), SWOT(강점·약점·기회·위협) 분석 프레임워크로 시장·제품·전략을 구조적으로 진단한다 — 각 범주를 빠짐없이 채우고, 추측이 아니라 조사된 근거를 바탕으로 작성한다."),
-    ("business-plan-writing-guide", "기획서는 배경(왜 필요한가)·목표(무엇을 달성하는가)·실행계획(어떻게·누가·언제)·예산·리스크와 대응방안 순으로 구성한다 — 의사결정자가 한 번에 핵심을 파악하도록 결론을 앞에 둔다."),
+    ("business-plan-writing-guide", "기획서는 배경(왜 필요한가)·목표(무엇을 달성하는가)·실행계획(어떻게·누가·언제)·예산·리스크와 대응방안 순으로 구성한다 — 의사결정자가 한 번에 핵심을 파악하도록 결론을 앞에 둔다. 실행 가능한 전체 소스 코드를 작성하지 않는다 — 구현은 개발 역할의 몫이고, 기획서는 요구사항·설계 방향·완료 기준(완료를 어떻게 확인할지)까지만 제시한다. 핵심 로직을 설명해야 하면 의사코드나 10줄 이내의 짧은 예시 스니펫만 쓴다."),
     ("business-strategy-formulation", "사업 전략은 시장·경쟁 분석 → 목표 고객·포지셔닝 설정 → 차별화 전략 → 실행 로드맵 → 성과지표(KPI) 순으로 수립한다 — 분석 없이 바로 전략부터 제시하지 않는다(3C/4P/SWOT 분석 결과를 전제로 삼는다)."),
     ("executive-report-writing-style", "C-level 보고서는 '핵심 요약(한눈에 결론)'을 맨 앞에 두고, 숫자·데이터 근거를 명시하며, 결론 → 근거 → 권고(Action) 순서로 1페이지 안에 의사결정에 필요한 정보를 압축한다 — 배경 설명을 길게 늘어놓지 않는다."),
     # --- 기획→개발 실행 파이프라인(PM·아키텍처·개발계획·UI·QA, 2026-10-14) ---
@@ -408,7 +408,19 @@ DEV_PIPELINE_DESCRIPTION = (
 )
 # (name, mode, lead_role_name, instructions, requires_human_approval,
 #  agents=[(role_name, instructions), ...])
-DEV_PIPELINE_STAGES: list[tuple[str, str, str | None, str, bool, list[tuple[str, str]]]] = [
+# (name, mode, lead_role_name, instructions, requires_human_approval,
+#  is_primary_deliverable, agents=[(role_name, instructions), ...])
+#
+# `is_primary_deliverable`(2026-10-19 추가) — 사용자 보고("Todo 앱 최종
+# 결과물에 코드가 아니라 품질 리포트만 있다") 원인 수정. Task 협업
+# 워크스페이스의 "최종 결과물"은 전엔 "가장 최근 approved된
+# deliverable"을 그대로 집었는데, 코드 검증/QA/품질 판정류는 전부
+# 자동 approved로 쌓이고 항상 맨 마지막에 돌아 실제 산출물(구현 단계의
+# 코드)을 밀어냈다. "구현" 단계만 True로 표시해 그 단계의 산출물을
+# 최종 결과물로 고정한다(나머지는 검증/보고 성격이라 False).
+DEV_PIPELINE_STAGES: list[
+    tuple[str, str, str | None, str, bool, bool, list[tuple[str, str]]]
+] = [
     (
         "요구분석/계획 확정",
         "single",
@@ -416,6 +428,7 @@ DEV_PIPELINE_STAGES: list[tuple[str, str, str | None, str, bool, list[tuple[str,
         "요구사항을 EARS 표기(WHEN/IF/WHILE ... THE SYSTEM SHALL ...)로 정리하고, "
         "[NEEDS CLARIFICATION]이 남아있지 않은지 스스로 점검하세요.",
         True,
+        False,
         [("요구사항 분석가", "")],
     ),
     (
@@ -423,6 +436,7 @@ DEV_PIPELINE_STAGES: list[tuple[str, str, str | None, str, bool, list[tuple[str,
         "sequential_relay",
         None,
         "앞 단계의 요구사항을 바탕으로 설계하세요.",
+        False,
         False,
         [
             ("AA", "모듈 경계와 모듈 간 인터페이스를 설계하세요."),
@@ -435,6 +449,7 @@ DEV_PIPELINE_STAGES: list[tuple[str, str, str | None, str, bool, list[tuple[str,
         None,
         "설계 산출물을 독립적으로 개발 가능한 모듈 단위로 쪼개고 선행조건·완료기준을 정하세요.",
         False,
+        False,
         [("개발 계획 수립가", "")],
     ),
     (
@@ -443,6 +458,7 @@ DEV_PIPELINE_STAGES: list[tuple[str, str, str | None, str, bool, list[tuple[str,
         "개발 계획 수립가",
         "앞 단계의 개발 계획에 따라 모듈을 구현하세요.",
         False,
+        True,
         [
             ("개발 계획 수립가", ""),
             ("개발자", "백엔드 모듈을 구현하세요."),
@@ -464,6 +480,7 @@ DEV_PIPELINE_STAGES: list[tuple[str, str, str | None, str, bool, list[tuple[str,
         None,
         "구현 산출물을 code-review-checklist 기준으로 검증하세요.",
         False,
+        False,
         [("코드 검증가", "")],
     ),
     (
@@ -471,6 +488,7 @@ DEV_PIPELINE_STAGES: list[tuple[str, str, str | None, str, bool, list[tuple[str,
         "sequential_relay",
         None,
         "구현 산출물을 테스트하세요.",
+        False,
         False,
         [
             ("테스트 계획 수립가", "요구사항별 테스트 케이스(정상/예외/경계값)를 설계하세요."),
@@ -483,6 +501,7 @@ DEV_PIPELINE_STAGES: list[tuple[str, str, str | None, str, bool, list[tuple[str,
         None,
         "지금까지의 전체 산출물을 종합해 품질/인수 기준(치명적 결함 0건, 핵심 요구사항 "
         "커버리지 등)으로 최종 판정하세요.",
+        False,
         False,
         [("품질 관리자", "")],
     ),
@@ -514,13 +533,13 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
         (DEV_PIPELINE_NAME, DEV_PIPELINE_DESCRIPTION, "software_dev"),
     )
     template_id = cur.lastrowid
-    for seq, (name, mode, lead_role_name, instructions, requires_approval, agents) in enumerate(
-        DEV_PIPELINE_STAGES, start=1
-    ):
+    for seq, (
+        name, mode, lead_role_name, instructions, requires_approval, is_primary, agents,
+    ) in enumerate(DEV_PIPELINE_STAGES, start=1):
         cur = conn.execute(
             "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
-            "lead_role_name, instructions, requires_human_approval) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "lead_role_name, instructions, requires_human_approval, is_primary_deliverable) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 template_id,
                 seq,
@@ -529,6 +548,7 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
                 lead_role_name,
                 instructions,
                 1 if requires_approval else 0,
+                1 if is_primary else 0,
             ),
         )
         stage_id = cur.lastrowid

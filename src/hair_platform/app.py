@@ -41,6 +41,7 @@ from hair_platform import (
     audit,
     conversations,
     cost,
+    crew_history,
     crew_runtime,
     dashboard,
     data_admin,
@@ -70,11 +71,14 @@ from hair_platform.auth import (
     require_role,
 )
 from hair_platform.models import (
+    AdhocCrewExecuteRequest,
     AgentExecuteRequest,
     AgentModelConfig,
     AgentNameUpdate,
+    AgentPersonaConfig,
     AgentTuningConfig,
     ApprovalDecision,
+    AssignmentCancelRequest,
     AssignmentRequest,
     AssistRequest,
     BriefSubmission,
@@ -106,6 +110,7 @@ from hair_platform.models import (
     PipelineTemplateActiveUpdate,
     PipelineTemplateCreate,
     SkillPoolCreate,
+    SkillPoolUpdate,
     TaskDecomposition,
     TaskDependencyCreate,
     TaskNotesUpdate,
@@ -115,10 +120,12 @@ from hair_platform.models import (
     TeamActiveUpdate,
     TeamCreate,
     TeamCrewExecuteRequest,
+    TeamDefaultsUpdate,
     TeamLeaderUpdate,
     TeamMemberAdd,
     ToolActiveUpdate,
     ToolPoolCreate,
+    ToolPoolUpdate,
     UserCreate,
     UserPasswordReset,
     UserStatusUpdate,
@@ -1818,11 +1825,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
         실행하고, 결과를 이 할 일의 deliverables/결재 체인에 연결한다 —
         단일 Agent 실행(`execute-agent`)과 같은 비동기 패턴."""
         if user["role"] not in ("admin", "manager") and (
-            payload.provider or payload.model
+            payload.provider
+            or payload.model
+            or payload.planning
+            or payload.manager_provider
+            or payload.manager_model
         ):
             raise HTTPException(
                 status_code=400,
-                detail="팀원은 provider/model을 직접 선택할 수 없습니다",
+                detail="팀원은 provider/model/매니저 LLM/planning을 직접 선택할 수 없습니다",
             )
         try:
             job = deliverables.start_team_crew_execution(
@@ -1853,6 +1864,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "manager_agent_not_in_team": "매니저로 지정한 Agent가 이 팀의 멤버가 아닙니다",
             }.get(str(exc), str(exc))
             raise HTTPException(status_code=400, detail=detail) from None
+        # 사용자 요청(2026-10-20, "고급 에이전트 관리") — 호출자가
+        # process/manager_agent_id를 명시하지 않았으면(기존처럼 매번
+        # 새로 고르지 않아도 되도록) "팀 관리"에서 저장해둔 팀 기본값을
+        # 쓴다 — 그마저 없으면 기존처럼 "sequential"/None(자동 추정)으로
+        # 떨어진다(하위 호환).
+        team_defaults = teams.get_team(conn, payload.team_id)
+        effective_process = (
+            payload.process
+            or (team_defaults["default_process"] if team_defaults else None)
+            or "sequential"
+        )
+        effective_manager_agent_id = payload.manager_agent_id or (
+            team_defaults["default_manager_agent_id"] if team_defaults else None
+        )
         background_tasks.add_task(
             deliverables.run_team_crew_job,
             conn,
@@ -1860,11 +1885,91 @@ def create_app(db_path: str | None = None) -> FastAPI:
             task_id,
             payload.team_id,
             user["id"],
+            effective_process,
+            payload.provider,
+            payload.model,
+            effective_manager_agent_id,
+            payload.content_type,
+            memory=payload.memory,
+            planning=payload.planning,
+            manager_provider=payload.manager_provider,
+            manager_model=payload.manager_model,
+        )
+        return {"job_ids": list(job["job_by_agent_id"].values()), "status": "running"}
+
+    @app.post("/api/tasks/{task_id}/execute-adhoc-crew", status_code=202)
+    def trigger_adhoc_crew_execution(
+        task_id: int,
+        payload: AdhocCrewExecuteRequest,
+        background_tasks: BackgroundTasks,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-10-20, "Crew 빌더... 업무에 바로 실행") —
+        팀 사전 등록·배정·승인 없이, 이 Task의 참가자가 Agent를 즉석으로
+        골라 바로 CrewAI Crew로 실행하고 결과를 이 Task의 deliverable+
+        결재 체인에 연결한다(`execute-team-crew`와 같은 비동기 패턴,
+        `deliverables.start_adhoc_crew_execution()` 참고)."""
+        if user["role"] not in ("admin", "manager") and (
+            payload.provider
+            or payload.model
+            or payload.planning
+            or payload.manager_provider
+            or payload.manager_model
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="팀원은 provider/model/매니저 LLM/planning을 직접 선택할 수 없습니다",
+            )
+        if len(payload.agent_ids) != len(payload.task_descriptions):
+            raise HTTPException(
+                status_code=400,
+                detail="agent_ids와 task_descriptions의 개수가 같아야 합니다",
+            )
+        try:
+            job = deliverables.start_adhoc_crew_execution(
+                conn,
+                task_id,
+                user["id"],
+                payload.agent_ids,
+                manager_agent_id=payload.manager_agent_id,
+                allow_supervisor_override=user["role"] in ("admin", "manager"),
+            )
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+        except LookupError as exc:
+            if str(exc) == "agent_already_running":
+                raise HTTPException(
+                    status_code=409,
+                    detail="이미 실행 중인 작업이 있습니다 — 완료를 기다려 주세요",
+                ) from None
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        except ValueError as exc:
+            detail = {
+                "no_agents_selected": "참여할 Agent를 1명 이상 선택하세요",
+                "some_agents_not_active": "선택한 Agent 중 온보딩(active) 상태가 아닌 Agent가 있습니다",
+                "manager_agent_not_in_agent_ids": "매니저로 지정한 Agent가 참여 Agent 목록에 없습니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from None
+        background_tasks.add_task(
+            deliverables.run_adhoc_crew_job,
+            conn,
+            job["job_by_agent_id"],
+            task_id,
+            user["id"],
+            payload.agent_ids,
+            payload.task_descriptions,
             payload.process,
             payload.provider,
             payload.model,
             payload.manager_agent_id,
             payload.content_type,
+            memory=payload.memory,
+            planning=payload.planning,
+            manager_provider=payload.manager_provider,
+            manager_model=payload.manager_model,
         )
         return {"job_ids": list(job["job_by_agent_id"].values()), "status": "running"}
 
@@ -1948,6 +2053,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
             )
         return pipeline_runtime.list_pipeline_runs_for_task(conn, task_id)
+
+    @app.get("/api/tasks/{task_id}/crew-runs")
+    def list_task_crew_runs(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """사용자 요청(2026-10-20, "Crew 빌더... 실행 이력 + 진행
+        가시성") — 이 Task의 팀/즉석 Crew 실행 이력(진행 중인 것
+        포함 — `progress` 필드로 "N명 중 M명 완료"를 보여줄 수 있다).
+        권한은 위 파이프라인 실행 이력 조회와 동일하다."""
+        task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return crew_history.list_runs_for_task(conn, task_id)
 
     @app.get("/api/tasks/{task_id}/execution-permission")
     def get_execution_permission(
@@ -2067,6 +2193,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 # 보여야 "복수 에이전트 그룹"이 업무와 어떻게 이어지는지
                 # 알 수 있다).
                 "team_names": teams.team_names_for_agent(conn, row["id"]),
+                # 사용자 요청(2026-10-20, "고급 에이전트 관리") — 저장된
+                # 오버라이드(없으면 빈 문자열/None)와, 실제 Crew 실행에
+                # "지금 적용되는" 값을 구분해 둘 다 보여준다 — 후자는
+                # `crew_runtime.py`의 자동 생성 로직을 그대로 호출해
+                # 미리보기로 쓴다(화면이 그 로직을 중복 구현하지 않도록).
+                "goal": row["goal"],
+                "backstory": row["backstory"],
+                "expected_output": row["expected_output"],
+                "effective_goal": row["goal"]
+                or crew_runtime._agent_goal(
+                    row["role_name"], json.loads(row["skill_tags"])
+                ),
+                "effective_backstory": row["backstory"]
+                or crew_runtime._agent_backstory(
+                    conn, row["role_name"], json.loads(row["skill_tags"])
+                ),
+                "effective_expected_output": row["expected_output"]
+                or crew_runtime.DEFAULT_EXPECTED_OUTPUT,
             }
             for row in rows
         ]
@@ -2158,6 +2302,28 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=404, detail="Agent를 찾을 수 없습니다"
             ) from exc
         return {"id": agent_id, "tuning_config": saved}
+
+    @app.patch("/api/agent-pool/{agent_id}/persona")
+    def set_agent_persona(
+        agent_id: int,
+        payload: AgentPersonaConfig,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-20, "CrewAI 에이전트... goal, backstory...
+        고급 에이전트 관리 기능") — `set_agent_tuning_config`와 같은
+        권한(admin+manager, 비용 없는 설정 전용 엔드포인트).
+        `agent_runtime.set_persona()` 참고."""
+        try:
+            saved = agent_runtime.set_persona(
+                conn, agent_id, user["id"], **payload.model_dump(exclude_unset=True)
+            )
+        except ValueError as exc:
+            if str(exc) == "agent_not_found":
+                raise HTTPException(
+                    status_code=404, detail="Agent를 찾을 수 없습니다"
+                ) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": agent_id, **saved}
 
     @app.get("/api/agent-pool/{agent_id}/optimize-recommendation")
     def get_agent_optimize_recommendation(
@@ -2281,6 +2447,43 @@ def create_app(db_path: str | None = None) -> FastAPI:
             ) from exc
         return {"id": tool_id}
 
+    @app.patch("/api/tool-pool/{tool_id}")
+    def update_tool_pool_entry(
+        tool_id: int,
+        payload: ToolPoolUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-20, "도구/스킬 Pool에 수정 기능을
+        추가해줘") — 지금까지 등록 뒤엔 삭제·재등록만 가능했다. `kind`·
+        `name`은 바꿀 수 없다(`pool_registry.update_tool()` 참고 — name은
+        Agent/Skill 연결이 참조하는 문자열이라 바꾸면 그 연결이 조용히
+        끊어진다). 등록(POST)과 같은 이유로 mcp_stdio/mcp_remote/
+        custom_python 종류는 admin 전용으로 좁힌다 — 수정 경로로 그
+        제한을 우회할 수 없어야 한다."""
+        row = conn.execute(
+            "SELECT kind FROM tool_pool WHERE id = ?", (tool_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="도구를 찾을 수 없습니다")
+        if (
+            row["kind"] in ("mcp_stdio", "mcp_remote", "custom_python")
+            and user["role"] != Role.ADMIN.value
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="MCP·커스텀 Python 도구(mcp_stdio/mcp_remote/custom_python) 수정은 admin 전용입니다",
+            )
+        try:
+            pool_registry.update_tool(
+                conn, user["id"], tool_id, **payload.model_dump(exclude_unset=True)
+            )
+        except ValueError as exc:
+            detail = {"tool_not_found": "도구를 찾을 수 없습니다"}.get(
+                str(exc), str(exc)
+            )
+            raise HTTPException(status_code=400, detail=detail) from exc
+        return {"id": tool_id}
+
     @app.patch("/api/tool-pool/{tool_id}/active")
     def set_tool_pool_active(
         tool_id: int,
@@ -2348,6 +2551,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=409, detail=f"이미 있는 이름입니다: {payload.name}"
             ) from exc
+        return {"id": skill_id}
+
+    @app.patch("/api/skill-pool/{skill_id}")
+    def update_skill_pool_entry(
+        skill_id: int,
+        payload: SkillPoolUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-20, "도구/스킬 Pool에 수정 기능을
+        추가해줘") — `name`은 바꿀 수 없다(`pool_registry.update_skill()`
+        참고)."""
+        try:
+            pool_registry.update_skill(
+                conn, user["id"], skill_id, **payload.model_dump(exclude_unset=True)
+            )
+        except ValueError as exc:
+            if str(exc) == "skill_not_found":
+                raise HTTPException(
+                    status_code=404, detail="스킬을 찾을 수 없습니다"
+                ) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": skill_id}
 
     @app.delete("/api/skill-pool/{skill_id}")
@@ -2498,6 +2722,30 @@ def create_app(db_path: str | None = None) -> FastAPI:
             ) from exc
         return {"id": team_id, "is_active": payload.is_active}
 
+    @app.patch("/api/teams/{team_id}")
+    def update_team_defaults_endpoint(
+        team_id: int,
+        payload: TeamDefaultsUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-20, "고급 에이전트 관리") — 이 팀의
+        기본 process/매니저를 저장한다. `teams.update_team_defaults()`
+        참고."""
+        try:
+            saved = teams.update_team_defaults(
+                conn, user["id"], team_id, **payload.model_dump(exclude_unset=True)
+            )
+        except ValueError as exc:
+            if str(exc) == "team_not_found":
+                raise HTTPException(
+                    status_code=404, detail="팀을 찾을 수 없습니다"
+                ) from exc
+            detail = {
+                "manager_must_be_active_agent_member_of_team": "지정한 매니저가 이 팀의 온보딩(active)된 Agent 멤버가 아닙니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from exc
+        return {"id": team_id, **saved}
+
     @app.delete("/api/teams/{team_id}")
     def delete_team_endpoint(
         team_id: int,
@@ -2637,6 +2885,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 min_gate_pass_ratio=payload.min_gate_pass_ratio,
                 max_retry=payload.max_retry,
                 requires_human_approval=payload.requires_human_approval,
+                is_primary_deliverable=payload.is_primary_deliverable,
+                expected_output=payload.expected_output,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2711,6 +2961,28 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=detail) from exc
         return {"id": assignment_id, "team_leader_id": payload.team_leader_id}
 
+    @app.post("/api/assignments/{assignment_id}/cancel")
+    def cancel_assignment_endpoint(
+        assignment_id: int,
+        payload: AssignmentCancelRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 보고(2026-10-19, "업무 요청 삭제가 확정된 배정 때문에
+        막히는데 정리할 방법이 없다") — 결재 체인 없이(이미 확정됐거나,
+        아직 결재 중인 배정 자체를 되돌리는 것뿐이라 새 승인이 필요
+        없다) 즉시 취소한다. `assignments.cancel_assignment()` 참고."""
+        try:
+            result = assignments.cancel_assignment(
+                conn, user["id"], assignment_id, payload.reason
+            )
+        except ValueError as exc:
+            detail = {
+                "assignment_not_found": "배정을 찾을 수 없습니다",
+                "assignment_not_cancellable": "이미 종료된 배정(반려/대체/취소됨)은 다시 취소할 수 없습니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from exc
+        return result
+
     @app.post("/api/agent-pool/{agent_id}/tools/{tool_pool_id}", status_code=201)
     def link_agent_tool_endpoint(
         agent_id: int,
@@ -2758,6 +3030,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 provider=payload.provider,
                 model=payload.model,
                 manager_agent_id=payload.manager_agent_id,
+                memory=payload.memory,
+                planning=payload.planning,
+                manager_provider=payload.manager_provider,
+                manager_model=payload.manager_model,
             )
         except PermissionError as exc:
             raise HTTPException(
@@ -2767,6 +3043,40 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return result
+
+    @app.get("/api/crew-runs")
+    def list_crew_runs(
+        limit: int = 50,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-20, "Crew 빌더... 실행 이력") — "Crew
+        빌더"의 "실행 이력" 탭이 Task를 가로질러 조회한다(admin/manager
+        전용 — 이 목록이 모든 Task의 실행을 한 번에 보여주므로 개별
+        Task 참가자 권한 범위를 넘는다)."""
+        return crew_history.list_recent_runs(conn, limit=limit)
+
+    @app.get("/api/crew-runs/{run_id}")
+    def get_crew_run(
+        run_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """단건 상세 — 협업 다이어그램·토큰 사용량·Gate 점수까지 포함된
+        전체 데이터(`crewDiagramSvg()`/`renderCrewResult()`가 그대로
+        쓸 수 있는 모양). 권한은 그 Crew 실행이 속한 Task의 참가자
+        판정과 동일(파이프라인 실행 이력 조회와 같은 기준)."""
+        run = crew_history.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Crew 실행 이력을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(
+                conn, run["task_id"], user["id"]
+            )
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return run
 
     @app.post("/api/agent-pool/{agent_id}/onboard")
     def onboard_agent(

@@ -185,6 +185,121 @@ def test_gc119_delete_brief_blocked_when_any_task_has_confirmed_assignment(
     )
 
 
+def test_gc119b_cancel_assignment_endpoint_unblocks_brief_delete(client_and_conn):
+    """사용자 보고(2026-10-19, "업무 요청 삭제가 확정된 배정 때문에
+    막히는데 정리할 방법이 없다") — 에러 메시지가 안내하는 "먼저
+    정리하세요"를 실제로 해낼 수 있는 `POST /api/assignments/{id}/cancel`
+    이 confirmed 배정을 풀어주고, 그 뒤엔 같은 brief 삭제가 정상
+    통과하는지 end-to-end로 확인한다."""
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    brief_id, task_id, resource_id = _make_task_with_candidate(client)
+    _confirm_assignment(client, task_id, "human", resource_id)
+
+    assignment_id = conn.execute(
+        "SELECT id FROM assignments WHERE task_id = ? AND status = 'confirmed'",
+        (task_id,),
+    ).fetchone()["id"]
+
+    # member는 배정 취소 권한이 없다(admin/manager 전용 — 결재 결정과
+    # 같은 권한 수위).
+    _login(client, "member1", "memberpass")
+    resp = client.post(f"/api/assignments/{assignment_id}/cancel", json={})
+    assert resp.status_code == 403, resp.text
+
+    _login(client, "admin1", "adminpass")
+    resp = client.delete(f"/api/briefs/{brief_id}")
+    assert resp.status_code == 409, resp.text
+
+    resp = client.post(
+        f"/api/assignments/{assignment_id}/cancel", json={"reason": "정리 테스트"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "cancelled"
+    assert (
+        conn.execute(
+            "SELECT status FROM assignments WHERE id = ?", (assignment_id,)
+        ).fetchone()["status"]
+        == "cancelled"
+    )
+
+    # 이미 취소된 배정을 다시 취소하면 막힌다.
+    resp = client.post(f"/api/assignments/{assignment_id}/cancel", json={})
+    assert resp.status_code == 400, resp.text
+
+    # 존재하지 않는 배정은 404가 아니라 같은 400 경로(assignment_not_found).
+    resp = client.post("/api/assignments/999999/cancel", json={})
+    assert resp.status_code == 400, resp.text
+
+    # 이제 confirmed 배정이 없으니 brief 삭제가 통과한다.
+    resp = client.delete(f"/api/briefs/{brief_id}")
+    assert resp.status_code == 200, resp.text
+    assert conn.execute(
+        "SELECT * FROM briefs WHERE id = ?", (brief_id,)
+    ).fetchone() is None
+
+
+def test_gc119c_cancel_assignment_while_requested_closes_pending_approval(
+    client_and_conn,
+):
+    """`cancel_assignment()`가 `requested` 상태(아직 아무도 결정하지
+    않은 결재 대기 중)도 취소할 수 있어야 하고, 그때 남아있는 결재
+    단계(`pending`)를 같이 닫아야 한다 — 안 닫으면 승인권자가 뒤늦게
+    그 결재를 승인했을 때 `resolve_assignment_decision()`이 이미
+    취소된 배정을 다시 `confirmed`로 되돌려버리는 경합이 생긴다."""
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    _brief_id, task_id, resource_id = _make_task_with_candidate(client)
+
+    resp = client.post(
+        f"/api/tasks/{task_id}/assignments",
+        json={"resource_type": "human", "resource_id": resource_id},
+    )
+    assert resp.status_code == 201, resp.text
+    assignment_id = resp.json()["assignment_id"]
+    approval_id = resp.json()["approval_id"]
+    assert (
+        conn.execute(
+            "SELECT status FROM assignments WHERE id = ?", (assignment_id,)
+        ).fetchone()["status"]
+        == "requested"
+    )
+    assert (
+        conn.execute(
+            "SELECT status FROM approvals WHERE id = ?", (approval_id,)
+        ).fetchone()["status"]
+        == "pending"
+    )
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(f"/api/assignments/{assignment_id}/cancel", json={})
+    assert resp.status_code == 200, resp.text
+
+    assert (
+        conn.execute(
+            "SELECT status FROM assignments WHERE id = ?", (assignment_id,)
+        ).fetchone()["status"]
+        == "cancelled"
+    )
+    assert (
+        conn.execute(
+            "SELECT status FROM approvals WHERE id = ?", (approval_id,)
+        ).fetchone()["status"]
+        == "skipped"
+    )
+
+    # 결재가 이미 닫혔으니, 뒤늦게 승인하려 해도 "이미 처리된 승인"으로
+    # 막혀 취소된 배정을 되살리지 못한다.
+    resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
+    assert resp.status_code == 409, resp.text
+    assert (
+        conn.execute(
+            "SELECT status FROM assignments WHERE id = ?", (assignment_id,)
+        ).fetchone()["status"]
+        == "cancelled"
+    )
+
+
 def test_gc120_delete_human_blocked_when_confirmed_else_succeeds(client_and_conn):
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")

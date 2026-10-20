@@ -72,6 +72,7 @@ from hair_platform import (
     agent_runtime,
     approvals,
     audit,
+    crew_history,
     crew_runtime,
     llm,
     pool_registry,
@@ -1191,6 +1192,201 @@ def start_team_crew_execution(
     return {"job_by_agent_id": job_by_agent_id, "agent_ids": agent_ids}
 
 
+def start_adhoc_crew_execution(
+    conn: sqlite3.Connection,
+    task_id: int,
+    actor_id: int,
+    agent_ids: list[int],
+    manager_agent_id: int | None = None,
+    allow_supervisor_override: bool = False,
+) -> dict:
+    """`POST /api/tasks/{task_id}/execute-adhoc-crew` — 사용자 요청
+    (2026-10-20, "crewai의 잠재력을 모두 끌어내고, 에이전트 그룹(crew
+    구성)을 직관적으로 하기 위한... 개편") — `start_team_crew_execution()`
+    과 거의 동일하지만 **팀이라는 전제조건을 없앤다**. 지금까지는 실제
+    업무에 에이전트 조합을 써보려면 "① 팀부터 만들고(사전 등록) → ②
+    배정+승인 → ③ 실행"의 3단계를 거쳐야 했다(그 전에 미리 테스트하고
+    싶으면 결과가 버려지는 `/api/crew/run` 샌드박스로 가야 했다) — 이
+    함수는 Task 참가자가 **Agent를 그 자리에서 즉석으로 골라** 바로
+    실행하고, 결과가 그대로 이 Task의 deliverable+결재 체인으로
+    쌓이게 한다(`start_team_crew_execution()`과 동일한 업무 연결 —
+    팀 등록·배정·승인 단계만 생략).
+
+    참가자 판정은 `start_team_crew_execution()`보다 더 넓다 — 팀
+    리더/팀원으로 좁히지 않고 이 Task의 confirmed 배정에 걸린 사람이면
+    누구나(`task_participant_relationship()`이 `None`이 아니면) 실행할
+    수 있다(팀이라는 매개가 없으니 "팀 역할"로 좁힐 근거 자체가 없다).
+
+    `agent_ids`가 전부 `status='active'`인지 여기서 미리 확인한다 —
+    `crew_runtime.run_crew()`도 같은 검사를 하지만, 거기서 걸리면
+    BackgroundTasks 안에서 조용히 실패 처리되므로(`run_adhoc_crew_job()`
+    의 except 블록) 사용자가 즉시 알 수 있게 요청 시점에 400으로
+    막는다."""
+    rel = task_participant_relationship(conn, task_id, actor_id)
+    if rel is None and not allow_supervisor_override:
+        raise PermissionError("not_a_task_participant")
+
+    already_running = conn.execute(
+        "SELECT id FROM agent_execution_jobs WHERE task_id = ? AND status = 'running'",
+        (task_id,),
+    ).fetchone()
+    if already_running is not None:
+        raise LookupError("agent_already_running")
+
+    if not agent_ids:
+        raise ValueError("no_agents_selected")
+    placeholders = ",".join("?" * len(agent_ids))
+    active_count = conn.execute(
+        f"SELECT COUNT(*) AS c FROM agent_pool WHERE id IN ({placeholders}) "  # noqa: S608
+        "AND status = 'active'",
+        agent_ids,
+    ).fetchone()["c"]
+    if active_count != len(set(agent_ids)):
+        raise ValueError("some_agents_not_active")
+    if manager_agent_id is not None and manager_agent_id not in agent_ids:
+        raise ValueError("manager_agent_not_in_agent_ids")
+
+    worker_agent_ids = [a for a in agent_ids if a != manager_agent_id]
+    job_by_agent_id: dict[int, int] = {}
+    for agent_id in worker_agent_ids:
+        cur = conn.execute(
+            "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
+            "VALUES (?, ?, 'running')",
+            (task_id, actor_id),
+        )
+        job_by_agent_id[agent_id] = cur.lastrowid
+    audit.record(
+        conn,
+        actor_id,
+        "adhoc_crew_execution_started",
+        "agent_execution_jobs",
+        None,
+        after={"task_id": task_id, "agent_ids": agent_ids},
+    )
+    conn.commit()
+    return {"job_by_agent_id": job_by_agent_id, "agent_ids": agent_ids}
+
+
+def run_adhoc_crew_job(
+    conn: sqlite3.Connection,
+    job_by_agent_id: dict[int, int],
+    task_id: int,
+    actor_id: int,
+    agent_ids: list[int],
+    task_descriptions: list[str],
+    process: str,
+    provider: str | None,
+    model: str | None,
+    manager_agent_id: int | None,
+    content_type: str = "text",
+    memory: bool = True,
+    planning: bool = False,
+    manager_provider: str | None = None,
+    manager_model: str | None = None,
+) -> None:
+    """`start_adhoc_crew_execution()`이 만든 job들을 실제로 실행한다 —
+    `run_team_crew_job()`과 같은 백그라운드 경계·결과 저장 방식이지만,
+    `crew_runtime.run_crew_for_team()`(팀 멤버 조회 필요) 대신
+    `crew_runtime.run_crew()`를 **직접** 호출한다(팀이 없으므로
+    `agent_ids`/`task_descriptions`를 호출자가 그대로 넘긴다). 이 덕분에
+    오늘의 "팀 Agent 실행"(전원 동일 설명)과 달리 **Agent별로 서로
+    다른 task description**을 줄 수 있다 — 실제로 더 유연하다.
+
+    사용자 요청(2026-10-20, "Crew 빌더... 실행 이력 + 진행 가시성") —
+    `crew_history.create_run()`으로 시작 시점에 행을 만들고
+    (`kind='adhoc'`), `crew_runtime.run_crew()`의 `on_task_complete`
+    콜백으로 Task 완료마다 즉시 commit해 실행 중에도 폴링으로 진행
+    상황을 볼 수 있게 하며, 끝나면 `complete_run()`/`fail_run()`으로
+    협업 다이어그램·토큰 사용량·Gate 점수까지 영구 기록한다(이전엔
+    이 정보가 실행 직후 전부 사라졌다)."""
+    run_id = crew_history.create_run(
+        conn, task_id, "adhoc", actor_id, agent_ids, process,
+        manager_agent_id=manager_agent_id,
+    )
+    crew_run_completed = False
+    try:
+        result = crew_runtime.run_crew(
+            conn,
+            agent_ids,
+            task_descriptions,
+            actor_id,
+            process=process,
+            provider=provider,
+            model=model,
+            manager_agent_id=manager_agent_id,
+            on_task_complete=lambda c: crew_history.append_progress(
+                conn, run_id, c["agent_role"], c["output_preview"]
+            ),
+            memory=memory,
+            planning=planning,
+            manager_provider=manager_provider,
+            manager_model=manager_model,
+        )
+        # 실제 Crew 실행(`run_crew()`) 자체는 여기서 이미 끝났다 —
+        # 아래 deliverable 저장 단계가 따로 실패해도(`agent_execution_
+        # jobs`가 그건 별도로 'failed' 기록한다) 이 Crew 실행 자체가
+        # "실패"였던 건 아니므로, `crew_run_completed`를 여기서 바로
+        # True로 세워 except 블록이 이미 성공한 실행을 되돌려 'failed'로
+        # 덮어쓰지 않게 한다.
+        crew_history.complete_run(conn, run_id, result)
+        crew_run_completed = True
+        for agent in result["agents"]:
+            job_id = job_by_agent_id.get(agent["agent_id"])
+            if job_id is None or agent["output"] is None:
+                continue  # 매니저 — job 자체를 안 만들었으므로 스킵
+            cur = conn.execute(
+                "INSERT INTO deliverables (task_id, author_type, author_id, content, "
+                "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
+                (task_id, agent["agent_id"], agent["output"], content_type),
+            )
+            deliverable_id = cur.lastrowid
+            assert deliverable_id is not None
+            agent_evaluation.record_evaluation(
+                conn, deliverable_id, result["gate_scores"], result["tcr"]
+            )
+            approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
+            conn.execute(
+                "UPDATE agent_execution_jobs SET status = 'succeeded', deliverable_id = ?, "
+                "finished_at = datetime('now') WHERE id = ?",
+                (deliverable_id, job_id),
+            )
+            audit.record(
+                conn,
+                actor_id,
+                "deliverable_created",
+                "deliverables",
+                deliverable_id,
+                after={
+                    "task_id": task_id,
+                    "author_type": "agent",
+                    "agent_id": agent["agent_id"],
+                    "gate_scores": result["gate_scores"],
+                    "tcr": result["tcr"],
+                },
+            )
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
+        conn.rollback()
+        friendly_error = _friendly_execution_error(exc)
+        if not crew_run_completed:
+            crew_history.fail_run(conn, run_id, friendly_error)
+        for agent_id, job_id in job_by_agent_id.items():
+            conn.execute(
+                "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "
+                "finished_at = datetime('now') WHERE id = ?",
+                (friendly_error, job_id),
+            )
+            audit.record(
+                conn,
+                actor_id,
+                "agent_execution_failed",
+                "agent_execution_jobs",
+                job_id,
+                after={"task_id": task_id, "agent_id": agent_id, "error": friendly_error},
+            )
+        conn.commit()
+
+
 def run_team_crew_job(
     conn: sqlite3.Connection,
     job_by_agent_id: dict[int, int],
@@ -1202,6 +1398,10 @@ def run_team_crew_job(
     model: str | None,
     manager_agent_id: int | None,
     content_type: str = "text",
+    memory: bool = True,
+    planning: bool = False,
+    manager_provider: str | None = None,
+    manager_model: str | None = None,
 ) -> None:
     """`start_team_crew_execution()`이 만든 job들을 실제로 실행한다 —
     `run_agent_execution_job()`과 같은 백그라운드 경계(예외가 여기서
@@ -1209,7 +1409,22 @@ def run_team_crew_job(
     `deliverables`(author_type='agent') + 결재 체인으로 만든다 —
     이 순간부터 팀 리더·팀원(사람)이 협업 워크스페이스에서 그 결과물을
     보고 댓글·승인/반려할 수 있다(이 함수가 Crew를 업무 파이프라인에
-    연결하는 지점)."""
+    연결하는 지점).
+
+    사용자 요청(2026-10-20, "Crew 빌더... 실행 이력 + 진행 가시성") —
+    `run_adhoc_crew_job()`과 같은 패턴으로 `crew_history`에 영구
+    기록한다(`kind='team'`, `team_id` 포함). `agent_ids`는 `job_by_
+    agent_id`의 키(워커)에 매니저를 더해 복원한다 — 이 함수는 전체
+    목록을 따로 받지 않는다(`start_team_crew_execution()`이 반환했던
+    것을 호출부가 넘기지 않아서다)."""
+    agent_ids_for_history = list(job_by_agent_id.keys())
+    if manager_agent_id is not None:
+        agent_ids_for_history.append(manager_agent_id)
+    run_id = crew_history.create_run(
+        conn, task_id, "team", actor_id, agent_ids_for_history, process,
+        manager_agent_id=manager_agent_id, team_id=team_id,
+    )
+    crew_run_completed = False
     try:
         result = crew_runtime.run_crew_for_team(
             conn,
@@ -1221,7 +1436,16 @@ def run_team_crew_job(
             model=model,
             manager_agent_id=manager_agent_id,
             content_type=content_type,
+            on_task_complete=lambda c: crew_history.append_progress(
+                conn, run_id, c["agent_role"], c["output_preview"]
+            ),
+            memory=memory,
+            planning=planning,
+            manager_provider=manager_provider,
+            manager_model=manager_model,
         )
+        crew_history.complete_run(conn, run_id, result)
+        crew_run_completed = True
         for agent in result["agents"]:
             job_id = job_by_agent_id.get(agent["agent_id"])
             if job_id is None or agent["output"] is None:
@@ -1261,6 +1485,8 @@ def run_team_crew_job(
     except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
         conn.rollback()
         friendly_error = _friendly_execution_error(exc)
+        if not crew_run_completed:
+            crew_history.fail_run(conn, run_id, friendly_error)
         for agent_id, job_id in job_by_agent_id.items():
             conn.execute(
                 "UPDATE agent_execution_jobs SET status = 'failed', error = ?, "

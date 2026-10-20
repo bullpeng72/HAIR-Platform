@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from hair_platform import conversations, db
+
 
 def _login(client, username, password):
     resp = client.post("/login", json={"username": username, "password": password})
@@ -244,6 +246,67 @@ def test_gc_agent_mention_suppresses_default_ai(client_and_conn):
     assert messages[1]["content"] == "에이전트 답변"
 
 
+def test_gc_uninvited_agent_mention_warns_in_default_ai_reply(client_and_conn):
+    """사용자 보고(2026-10-19, "'기획서 작성자'로 설정했는데 기본 AI
+    (openai/gpt-4o-mini)가 대신 응답했다") — 자동완성 드롭다운을 거치지
+    않고 `@역할명`을 직접 타이핑하면, 그 Agent가 아직 이 대화의
+    참가자가 아닌 한 멘션으로 인식되지 않아 기본 AI가 조용히 대신
+    응답했다. 자동 초대는 여전히 하지 않되(기존 안전 설계 유지), 기본
+    AI 응답 맨 앞에 "이 이름을 찾았지만 초대가 안 돼 있다"는 경고를
+    붙인다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    _make_agent(conn, role_name="기획서 작성자")  # 참가자로 초대하지 않음
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "미초대방"}).json()["id"]
+
+    with patch("hair_platform.llm.call_llm", return_value="기본 AI 응답") as mock_call:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@기획서 작성자 기획해줘"},
+        )
+        assert resp.status_code == 201, resp.text
+        jobs = resp.json()["triggered_jobs"]
+        assert len(jobs) == 1
+        assert jobs[0]["trigger_type"] == "auto_reply"  # 멘션으로 인식되지 않음
+        mock_call.assert_called_once()
+
+    messages = client.get(f"/api/conversations/{conv_id}/messages").json()
+    reply = messages[1]
+    assert reply["author_type"] == "agent"
+    assert reply["author_id"] == 0  # 기본 AI sentinel — 실제 Agent 아님
+    assert '"@기획서 작성자"' in reply["content"]
+    assert "아직 이 대화에 초대되지 않아" in reply["content"]
+    assert reply["content"].endswith("기본 AI 응답")
+
+
+def test_gc_invited_agent_mention_has_no_warning(client_and_conn):
+    """반대 사례 — 정상적으로 초대된 뒤 멘션하면 경고 없이 그 Agent가
+    직접 응답한다(기본 AI로 새지 않음)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent_id = _make_agent(conn, role_name="기획서 작성자")
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "초대방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "agent", "participant_id": agent_id},
+    )
+
+    with patch(
+        "hair_platform.agent_runtime.execute_agent", return_value="기획서 작성자 응답"
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@기획서 작성자 기획해줘"},
+        )
+        assert resp.json()["triggered_jobs"][0]["trigger_type"] == "agent_mention"
+
+    messages = client.get(f"/api/conversations/{conv_id}/messages").json()
+    assert messages[1]["author_id"] == agent_id
+    assert messages[1]["content"] == "기획서 작성자 응답"  # 경고 없음
+
+
 def test_gc_mentioning_human_participant_suppresses_default_ai(client_and_conn):
     """버그 재현(사용자 보고, 2026-10-14, "대화 중 Human을 호출했지만
     AI가 자동 응답을 했다") — 사람을 멘션하면 실행할 job은 없지만
@@ -434,6 +497,15 @@ def test_gc_team_mention_routes_hierarchical_when_team_has_manager_role_label(
     _login(client, "admin1", "adminpass")
     manager_id = _make_agent(conn, "매니저")
     worker_id = _make_agent(conn, "워커")
+    # 사용자 보고(2026-10-19, "매니저의 저장된 설정을 쓰도록") — 매니저
+    # 자신에게 저장된 provider/model이 실제 run_crew() 호출에 그대로
+    # 전달되는지 함께 검증한다(이전엔 자동판별로 떨어져 무시됐었다).
+    conn.execute(
+        "UPDATE agent_pool SET llm_provider = 'ollama', llm_model = 'qwen3-coder:latest' "
+        "WHERE id = ?",
+        (manager_id,),
+    )
+    conn.commit()
     cur = conn.execute("INSERT INTO teams (name) VALUES ('자율 개발 크루 테스트')")
     conn.commit()
     team_id = cur.lastrowid
@@ -476,6 +548,8 @@ def test_gc_team_mention_routes_hierarchical_when_team_has_manager_role_label(
         _, kwargs = mock_crew.call_args
         assert kwargs["process"] == "hierarchical"
         assert kwargs["manager_agent_id"] == manager_id
+        assert kwargs["provider"] == "ollama"
+        assert kwargs["model"] == "qwen3-coder:latest"
 
 
 def test_gc_team_mention_persists_gate_scores_and_delegation_count_and_warns_against_copying_old_output(
@@ -534,11 +608,74 @@ def test_gc_team_mention_persists_gate_scores_and_delegation_count_and_warns_aga
         task_descriptions = mock_crew.call_args[0][2]
         assert "그대로 복사하거나 재사용하지 마세요" in task_descriptions[0]
         assert "구현하지 않은 기능을 구현했다고 설명하지 마세요" in task_descriptions[0]
+        # 사용자 보고(2026-10-19, "(제목 없음) 대화 분석") 재발 방지 —
+        # "복사 금지"만으로는 "위에 이미 있다"며 빈손으로 응답하는 걸
+        # 못 막았다. "이번 응답에 직접 완성된 산출물을 포함하라"는
+        # 명시적 요구가 들어가는지 확인한다.
+        assert "이번 응답 자체에 실제로" in task_descriptions[0]
 
     messages = client.get(f"/api/conversations/{conv_id}/messages").json()
     agent_msg = next(m for m in messages if m["author_type"] == "agent")
     assert agent_msg["gate_scores"] == bad_gate_scores
     assert agent_msg["delegation_count"] == 1
+
+
+def test_strip_large_code_fences_replaces_long_blocks_only():
+    """사용자 보고(2026-10-19, "(제목 없음) 대화 분석") — 실측 재현:
+    기획서 작성자가 §5에 265줄짜리 완성된 게임 코드를 포함한 기획서를
+    쓰면, `_build_transcript()`가 그 코드를 글자 수 제한 없이 그대로
+    다음 실행(자율 개발 크루)에 넘겼고, 매니저는 그 코드를 복사도
+    설명도 안 한 채 "위 코드는 이미 완성돼 있다"는 한 줄만 쓰고
+    끝냈다(실제 산출물 0건). 긴 코드 블록(15줄 초과)만 생략 표시로
+    바꾸고, 맥락상 유용할 짧은 예시(15줄 이하)는 그대로 둔다."""
+    long_code = "\n".join(f"line{i}" for i in range(20))
+    content = f"설명 문단입니다.\n\n```html\n{long_code}\n```\n\n끝."
+    result = conversations._strip_large_code_fences(content)
+    assert "line0" not in result
+    assert "line19" not in result
+    assert "[코드 20줄 생략" in result
+    assert "```html" in result  # 펜스 마커/언어 태그는 유지
+    assert "설명 문단입니다." in result
+    assert "끝." in result
+
+    short_code = "\n".join(f"line{i}" for i in range(5))
+    short_content = f"```js\n{short_code}\n```"
+    assert conversations._strip_large_code_fences(short_content) == short_content  # 15줄 이하는 그대로
+
+
+def test_business_plan_writing_guide_forbids_full_source_code():
+    """사용자 보고(2026-10-19, "(제목 없음) 대화 분석") — "기획서 작성자"
+    (스킬: business-plan-writing-guide)가 사업계획서 역할을 벗어나
+    265줄짜리 완성된 게임 코드를 §5에 통째로 넣은 사례가 실측됐다.
+    이 스킬 설명(Agent 시스템 프롬프트에 그대로 들어감, `llm.
+    system_prompt_for_role()` 참고)에 "전체 소스 코드를 작성하지
+    않는다"는 경계가 명시됐는지 확인한다."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    desc = conn.execute(
+        "SELECT description FROM skill_pool WHERE name = 'business-plan-writing-guide'"
+    ).fetchone()["description"]
+    assert "전체 소스 코드를 작성하지 않는다" in desc
+    assert "구현은 개발 역할의 몫" in desc
+
+
+def test_build_transcript_omits_large_past_code_blocks(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "코드방"}).json()["id"]
+    client.patch(f"/api/conversations/{conv_id}/ai-auto-reply", json={"enabled": False})
+    long_code = "\n".join(f"console.log({i})" for i in range(30))
+    conn.execute(
+        "INSERT INTO conversation_messages (conversation_id, author_type, author_id, content) "
+        "VALUES (?, 'agent', 0, ?)",
+        (conv_id, f"# 기획서\n\n## 산출물\n\n```js\n{long_code}\n```"),
+    )
+    conn.commit()
+
+    transcript = conversations._build_transcript(conn, conv_id)
+    assert "console.log(0)" not in transcript
+    assert "[코드 30줄 생략" in transcript
+    assert "# 기획서" in transcript  # 코드 밖 본문은 그대로 유지
 
 
 def test_gc_team_mention_translates_json_decode_error_for_user(client_and_conn):

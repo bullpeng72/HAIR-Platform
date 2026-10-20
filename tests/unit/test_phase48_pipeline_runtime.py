@@ -44,7 +44,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
     gate_scores = gate_scores or {"A": {"score": 0.9, "passed": True}, "B": {"not_measured": True}}
 
     def _fn(conn, agent_ids, task_descriptions, actor_id, process="sequential",
-            provider=None, model=None, manager_agent_id=None):
+            provider=None, model=None, manager_agent_id=None, expected_outputs=None):
         return {
             "final_output": "최종산출물",
             "agents": [
@@ -175,11 +175,11 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
     calls = []
 
     def _tracking_run_crew(conn, agent_ids, task_descriptions, actor_id, process="sequential",
-                            provider=None, model=None, manager_agent_id=None):
+                            provider=None, model=None, manager_agent_id=None, expected_outputs=None):
         calls.append({"agent_ids": agent_ids, "process": process, "manager_agent_id": manager_agent_id,
-                      "descriptions": task_descriptions})
+                      "descriptions": task_descriptions, "expected_outputs": expected_outputs})
         return _good_run_crew()(conn, agent_ids, task_descriptions, actor_id, process, provider,
-                                 model, manager_agent_id)
+                                 model, manager_agent_id, expected_outputs)
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew):
         run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
@@ -200,6 +200,128 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
     assert all(d["status"] == "approved" for d in deliverables_rows)  # 승인 불필요 단계는 자동 승인
 
 
+def test_is_primary_deliverable_round_trips_through_add_stage_and_template():
+    """사용자 보고(2026-10-19, "최종 결과물에 코드가 아니라 품질 리포트만
+    있다") — `is_primary_deliverable`이 `add_stage()` → `get_pipeline_
+    template()` → `update_stage()`까지 제대로 저장/반영되는지 확인."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+
+    tid = pr.create_pipeline_template(conn, admin_id, "p-primary", "", "x")
+    s1 = pr.add_stage(conn, admin_id, tid, "설계", "single", [("AA", "")])
+    s2 = pr.add_stage(conn, admin_id, tid, "구현", "single", [("개발자", "")],
+                       is_primary_deliverable=True)
+
+    tpl = pr.get_pipeline_template(conn, tid)
+    assert tpl["stages"][0]["is_primary_deliverable"] is False
+    assert tpl["stages"][1]["is_primary_deliverable"] is True
+
+    pr.update_stage(conn, admin_id, s1, is_primary_deliverable=True)
+    pr.update_stage(conn, admin_id, s2, is_primary_deliverable=False)
+    tpl2 = pr.get_pipeline_template(conn, tid)
+    assert tpl2["stages"][0]["is_primary_deliverable"] is True
+    assert tpl2["stages"][1]["is_primary_deliverable"] is False
+
+
+def test_primary_deliverable_stage_output_identifiable_via_list_pipeline_runs_for_task():
+    """위와 같은 사용자 보고의 핵심 — Task 워크스페이스가 폴링하는
+    `list_pipeline_runs_for_task()`의 `stage_results`에서 "구현" 단계의
+    deliverable만 `is_primary_deliverable=True`로 식별 가능해야, 맨 나중에
+    도는 검증/판정 단계의 결과물이 아니라 실제 구현 결과물을 "최종
+    결과물"로 고를 수 있다(webui.py `renderCollabWorkspace`가 바로 이
+    필드로 고른다)."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+    task_id = _make_task(conn)
+    tid = pr.create_pipeline_template(conn, admin_id, "p3", "", "x")
+    pr.add_stage(conn, admin_id, tid, "구현", "single", [("개발자", "")],
+                 is_primary_deliverable=True)
+    pr.add_stage(conn, admin_id, tid, "품질 관리 최종 판정", "single", [("코드 검증가", "")])
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
+        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+
+    runs = pr.list_pipeline_runs_for_task(conn, task_id)
+    assert len(runs) == 1
+    stage_results = runs[0]["stage_results"]
+    assert len(stage_results) == 2
+    primary = [sr for sr in stage_results if sr["is_primary_deliverable"]]
+    assert len(primary) == 1
+    assert primary[0]["stage_name"] == "구현"
+    assert primary[0]["deliverable_id"] is not None
+    non_primary = [sr for sr in stage_results if not sr["is_primary_deliverable"]]
+    assert non_primary[0]["stage_name"] == "품질 관리 최종 판정"
+    # 품질 판정 단계가 시간상 나중이라도(created_at 비교로는 걸러지지 않음)
+    # is_primary_deliverable 플래그로 구현 단계의 deliverable_id를 구분해낼 수 있다.
+    assert primary[0]["deliverable_id"] != non_primary[0]["deliverable_id"]
+
+
+def test_expected_output_round_trips_through_add_stage_and_update_stage():
+    """사용자 요청(2026-10-20, "고급 에이전트 관리") —
+    `pipeline_stages.expected_output`이 `add_stage()`→`get_pipeline_
+    template()`→`update_stage()`까지 제대로 저장/반영되는지 확인
+    (`is_primary_deliverable`과 같은 패턴)."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+
+    tid = pr.create_pipeline_template(conn, admin_id, "p-expected-output", "", "x")
+    s1 = pr.add_stage(conn, admin_id, tid, "설계", "single", [("AA", "")])
+    s2 = pr.add_stage(
+        conn, admin_id, tid, "QA 기능테스트", "single", [("QA", "")],
+        expected_output="실제로 실행 가능한 테스트 코드와 통과/실패 리포트",
+    )
+
+    tpl = pr.get_pipeline_template(conn, tid)
+    assert tpl["stages"][0]["expected_output"] == ""  # 기본값
+    assert tpl["stages"][1]["expected_output"] == "실제로 실행 가능한 테스트 코드와 통과/실패 리포트"
+
+    pr.update_stage(conn, admin_id, s1, expected_output="설계 문서(ERD/API 스펙)")
+    tpl2 = pr.get_pipeline_template(conn, tid)
+    assert tpl2["stages"][0]["expected_output"] == "설계 문서(ERD/API 스펙)"
+
+    # s2를 빈 문자열로 되돌리면 플랫폼 공통 기본값으로 폴백(crew_runtime.
+    # run_crew()가 falsy 체크로 처리 — 여기선 저장값만 확인).
+    pr.update_stage(conn, admin_id, s2, expected_output="")
+    tpl3 = pr.get_pipeline_template(conn, tid)
+    assert tpl3["stages"][1]["expected_output"] == ""
+
+
+def test_execute_stage_attempt_passes_stage_expected_output_to_run_crew():
+    """단계에 저장한 `expected_output`이 실제로 `crew_runtime.run_crew()`
+    호출의 `expected_outputs` 인자로 넘어가는지 — 참여 Agent 수만큼
+    같은 값이 반복돼야 한다(`_execute_stage_attempt()`의 `task_
+    descriptions`와 같은 모양)."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+    task_id = _make_task(conn)
+    tid = pr.create_pipeline_template(conn, admin_id, "p-eo-passthrough", "", "x")
+    pr.add_stage(
+        conn, admin_id, tid, "구현", "sequential_relay",
+        [("AA", ""), ("개발자", "")],
+        expected_output="동작하는 코드 한 벌",
+    )
+
+    calls = []
+
+    def _tracking(conn, agent_ids, task_descriptions, actor_id, process="sequential",
+                  provider=None, model=None, manager_agent_id=None, expected_outputs=None):
+        calls.append(expected_outputs)
+        return _good_run_crew()(conn, agent_ids, task_descriptions, actor_id, process,
+                                 provider, model, manager_agent_id, expected_outputs)
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking):
+        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+
+    assert len(calls) == 1
+    assert calls[0] == ["동작하는 코드 한 벌", "동작하는 코드 한 벌"]
+
+
 def test_gate_failure_retries_with_feedback_then_escalates():
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
@@ -213,10 +335,11 @@ def test_gate_failure_retries_with_feedback_then_escalates():
     descriptions_seen = []
 
     def _bad_run_crew(conn, agent_ids, task_descriptions, actor_id, process="sequential",
-                       provider=None, model=None, manager_agent_id=None):
+                       provider=None, model=None, manager_agent_id=None, expected_outputs=None):
         descriptions_seen.append(task_descriptions[0])
         return _good_run_crew(gate_scores=bad_gate, tcr=10.0)(
-            conn, agent_ids, task_descriptions, actor_id, process, provider, model, manager_agent_id
+            conn, agent_ids, task_descriptions, actor_id, process, provider, model,
+            manager_agent_id, expected_outputs,
         )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_bad_run_crew):
@@ -258,6 +381,9 @@ def test_resolve_stage_decision_approve_advances_to_next_stage():
         approval = conn.execute(
             "SELECT * FROM approvals WHERE subject_type='pipeline_run_stage'"
         ).fetchone()
+        approved_run_stage = conn.execute(
+            "SELECT * FROM pipeline_run_stages WHERE id=?", (approval["subject_id"],)
+        ).fetchone()
         returned_run_id = pr.resolve_stage_decision(
             conn, admin_id, approval["subject_id"], approved=True
         )
@@ -265,10 +391,47 @@ def test_resolve_stage_decision_approve_advances_to_next_stage():
         run = conn.execute("SELECT * FROM pipeline_runs WHERE id=?", (run_id,)).fetchone()
         assert run["status"] == "running"
         assert run["current_stage_seq"] == 2
+        # 실측 버그(2026-10-19, "내게 필요한 조치"에 같은 업무가 중복
+        # 표시됨) — 사람이 파이프라인 단계를 승인했으면 그 단계의
+        # deliverable도 'pending_review'에 머물지 않고 함께 'approved'로
+        # 바뀌어야 한다(안 바뀌면 inbox의 low_gate_score 항목이 계속
+        # "아직 조치 필요"로 집어옴).
+        d = conn.execute(
+            "SELECT status FROM deliverables WHERE id=?",
+            (approved_run_stage["deliverable_id"],),
+        ).fetchone()
+        assert d["status"] == "approved"
         pr.run_pipeline_stage_job(conn, run_id, admin_id)
 
     run = conn.execute("SELECT * FROM pipeline_runs WHERE id=?", (run_id,)).fetchone()
     assert run["status"] == "completed"
+
+
+def test_resolve_stage_decision_reject_also_rejects_the_deliverable():
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+    task_id = _make_task(conn)
+    tid = pr.create_pipeline_template(conn, admin_id, "p5", "", "x")
+    pr.add_stage(conn, admin_id, tid, "s1", "single", [("요구사항 분석가", "")],
+                 requires_human_approval=True, max_retry=0)
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
+        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+        approval = conn.execute(
+            "SELECT * FROM approvals WHERE subject_type='pipeline_run_stage'"
+        ).fetchone()
+        rejected_run_stage = conn.execute(
+            "SELECT * FROM pipeline_run_stages WHERE id=?", (approval["subject_id"],)
+        ).fetchone()
+        pr.resolve_stage_decision(conn, admin_id, approval["subject_id"], approved=False)
+
+    d = conn.execute(
+        "SELECT status FROM deliverables WHERE id=?",
+        (rejected_run_stage["deliverable_id"],),
+    ).fetchone()
+    assert d["status"] == "rejected"
 
 
 # ---------- HTTP 엔드포인트(사용자 요청, "화면에서 단계를 직접 구성하는

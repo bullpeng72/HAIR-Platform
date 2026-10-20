@@ -286,3 +286,58 @@ def set_tuning_config(conn: sqlite3.Connection, agent_id: int, actor_id: int, tu
     )
     conn.commit()
     return cleaned
+
+
+def set_persona(conn: sqlite3.Connection, agent_id: int, actor_id: int, **fields) -> dict:
+    """사용자 요청(2026-10-20, "CrewAI 에이전트... goal, backstory...
+    상세조정하고 수정하기 위한 고급 에이전트 관리 기능") — 지금까지
+    `Agent.goal`/`backstory`/`Task.expected_output`은 전부
+    `crew_runtime.py`가 role_name+skill_tags로 매번 자동 생성하거나
+    (goal/backstory) 플랫폼 전역 하드코딩 문구 하나뿐이었다
+    (expected_output) — 관리자가 덮어쓸 방법이 없었다.
+
+    `fields`에서 빈 문자열(`""`)을 주면 그 필드를 **명시적으로 비워**
+    "자동 생성으로 되돌린다"는 뜻이다(`crew_runtime.py`가 소비할 때
+    `row["goal"] or _agent_goal(...)`처럼 falsy 체크 하나로 폴백한다 —
+    `None`/빈 문자열 모두 "오버라이드 없음"으로 취급). 필드를 아예 안
+    보내면(`exclude_unset`) 기존 값을 그대로 둔다 — `set_tuning_config()`
+    와 달리 부분 필드만 바꿀 수 있어야 하므로(goal만 바꾸고 backstory는
+    유지하는 등) `tuning_config`처럼 JSON 통째로 덮어쓰지 않고 컬럼별로
+    갱신한다."""
+    allowed = {"goal", "backstory", "expected_output"}
+    unknown = set(fields) - allowed
+    if unknown:
+        raise ValueError(f"unsupported_fields:{sorted(unknown)}")
+    agent = conn.execute(
+        "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
+    ).fetchone()
+    if agent is None:
+        raise ValueError("agent_not_found")
+    if not fields:
+        return {
+            "goal": agent["goal"],
+            "backstory": agent["backstory"],
+            "expected_output": agent["expected_output"],
+        }
+
+    set_clauses = [f"{key} = ?" for key in fields]
+    values = list(fields.values()) + [agent_id]
+    conn.execute(
+        f"UPDATE agent_pool SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+        values,
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "agent_persona_updated",
+        "agent_pool",
+        agent_id,
+        before={k: agent[k] for k in fields},
+        after=fields,
+    )
+    conn.commit()
+    updated = conn.execute(
+        "SELECT goal, backstory, expected_output FROM agent_pool WHERE id = ?",
+        (agent_id,),
+    ).fetchone()
+    return dict(updated)

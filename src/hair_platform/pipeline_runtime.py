@@ -51,7 +51,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from hair_platform import agent_evaluation, approvals, audit, crew_runtime
+from hair_platform import agent_evaluation, approvals, audit, crew_runtime, deliverables
 
 VALID_MODES = ("single", "sequential_relay", "parallel_delegated")
 GATE_IDS = ["A", "B", "C", "D", "E", "F", "G"]
@@ -102,6 +102,8 @@ def _stage_to_dict(conn: sqlite3.Connection, stage_row: sqlite3.Row) -> dict:
         "min_gate_pass_ratio": stage_row["min_gate_pass_ratio"],
         "max_retry": stage_row["max_retry"],
         "requires_human_approval": bool(stage_row["requires_human_approval"]),
+        "is_primary_deliverable": bool(stage_row["is_primary_deliverable"]),
+        "expected_output": stage_row["expected_output"],
         "agents": [
             {
                 "role_name": a["role_name"],
@@ -226,11 +228,17 @@ def add_stage(
     min_gate_pass_ratio: float = 0.0,
     max_retry: int = 2,
     requires_human_approval: bool = False,
+    is_primary_deliverable: bool = False,
+    expected_output: str = "",
 ) -> int:
     """`agents`는 `(role_name, instructions)` 튜플 목록, 입력 순서가
     `sequential_relay`의 처리 순서가 된다(`parallel_delegated`는 순서
     무의미 — 리드가 알아서 나눠 위임). `single`은 `agents`가 정확히
-    1개여야 한다."""
+    1개여야 한다.
+
+    `expected_output`(사용자 요청, 2026-10-20, "고급 에이전트 관리") —
+    이 단계의 `Task.expected_output` 기본값. 빈 문자열이면
+    `crew_runtime.run_crew()`의 플랫폼 공통 기본 문구를 그대로 쓴다."""
     name = name.strip()
     if not name:
         raise ValueError("empty_stage_name")
@@ -263,7 +271,8 @@ def add_stage(
     cur = conn.execute(
         "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
         "lead_role_name, instructions, gate_ids, min_gate_pass_ratio, max_retry, "
-        "requires_human_approval) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "requires_human_approval, is_primary_deliverable, expected_output) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             template_id,
             next_seq,
@@ -275,6 +284,8 @@ def add_stage(
             min_gate_pass_ratio,
             max_retry,
             1 if requires_human_approval else 0,
+            1 if is_primary_deliverable else 0,
+            expected_output,
         ),
     )
     stage_id = cur.lastrowid
@@ -305,6 +316,8 @@ def update_stage(conn: sqlite3.Connection, actor_id: int, stage_id: int, **field
         "min_gate_pass_ratio",
         "max_retry",
         "requires_human_approval",
+        "is_primary_deliverable",
+        "expected_output",
     }
     unknown = set(fields) - allowed
     if unknown:
@@ -321,7 +334,7 @@ def update_stage(conn: sqlite3.Connection, actor_id: int, stage_id: int, **field
     for key, value in fields.items():
         if key == "gate_ids":
             value = json.dumps(value, ensure_ascii=False)
-        elif key == "requires_human_approval":
+        elif key in ("requires_human_approval", "is_primary_deliverable"):
             value = 1 if value else 0
         set_clauses.append(f"{key} = ?")
         values.append(value)
@@ -600,6 +613,12 @@ def _execute_stage_attempt(
         process = "sequential"
         manager_agent_id = None
 
+    # 사용자 요청(2026-10-20, "고급 에이전트 관리") — 이 단계에 저장된
+    # `expected_output`(없으면 빈 문자열)을 모든 참여 Agent에 동일하게
+    # 전달한다. `run_crew()`가 빈 값이면 그 Agent 자신의 저장된 기본값 →
+    # 플랫폼 공통 문구 순으로 추가 폴백한다.
+    expected_outputs = [stage["expected_output"]] * len(run_agent_ids)
+
     result = crew_runtime.run_crew(
         conn,
         run_agent_ids,
@@ -607,6 +626,7 @@ def _execute_stage_attempt(
         actor_id,
         process=process,
         manager_agent_id=manager_agent_id,
+        expected_outputs=expected_outputs,
     )
     gate_scores = result["gate_scores"]
     tcr = result["tcr"]
@@ -744,6 +764,22 @@ def resolve_stage_decision(
             "UPDATE pipeline_run_stages SET status = 'approved' WHERE id = ?",
             (pipeline_run_stage_id,),
         )
+        # 실측 버그(2026-10-19, 사용자 보고 — "내게 필요한 조치"에 같은
+        # 업무가 중복 표시됨): 여기서 `pipeline_run_stages.status`만
+        # 'approved'로 바꾸고 그 단계가 만든 `deliverables.status`는
+        # 그대로 'pending_review'에 남겨뒀었다 — Gate 경고가 있는 채로
+        # 사람 승인까지 끝난 단계인데도 `inbox.get_inbox()`의
+        # `low_gate_score` 항목(판정 기준: status=='pending_review' +
+        # 낮은 Gate)이 계속 그 deliverable을 "아직 조치 필요"로 집어
+        # 올렸다. 같은 task가 파이프라인을 여러 번 돌리면(재시도 등)
+        # 회차마다 다른 deliverable_id가 남아, 화면엔 똑같은 문구의
+        # 카드가 회차 수만큼 중복으로 보였다. 사람 승인 자체가 그
+        # deliverable에 대한 최종 결정이므로, 파이프라인 단계 결정을
+        # deliverable 상태에도 그대로 반영한다.
+        if run_stage["deliverable_id"] is not None:
+            deliverables.resolve_deliverable_decision(
+                conn, run_stage["deliverable_id"], True
+            )
         next_seq = run["current_stage_seq"] + 1
         has_next = conn.execute(
             "SELECT 1 FROM pipeline_stages WHERE pipeline_template_id = ? AND seq_order = ?",
@@ -772,6 +808,10 @@ def resolve_stage_decision(
             "UPDATE pipeline_run_stages SET status = 'rejected' WHERE id = ?",
             (pipeline_run_stage_id,),
         )
+        if run_stage["deliverable_id"] is not None:
+            deliverables.resolve_deliverable_decision(
+                conn, run_stage["deliverable_id"], False
+            )
         if run_stage["attempt"] < stage["max_retry"]:
             conn.execute(
                 "UPDATE pipeline_runs SET status = 'running' WHERE id = ?", (run_id,)
@@ -802,7 +842,8 @@ def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[
             (run["pipeline_template_id"],),
         ).fetchone()
         stage_results = conn.execute(
-            "SELECT prs.*, ps.name AS stage_name, ps.seq_order AS stage_seq_order "
+            "SELECT prs.*, ps.name AS stage_name, ps.seq_order AS stage_seq_order, "
+            "ps.is_primary_deliverable AS stage_is_primary_deliverable "
             "FROM pipeline_run_stages prs "
             "JOIN pipeline_stages ps ON ps.id = prs.stage_id "
             "WHERE prs.pipeline_run_id = ? ORDER BY ps.seq_order, prs.attempt",
@@ -827,6 +868,7 @@ def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[
                         "gate_scores": json.loads(sr["gate_scores"]) if sr["gate_scores"] else None,
                         "tcr": sr["tcr"],
                         "deliverable_id": sr["deliverable_id"],
+                        "is_primary_deliverable": bool(sr["stage_is_primary_deliverable"]),
                     }
                     for sr in stage_results
                 ],

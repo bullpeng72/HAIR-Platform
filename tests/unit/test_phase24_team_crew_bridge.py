@@ -277,6 +277,266 @@ def test_gc241_two_teams_on_one_task_execute_independently(client_and_conn):
     assert contents == {"A팀 결과", "B팀 결과"}
 
 
+# ---------- Crew 빌더(2026-10-20) — 팀 사전 등록 없는 즉석 Crew 실행 ----------
+
+
+def test_adhoc_crew_execution_available_to_any_task_participant_not_just_team(
+    client_and_conn,
+):
+    """핵심 검증 — 팀을 전혀 만들지 않고도(위임만으로 참가자가 된 사람)
+    즉석으로 Agent를 골라 바로 실행할 수 있어야 한다. 기존 "팀 Agent
+    실행"은 팀 리더/팀원으로 좁히지만, 즉석 실행은 이 Task의 confirmed
+    배정에 걸린 사람이면 누구나(위임 요청자 포함) 쓸 수 있다."""
+    from hair_platform import assignments
+
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_id = _make_task(client, "즉석 실행 업무")
+    agent_id = _make_active_agent(conn, "카피 초안")
+    member_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'member1'"
+    ).fetchone()["id"]
+    # 팀 없이, 위임(delegation)만으로 member1을 이 task의 참가자("requester")
+    # 로 만든다 — create_delegation()은 즉시 confirmed된다.
+    assignments.create_delegation(conn, task_id, agent_id, member_id)
+
+    _login(client, "member1", "memberpass")
+    with patch(
+        "crewai.Crew.kickoff", return_value=_crew_output("즉석 결과", ["즉석 결과"])
+    ):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-adhoc-crew",
+            json={"agent_ids": [agent_id], "task_descriptions": ["카피를 작성하세요"]},
+        )
+    assert resp.status_code == 202, resp.text
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    agent_delivs = [d for d in resp.json() if d["author_type"] == "agent"]
+    assert len(agent_delivs) == 1
+    assert agent_delivs[0]["content"] == "즉석 결과"
+    assert agent_delivs[0]["status"] == "pending_review"
+
+
+def test_adhoc_crew_execution_rejects_non_participant(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_id = _make_task(client, "즉석 실행 거부 업무")
+    agent_id = _make_active_agent(conn, "카피 초안")
+
+    _login(client, "member1", "memberpass")
+    resp = client.post(
+        f"/api/tasks/{task_id}/execute-adhoc-crew",
+        json={"agent_ids": [agent_id], "task_descriptions": ["아무거나"]},
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_adhoc_crew_execution_lets_each_agent_have_a_different_task_description(
+    client_and_conn,
+):
+    """즉석 실행만의 장점 — "팀 Agent 실행"은 전원에게 같은 설명을
+    주지만, 즉석 실행은 Agent별로 서로 다른 지시를 줄 수 있다(실제
+    CrewAI Task 객체까지 inspect — `_kickoff_capture` 패턴)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    task_id = _make_task(client, "역할 분담 업무")
+    agent1 = _make_active_agent(conn, "카피 초안")
+    agent2 = _make_active_agent(conn, "디자인 가이드")
+
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["crew"] = self
+        return _crew_output("최종", ["카피 결과", "디자인 결과"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-adhoc-crew",
+            json={
+                "agent_ids": [agent1, agent2],
+                "task_descriptions": ["카피를 작성하세요", "디자인 가이드를 작성하세요"],
+            },
+        )
+    assert resp.status_code == 202, resp.text
+
+    crew = captured["crew"]
+    assert "카피를 작성하세요" in crew.tasks[0].description
+    assert "디자인 가이드를 작성하세요" in crew.tasks[1].description
+
+    resp = client.get(f"/api/tasks/{task_id}/deliverables")
+    contents = {d["content"] for d in resp.json() if d["author_type"] == "agent"}
+    assert contents == {"카피 결과", "디자인 결과"}
+
+
+def test_adhoc_crew_execution_rejects_inactive_agent(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    task_id = _make_task(client, "비활성 Agent 거부 업무")
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('아직 온보딩 안 됨', '[]', 'pending_onboarding')"
+    )
+    inactive_agent_id = cur.lastrowid
+    conn.commit()
+
+    resp = client.post(
+        f"/api/tasks/{task_id}/execute-adhoc-crew",
+        json={"agent_ids": [inactive_agent_id], "task_descriptions": ["아무거나"]},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_adhoc_crew_execution_rejects_mismatched_agent_and_description_counts(
+    client_and_conn,
+):
+    """사용자 요청(2026-10-20) — 길이가 안 맞으면 job 행을 만들기 전에
+    즉시 400으로 막아야 한다(먼저 job을 만들고 뒤늦게 막으면 그
+    job들이 영원히 'running'에 갇힌다)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    task_id = _make_task(client, "개수 불일치 거부 업무")
+    agent1 = _make_active_agent(conn, "카피 초안")
+    agent2 = _make_active_agent(conn, "디자인 가이드")
+
+    resp = client.post(
+        f"/api/tasks/{task_id}/execute-adhoc-crew",
+        json={"agent_ids": [agent1, agent2], "task_descriptions": ["설명 하나뿐"]},
+    )
+    assert resp.status_code == 400, resp.text
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM agent_execution_jobs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()["c"]
+        == 0
+    )
+
+
+# ---------- Crew 빌더(2026-10-20) — 실행 이력(`crew_history`) ----------
+
+
+def test_adhoc_crew_run_is_recorded_in_crew_history_with_progress(client_and_conn):
+    """즉석 Crew 실행이 `crew_runs`에 영구 기록되는지 — `on_task_
+    complete` 콜백이 실제로 Task 완료마다 호출돼 `progress`가 쌓이고,
+    끝나면 gate_scores/token_usage/agents(diagram에 쓰일 데이터)까지
+    남는지 확인한다. `self.task_callback(output)`을 직접 호출하는
+    기존 패턴(`test_gc101_run_crew_records_audit_log_per_task_via_
+    task_callback`, test_phase12)을 그대로 재사용 — `crewai.Crew.
+    kickoff`를 통째로 mock하면 CrewAI 내부 루프가 안 돌아 콜백이
+    저절로는 안 불리므로, 콜백 호출 자체를 이 mock이 흉내 낸다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    task_id = _make_task(client, "이력 기록 업무")
+    agent1 = _make_active_agent(conn, "카피 초안")
+    agent2 = _make_active_agent(conn, "디자인 가이드")
+
+    def _kickoff_with_task_callback(self, *args, **kwargs):
+        from crewai.tasks.task_output import TaskOutput
+
+        outputs = [
+            TaskOutput(description="task-0", agent="agent", raw="카피 결과"),
+            TaskOutput(description="task-1", agent="agent", raw="디자인 결과"),
+        ]
+        for output in outputs:
+            self.task_callback(output)
+        return _crew_output("최종", ["카피 결과", "디자인 결과"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_with_task_callback):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-adhoc-crew",
+            json={
+                "agent_ids": [agent1, agent2],
+                "task_descriptions": ["카피를 작성하세요", "디자인 가이드를 작성하세요"],
+            },
+        )
+    assert resp.status_code == 202, resp.text
+
+    resp = client.get(f"/api/tasks/{task_id}/crew-runs")
+    assert resp.status_code == 200, resp.text
+    runs = resp.json()
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["kind"] == "adhoc"
+    assert run["status"] == "completed"
+    assert run["team_id"] is None
+    assert set(run["agent_ids"]) == {agent1, agent2}
+    assert len(run["progress"]) == 2
+    assert run["progress"][0]["output_preview"] == "카피 결과"
+    assert run["gate_scores"] is not None
+    assert run["token_usage"] is not None
+    assert run["agents"] is not None
+    assert run["final_output"] == "최종"
+
+    resp = client.get(f"/api/crew-runs/{run['id']}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["final_output"] == "최종"
+
+    resp = client.get("/api/crew-runs")
+    assert resp.status_code == 200, resp.text
+    assert any(r["id"] == run["id"] for r in resp.json())
+
+
+def test_team_crew_run_is_recorded_in_crew_history_with_team_id(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_id = _make_task(client, "팀 이력 기록 업무")
+    agent1 = _make_active_agent(conn, "카피 초안")
+    team_id = _make_team_confirmed_on_task(client, conn, task_id, [agent1])
+
+    _login(client, "manager1", "managerpass")
+    with patch(
+        "crewai.Crew.kickoff", return_value=_crew_output("팀 결과", ["팀 결과"])
+    ):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-team-crew", json={"team_id": team_id}
+        )
+    assert resp.status_code == 202, resp.text
+
+    resp = client.get(f"/api/tasks/{task_id}/crew-runs")
+    assert resp.status_code == 200, resp.text
+    runs = resp.json()
+    assert len(runs) == 1
+    assert runs[0]["kind"] == "team"
+    assert runs[0]["team_id"] == team_id
+    assert runs[0]["status"] == "completed"
+    assert runs[0]["agent_ids"] == [agent1]
+
+
+def test_crew_run_history_records_failure_without_leaving_it_running(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    task_id = _make_task(client, "실패 이력 업무")
+    agent_id = _make_active_agent(conn, "카피 초안")
+
+    with patch("crewai.Crew.kickoff", side_effect=RuntimeError("모델 호출 실패")):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-adhoc-crew",
+            json={"agent_ids": [agent_id], "task_descriptions": ["아무거나"]},
+        )
+    assert resp.status_code == 202, resp.text
+
+    resp = client.get(f"/api/tasks/{task_id}/crew-runs")
+    runs = resp.json()
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    assert runs[0]["error"]
+    assert runs[0]["gate_scores"] is None
+
+
+def test_list_crew_runs_requires_admin_or_manager(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    resp = client.get("/api/crew-runs")
+    assert resp.status_code == 403, resp.text
+
+
+def test_get_crew_run_404_for_missing_id(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/crew-runs/999999")
+    assert resp.status_code == 404, resp.text
+
+
 def test_gc242_team_names_for_agent_reflects_membership(client_and_conn):
     from hair_platform import teams
 
@@ -433,7 +693,9 @@ def test_gc250_run_crew_for_team_auto_detects_manager_when_hierarchical_and_unse
     captured = {}
 
     def _capture_run_crew(conn, agent_ids, task_descriptions, actor_id, process="sequential",
-                           provider=None, model=None, manager_agent_id=None):
+                           provider=None, model=None, manager_agent_id=None,
+                           on_task_complete=None, memory=True, planning=False,
+                           manager_provider=None, manager_model=None):
         captured["process"] = process
         captured["manager_agent_id"] = manager_agent_id
         return _crew_output("최종", ["x"] * len(agent_ids))
@@ -465,3 +727,338 @@ def test_gc250_run_crew_for_team_auto_detects_manager_when_hierarchical_and_unse
             manager_agent_id=worker_agent,
         )
     assert captured["manager_agent_id"] == worker_agent
+
+
+# ---------- 고급 에이전트 관리(2026-10-20) — 팀 기본 process/매니저 ----------
+
+
+def test_update_team_defaults_requires_admin_or_manager_and_validates(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    manager_agent = _make_active_agent(conn, "개발 계획 수립가")
+    other_agent = _make_active_agent(conn, "다른 팀 Agent")
+    resp = client.post("/api/teams", json={"name": "기본값팀"})
+    team_id = resp.json()["id"]
+    resp = client.post(
+        f"/api/teams/{team_id}/members",
+        json={"member_type": "agent", "member_id": manager_agent},
+    )
+    assert resp.status_code == 201, resp.text
+
+    _login(client, "member1", "memberpass")
+    resp = client.patch(f"/api/teams/{team_id}", json={"default_process": "hierarchical"})
+    assert resp.status_code == 403
+
+    _login(client, "manager1", "managerpass")
+    resp = client.patch(
+        f"/api/teams/{team_id}",
+        json={"default_process": "hierarchical", "default_manager_agent_id": manager_agent},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "id": team_id,
+        "default_process": "hierarchical",
+        "default_manager_agent_id": manager_agent,
+    }
+
+    resp = client.get(f"/api/teams/{team_id}")
+    assert resp.json()["default_process"] == "hierarchical"
+    assert resp.json()["default_manager_agent_id"] == manager_agent
+
+    # 이 팀의 멤버가 아닌 Agent는 매니저로 지정할 수 없다.
+    resp = client.patch(
+        f"/api/teams/{team_id}", json={"default_manager_agent_id": other_agent}
+    )
+    assert resp.status_code == 400, resp.text
+
+    # 허용 안 된 process 값은 거부된다(Pydantic Literal 검증, 422).
+    resp = client.patch(f"/api/teams/{team_id}", json={"default_process": "parallel"})
+    assert resp.status_code == 422, resp.text
+
+    # None을 명시적으로 보내면 기본값을 지운다.
+    resp = client.patch(
+        f"/api/teams/{team_id}",
+        json={"default_process": None, "default_manager_agent_id": None},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["default_process"] is None
+    assert resp.json()["default_manager_agent_id"] is None
+
+    resp = client.patch("/api/teams/999999", json={"default_process": "sequential"})
+    assert resp.status_code == 404
+
+
+def test_manager_agent_id_for_team_prefers_explicit_default_over_role_label_heuristic(
+    client_and_conn,
+):
+    """사용자 요청(2026-10-20, "고급 에이전트 관리") — `teams.
+    default_manager_agent_id`를 명시적으로 지정해뒀으면 `role_label`
+    문자열 추정보다 우선해야 한다. 탈퇴/비활성화되면 조용히 추정으로
+    폴백해야 전체 실행이 깨지지 않는다."""
+    from hair_platform import teams
+
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    labeled_manager = _make_active_agent(conn, "기획자")
+    explicit_manager = _make_active_agent(conn, "PM")
+    resp = client.post("/api/teams", json={"name": "우선순위팀"})
+    team_id = resp.json()["id"]
+    # role_label="매니저"인 멤버와, 그와 별개로 명시적 기본값으로 지정할
+    # 또 다른 Agent 둘 다 팀에 넣는다.
+    resp = client.post(
+        f"/api/teams/{team_id}/members",
+        json={"member_type": "agent", "member_id": labeled_manager, "role_label": "매니저"},
+    )
+    assert resp.status_code == 201, resp.text
+    resp = client.post(
+        f"/api/teams/{team_id}/members",
+        json={"member_type": "agent", "member_id": explicit_manager},
+    )
+    assert resp.status_code == 201, resp.text
+
+    # 아직 default_manager_agent_id가 없으면 기존처럼 role_label 추정.
+    assert teams.manager_agent_id_for_team(conn, team_id) == labeled_manager
+
+    resp = client.patch(
+        f"/api/teams/{team_id}", json={"default_manager_agent_id": explicit_manager}
+    )
+    assert resp.status_code == 200, resp.text
+    # 명시적 기본값이 role_label 추정보다 우선한다.
+    assert teams.manager_agent_id_for_team(conn, team_id) == explicit_manager
+
+    # 지정된 매니저가 더 이상 active가 아니면 조용히 추정으로 폴백한다.
+    conn.execute(
+        "UPDATE agent_pool SET status = 'deprecated' WHERE id = ?", (explicit_manager,)
+    )
+    conn.commit()
+    assert teams.manager_agent_id_for_team(conn, team_id) == labeled_manager
+
+
+def test_execute_team_crew_endpoint_falls_back_to_team_default_process_and_manager(
+    client_and_conn,
+):
+    """사용자 요청(2026-10-20, "고급 에이전트 관리") — "팀 Agent 실행"
+    요청에 `process`/`manager_agent_id`를 안 보내면(기존 UI 기본값
+    그대로) 팀에 저장된 기본값을 쓴다. 명시적으로 보내면 여전히 그
+    값이 우선한다(기존 동작 유지)."""
+    client, conn = client_and_conn
+    manager_agent = _make_active_agent(conn, "개발 계획 수립가")
+    worker_agent = _make_active_agent(conn, "개발자")
+    _login(client, "manager1", "managerpass")
+    task_id = _make_task(client, "팀 기본값 실행 업무")
+    team_id = _make_team_confirmed_on_task(
+        client, conn, task_id, [manager_agent, worker_agent], team_name="실행기본값팀"
+    )
+    _login(client, "manager1", "managerpass")
+    resp = client.patch(
+        f"/api/teams/{team_id}",
+        json={"default_process": "hierarchical", "default_manager_agent_id": manager_agent},
+    )
+    assert resp.status_code == 200, resp.text
+
+    captured = {}
+
+    def _capture_run_team_crew_job(conn, job_by_agent_id, task_id, team_id, actor_id,
+                                    process, provider, model, manager_agent_id,
+                                    content_type="text", memory=True, planning=False,
+                                    manager_provider=None, manager_model=None):
+        captured["process"] = process
+        captured["manager_agent_id"] = manager_agent_id
+        # 실제 run_team_crew_job()을 안 태우므로, 그게 하던 "job을 종결
+        # 상태로 바꾸는" 역할을 대신한다 — 안 하면 다음 호출이 "이미
+        # 실행 중"(409)으로 막힌다.
+        for job_id in job_by_agent_id.values():
+            conn.execute(
+                "UPDATE agent_execution_jobs SET status = 'succeeded' WHERE id = ?",
+                (job_id,),
+            )
+        conn.commit()
+
+    with patch(
+        "hair_platform.deliverables.run_team_crew_job",
+        side_effect=_capture_run_team_crew_job,
+    ):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-team-crew", json={"team_id": team_id}
+        )
+        assert resp.status_code == 202, resp.text
+
+    assert captured["process"] == "hierarchical"
+    assert captured["manager_agent_id"] == manager_agent
+
+    # 명시적으로 보내면 팀 기본값보다 우선한다.
+    with patch(
+        "hair_platform.deliverables.run_team_crew_job",
+        side_effect=_capture_run_team_crew_job,
+    ):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-team-crew",
+            json={"team_id": team_id, "process": "sequential"},
+        )
+        assert resp.status_code == 202, resp.text
+    assert captured["process"] == "sequential"
+
+
+# ---------- Crew 빌더(2026-10-20) — Crew 레벨 고급 옵션(로드맵 4단계):
+# memory/planning 토글 + 매니저 전용 경량 LLM ----------
+
+
+def test_run_crew_memory_and_planning_toggle_pass_through_to_crew(client_and_conn):
+    """`memory`/`planning`이 실제 `Crew(...)` 생성자에 그대로 전달되는지
+    확인한다. `crewai.Crew.kickoff`를 통째로 mock해도 `self`는 이미 정상
+    생성된 실제 Crew 인스턴스이므로, 그 속성을 직접 읽어 검증한다(추측
+    없이 CrewAI 자신이 들고 있는 값). 기본값(둘 다 생략)이 기존 동작
+    (memory=True, planning=False)과 같은지도 같이 확인한다(하위 호환)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    from hair_platform import crew_runtime
+
+    agent1 = _make_active_agent(conn, "작가")
+    agent2 = _make_active_agent(conn, "편집자")
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["memory"] = self.memory
+        captured["planning"] = self.planning
+        return _crew_output("최종", ["x", "y"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.run_crew(
+            conn, [agent1, agent2], ["글을 쓰세요", "교정하세요"], admin_id,
+            memory=False, planning=True,
+        )
+    assert captured == {"memory": False, "planning": True}
+
+    captured.clear()
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.run_crew(
+            conn, [agent1, agent2], ["글을 쓰세요", "교정하세요"], admin_id,
+        )
+    assert captured == {"memory": True, "planning": False}
+
+
+def test_run_crew_manager_llm_uses_separate_manager_provider_when_auto_manager(client_and_conn):
+    """매니저를 자동 배정(`manager_agent_id=None`)한 hierarchical 실행에서
+    `manager_provider`/`manager_model`을 지정하면, 워커 전체가 쓰는 LLM과는
+    분리된 매니저 전용 LLM이 구성되는지 확인한다 — Agent 전체를
+    `agent_pool`에 등록하지 않고도 매니저만 더 가볍거나 다른 모델로 돌릴
+    수 있게 하는 것이 이 기능의 목적(사용자 요청, 2026-10-20, "Crew
+    레벨 고급 옵션")."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    from hair_platform import crew_runtime
+
+    agent1 = _make_active_agent(conn, "작가")
+    agent2 = _make_active_agent(conn, "편집자")
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["manager_llm_model"] = self.manager_llm.model if self.manager_llm else None
+        captured["worker_llm_model"] = self.agents[0].llm.model
+        return _crew_output("최종", ["x", "y"])
+
+    # provider="openai"(테스트 환경의 `.env`에 OPENAI_API_KEY가 있어
+    # 실제 LLM 생성이 가능), manager_provider="ollama"(API 키가
+    # 필요 없는 로컬 provider)로 서로 다른 provider임을 확인한다 —
+    # anthropic은 이 테스트 환경에 키가 없어 LLM 생성 자체가 실패한다.
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.run_crew(
+            conn, [agent1, agent2], ["글을 쓰세요", "교정하세요"], admin_id,
+            process="hierarchical", provider="openai", model="gpt-4o-mini",
+            manager_provider="ollama", manager_model="llama3.1",
+        )
+    # openai는 crewai가 "네이티브 provider"로 다뤄 `self.model`에서
+    # provider 접두어를 벗겨내고(`"gpt-4o-mini"`), ollama는 네이티브가
+    # 아니라 LiteLLM로 폴백해 접두어를 그대로 유지한다(`"ollama/..."`)
+    # — 둘 다 crewai 자신의 실제 동작이라 그대로 검증한다.
+    assert captured["manager_llm_model"] == "ollama/llama3.1"
+    assert captured["worker_llm_model"] == "gpt-4o-mini"
+    assert captured["manager_llm_model"] != captured["worker_llm_model"]
+
+
+def test_run_crew_manager_llm_falls_back_to_worker_llm_when_manager_provider_not_set(
+    client_and_conn,
+):
+    """`manager_provider`/`manager_model`을 안 주면(기본값) 기존처럼
+    워커와 같은 LLM을 매니저에도 그대로 쓴다(하위 호환 — 이전엔 이게
+    유일한 동작이었다)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    from hair_platform import crew_runtime
+
+    agent1 = _make_active_agent(conn, "작가")
+    agent2 = _make_active_agent(conn, "편집자")
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["manager_llm_model"] = self.manager_llm.model if self.manager_llm else None
+        captured["worker_llm_model"] = self.agents[0].llm.model
+        return _crew_output("최종", ["x", "y"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.run_crew(
+            conn, [agent1, agent2], ["글을 쓰세요", "교정하세요"], admin_id,
+            process="hierarchical", provider="openai", model="gpt-4o-mini",
+        )
+    assert captured["manager_llm_model"] == captured["worker_llm_model"] == "gpt-4o-mini"
+
+
+def test_execute_team_crew_rejects_member_setting_planning_or_manager_llm(client_and_conn):
+    """`planning`/`manager_provider`/`manager_model`은 provider/model과
+    같은 이유(비용에 직접 영향)로 팀원은 설정할 수 없다(기존 provider/
+    model 제한을 그대로 확장). `memory`는 비용을 늘리는 방향이 아니라
+    (OPENAI_API_KEY 없이 쓰기 위한 방어적 toggle) 팀원도 설정할 수
+    있게 구분해서 둔다 — 마지막 요청은 400이 아니라 403(참가자가 아님)
+    이어야 그 구분이 실제로 적용됐다는 뜻이다."""
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_id = _make_task(client)
+    agent_id = _make_active_agent(conn, "작가")
+    team_id = _make_team_confirmed_on_task(client, conn, task_id, [agent_id])
+
+    _login(client, "member1", "memberpass")
+    for extra in (
+        {"planning": True},
+        {"manager_provider": "openai"},
+        {"manager_model": "gpt-4o-mini"},
+    ):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-team-crew",
+            json={"team_id": team_id, **extra},
+        )
+        assert resp.status_code == 400, resp.text
+
+    resp = client.post(
+        f"/api/tasks/{task_id}/execute-team-crew",
+        json={"team_id": team_id, "memory": False},
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_execute_adhoc_crew_rejects_member_setting_planning_or_manager_llm(client_and_conn):
+    """같은 제한을 "업무에 바로 실행"(즉석 Crew) 경로에도 똑같이
+    확인한다 — 두 엔드포인트가 같은 게이팅 로직을 각자 복제해 두고
+    있어 하나만 고치고 잊어버릴 위험이 있다."""
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_id = _make_task(client)
+    agent_id = _make_active_agent(conn, "작가")
+
+    _login(client, "member1", "memberpass")
+    for extra in (
+        {"planning": True},
+        {"manager_provider": "openai"},
+        {"manager_model": "gpt-4o-mini"},
+    ):
+        resp = client.post(
+            f"/api/tasks/{task_id}/execute-adhoc-crew",
+            json={
+                "agent_ids": [agent_id],
+                "task_descriptions": ["글을 쓰세요"],
+                **extra,
+            },
+        )
+        assert resp.status_code == 400, resp.text

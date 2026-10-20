@@ -414,6 +414,17 @@ CREATE TABLE IF NOT EXISTS pipeline_stages (
     min_gate_pass_ratio REAL NOT NULL DEFAULT 0.0,
     max_retry INTEGER NOT NULL DEFAULT 2,
     requires_human_approval INTEGER NOT NULL DEFAULT 0,
+    -- 사용자 보고(2026-10-19, "Todo 앱의 최종 결과물에 코드가 포함돼야
+    -- 하는데 품질 리포트만 있다") 원인 분석 — Task 협업 워크스페이스의
+    -- "최종 결과물"은 지금까지 "가장 최근에 approved된 deliverable"을
+    -- 그대로 집었다. 파이프라인 단계는 승인 불필요 단계가 전부 자동
+    -- approved로 쌓이는데, 마지막 단계(코드 검증/QA/품질 판정류)가
+    -- 시간상 항상 가장 나중이라 "검증 결과 텍스트"가 "진짜 산출물"
+    -- (예: 구현 단계의 코드)을 밀어내고 최종 결과물 자리를 차지했다.
+    -- 어느 단계의 산출물이 "진짜 최종 산출물"인지는 템플릿 작성자만
+    -- 알 수 있어(코드/기획서/보고서 등 도메인마다 다름) 단계별로
+    -- 명시적으로 표시해둔다.
+    is_primary_deliverable INTEGER NOT NULL DEFAULT 0,
     UNIQUE(pipeline_template_id, seq_order)
 );
 
@@ -461,6 +472,43 @@ CREATE TABLE IF NOT EXISTS pipeline_run_stages (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     finished_at TEXT
 );
+
+-- 사용자 요청(2026-10-20, "crewai의 잠재력을 모두 끌어내고... Crew 빌더"
+-- 로드맵 3단계, "실행 이력 + 진행 가시성") — 파이프라인 실행
+-- (pipeline_runs)만 DB에 남고, 팀 Crew 실행·즉석 Crew 실행은 실행
+-- 즉시 흩어진 deliverables/agent_execution_jobs 행으로만 남아 "이
+-- Crew가 언제 누구랑 무슨 설정으로 돌았는지, 협업 다이어그램·토큰
+-- 사용량이 어땠는지"를 한 번에 볼 방법이 없었다(admin 전용 즉석
+-- 테스트 샌드박스에서만 실행 직후 한 번 보여주고 사라짐). 이 테이블이
+-- 팀 Crew·즉석 Crew 실행 둘 다 영구 기록한다 — `kind`로 어느 경로인지
+-- 구분한다('team'은 team_id가 채워짐, 'adhoc'은 NULL).
+-- `progress`는 CrewAI `task_callback`이 Task 완료마다 추가하는
+-- {agent_role, output_preview} 배열(JSON) — 실행 중에도 폴링으로
+-- "N명 중 M명 완료"를 보여줄 수 있게 미리 기록해둔다.
+CREATE TABLE IF NOT EXISTS crew_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    kind TEXT NOT NULL CHECK (kind IN ('team', 'adhoc')),
+    team_id INTEGER REFERENCES teams(id),
+    requested_by INTEGER NOT NULL REFERENCES users(id),
+    agent_ids TEXT NOT NULL DEFAULT '[]',
+    process TEXT NOT NULL,
+    manager_agent_id INTEGER REFERENCES agent_pool(id),
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'completed', 'failed')),
+    progress TEXT NOT NULL DEFAULT '[]',
+    gate_scores TEXT,
+    tcr REAL,
+    token_usage TEXT,
+    delegations TEXT,
+    agent_outputs TEXT,
+    final_output TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_crew_runs_task_id ON crew_runs(task_id);
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_run_stages_run_id
     ON pipeline_run_stages(pipeline_run_id);
@@ -818,6 +866,40 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 결재 체인만큼 엄격하진 않지만, 적어도 조용히 사라지진 않는다).
     _ensure_column(conn, "conversation_messages", "gate_scores", "TEXT")
     _ensure_column(conn, "conversation_messages", "delegation_count", "INTEGER")
+    # 사용자 보고(2026-10-19, "Todo 앱 최종 결과물에 코드가 아니라 품질
+    # 리포트만 있다") — `pipeline_stages` CREATE TABLE에 추가한 설명
+    # 참고. 어느 단계가 "진짜 최종 산출물"인지 표시하는 플래그.
+    _ensure_column(
+        conn, "pipeline_stages", "is_primary_deliverable", "INTEGER NOT NULL DEFAULT 0"
+    )
+    # 사용자 요청(2026-10-20, "CrewAI agent의 경우 에이전트 생성은 role,
+    # goal, backstory, tool 등을 설정하고... HAIR-Platform에 crewai
+    # 에이전트 및 에이전트 그룹을 상세조정하고 수정하기 위한 고급 에이전트
+    # 관리 기능 추가를 기획해줘") — 지금까지 `Agent.goal`/`backstory`는
+    # `crew_runtime._agent_goal()`/`_agent_backstory()`가 role_name+
+    # skill_tags로 매번 자동 생성했고, `Task.expected_output`은 플랫폼
+    # 전역에서 하드코딩 문자열 하나뿐이었다(관리자가 덮어쓸 방법 없음).
+    # 전부 NULL 허용 — NULL/빈 문자열이면 기존처럼 자동 생성(100% 하위
+    # 호환, `tuning_config` 빈 값 관례와 동일).
+    _ensure_column(conn, "agent_pool", "goal", "TEXT")
+    _ensure_column(conn, "agent_pool", "backstory", "TEXT")
+    _ensure_column(conn, "agent_pool", "expected_output", "TEXT")
+    # Team(재사용 가능한 사람+Agent 그룹, `teams` 테이블)은 멤버 목록뿐
+    # process(sequential/hierarchical)·매니저 기본값이 없어, "팀 Agent
+    # 실행"을 누를 때마다 매번 새로 골라야 했다(또는
+    # `manager_agent_id_for_team()`의 `role_label`="매니저" 문자열 추정에
+    # 의존). NULL이면 기존처럼 그 추정/매 실행 시 선택에 그대로 맡긴다.
+    _ensure_column(conn, "teams", "default_process", "TEXT")
+    _ensure_column(
+        conn, "teams", "default_manager_agent_id", "INTEGER REFERENCES agent_pool(id)"
+    )
+    # 파이프라인 단계는 `instructions`(Task.description 보강)는 있었지만
+    # `expected_output`은 없어, 모든 단계가 똑같은 하드코딩 문구를 썼다
+    # (예: "QA 기능테스트" 단계도 "구현" 단계와 같은 기대 산출물 문구).
+    # 빈 문자열 = 기존 하드코딩 문구 그대로 사용.
+    _ensure_column(
+        conn, "pipeline_stages", "expected_output", "TEXT NOT NULL DEFAULT ''"
+    )
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:

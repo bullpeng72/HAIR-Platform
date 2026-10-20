@@ -304,3 +304,173 @@ def test_custom_python_tool_timeout_returns_error_string_not_exception(
     tool = pool_registry._custom_python_crewai_tool(row)
     output = tool.run(query="x")
     assert "오류" in output or "시간 초과" in output or "sandbox timeout" in output
+
+
+# ---------- 고급 에이전트 관리(2026-10-20, "CrewAI 에이전트... role,
+# goal, backstory, tool... 상세조정하고 수정하기 위한 고급 에이전트 관리
+# 기능을 기획해줘") — goal/backstory/expected_output ----------
+
+
+def test_set_agent_persona_requires_admin_or_manager_and_persists(client_and_conn):
+    client, conn = client_and_conn
+    agent_id = _make_active_agent(conn, "백엔드 개발자")
+
+    _login(client, "member1", "memberpass")
+    resp = client.patch(
+        f"/api/agent-pool/{agent_id}/persona", json={"goal": "x"}
+    )
+    assert resp.status_code == 403
+
+    _login(client, "manager1", "managerpass")
+    resp = client.patch(
+        f"/api/agent-pool/{agent_id}/persona",
+        json={
+            "goal": "항상 테스트 커버리지 90% 이상을 유지한다.",
+            "backstory": "10년차 백엔드 베테랑이다.",
+            "expected_output": "동작하는 코드와 테스트 코드 한 쌍",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "id": agent_id,
+        "goal": "항상 테스트 커버리지 90% 이상을 유지한다.",
+        "backstory": "10년차 백엔드 베테랑이다.",
+        "expected_output": "동작하는 코드와 테스트 코드 한 쌍",
+    }
+
+    resp = client.get("/api/agent-pool")
+    row = next(a for a in resp.json() if a["id"] == agent_id)
+    assert row["goal"] == "항상 테스트 커버리지 90% 이상을 유지한다."
+    assert row["effective_goal"] == row["goal"]  # 저장값이 있으면 그대로 미리보기
+
+    # 부분 갱신 — backstory만 바꾸면 goal/expected_output은 그대로 남는다.
+    resp = client.patch(
+        f"/api/agent-pool/{agent_id}/persona",
+        json={"backstory": "이제는 풀스택이다."},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["goal"] == "항상 테스트 커버리지 90% 이상을 유지한다."
+    assert resp.json()["backstory"] == "이제는 풀스택이다."
+
+    # 빈 문자열을 명시적으로 보내면 그 필드만 자동생성으로 되돌아간다.
+    resp = client.patch(f"/api/agent-pool/{agent_id}/persona", json={"goal": ""})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["goal"] == ""
+    resp = client.get("/api/agent-pool")
+    row = next(a for a in resp.json() if a["id"] == agent_id)
+    assert row["goal"] == ""
+    assert row["effective_goal"] == crew_runtime._agent_goal("백엔드 개발자", [])
+    assert row["backstory"] == "이제는 풀스택이다."  # 건드리지 않은 필드는 유지
+
+
+def test_set_agent_persona_404_for_missing_agent(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.patch("/api/agent-pool/999999/persona", json={"goal": "x"})
+    assert resp.status_code == 404
+
+
+def test_get_agent_pool_exposes_effective_persona_defaults_when_unset(
+    client_and_conn,
+):
+    """아무것도 설정하지 않은 Agent는 `goal`/`backstory`/`expected_output`이
+    전부 비어 있고, `effective_*`는 기존 자동생성 로직 그대로를 보여줘야
+    한다(100% 하위 호환 — 이 기능을 쓰지 않는 기존 Agent는 아무 영향이
+    없다)."""
+    client, conn = client_and_conn
+    agent_id = _make_active_agent(conn, "QA 엔지니어")
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/agent-pool")
+    row = next(a for a in resp.json() if a["id"] == agent_id)
+    assert row["goal"] is None
+    assert row["backstory"] is None
+    assert row["expected_output"] is None
+    assert row["effective_goal"] == crew_runtime._agent_goal("QA 엔지니어", [])
+    assert row["effective_backstory"] == crew_runtime._agent_backstory(
+        conn, "QA 엔지니어", []
+    )
+    assert row["effective_expected_output"] == crew_runtime.DEFAULT_EXPECTED_OUTPUT
+
+
+def test_run_crew_uses_stored_persona_when_set_else_autogenerates(client_and_conn):
+    """실제 `crewai.Agent`/`Task` 생성자에 저장된 goal/backstory/
+    expected_output이 들어가는지(설정한 Agent), 설정 안 한 Agent는
+    기존 자동생성 그대로 쓰는지 — `crewai.Crew.kickoff`만 mock해 실제
+    LLM 호출 없이 실제 Agent/Task 객체를 그대로 inspect한다(기존
+    `_kickoff_capture` 관례, `test_phase12_crewai_vectordb_graphdb.py`
+    참고)."""
+    client, conn = client_and_conn
+    customized_id = _make_active_agent(conn, "백엔드 개발자")
+    default_id = _make_active_agent(conn, "프론트엔드 개발자")
+    conn.execute(
+        "UPDATE agent_pool SET goal = ?, backstory = ?, expected_output = ? "
+        "WHERE id = ?",
+        (
+            "항상 테스트 커버리지 90% 이상을 유지한다.",
+            "10년차 백엔드 베테랑이다.",
+            "동작하는 코드와 테스트 코드 한 쌍",
+            customized_id,
+        ),
+    )
+    conn.commit()
+    _login(client, "admin1", "adminpass")
+
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["crew"] = self
+        return _crew_output("최종 산출물", ["백엔드 결과", "프론트 결과"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.run_crew(
+            conn,
+            [customized_id, default_id],
+            ["백엔드 작업을 하세요", "프론트 작업을 하세요"],
+            _admin_id(conn),
+            process="sequential",
+            provider="openai",
+        )
+
+    crew = captured["crew"]
+    assert crew.agents[0].goal == "항상 테스트 커버리지 90% 이상을 유지한다."
+    assert crew.agents[0].backstory == "10년차 백엔드 베테랑이다."
+    assert crew.tasks[0].expected_output == "동작하는 코드와 테스트 코드 한 쌍"
+
+    assert crew.agents[1].goal == crew_runtime._agent_goal("프론트엔드 개발자", [])
+    assert crew.agents[1].backstory == crew_runtime._agent_backstory(
+        conn, "프론트엔드 개발자", []
+    )
+    assert crew.tasks[1].expected_output == crew_runtime.DEFAULT_EXPECTED_OUTPUT
+
+
+def test_run_crew_expected_outputs_param_overrides_agent_default(client_and_conn):
+    """`expected_outputs` 인자(파이프라인 단계가 쓸 경로)가 그 Agent의
+    저장된 기본값보다 우선해야 한다 — 단계별로 다른 기대 산출물을
+    강제할 수 있어야 하므로."""
+    client, conn = client_and_conn
+    agent_id = _make_active_agent(conn, "QA 엔지니어")
+    conn.execute(
+        "UPDATE agent_pool SET expected_output = ? WHERE id = ?",
+        ("Agent 저장값", agent_id),
+    )
+    conn.commit()
+    _login(client, "admin1", "adminpass")
+
+    captured = {}
+
+    def _kickoff_capture(self, *args, **kwargs):
+        captured["crew"] = self
+        return _crew_output("결과", ["결과"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        crew_runtime.run_crew(
+            conn,
+            [agent_id],
+            ["QA 작업을 하세요"],
+            _admin_id(conn),
+            process="sequential",
+            provider="openai",
+            expected_outputs=["파이프라인 단계 기본값"],
+        )
+
+    assert captured["crew"].tasks[0].expected_output == "파이프라인 단계 기본값"

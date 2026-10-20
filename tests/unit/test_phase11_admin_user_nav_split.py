@@ -131,6 +131,9 @@ def test_gc77_common_group_is_exactly_the_pure_reference_screens():
     공통 업무를 구분해줘")에서 실측으로 뽑은 분류를 그대로 반영한다."""
     entries = {e["id"]: e for e in _parse_tab_entries()}
     common_ids = {e_id for e_id, e in entries.items() if e["group"] == "common"}
-    assert common_ids == {"search", "orgchart"}
+    # "manual"(이용 가이드, 2026-10-18 추가) — 역할과 무관한 순수 조회
+    # 화면이라는 정의에 그대로 들어맞는다(특정 권한이 필요한 동작이
+    # 전혀 없음, 전 역할이 같은 내용을 본다).
+    assert common_ids == {"search", "orgchart", "manual"}
     for tab_id in common_ids:
         assert entries[tab_id]["roles"] == ["admin", "manager", "member", "viewer"]

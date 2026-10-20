@@ -194,6 +194,10 @@ class TeamLeaderUpdate(BaseModel):
     team_leader_id: int
 
 
+class AssignmentCancelRequest(BaseModel):
+    reason: str | None = None
+
+
 class TeamCreate(BaseModel):
     name: str
     description: str = ""
@@ -201,6 +205,19 @@ class TeamCreate(BaseModel):
 
 class TeamActiveUpdate(BaseModel):
     is_active: bool
+
+
+class TeamDefaultsUpdate(BaseModel):
+    """사용자 요청(2026-10-20, "고급 에이전트 관리") — 지금까지 "팀 Agent
+    실행"을 누를 때마다 process·매니저를 매번 새로 골라야 했다. 팀에
+    기본값을 저장해두면 실행 화면이 이 값을 미리 채우고(여전히 그
+    자리에서 바꿀 수 있다), `@팀멘션`도 이 매니저를 우선 쓴다
+    (`teams.manager_agent_id_for_team()` 참고). 부분 갱신
+    (`exclude_unset=True`로 읽는다) — `None`을 명시적으로 보내면 그
+    기본값을 지운다(다시 매번 선택/기존 자동 추정으로 되돌림)."""
+
+    default_process: CrewProcess | None = None
+    default_manager_agent_id: int | None = None
 
 
 class TeamMemberAdd(BaseModel):
@@ -383,6 +400,24 @@ class AgentTuningConfig(BaseModel):
     temperature: float | None = None
 
 
+class AgentPersonaConfig(BaseModel):
+    """사용자 요청(2026-10-20, "CrewAI 에이전트... role, goal, backstory,
+    tool... 상세조정하고 수정하기 위한 고급 에이전트 관리 기능") — 지금까지
+    `Agent.goal`/`backstory`는 role_name+skill_tags로 매번 자동 생성됐고
+    (`crew_runtime._agent_goal()`/`_agent_backstory()`), `Task.
+    expected_output`은 플랫폼 전역 하드코딩 문구 하나뿐이었다 — 전부
+    관리자가 덮어쓸 방법이 없었다. 부분 갱신(`exclude_unset=True`로
+    읽는다) — 필드를 아예 안 보내면 기존 값을 그대로 둔다. **빈
+    문자열(`""`)을 명시적으로 보내면** 그 필드를 자동 생성/플랫폼 공통
+    기본값으로 되돌린다(`AgentTuningConfig`처럼 `stub`/`simple_llm`
+    프레임워크나 솔로 "실행(일 시키기)"에는 적용되지 않는다 — CrewAI
+    `Crew` 실행 경로에만 반영된다)."""
+
+    goal: str | None = None
+    backstory: str | None = None
+    expected_output: str | None = None
+
+
 class CrewRunRequest(BaseModel):
     """여러 Agent를 CrewAI Crew로 묶어 실제로 협업 실행한다
     (사용자 요청, 2026-09-26, 3차). `agent_ids`와 `task_descriptions`는 순서가
@@ -397,6 +432,39 @@ class CrewRunRequest(BaseModel):
     provider: LlmProvider | None = None
     model: str | None = None
     manager_agent_id: int | None = None
+    # 사용자 요청(2026-10-20, "crewai의 잠재력을 모두 끌어내고..." — Crew
+    # 빌더 로드맵 4단계, "Crew 레벨 고급 옵션") — `memory`는 기본 True로
+    # 기존 동작을 유지하되 provider가 openai가 아니어서 OPENAI_API_KEY
+    # 없이 쓰려는 경우 꺼둘 수 있게 한다. `planning`은 추가 LLM 호출
+    # 비용이 들어 기본 False. `manager_provider`/`manager_model`은
+    # `manager_agent_id`가 없을 때(=CrewAI 자동 매니저)만 의미가 있다.
+    memory: bool = True
+    planning: bool = False
+    manager_provider: LlmProvider | None = None
+    manager_model: str | None = None
+
+
+class AdhocCrewExecuteRequest(BaseModel):
+    """사용자 요청(2026-10-20, "crewai의 잠재력을 모두 끌어내고...
+    에이전트 그룹(crew 구성)을 직관적으로") — "Crew 빌더" 화면의
+    "업무에 바로 실행" 모드가 쓴다. `CrewRunRequest`(즉석 테스트
+    샌드박스, `/api/crew/run`)와 같은 입력 모양이지만 `task_id`가
+    URL path에 있어 결과가 그 Task의 deliverable+결재 체인으로
+    쌓인다는 점이 다르다(샌드박스는 결과가 저장되지 않는다).
+    `agent_ids`/`task_descriptions`는 순서가 같아야 한다(N번째 Agent가
+    N번째 Task를 맡는다 — `CrewRunRequest`와 동일 관례)."""
+
+    agent_ids: list[int]
+    task_descriptions: list[str]
+    process: CrewProcess = "sequential"
+    provider: LlmProvider | None = None
+    model: str | None = None
+    manager_agent_id: int | None = None
+    content_type: ContentType = "text"
+    memory: bool = True
+    planning: bool = False
+    manager_provider: LlmProvider | None = None
+    manager_model: str | None = None
 
 
 class TeamCrewExecuteRequest(BaseModel):
@@ -408,11 +476,19 @@ class TeamCrewExecuteRequest(BaseModel):
     배정돼 있어도 한 번에 하나씩 — 사용자 결정)."""
 
     team_id: int
-    process: CrewProcess = "sequential"
+    # 사용자 요청(2026-10-20, "고급 에이전트 관리") — `None`이면 "명시
+    # 안 함"으로 구분해, 팀에 저장된 `default_process`(없으면
+    # "sequential")로 폴백한다(이전엔 항상 "sequential" 고정값이라 팀
+    # 기본값을 구분해 쓸 방법이 없었다).
+    process: CrewProcess | None = None
     provider: LlmProvider | None = None
     model: str | None = None
     manager_agent_id: int | None = None
     content_type: ContentType = "text"
+    memory: bool = True
+    planning: bool = False
+    manager_provider: LlmProvider | None = None
+    manager_model: str | None = None
 
 
 PipelineStageMode = Literal["single", "sequential_relay", "parallel_delegated"]
@@ -455,6 +531,17 @@ class PipelineStageCreate(BaseModel):
     min_gate_pass_ratio: float = 0.0
     max_retry: int = 2
     requires_human_approval: bool = False
+    # 사용자 보고(2026-10-19, "최종 결과물에 코드가 아니라 품질 리포트만
+    # 있다") — Task 협업 워크스페이스의 "최종 결과물"이 지금까지 "가장
+    # 최근 approved된 deliverable"을 집어, 코드 검증/QA/품질 판정처럼
+    # 항상 맨 마지막에 도는 검토 단계의 텍스트가 실제 산출물(예: 구현
+    # 단계의 코드)을 밀어냈다. 어느 단계가 "진짜 최종 산출물"인지는
+    # 템플릿 작성자만 판단할 수 있어 단계 생성 시 명시하게 한다.
+    is_primary_deliverable: bool = False
+    # 사용자 요청(2026-10-20, "고급 에이전트 관리") — 이 단계의
+    # `Task.expected_output` 기본값. 빈 문자열(기본값)이면
+    # `crew_runtime.run_crew()`의 플랫폼 공통 기본 문구를 그대로 쓴다.
+    expected_output: str = ""
 
 
 class PipelineStageUpdate(BaseModel):
@@ -468,6 +555,8 @@ class PipelineStageUpdate(BaseModel):
     min_gate_pass_ratio: float | None = None
     max_retry: int | None = None
     requires_human_approval: bool | None = None
+    is_primary_deliverable: bool | None = None
+    expected_output: str | None = None
 
 
 class PipelineStageReorder(BaseModel):
@@ -541,6 +630,24 @@ class ToolPoolCreate(BaseModel):
     tool_names: list[str] = []
 
 
+class ToolPoolUpdate(BaseModel):
+    """부분 갱신(`exclude_unset=True`로 읽는다) — 보낸 필드만 반영한다.
+    `kind`는 바꿀 수 없다(`config`의 구조 자체가 종류마다 달라 — 바꾸려면
+    삭제 후 새로 등록하는 쪽이 안전하다, `PipelineStageUpdate`가 `mode`를
+    못 바꾸게 하는 것과 같은 원칙). `is_active`는 기존
+    `PATCH /api/tool-pool/{id}/active`를 그대로 쓴다(여기서 중복
+    제공하지 않는다). 사용자 요청(2026-10-20, "에이전트 연결 관련 영향을
+    주는 도구명/스킬명은 수정 대상에서 제외") — `name`도 바꿀 수 없다:
+    `skill_pool.default_tool_pool_ids`는 id로 연결되니 무관하지만, Skill
+    `augmentation_mode="tool"` 매칭·Agent `required_skills`/`skill_tags`
+    자동완성 등 여러 곳이 이 이름 **문자열**을 그대로 참조한다 — 바꾸면
+    그 연결들이 조용히 끊어진다."""
+
+    description: str | None = None
+    config: dict | None = None
+    tool_names: list[str] | None = None
+
+
 class ToolActiveUpdate(BaseModel):
     """Tool Pool 항목을 비활성화하면(`is_active=False`) 그 도구를 참조하는
     모든 Agent에서 즉시 빠진다 — 삭제 대신 비활성화만 지원한다(참조
@@ -561,6 +668,17 @@ class SkillPoolCreate(BaseModel):
     description: str = ""
     default_tool_pool_ids: list[int] = []
     augmentation_mode: AugmentationMode = "tool"
+
+
+class SkillPoolUpdate(BaseModel):
+    """부분 갱신(`exclude_unset=True`로 읽는다) — 보낸 필드만 반영한다.
+    `name`은 바꿀 수 없다(`ToolPoolUpdate` 참고 — Agent의 `skill_tags`가
+    이 이름 문자열과 정확히 일치해야 매칭되므로, 바꾸면 그 연결이
+    조용히 끊어진다)."""
+
+    description: str | None = None
+    default_tool_pool_ids: list[int] | None = None
+    augmentation_mode: AugmentationMode | None = None
 
 
 class ModelRegistryCreate(BaseModel):

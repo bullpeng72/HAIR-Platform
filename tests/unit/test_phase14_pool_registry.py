@@ -95,6 +95,137 @@ def test_gc110_create_tool_and_toggle_active(client_and_conn):
     assert "tool_pool_active_changed" in actions
 
 
+def test_update_tool_rejects_kind_change_and_revalidates_config(client_and_conn):
+    """사용자 요청(2026-10-20, "도구/스킬 Pool에 수정 기능을 추가해줘",
+    이어서 "에이전트 연결 관련 영향을 주는 도구명/스킬명은 수정 대상에서
+    제외") — 지금까지 Tool Pool은 등록·활성화 토글·삭제만 있고, 설명/
+    config를 고치려면 지우고 다시 만들어야 했다. `kind`·`name`은 여전히
+    바꿀 수 없어야 하고(`name`은 Skill 매칭이 문자열로 참조한다),
+    `config`를 바꾸면 `create_tool()`과 같은 검증(native_id 존재 확인)을
+    다시 돌려야 한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    tool_id = pool_registry.create_tool(
+        conn, admin_id, "웹검색 도구", "설명 v1", "native", {"native_id": "web_search"}
+    )
+
+    pool_registry.update_tool(conn, admin_id, tool_id, description="설명 v2")
+    tools = {t["id"]: t for t in pool_registry.list_tools(conn)}
+    assert tools[tool_id]["name"] == "웹검색 도구"  # name은 안 바뀜
+    assert tools[tool_id]["description"] == "설명 v2"
+    assert tools[tool_id]["kind"] == "native"  # kind도 안 바뀜
+
+    # kind·name 자체는 허용 필드가 아니다 — 보내면 바로 거부된다.
+    with pytest.raises(ValueError, match="unsupported_fields"):
+        pool_registry.update_tool(conn, admin_id, tool_id, kind="custom_python")
+    with pytest.raises(ValueError, match="unsupported_fields"):
+        pool_registry.update_tool(conn, admin_id, tool_id, name="다른 이름")
+
+    # config를 바꿀 때도 create_tool()과 같은 native_id 검증이 다시 돈다.
+    with pytest.raises(ValueError, match="unknown_native_id"):
+        pool_registry.update_tool(
+            conn, admin_id, tool_id, config={"native_id": "존재안함"}
+        )
+
+    with pytest.raises(ValueError, match="tool_not_found"):
+        pool_registry.update_tool(conn, admin_id, 999999, description="x")
+
+    actions = {
+        r["action"] for r in conn.execute("SELECT action FROM audit_log").fetchall()
+    }
+    assert "tool_pool_updated" in actions
+
+
+def test_update_skill_revalidates_augmentation_mode(client_and_conn):
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    skill_id = pool_registry.create_skill(conn, admin_id, "임시스킬", "설명 v1")
+
+    pool_registry.update_skill(
+        conn,
+        admin_id,
+        skill_id,
+        description="설명 v2",
+        default_tool_pool_ids=[1, 2],
+        augmentation_mode="always",
+    )
+    skills = {s["id"]: s for s in pool_registry.list_skills(conn)}
+    assert skills[skill_id]["description"] == "설명 v2"
+    assert skills[skill_id]["default_tool_pool_ids"] == [1, 2]
+    assert skills[skill_id]["augmentation_mode"] == "always"
+
+    with pytest.raises(ValueError, match="unsupported_augmentation_mode"):
+        pool_registry.update_skill(
+            conn, admin_id, skill_id, augmentation_mode="not_a_mode"
+        )
+    with pytest.raises(ValueError, match="unsupported_fields"):
+        pool_registry.update_skill(conn, admin_id, skill_id, name="다른 이름")
+    with pytest.raises(ValueError, match="skill_not_found"):
+        pool_registry.update_skill(conn, admin_id, 999999, description="x")
+
+
+def test_update_tool_and_skill_pool_endpoints_rbac(client_and_conn):
+    """PATCH 엔드포인트도 등록(POST)과 같은 RBAC을 따라야 한다 — member는
+    둘 다 403, manager는 native 도구/스킬은 가능하지만 mcp_remote 도구
+    수정은 여전히 admin 전용이어야 한다(수정 경로로 그 제한을 우회할
+    수 없어야 한다)."""
+    client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    native_tool_id = pool_registry.create_tool(
+        conn, admin_id, "네이티브 도구", "", "native", {"native_id": "web_search"}
+    )
+    mcp_tool_id = pool_registry.create_tool(
+        conn, admin_id, "MCP 도구", "", "mcp_remote", {"url": "http://localhost:9000"}
+    )
+    skill_id = pool_registry.create_skill(conn, admin_id, "임시스킬2", "")
+
+    resp = client.post(
+        "/login", json={"username": "member1", "password": "memberpass"}
+    )
+    assert resp.status_code == 200
+    resp = client.patch(f"/api/tool-pool/{native_tool_id}", json={"description": "x"})
+    assert resp.status_code == 403
+    resp = client.patch(f"/api/skill-pool/{skill_id}", json={"description": "x"})
+    assert resp.status_code == 403
+
+    resp = client.post(
+        "/login", json={"username": "manager1", "password": "managerpass"}
+    )
+    assert resp.status_code == 200
+    resp = client.patch(
+        f"/api/tool-pool/{native_tool_id}", json={"description": "매니저 수정"}
+    )
+    assert resp.status_code == 200
+    resp = client.patch(f"/api/skill-pool/{skill_id}", json={"description": "매니저 수정"})
+    assert resp.status_code == 200
+    # mcp_remote는 매니저가 수정 못 한다(등록과 같은 제한).
+    resp = client.patch(
+        f"/api/tool-pool/{mcp_tool_id}", json={"description": "매니저 시도"}
+    )
+    assert resp.status_code == 403
+
+    resp = client.post("/login", json={"username": "admin1", "password": "adminpass"})
+    assert resp.status_code == 200
+    resp = client.patch(
+        f"/api/tool-pool/{mcp_tool_id}", json={"description": "admin 수정"}
+    )
+    assert resp.status_code == 200
+    resp = client.get("/api/tool-pool")
+    row = next(t for t in resp.json() if t["id"] == mcp_tool_id)
+    assert row["description"] == "admin 수정"
+
+    resp = client.patch("/api/tool-pool/999999", json={"description": "x"})
+    assert resp.status_code == 404
+    resp = client.patch("/api/skill-pool/999999", json={"description": "x"})
+    assert resp.status_code == 404
+
+
 def test_gc111_create_skill_rejects_unknown_augmentation_mode(client_and_conn):
     _client, conn = client_and_conn
     admin_id = conn.execute(

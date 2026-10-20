@@ -46,6 +46,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Callable
 from contextlib import ExitStack
 
 from hair_platform import (
@@ -281,6 +282,14 @@ def _min_length_guardrail(output):
     return True, output.raw
 
 
+# 플랫폼 공통 `Task.expected_output` 기본 문구 — `agent_pool.
+# expected_output`/`pipeline_stages.expected_output` 둘 다 비어 있을 때
+# 쓰는 최종 폴백이다. 상수로 뽑아 `app.py`(관리 화면의 "지금 적용 중인
+# 값" 미리보기)와 공유한다(문자열 두 군데 흩어지면 나중에 하나만
+# 바뀌는 사고가 난다).
+DEFAULT_EXPECTED_OUTPUT = "실무에 바로 쓸 수 있는 구체적인 산출물"
+
+
 def _agent_goal(role_name: str, skills: list[str]) -> str:
     """사용자 요청(2026-10-13, "goal도 skill 기반으로 보강") — 지금까지
     모든 Agent가 역할명만 다를 뿐 완전히 동일한 목표 문장을 썼다(스킬이
@@ -361,7 +370,7 @@ def crewai_agent_generator(
                 f"'{role_name}' 역할로서 지금 막 팀에 합류했습니다. 이 역할이 "
                 "프로젝트에서 처음 맡을 만한 구체적인 산출물을 하나 작성하세요.",
             ),
-            expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
+            expected_output=DEFAULT_EXPECTED_OUTPUT,
             agent=agent,
             guardrail=_min_length_guardrail,
         )
@@ -405,6 +414,12 @@ def run_crew(
     provider: str | None = None,
     model: str | None = None,
     manager_agent_id: int | None = None,
+    expected_outputs: list[str] | None = None,
+    on_task_complete: Callable[[dict], None] | None = None,
+    memory: bool = True,
+    planning: bool = False,
+    manager_provider: str | None = None,
+    manager_model: str | None = None,
 ) -> dict:
     """여러 온보딩된 Agent를 CrewAI Crew로 묶어 실제 협업
     실행한다. N번째 `agent_ids`가 N번째 `task_descriptions`를 맡는다.
@@ -423,11 +438,35 @@ def run_crew(
     캡처해 정직하게 기록한다(추측 아님).
 
     `memory=True`(약속했으나 누락됐던 부분, 2026-09-27
-    리뷰에서 발견해 반영함)로 Crew 전체가 이전 실행 맥락을 기억한다 —
-    **주의**: CrewAI의 기본 메모리 임베더는 provider와 무관하게 OpenAI
-    임베딩 API를 쓴다(Anthropic은 임베딩 API 자체가 없다). 즉
-    provider="anthropic"/"ollama"로 이 함수를 호출해도 `OPENAI_API_KEY`가
-    별도로 필요하다 — 없으면 메모리 저장 시점에 CrewAI가 에러를 낸다.
+    리뷰에서 발견해 반영함, 기본값)로 Crew 전체가 이전 실행 맥락을
+    기억한다 — **주의**: CrewAI의 기본 메모리 임베더는 provider와
+    무관하게 OpenAI 임베딩 API를 쓴다(Anthropic은 임베딩 API 자체가
+    없다). 즉 provider="anthropic"/"ollama"로 이 함수를 호출해도
+    `OPENAI_API_KEY`가 별도로 필요하다 — 없으면 메모리 저장 시점에
+    CrewAI가 에러를 낸다. `OPENAI_API_KEY` 없이 non-openai provider를
+    쓰려면 호출자가 `memory=False`로 꺼야 한다(사용자 요청, 2026-10-20,
+    "Crew 레벨 고급 옵션" — 4단계).
+
+    `planning=False`(기본값) — `True`로 켜면 CrewAI가 Crew 실행 전에
+    별도 LLM 호출로 전체 작업 계획을 먼저 세운다(`Crew(planning=True)`,
+    추가 LLM 비용 발생). 복잡한 다단계 협업에서 Agent들이 더 일관된
+    순서로 움직이게 하는 CrewAI 내장 기능이나, 단순한 조합에서는
+    비용만 늘어날 수 있어 기본은 꺼둔다.
+
+    `manager_provider`/`manager_model` — `manager_agent_id`가
+    `None`(=CrewAI가 익명 매니저를 자동 배정하는 경로)이고
+    `process="hierarchical"`일 때만 의미가 있다. 둘 중 하나라도 주어지면
+    그 매니저 전용 LLM을 구성한다(워커 Agent 전체에 쓰는 `provider`/
+    `model`과 분리 — 매니저는 조율만 하므로 더 가벼운/저렴한 모델을
+    따로 쓸 수 있게 한다). 둘 다 `None`이면 기존처럼 워커와 같은 LLM을
+    그대로 쓴다(하위 호환).
+
+    `expected_outputs`(사용자 요청, 2026-10-20, "고급 에이전트 관리") —
+    `task_descriptions`와 1:1 대응하는 `Task.expected_output` 오버라이드.
+    인덱스별 우선순위: `expected_outputs[i]`(호출자가 명시, 예: 파이프라인
+    단계의 `expected_output`) → 그 Agent의 저장된 기본값(`agent_pool.
+    expected_output`, `PATCH .../persona`로 설정) → 플랫폼 공통 기본
+    문구. `None`이면(기본값) 전부 두 번째 단계부터 평가한다.
     """
     if len(agent_ids) != len(task_descriptions):
         raise ValueError("agent_ids와 task_descriptions의 개수가 같아야 합니다")
@@ -492,8 +531,10 @@ def run_crew(
         crewai_agents = [
             Agent(
                 role=row["role_name"],
-                goal=_agent_goal(row["role_name"], json.loads(row["skill_tags"])),
-                backstory=_agent_backstory(
+                goal=row["goal"]
+                or _agent_goal(row["role_name"], json.loads(row["skill_tags"])),
+                backstory=row["backstory"]
+                or _agent_backstory(
                     conn, row["role_name"], json.loads(row["skill_tags"])
                 ),
                 **agent_kwargs_by_id[row["id"]],
@@ -540,6 +581,11 @@ def run_crew(
         )
         worker_agents = [a for i, a in enumerate(crewai_agents) if i != manager_index]
         worker_rows = [r for i, r in enumerate(rows) if i != manager_index]
+
+        def _expected_output_for(i: int, fallback: str) -> str:
+            if expected_outputs and i < len(expected_outputs) and expected_outputs[i]:
+                return expected_outputs[i]
+            return rows[i]["expected_output"] or fallback
 
         # 사용자 요청(2026-10-18, "매니저가 하위 과업을 실제로 쪼개서
         # 위임하도록 개선해줘") — 실측으로 확인한 문제: CrewAI는 hierarchical
@@ -612,9 +658,10 @@ def run_crew(
                         json.loads(manager_row["skill_tags"]),
                         hierarchical_description,
                     ),
-                    expected_output=(
+                    expected_output=_expected_output_for(
+                        manager_index,
                         "코워커들에게 위임한 하위 과업들의 결과를 모두 "
-                        "통합한, 실무에 바로 쓸 수 있는 하나의 완성된 최종 산출물"
+                        "통합한, 실무에 바로 쓸 수 있는 하나의 완성된 최종 산출물",
                     ),
                     guardrail=_min_length_guardrail,
                 )
@@ -630,7 +677,9 @@ def run_crew(
                         description=_static_augmentation(
                             conn, json.loads(rows[i]["skill_tags"]), description
                         ),
-                        expected_output="실무에 바로 쓸 수 있는 구체적인 산출물",
+                        expected_output=_expected_output_for(
+                            i, DEFAULT_EXPECTED_OUTPUT
+                        ),
                         agent=crewai_agents[i],
                         context=context,
                         guardrail=_min_length_guardrail,
@@ -666,18 +715,30 @@ def run_crew(
                     if idx < len(worker_rows)
                     else task_output.agent
                 )
-            task_completions.append(
-                {
-                    "agent_role": agent_role,
-                    "output_preview": (task_output.raw or "")[:200],
-                }
-            )
+            completion = {
+                "agent_role": agent_role,
+                "output_preview": (task_output.raw or "")[:200],
+            }
+            task_completions.append(completion)
+            # 사용자 요청(2026-10-20, "Crew 빌더... 실행 이력 + 진행
+            # 가시성") — `crew.kickoff()`가 끝나기 전에도(Task 하나씩
+            # 끝날 때마다) 호출자가 즉시 알 수 있게 한다. 호출자
+            # (`deliverables.py`)가 이 콜백 안에서 DB에 바로 commit하면,
+            # Crew 실행이 끝나기 전에도 폴링으로 "N명 중 M명 완료"를
+            # 볼 수 있다 — 새 WebSocket/SSE 없이 기존 폴링 패턴만으로.
+            # 콜백이 예외를 던지면 CrewAI 실행 전체가 깨지므로 삼킨다
+            # (진행 상황 기록 실패가 실제 Crew 작업을 막으면 안 된다).
+            if on_task_complete is not None:
+                try:
+                    on_task_complete(completion)
+                except Exception:  # noqa: BLE001 — 진행 상황 기록은 부가 기능
+                    pass
 
         crew_kwargs: dict[str, object] = {
             "agents": worker_agents,
             "tasks": worker_tasks,
             "verbose": False,
-            "memory": True,
+            "memory": memory,
             # 사용자 요청(2026-09-27, "다른 리뷰 항목 마저 진행해줘")으로 Task
             # 완료마다 감사로그를 남긴다. `step_callback`은 일부러 안 쓴다 —
             # CrewAI가 콜백에 넘기는 AgentAction/AgentFinish에는 어느 Agent가
@@ -685,10 +746,19 @@ def run_crew(
             # text/result 뿐) 감사로그에 "누가"를 못 남긴다.
             "task_callback": _capture_task_completion,
         }
+        if planning:
+            crew_kwargs["planning"] = True
         if process == "hierarchical":
             crew_kwargs["process"] = Process.hierarchical
             if manager_agent_id is not None:
                 crew_kwargs["manager_agent"] = crewai_agents[manager_index]
+            elif manager_provider or manager_model:
+                manager_resolved_provider, manager_resolved_model = (
+                    llm.resolve_provider_and_model(manager_provider, manager_model)
+                )
+                crew_kwargs["manager_llm"] = _crewai_llm(
+                    manager_resolved_provider, manager_resolved_model
+                )
             else:
                 crew_kwargs["manager_llm"] = crew_llm
         elif process == "sequential":
@@ -864,6 +934,11 @@ def run_crew_for_team(
     model: str | None = None,
     manager_agent_id: int | None = None,
     content_type: str = "text",
+    on_task_complete: Callable[[dict], None] | None = None,
+    memory: bool = True,
+    planning: bool = False,
+    manager_provider: str | None = None,
+    manager_model: str | None = None,
 ) -> dict:
     """사용자 요청(2026-10-07, "crew 실행에서 묶인 에이전트 그룹의 경우
     하나의 그룹만 가능한 구조인데, 복수 그룹 가능하도록 개선, 이 그룹이
@@ -955,4 +1030,9 @@ def run_crew_for_team(
         provider=provider,
         model=model,
         manager_agent_id=manager_agent_id,
+        on_task_complete=on_task_complete,
+        memory=memory,
+        planning=planning,
+        manager_provider=manager_provider,
+        manager_model=manager_model,
     )

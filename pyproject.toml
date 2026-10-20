@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hair-platform"
-version = "0.0.3"
+version = "0.0.4"
 description = "HAIR(Human-AI Resource Management) 협업 플랫폼 — 사람과 AI Agent를 하나의 조직도에서 배치·배분·승인·성과리뷰하는 도구. AgentForge의 자매 프로젝트."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,12 +27,34 @@ dev = ["pytest>=7.0.0", "black>=23.0.0", "ruff>=0.5.0", "httpx>=0.27.0"]
 llm = ["anthropic>=0.34.0", "openai>=1.40.0", "httpx>=0.27.0"]
 # crew_runtime.py가 지연 import한다 — framework="crewai" 경로를 쓸 때만 필요하다.
 # 주의: crewai/litellm은 import 시점에 자체적으로 .env를 읽는다(수입 부작용).
-crewai = ["crewai>=1.0.0"]
+# `litellm`을 명시한 이유(2026-10-19 실측 버그) — crewai>=1.6부터 LLM
+# 클래스가 openai/anthropic/azure/google/bedrock만 "네이티브 provider"로
+# 직접 다루고, 그 외(ollama 포함)는 litellm로 폴백한다. 예전엔 litellm이
+# crewai의 전이 의존성으로 같이 깔려서 신경 쓸 일이 없었는데, 지금
+# 버전은 litellm을 선택적 의존성으로 뺐다 — 설치 안 돼 있으면 ollama로
+# `run_crew()`를 돌릴 때마다 즉시 `ImportError: Fallback to LiteLLM is
+# not available`로 실패한다(실제로 "자율 개발 크루"가 ollama로 Crew를
+# 실행하다 재현). 단일 Agent 경로(`llm.call_llm()`)는 litellm을 안 거쳐
+# 영향 없었다 — 그래서 이 버그가 지금까지 안 드러났다.
+crewai = ["crewai>=1.0.0", "litellm>=1.0.0"]
 # crew_runtime.py의 _mcp_tools()가 지연 import한다 — Agent에 mcp_servers를
 # 실제로 설정했을 때만 필요하다(ADR 결정 10, 2026-09-27). MCPServerAdapter는
 # 생성 시점에 실제로 MCP 서버에 접속을 시도한다 — 접속 가능한 서버가 없으면
 # 이 extra를 설치해도 mcp_servers를 빈 배열로 둔 채면 아무 영향이 없다.
-mcp = ["crewai-tools[mcp]>=1.0.0"]
+# `mcp<2.0` 상한(2026-10-19 실측 버그) — `crewai-tools`가 쓰는
+# `mcpadapt==0.1.19`는 `mcp.client.streamable_http.streamablehttp_client`
+# (언더스코어 없이)를 import하는데, `mcp>=2.0`은 이 함수를
+# `streamable_http_client`(언더스코어 있게)로 이름을 바꿨다 — 둘 다
+# 하한만 선언해 pip가 최신 `mcp 2.2.0`을 깔면 이 import가 깨진다.
+# `crewai_tools.adapters.mcp_adapter`는 이 ImportError를 "mcp 패키지가
+# 아예 없다"로 오인해 `MCP_AVAILABLE=False`로 떨어뜨리고, MCP 도구가
+# 달린 Agent(예: "코드 검증가"의 recommend-fix-workflow 스킬)를 실행할
+# 때마다 터미널에 "You are missing the 'mcp' package. Would you like to
+# install it?"를 대화형으로 물어본다 — 백그라운드/서버 프로세스엔
+# stdin이 없어 그 자리에서 예외로 죽는다(실제로 파이프라인 "코드 검증"
+# 단계가 이렇게 실패하는 걸 확인). `mcpadapt`가 새 이름을 따라잡을
+# 때까지 `mcp`를 1.x로 묶어둔다.
+mcp = ["crewai-tools[mcp]>=1.0.0", "mcp>=1.10.1,<2.0"]
 
 [project.scripts]
 # 통합 CLI(2026-10-10) — `hair serve`/`hair bootstrap-admin`/`hair eval`

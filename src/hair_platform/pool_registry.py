@@ -210,6 +210,60 @@ def set_tool_active(
     conn.commit()
 
 
+def update_tool(conn: sqlite3.Connection, actor_id: int, tool_id: int, **fields) -> None:
+    """사용자 요청(2026-10-20, "도구/스킬 Pool에 수정 기능을 추가해줘")
+    — 지금까지 Tool Pool은 등록·활성화 토글·삭제만 있고, 설명이나
+    config를 고치려면 지우고 다시 만들어야 했다. `kind`는 바꿀 수
+    없다(`config`의 구조 자체가 종류마다 다르다 — 바꾸려면 삭제 후
+    새로 등록하는 쪽이 안전하다, `pipeline_runtime.update_stage()`가
+    `mode`를 못 바꾸게 하는 것과 같은 원칙). `name`도 바꿀 수 없다
+    (사용자 요청, 2026-10-20, "에이전트 연결 관련 영향을 주는
+    도구명/스킬명은 수정 대상에서 제외" — Skill `augmentation_mode=
+    "tool"` 매칭이 이 이름 문자열을 그대로 참조하므로 바꾸면 기존
+    연결이 조용히 끊어진다). `config`를 바꾸면 `create_tool()`과
+    똑같은 검증(native_id가 실제 native 도구를 가리키는지,
+    custom_python 소스가 안전한 모양인지)을 다시 돌린다 — 수정 경로로
+    검증을 우회해 등록 시점보다 느슨해지면 안 된다."""
+    allowed = {"description", "config", "tool_names"}
+    unknown = set(fields) - allowed
+    if unknown:
+        raise ValueError(f"unsupported_fields:{sorted(unknown)}")
+    row = conn.execute("SELECT * FROM tool_pool WHERE id = ?", (tool_id,)).fetchone()
+    if row is None:
+        raise ValueError("tool_not_found")
+    if not fields:
+        return
+    if "config" in fields:
+        config = fields["config"]
+        kind = row["kind"]
+        if kind == "native" and config.get("native_id") not in NATIVE_TOOL_FACTORIES:
+            raise ValueError(f"unknown_native_id:{config.get('native_id')}")
+        if kind == "custom_python":
+            _validate_custom_python_source(config.get("function_source", ""))
+    set_clauses = []
+    values: list[object] = []
+    for key, value in fields.items():
+        if key in ("config", "tool_names"):
+            value = json.dumps(value, ensure_ascii=False)
+        set_clauses.append(f"{key} = ?")
+        values.append(value)
+    values.append(tool_id)
+    conn.execute(
+        f"UPDATE tool_pool SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+        values,
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "tool_pool_updated",
+        "tool_pool",
+        tool_id,
+        before={"name": row["name"], "description": row["description"]},
+        after=fields,
+    )
+    conn.commit()
+
+
 def delete_tool(conn: sqlite3.Connection, actor_id: int, tool_id: int) -> None:
     """Tool Pool 항목을 완전히 지운다(사용자 요청, 2026-09-28, "각 메뉴에서
     데이터 삭제나, 초기화 기능 추가"). `agent_tool_links`가 이 도구를
@@ -281,6 +335,51 @@ def list_skills(conn: sqlite3.Connection) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def update_skill(conn: sqlite3.Connection, actor_id: int, skill_id: int, **fields) -> None:
+    """사용자 요청(2026-10-20, "도구/스킬 Pool에 수정 기능을 추가해줘")
+    — `create_skill()`과 같은 검증(augmentation_mode 허용값)을 다시
+    돌린다. `name`은 바꿀 수 없다(`update_tool()` 참고 — Agent의
+    `skill_tags`가 이 이름 문자열과 정확히 일치해야 매칭되므로, 바꾸면
+    그 연결이 조용히 끊어진다)."""
+    allowed = {"description", "default_tool_pool_ids", "augmentation_mode"}
+    unknown = set(fields) - allowed
+    if unknown:
+        raise ValueError(f"unsupported_fields:{sorted(unknown)}")
+    row = conn.execute("SELECT * FROM skill_pool WHERE id = ?", (skill_id,)).fetchone()
+    if row is None:
+        raise ValueError("skill_not_found")
+    if not fields:
+        return
+    if "augmentation_mode" in fields and fields["augmentation_mode"] not in (
+        "tool",
+        "always",
+        "none",
+    ):
+        raise ValueError(f"unsupported_augmentation_mode:{fields['augmentation_mode']}")
+    set_clauses = []
+    values: list[object] = []
+    for key, value in fields.items():
+        if key == "default_tool_pool_ids":
+            value = json.dumps(value)
+        set_clauses.append(f"{key} = ?")
+        values.append(value)
+    values.append(skill_id)
+    conn.execute(
+        f"UPDATE skill_pool SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+        values,
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "skill_pool_updated",
+        "skill_pool",
+        skill_id,
+        before={"name": row["name"], "description": row["description"]},
+        after=fields,
+    )
+    conn.commit()
 
 
 def delete_skill(conn: sqlite3.Connection, actor_id: int, skill_id: int) -> None:

@@ -14,7 +14,7 @@ Task 종속 대화 흡수 + Brief 승격 공존), 단계형 개발 파이프라�
 (Gate A-G 기준 자동 재시도/에스컬레이션, BMAD-METHOD식 계획 승인
 1회 + 최소 HITL), Agent별 LLM 모델/설정 최적화 추천(admin), **통합
 CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
-쓸 수 있다. `pytest` 467건 통과, API 엔드포인트 130개. 개념·아키텍처
+쓸 수 있다. `pytest` 500건 통과, API 엔드포인트 139개. 개념·아키텍처
 전체 설명은
 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은 `git log`
 (커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를 참고.
@@ -87,7 +87,7 @@ CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
 - 데이터 삭제/초기화(도구·스킬·사람·Agent·brief/task, confirmed 배정이
   있는 대상은 보호) + 보관기간 정책(`retention.py`, assignment_history
   1년 — audit_log는 append-only 트리거를 이 모듈만 통제된 방식으로 해제)
-- Web UI 24개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
+- Web UI 25개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
   분리(원래 "내 업무"/"공용 조회"/"운영 관리" 3구역이었으나 이후
   2구역으로 재편)
 
@@ -102,7 +102,7 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 467건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 500건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -125,13 +125,14 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 pip install -e ".[crewai]"
 # GenerateRequest.framework="crewai" 또는 Web UI "AI 에이전트 생성" 탭에서
 # framework를 crewai로 선택 — 실제 LLM API를 호출하므로 비용이 발생한다.
-# "Crew 실행" 탭에서 여러 Agent를 실제 CrewAI Crew로 묶어 협업시킬 수 있다.
+# "Crew 빌더" 탭에서 여러 Agent를 실제 CrewAI Crew로 묶어 협업시킬 수 있다
+# (업무에 바로 실행/즉석 테스트/실행 이력 3개 모드).
 
 # MCP(외부 검색 등 도구) 연동을 쓰려면 추가로:
 pip install -e ".[mcp]"
 # Web UI "AI 에이전트" 탭의 "MCP 서버(JSON)" 칸에
 # [{"url": "http://localhost:8000/mcp", "transport": "streamable-http"}]
-# 형태로 넣고 "모델 설정" 저장 — 이후 "Crew 실행"에서 그 Agent에 실제
+# 형태로 넣고 "모델 설정" 저장 — 이후 "Crew 빌더"에서 그 Agent에 실제
 # MCP 도구가 붙는다. MCPServerAdapter는 생성 시점에 실제로 접속을
 # 시도한다(접속 가능한 MCP 서버가 준비돼 있어야 한다).
 ```
@@ -184,7 +185,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(130개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(139개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   approvals.py       # 다단계 결재라인(조직도 매니저 체인)
@@ -201,11 +202,12 @@ src/hair_platform/
   agent_evaluation.py # Gate A-G 평가를 Agent 실행 경로에 상시 연결(agent_evaluations 테이블)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
   cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/eval
-  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 24개 탭)
+  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 25개 탭)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
   model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용")
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
   crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임 + 다이어그램)
+  crew_history.py    # Crew 실행 이력(crew_runs) — 팀/즉석 실행의 진행상태·협업다이어그램·토큰사용량 영구 저장
   vectorstore.py     # 지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
   graphquery.py      # 관계분석 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
   websearch.py       # 외부 일반 지식 검색(Wikipedia native 도구 + Parallel AI MCP)
@@ -222,7 +224,7 @@ docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 467건 통과(1건은 무관한 사전 실패 — 재현 확인됨)
+tests/unit/                            # 골든셋 500건 통과(1건은 무관한 사전 실패 — 재현 확인됨)
 ```
 
 ## 로드맵
@@ -230,6 +232,34 @@ tests/unit/                            # 골든셋 467건 통과(1건은 무관�
 핵심 기능은 전부 구현 완료됐고, 그 이후 반복적으로 들어온 사용자 요청에
 맞춰 계속 확장돼왔다 — 다음에 뭘 할지는 `docs/OVERVIEW.md`의 "알려진
 한계" 절을 참고해서 정한다.
+
+## 변경 이력
+
+버전별 핵심 변경만 요약한다 — 세부 배경·버그 재현 과정은 커밋 메시지
+(`git log --oneline --all`)에 날짜·사용자 요청 원문과 함께 남아 있다.
+
+### v0.0.4 (2026-10-20) — Crew 빌더(멀티에이전트 실행 통합) + 배정 취소 + 버그 수정
+
+- ✨ **Crew 빌더** 신설(기존 "Crew 실행" 탭 대체) — 팀 사전 등록·배정·
+  승인 없이 Task 참가자가 Agent를 즉석으로 묶어 바로 실행("업무에 바로
+  실행"), 성공한 조합을 팀 또는 파이프라인 단계로 저장("저장/승격"),
+  팀·즉석 Crew 실행 전체의 진행 상태·협업 다이어그램·토큰 사용량을
+  영구 기록하는 "실행 이력"(`crew_runs` 테이블) 3개 모드로 구성.
+- ✨ **배정 취소** 기능 추가 — confirmed/requested 배정을 admin/manager가
+  취소할 수 있고, 늦게 들어오는 결재가 취소된 배정을 되살리지 못하게
+  대기 중인 결재 단계도 함께 정리.
+- ✨ **Agent 역할/인격 상세조정** — Agent별 `goal`/`backstory`/
+  `expected_output`을 저장해 CrewAI 자동 생성값을 덮어쓸 수 있고(빈
+  값이면 기존처럼 자동 생성), 팀별 기본 `process`/매니저 Agent, 파이프라인
+  단계별 `expected_output`도 함께 지원.
+- 🐛 같은 업무가 "내게 필요한 조치"에 중복 표시되던 문제 수정 — 파이프라인
+  단계 결재 승인 시 `deliverables.status`가 동기화되지 않아 이미 승인된
+  결과물이 계속 재노출되던 근본 원인 해결.
+- 🐛 파이프라인 Gate B/E가 전혀 표시되지 않던 문제 수정 — 측정 대상이
+  아닌 Gate를 숨기는 대신 "미평가" 배지로 표시하고 색상 범례 추가.
+- 🔧 Tool/Skill Pool에 수정 기능 추가 — Agent/Skill 매칭에 쓰이는
+  이름(`name`)은 백엔드·UI 양쪽에서 수정 대상 제외, 코드 입력창 확대,
+  수정 패널을 대상 행 바로 아래에 띄우도록 개선.
 
 ## 라이선스
 

@@ -43,6 +43,7 @@ NULL이면 완전히 독립된 "내 대화"다.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 
 from hair_platform import agent_runtime, audit, crew_runtime, deliverables, llm, teams
@@ -58,6 +59,16 @@ _CONTEXT_MESSAGE_LIMIT = 10
 # 새 spec보다 그 과거 코드를 거의 그대로 재사용함)를 프롬프트로 명시
 # 차단한다. `run_team_mention_job()`에서만 쓴다(그 문제가 실제로
 # 재현된 경로).
+#
+# 재발 확인(2026-10-19, "(제목 없음) 대화 분석") — 위 문구는 "복사하지
+# 마라"만 막았지 "빈손으로 응답하지 마라"는 막지 않았다. 실측: 대화록에
+# 이미 완성된 코드가 포함된 기획서가 있으면(§3 skill 경계 문제와 별개로
+# 실제 재현), 매니저가 그 코드를 복사도, 설명도 안 하고 그냥
+# "위 코드는 이미 완성된 게임입니다"라는 한 줄만 쓰고 끝냈다(실제
+# 산출물 0건, Gate A/C가 그대로 fail) — "복사 금지"라는 글자 그대로의
+# 규칙은 지켰지만 의도(실제로 쓸 수 있는 새 산출물 제출)는 완전히
+# 비껴갔다. "이번 응답 자체에 완성된 산출물을 반드시 포함하라"는 요구를
+# 명시적으로 추가해 이 빈틈을 막는다.
 _ANTI_ANCHORING_NOTE = (
     "\n\n[중요] 위 대화 기록에 이전에 생성된 코드나 산출물이 포함돼 "
     "있어도, 그것을 그대로 복사하거나 재사용하지 마세요. 가장 최근 "
@@ -65,7 +76,13 @@ _ANTI_ANCHORING_NOTE = (
     "문서를 기준으로 처음부터 다시 작성하세요. 과거 산출물은 참고 "
     "자료일 뿐이며, 새 요구사항과 다르면 전부 새로 작성해야 합니다. "
     "구현하지 않은 기능을 구현했다고 설명하지 마세요 — 실제로 작성한 "
-    "코드에 있는 것만 설명하세요."
+    "코드에 있는 것만 설명하세요. 당신의 이번 응답 자체에 실제로 "
+    "완성된 산출물(코드 전체 등)을 직접 포함해야 합니다 — "
+    "\"위에 이미 완성돼 있습니다\", \"이전 내용을 참고하세요\", "
+    "\"위 코드는 이미 동작합니다\"처럼 산출물 제시를 생략하거나 대화 "
+    "기록의 다른 메시지를 가리키기만 하는 응답은 금지합니다. 그런 "
+    "메시지가 보이더라도 당신이 맡은 작업의 결과물은 이번 응답 안에 "
+    "처음부터 끝까지 직접 작성하세요."
 )
 # agent_pool.id는 AUTOINCREMENT라 1부터 시작 — 0은 "실존하는 agent_pool
 # 행이 없는 대화 자체의 기본 AI"를 가리키는 예약 sentinel로 안전하게
@@ -707,6 +724,58 @@ def _detect_mentions(
     return {"humans": humans, "agents": agents, "teams": matched_teams}
 
 
+def _uninvited_mention_candidates(
+    conn: sqlite3.Connection, conversation_id: int, content: str
+) -> list[str]:
+    """사용자 보고(2026-10-19, "'기획서 작성자'로 설정했는데 기본 AI
+    (openai/gpt-4o-mini)가 대신 응답했다") 원인 분석 — `_detect_mentions()`
+    는 의도적으로 "이미 초대된 참가자"만 본다(원문에서 이름을 추측해
+    자동 초대하지 않는 안전 설계, `search_mentionable()` 참고). 자동완성
+    드롭다운을 거치지 않고 `@역할명`을 직접 타이핑하면 그 대상이 아직
+    이 대화의 참가자가 아닌 한 멘션으로 인식되지 않고, `ai_auto_reply`가
+    켜져 있으면 기본 AI가 아무 안내 없이 대신 답한다 — 사용자는 특정
+    Agent의 설정(provider/model/스킬)으로 답을 받았다고 착각하기 쉽다.
+    사용자 결정(2026-10-19) — 자동 초대는 여전히 하지 않되(기존 안전
+    설계 유지), 이 상황(원문에 실제 활성 Agent/Team 이름과 일치하는
+    `@텍스트`가 있는데 초대가 안 돼 있음)만 찾아 경고 문구를 붙일 수
+    있게 후보 이름 목록을 반환한다. 사람은 대상에서 제외한다(사람을
+    멘션해도 실행할 job이 없어 "기본 AI 대신 응답"과 섞여 헷갈릴 소지가
+    적다)."""
+    invited_agent_ids = {
+        r["participant_id"]
+        for r in conn.execute(
+            "SELECT participant_id FROM conversation_participants "
+            "WHERE conversation_id = ? AND participant_type = 'agent'",
+            (conversation_id,),
+        ).fetchall()
+    }
+    invited_team_ids = {
+        r["participant_id"]
+        for r in conn.execute(
+            "SELECT participant_id FROM conversation_participants "
+            "WHERE conversation_id = ? AND participant_type = 'team'",
+            (conversation_id,),
+        ).fetchall()
+    }
+    found: list[str] = []
+    for row in conn.execute(
+        "SELECT id, role_name, name FROM agent_pool WHERE status = 'active'"
+    ).fetchall():
+        if row["id"] in invited_agent_ids:
+            continue
+        label = row["name"] or row["role_name"]
+        if ("@" + label) in content:
+            found.append(label)
+    for row in conn.execute(
+        "SELECT id, name FROM teams WHERE is_active = 1"
+    ).fetchall():
+        if row["id"] in invited_team_ids:
+            continue
+        if ("@" + row["name"]) in content:
+            found.append(row["name"])
+    return found
+
+
 def _format_messages_for_summary(rows: list[sqlite3.Row]) -> str:
     return "\n".join(
         ("AI" if row["author_type"] == "agent" else "사용자") + ": " + row["content"]
@@ -780,6 +849,41 @@ def _ensure_context_summary(
     return new_summary
 
 
+_CODE_FENCE_RE = re.compile(r"```([a-zA-Z0-9_+-]*)\n(.*?)\n```", re.DOTALL)
+_CODE_FENCE_STRIP_THRESHOLD_LINES = 15
+
+
+def _strip_large_code_fences(content: str) -> str:
+    """사용자 보고(2026-10-19, "(제목 없음) 대화 분석" — "자율 개발 크루"가
+    `_build_transcript()`로 받은 과거 메시지에 이미 완성된 코드(기획서
+    작성자가 §5에 넣은 265줄짜리 게임 전체)가 그대로 포함돼 있자, 그
+    코드를 다시 쓰지도 복사하지도 않고 그냥 "위 코드는 이미 완성돼
+    있다"고만 답하고 끝낸 실제 사례에서 — 원인의 절반은 이 함수가
+    메시지 전문을 글자 수 제한 없이 그대로 넘긴다는 것이었다(나머지
+    절반은 `_ANTI_ANCHORING_NOTE`의 허점, 위에서 따로 메움). 긴 코드
+    블록(15줄 초과)을 생략 표시로 바꿔, 매니저/Agent가 "이미 완성된
+    산출물"을 보지 못하게 한다 — 짧은 예시 스니펫(15줄 이하)은 맥락상
+    유용한 경우가 많아 그대로 둔다. 이 함수는 `_build_transcript()`
+    에서만 쓰여 모든 응답 경로(기본 AI/Agent 멘션/Team 멘션)에 똑같이
+    적용된다 — 토큰 낭비와 앵커링 위험을 전반적으로 줄이는 효과도
+    겸한다."""
+
+    def _replace(match: re.Match[str]) -> str:
+        lang, body = match.group(1), match.group(2)
+        line_count = body.count("\n") + 1
+        if line_count <= _CODE_FENCE_STRIP_THRESHOLD_LINES:
+            return match.group(0)
+        return (
+            "```" + lang + "\n"
+            f"[코드 {line_count}줄 생략 — 이 메시지의 전체 내용은 대화 화면에서 "
+            "직접 확인하세요. 이 내용을 그대로 복사하지 말고, 이번 요청에 맞게 "
+            "처음부터 다시 작성해야 합니다.]\n"
+            "```"
+        )
+
+    return _CODE_FENCE_RE.sub(_replace, content)
+
+
 def _build_transcript(
     conn: sqlite3.Connection, conversation_id: int, limit: int = _CONTEXT_MESSAGE_LIMIT
 ) -> str:
@@ -799,7 +903,8 @@ def _build_transcript(
         (conversation_id, limit),
     ).fetchall()
     lines = [
-        ("AI" if row["author_type"] == "agent" else "사용자") + ": " + row["content"]
+        ("AI" if row["author_type"] == "agent" else "사용자") + ": "
+        + _strip_large_code_fences(row["content"])
         for row in reversed(rows)
     ]
     if summary:
@@ -1109,6 +1214,19 @@ def run_team_mention_job(
         task_descriptions = [transcript] * len(agent_ids)
         manager_agent_id = teams.manager_agent_id_for_team(conn, team_id)
         if manager_agent_id is not None:
+            # 사용자 보고(2026-10-19, "매니저의 저장된 설정을 쓰도록") —
+            # `run_crew()`는 Crew 전체가 공유하는 provider/model 하나만
+            # 받는데, 여기서 안 넘기면 `llm.resolve_provider_and_model()`
+            # 의 자동판별(ANTHROPIC_API_KEY 없으면 OPENAI_API_KEY)로
+            # 떨어진다 — "자율 개발 크루" 12명 전원이 각자 Ollama(무료)로
+            # 설정돼 있어도 실제로는 유료 openai로 실행되는 결과를 낳았다
+            # (실측 확인). hierarchical 실행의 provider/model은 매니저가
+            # 조율 전체를 담당하므로, 매니저 Agent 자신에게 저장된
+            # 설정을 그대로 쓴다.
+            manager_row = conn.execute(
+                "SELECT llm_provider, llm_model FROM agent_pool WHERE id = ?",
+                (manager_agent_id,),
+            ).fetchone()
             result = crew_runtime.run_crew(
                 conn,
                 agent_ids,
@@ -1116,6 +1234,8 @@ def run_team_mention_job(
                 actor_id,
                 process="hierarchical",
                 manager_agent_id=manager_agent_id,
+                provider=manager_row["llm_provider"] if manager_row else None,
+                model=manager_row["llm_model"] if manager_row else None,
             )
         else:
             result = crew_runtime.run_crew(conn, agent_ids, task_descriptions, actor_id)
@@ -1229,6 +1349,22 @@ def run_default_ai_job(
             system = _DEFAULT_SYSTEM_PROMPT
         transcript = _build_transcript(conn, conversation_id)
         output = llm.call_llm(provider, model, system, transcript)
+        last_human = conn.execute(
+            "SELECT content FROM conversation_messages WHERE conversation_id = ? "
+            "AND author_type = 'human' ORDER BY id DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        if last_human is not None:
+            uninvited = _uninvited_mention_candidates(
+                conn, conversation_id, last_human["content"]
+            )
+            if uninvited:
+                names = ", ".join(f'"@{n}"' for n in uninvited)
+                output = (
+                    f"> ⚠ {names}를 찾았지만 아직 이 대화에 초대되지 않아 기본 AI가 "
+                    "대신 응답했습니다. 메시지창에서 @를 입력해 자동완성으로 초대한 "
+                    "뒤 다시 멘션해 보세요.\n\n" + output
+                )
         _finish_job_with_message(
             conn,
             job_id,

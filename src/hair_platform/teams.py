@@ -66,6 +66,8 @@ def get_team(conn: sqlite3.Connection, team_id: int) -> dict | None:
         "name": row["name"],
         "description": row["description"],
         "is_active": bool(row["is_active"]),
+        "default_process": row["default_process"],
+        "default_manager_agent_id": row["default_manager_agent_id"],
         "members": [_member_row_to_dict(m) for m in members],
     }
 
@@ -95,6 +97,64 @@ def set_team_active(
         after={"is_active": is_active},
     )
     conn.commit()
+
+
+def update_team_defaults(
+    conn: sqlite3.Connection, actor_id: int, team_id: int, **fields
+) -> dict:
+    """사용자 요청(2026-10-20, "고급 에이전트 관리") — 지금까지 "팀 Agent
+    실행" 버튼을 누를 때마다 process(sequential/hierarchical)·매니저를
+    매번 새로 골라야 했다(또는 `manager_agent_id_for_team()`의
+    `role_label` 문자열 추정에 의존). 팀에 기본값을 저장해두면 실행
+    화면이 그 값을 미리 채워주고(여전히 그 자리에서 바꿀 수 있다),
+    `@팀멘션`/hierarchical 라우팅도 이 매니저를 우선 쓴다
+    (`manager_agent_id_for_team()` 참고)."""
+    allowed = {"default_process", "default_manager_agent_id"}
+    unknown = set(fields) - allowed
+    if unknown:
+        raise ValueError(f"unsupported_fields:{sorted(unknown)}")
+    team = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if team is None:
+        raise ValueError("team_not_found")
+    if not fields:
+        return {
+            "default_process": team["default_process"],
+            "default_manager_agent_id": team["default_manager_agent_id"],
+        }
+    if (
+        "default_process" in fields
+        and fields["default_process"] is not None
+        and fields["default_process"] not in ("sequential", "hierarchical")
+    ):
+        raise ValueError(f"unsupported_process:{fields['default_process']}")
+    if (
+        "default_manager_agent_id" in fields
+        and fields["default_manager_agent_id"] is not None
+        and fields["default_manager_agent_id"] not in active_agent_member_ids(conn, team_id)
+    ):
+        raise ValueError("manager_must_be_active_agent_member_of_team")
+
+    set_clauses = [f"{key} = ?" for key in fields]
+    values = list(fields.values()) + [team_id]
+    conn.execute(
+        f"UPDATE teams SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+        values,
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "team_defaults_updated",
+        "team",
+        team_id,
+        before={k: team[k] for k in fields},
+        after=fields,
+    )
+    conn.commit()
+    updated = conn.execute(
+        "SELECT default_process, default_manager_agent_id FROM teams WHERE id = ?",
+        (team_id,),
+    ).fetchone()
+    return dict(updated)
 
 
 def delete_team(conn: sqlite3.Connection, actor_id: int, team_id: int) -> None:
@@ -212,7 +272,30 @@ def manager_agent_id_for_team(conn: sqlite3.Connection, team_id: int) -> int | N
     불어나, CrewAI/litellm이 위임 도구 호출 인자를 JSON으로 파싱하다
     실패하는 조건(모델이 빈/깨진 응답을 낼 때)에 더 쉽게 걸린다 —
     이 함수가 그 매니저를 식별해 `run_team_mention_job()`이 설계된
-    대로 hierarchical로 라우팅할 수 있게 한다."""
+    대로 hierarchical로 라우팅할 수 있게 한다.
+
+    사용자 요청(2026-10-20, "고급 에이전트 관리") — `teams.
+    default_manager_agent_id`를 명시적으로 지정해뒀으면(관리자가
+    "팀 관리" 화면에서 직접 고른 값) `role_label` 문자열 추정보다
+    **우선**한다 — 추정은 여전히 작동해야 하는 팀(예: 레퍼런스 시드)을
+    위한 폴백으로만 남긴다. 지정된 매니저가 탈퇴했거나 더 이상
+    active가 아니면 조용히 추정으로 폴백한다(죽은 참조로 전체가
+    실패하면 안 된다)."""
+    team = conn.execute(
+        "SELECT default_manager_agent_id FROM teams WHERE id = ?", (team_id,)
+    ).fetchone()
+    if team is not None and team["default_manager_agent_id"] is not None:
+        explicit = conn.execute(
+            """
+            SELECT ap.id AS agent_id
+            FROM team_members tm
+            JOIN agent_pool ap ON ap.id = tm.member_id AND tm.member_type = 'agent'
+            WHERE tm.team_id = ? AND ap.status = 'active' AND ap.id = ?
+            """,
+            (team_id, team["default_manager_agent_id"]),
+        ).fetchone()
+        if explicit is not None:
+            return explicit["agent_id"]
     row = conn.execute(
         """
         SELECT ap.id AS agent_id
