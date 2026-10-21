@@ -909,6 +909,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(
         conn, "crew_runs", "completed_agent_ids", "TEXT NOT NULL DEFAULT '[]'"
     )
+    # 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — 지금까지
+    # `team_members`엔 순서 개념이 전혀 없어(암묵적으로 `id` 삽입 순서만
+    # 있음) 사용자가 순차 릴레이 순서를 바꿀 수단이 없었다. NULL = "아직
+    # 캔버스로 순서를 정한 적 없음" → 기존처럼 `id` 순서로 폴백(하위 호환).
+    _ensure_column(conn, "team_members", "sequence_order", "INTEGER")
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:

@@ -107,6 +107,16 @@ INDEX_HTML = """<!DOCTYPE html>
      자체에도 그대로 써서 일관성 있게 누가 말했는지 한눈에 띄게 한다. */
   .msg-author-human { font-weight: 700; color: #2563eb; }
   .msg-author-agent { font-weight: 700; color: #7c3aed; }
+  /* 사용자 요청(2026-10-21, "Layer 4 — 대화/채팅 시각 다듬기") —
+     이름 텍스트 색만으론 메시지가 길어지면 스캔하기 번거롭다 —
+     이니셜 원형 아바타를 이름 앞에 덧붙인다. `.spinner`의 원 그리기
+     기법(고정 width/height + border-radius:50%) 재사용, 색은 위
+     사람/Agent 토큰과 동일. */
+  .msg-avatar { display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%; font-size: 0.68rem; font-weight: 700;
+    color: #fff; vertical-align: middle; margin-right: 0.35rem; flex-shrink: 0; }
+  .msg-avatar.msg-avatar-human { background: #2563eb; }
+  .msg-avatar.msg-avatar-agent { background: #7c3aed; }
   /* 사용자 보고(2026-10-19, 스크린샷 — "@자율 개발 크루 위 기획을
      구현해줘"처럼 멘션 대상과 실제 요청 문장이 구분 없이 붙어 보임) —
      본문 안의 "@대상" 텍스트를 받는 쪽 이름과 같은 색 pill로 감싸
@@ -122,6 +132,21 @@ INDEX_HTML = """<!DOCTYPE html>
   .pending-indicator { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; margin-top: 0.5rem; background: #f5f7fa; border: 1px solid #e2e4e8; border-radius: 6px; color: #555; font-size: 0.9rem; }
   .spinner { width: 14px; height: 14px; border: 2px solid #c7d2e0; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* 사용자 요청(2026-10-21, "Layer 2 — 실행 가시성 강화") — 지금까지
+     "N/M 완료" 텍스트만 있던 세 군데(Crew 실행 이력/파이프라인
+     타임라인/대화 진행 패널)에 시각적 진행 표시를 더한다. 새 폴링·
+     상태추적 인프라는 추가하지 않고 이미 있는 데이터/클래스에
+     CSS·마크업만 얹는다 — `.spinner`와 같은 타이밍·색 어휘를 그대로
+     따른다(파란 강조 #2563eb, 연한 테두리 #c7d2e0). */
+  .progress-bar { height: 6px; border-radius: 3px; background: var(--status-muted-bg); overflow: hidden; }
+  .progress-bar-fill { height: 100%; background: #2563eb; transition: width 0.3s ease; }
+  .progress-bar-fill.failed { background: var(--status-warn-fg); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+  .job-status-badge.running { animation: pulse 1.4s ease-in-out infinite; }
+  .pipeline-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 0.15rem; margin: 0.3rem 0; }
+  .pipeline-breadcrumb-step { white-space: nowrap; }
+  .pipeline-breadcrumb-current { outline: 2px solid #2563eb; outline-offset: 1px; }
+  .pipeline-breadcrumb-arrow { color: var(--color-muted); margin: 0 0.1rem; }
   /* 사용자 요청(2026-10-18, "어떤 에이전트가 어떤 동작을 하고 있는지
      알 수 있도록... 펼침/닫힘 UI로 표시") — 메시지 하나로 여러 Job이
      한꺼번에 트리거될 수 있어(복수 @멘션, Team은 멤버 전원을 한
@@ -151,6 +176,16 @@ INDEX_HTML = """<!DOCTYPE html>
   .gate-badge.gate-ok { background: var(--status-success-bg); color: var(--status-success-fg); }
   .gate-badge.gate-warn { background: var(--status-warn-bg); color: var(--status-warn-fg); }
   .gate-badge.gate-na { background: var(--status-muted-bg); color: var(--status-muted-fg); }
+  /* 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — Drawflow
+     노드 안쪽 콘텐츠(HTML을 그대로 넣는 자리)의 최소 스타일. Drawflow
+     자체 CSS가 노드 박스 테두리/배경을 이미 그려주므로 라벨·버튼
+     간격만 보정한다. */
+  .team-canvas-node { padding: 0.3rem 0.5rem; text-align: center; }
+  .team-canvas-node-label { font-size: 0.82rem; font-weight: 600; margin-bottom: 0.2rem; word-break: break-word; }
+  .team-canvas-node-manager .team-canvas-node-label { color: #b45309; }
+  .team-canvas-node button { font-size: 0.72rem; padding: 0.1rem 0.35rem; }
+  .team-canvas-wrap .drawflow-node { background: #eef1f6; border: 1.5px solid #888; border-radius: 8px; }
+  .team-canvas-wrap .drawflow-node.team-canvas-manager { background: #fef3c7; border-color: #b45309; }
   .final-result-card { background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
   .dashboard-grid { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
   .dashboard-grid .card { flex: 1; min-width: 200px; margin-bottom: 0; }
@@ -302,6 +337,14 @@ INDEX_HTML = """<!DOCTYPE html>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<!-- 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — "팀 관리"
+     화면에서 멤버 구조(순차 릴레이/매니저 위임)를 실행 전에도 보고
+     드래그로 순서를 바꿀 수 있게 한다. Drawflow: vanilla JS, 의존성
+     0개, MIT — 위 5개 CDN 라이브러리와 같은 패턴(런타임 CDN 로드,
+     pip 패키징 영향 없음). CDN 로드 실패 시 캔버스만 비고 기존 멤버
+     표(CRUD)는 전혀 영향받지 않는다(아래 renderTeams 참고). -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.css">
+<script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.js"></script>
 </head>
 <body>
 
@@ -917,6 +960,8 @@ const LABELS = {
   backlog: "백로그", queued: "대기", in_progress: "진행중", done: "완료",
   low: "낮음", medium: "보통", high: "높음", urgent: "긴급",
   task_dependencies: "의존관계", tasks: "업무",
+  // (2026-10-21, "Agent 직접 생성") — agent_pool.framework 표시용.
+  manual: "직접 생성",
 };
 function label(v) { return LABELS[v] || v; }
 
@@ -1869,6 +1914,19 @@ function _highlightMentions(content, participants) {
   return result;
 }
 
+// 사용자 요청(2026-10-21, "Layer 4") — `who`는 이미 `esc()` 처리된
+// 표시 이름 문자열("AI (claude-sonnet-5)", "코드리뷰 Agent (AI ·
+// gpt-4o-mini)", "사용자 #3" 등) — 괄호 뒤 provider/model 부가정보는
+// 이니셜에 불필요해 `" ("` 앞부분만 쓴다. 기본 AI는 한 글자보다
+// 식별하기 쉽게 "AI" 그대로 보여준다.
+// 알려진 한계: `who`가 이미 escape된 문자열이라 이름이 `<`/`&`/`"`로
+// 시작하면 이니셜이 "&"로 보일 수 있다(실제로는 거의 없는 edge case
+// — 별도 처리 안 함).
+function _conversationAuthorInitial(who) {
+  const core = who.split(" (")[0].trim();
+  return core === "AI" ? "AI" : core.slice(0, 1).toUpperCase();
+}
+
 function _renderConversationMessage(m, participants, conv) {
   const side = m.author_type === "agent" ? "chat-agent" : "chat-human";
   const who = _conversationAuthorLabel(m, participants, conv ? conv.llm_model : null);
@@ -1876,6 +1934,7 @@ function _renderConversationMessage(m, participants, conv) {
   // 가독성을 높여줘") — 작성자 이름을 카드 왼쪽 테두리와 같은 색으로
   // 굵게 표시해 본문과 한눈에 구분되게 한다.
   const whoClass = m.author_type === "agent" ? "msg-author-agent" : "msg-author-human";
+  const avatarClass = m.author_type === "agent" ? "msg-avatar-agent" : "msg-avatar-human";
   const skillBadge = m.used_skill
     ? ' <span class="gate-badge gate-ok">스킬: ' + esc(m.used_skill) + '</span>'
     : '';
@@ -1890,7 +1949,9 @@ function _renderConversationMessage(m, participants, conv) {
   const contentType = isFullHtmlDoc ? "html" : undefined;
   const bodyContent = isFullHtmlDoc ? m.content : _highlightMentions(m.content, participants);
   return '<div class="deliverable-card ' + side + '">' +
-    '<div class="muted"><strong class="' + whoClass + '">' + who + '</strong>' + skillBadge +
+    '<div class="muted"><span class="msg-avatar ' + avatarClass + '">' +
+    esc(_conversationAuthorInitial(who)) + '</span>' +
+    '<strong class="' + whoClass + '">' + who + '</strong>' + skillBadge +
     _conversationGateBadge(m) + _conversationDelegationBadge(m) + ' · ' + esc(m.created_at) +
     deleteBtn + '</div>' +
     '<div>' + renderContent(bodyContent, contentType) + '</div>' +
@@ -2859,6 +2920,25 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '<span class="gate-badge gate-warn">A</span> 미통과 · ' +
     '<span class="gate-badge gate-na">A</span> 미평가(이 플랫폼이 측정하지 않는 항목) — 글자는 Gate A-G 식별자입니다.' +
     '</p>';
+  // 사용자 요청(2026-10-21, "Layer 2 — 실행 가시성 강화") — 기존
+  // 상세 목록(Gate 배지·시도 횟수·반려 이유)은 그대로 두고, 그 위에
+  // 한눈에 훑을 수 있는 브레드크럼 요약을 추가한다(교체 아님 — 상세
+  // 정보를 요약이 대신할 수 없어서).
+  const pipelineBreadcrumbHtml = (run) => {
+    const currentIdx = run.stage_results.findIndex(sr =>
+      ["running", "failed_retrying", "escalated"].includes(sr.status));
+    const resolvedCurrentIdx = currentIdx === -1 ? run.stage_results.length - 1 : currentIdx;
+    return '<div class="pipeline-breadcrumb">' +
+      run.stage_results.map((sr, i) => {
+        const cls = PIPELINE_STAGE_BADGE_CLASS[sr.status] || "";
+        const isCurrent = i === resolvedCurrentIdx;
+        return '<span class="pipeline-breadcrumb-step job-status-badge ' + cls +
+          (isCurrent ? ' pipeline-breadcrumb-current' : '') + '">' +
+          (i + 1) + '. ' + esc(sr.stage_name) + '</span>';
+      }).join('<span class="pipeline-breadcrumb-arrow">→</span>') +
+      '</div>';
+  };
+
   const pipelineTimelineHtml = (run) => {
     if (!run) return "";
     const rows = run.stage_results.map(sr => {
@@ -2884,6 +2964,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     return '<details class="card" open><summary>' +
       esc(run.pipeline_template_name || "파이프라인") + " — " +
       esc(PIPELINE_RUN_STATUS_LABEL[run.status] || run.status) + "</summary>" +
+      pipelineBreadcrumbHtml(run) +
       GATE_LEGEND_HTML +
       '<ul class="job-progress-list">' + rows + "</ul>" +
       (run.status === "paused_for_approval"
@@ -4166,7 +4247,26 @@ async function renderJobs(content) {
       '<li>만든 Agent는 이 탭이 아니라 "AI 에이전트 관리" 탭에서 온보딩 승인(pending_onboarding → active) 후에야 실제 업무 배정·실행에 쓸 수 있습니다.</li>' +
       '<li><b>중복 방지</b>: 같은 할 일(역할)에 이미 생성된 Agent가 있으면 새 Agent를 만들지 않고 기존 것을 재사용합니다 — 이 경우 "AI 에이전트 관리"에 새 행이 안 생기는데, 결과에 "재사용" 배지와 안내가 표시됩니다. 새 Agent를 만들려면 다른 할 일을 고르세요.</li>' +
       '</ul>' +
-    '<div id="job-result"></div></section>';
+    '<div id="job-result"></div></section>' +
+    // 사용자 요청(2026-10-21, "Agent 직접 생성" — CrewAI Studio UI
+    // 참조) — 위 Task 기반 생성과 달리 Brief/Task 선택 없이 역할명·
+    // goal·backstory·expected_output·스킬을 바로 입력해 즉시 등록한다.
+    // skillPickerHtml()/initSkillPicker()는 이미 Task 생성·사람 인력
+    // 등록에서 쓰는 컴포넌트를 그대로 재사용(새로 안 만듦).
+    '<section class="card"><h2>Agent 직접 생성(Brief/Task 없이 즉시 등록)</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>역할명만 필수입니다 — goal/backstory/expected_output을 비워두면 실행 시점에 역할명·스킬 기반으로 자동 생성됩니다("AI 에이전트 관리"에서 나중에 덮어쓸 수 있는 것과 동일한 규칙).</li>' +
+    '<li>이렇게 만든 Agent도 똑같이 <b>pending_onboarding</b> 상태로 시작합니다 — "AI 에이전트 관리" 탭에서 온보딩 승인해야 실제 업무에 쓸 수 있습니다. 도구 연결도 그 탭에서(이 Agent가 실제로 생긴 뒤에만 가능).</li>' +
+    '</ul>' +
+    '<form id="direct-agent-form">' +
+    '<label>역할명(필수)<br><input id="direct-agent-role-name" required style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
+    '<label style="display:block;margin-top:0.5rem">스킬<br>' + skillPickerHtml("direct-agent-skills-picker", "direct-agent-skills") + '</label>' +
+    '<label style="display:block;margin-top:0.5rem">Goal(목표)<br><textarea id="direct-agent-goal" rows="2" style="width:100%;box-sizing:border-box;margin-top:0.2rem" placeholder="비워두면 역할명·스킬 기반으로 자동 생성"></textarea></label>' +
+    '<label style="display:block;margin-top:0.5rem">Backstory(배경)<br><textarea id="direct-agent-backstory" rows="2" style="width:100%;box-sizing:border-box;margin-top:0.2rem" placeholder="비워두면 역할명·스킬 기반으로 자동 생성"></textarea></label>' +
+    '<label style="display:block;margin-top:0.5rem">Expected Output(기대 산출물)<br><textarea id="direct-agent-expected" rows="2" style="width:100%;box-sizing:border-box;margin-top:0.2rem" placeholder="비워두면 플랫폼 공통 기본 문구 사용"></textarea></label>' +
+    '<button class="primary" type="submit" style="margin-top:0.6rem">Agent 생성</button>' +
+    '</form>' +
+    '<div id="direct-agent-result"></div></section>';
 
   const tasksPicker = document.getElementById("job-tasks-picker");
   const loadTasksForBrief = async (briefId) => {
@@ -4212,6 +4312,33 @@ async function renderJobs(content) {
         task_ids: taskIds, use_llm: framework !== "stub", framework, provider, model,
       }));
       renderJobResult(result);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  // 사용자 요청(2026-10-21, "Agent 직접 생성") — 위 Task 기반 생성과
+  // 별개인 두 번째 폼. skillPickerHtml()가 이미 넣어둔 hidden input의
+  // 값(쉼표로 join)을 flush() 호출 뒤에 읽는다(입력창에 남은 값을
+  // "추가" 안 누르고 바로 제출해도 놓치지 않도록 — 기존 호출부 관례).
+  const directSkillPicker = initSkillPicker("direct-agent-skills-picker", "direct-agent-skills", []);
+  document.getElementById("direct-agent-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const roleName = document.getElementById("direct-agent-role-name").value.trim();
+    if (!roleName) { showMsg("global-msg", "역할명을 입력하세요.", "error"); return; }
+    directSkillPicker.flush();
+    const skillsRaw = document.getElementById("direct-agent-skills").value;
+    const skillTags = skillsRaw ? skillsRaw.split(",").filter(Boolean) : [];
+    const submitBtn = ev.submitter || document.querySelector("#direct-agent-form button[type=submit]");
+    try {
+      const result = await withBusy(submitBtn, "생성 중…", () => api("POST", "/api/agent-pool", {
+        role_name: roleName,
+        skill_tags: skillTags,
+        goal: document.getElementById("direct-agent-goal").value,
+        backstory: document.getElementById("direct-agent-backstory").value,
+        expected_output: document.getElementById("direct-agent-expected").value,
+      }));
+      document.getElementById("direct-agent-result").innerHTML =
+        '<p class="msg ok">Agent #' + result.id + '을(를) 등록했습니다 — "AI 에이전트 관리" 탭에서 온보딩 승인 후, 필요하면 도구도 거기서 연결하세요.</p>';
+      document.getElementById("direct-agent-form").reset();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 }
@@ -4696,7 +4823,7 @@ async function renderAgentPool(content) {
         (a.last_output ? output : "") +
         '</div></details>';
       return [a.id, a.name ? esc(a.name) : '<span class="muted">(미지정)</span>', esc(a.role_name), esc(a.skill_tags.join(", ")),
-        esc(label(a.status)), esc(a.framework), llmInfo, detail, '<div class="actions">' + actions + "</div>"];
+        esc(label(a.status)), esc(label(a.framework)), llmInfo, detail, '<div class="actions">' + actions + "</div>"];
     })) + '<div id="execute-result"></div></section>';
 
   if (canExecute) {
@@ -5216,10 +5343,19 @@ async function renderTeams(content) {
   // 실행"을 누를 때마다 process·매니저를 매번 새로 골라야 했다. 매니저
   // 후보는 이 팀의 온보딩(active)된 Agent 멤버로만 좁힌다(서버도
   // `teams.update_team_defaults()`에서 같은 제약을 검증한다).
+  // 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — 재정렬
+  // API(`PATCH .../members/order`)는 `team_members.id`(행 id)를 받지
+  // `agent_pool.id`를 받지 않는다 — 캔버스가 둘 다 들고 있어야 해서
+  // `agent_pool` 필드에 `teamMemberRowId`를 덧붙여 돌려준다.
   const activeAgentMembersOf = (t) => t.members
     .filter(m => m.member_type === "agent")
-    .map(m => agents.find(a => a.id === m.member_id))
-    .filter(a => a && a.status === "active");
+    .map(m => {
+      const a = agents.find(x => x.id === m.member_id);
+      return a && a.status === "active"
+        ? Object.assign({}, a, { teamMemberRowId: m.id })
+        : null;
+    })
+    .filter(Boolean);
 
   const teamDefaultsFormHtml = (t) => {
     const activeAgentMembers = activeAgentMembersOf(t);
@@ -5239,25 +5375,56 @@ async function renderTeams(content) {
       '<button class="small" type="submit">기본값 저장</button></form>';
   };
 
-  const teamCardHtml = (t) =>
-    '<section class="card" data-team-card="' + t.id + '">' +
-    '<h3>#' + t.id + " " + esc(t.name) + (t.is_active ? "" : ' <span class="gate-badge gate-warn">비활성</span>') + '</h3>' +
-    (t.description ? '<p class="muted">' + esc(t.description) + '</p>' : "") +
-    table(["타입", "멤버", "역할 라벨", "동작"], t.members.map(m => [
-      esc(label(m.member_type)), esc(m.member_name || ("#" + m.member_id)), esc(m.role_label),
-      '<button class="small danger" data-remove-member="' + t.id + ':' + m.id + '">제외</button>',
-    ])) +
-    '<form class="inline" data-add-member-form="' + t.id + '">' +
-    '<select data-member-select required style="min-width:180px">' + memberOptionsHtml + '</select>' +
-    '<input data-role-label placeholder="역할 라벨(선택)" style="width:140px">' +
-    '<button class="small" type="submit">멤버 추가</button></form>' +
-    teamDefaultsFormHtml(t) +
-    '<div class="actions" style="margin-top:0.5rem">' +
-    '<button class="small" data-toggle-active="' + t.id + '" data-next-active="' + (t.is_active ? "0" : "1") + '">' +
-    (t.is_active ? "비활성화" : "활성화") + '</button>' +
-    (isAdmin ? '<button class="small danger" data-delete-team="' + t.id + '">팀 삭제</button>' : "") +
-    '</div>' +
-    '</section>';
+  // 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — 기존
+  // 멤버 표(CRUD)는 전혀 안 건드리고, 그 위에 "구조 보기/순서·매니저
+  // 편집" 캔버스를 추가로 얹는다. Human 멤버는 CrewAI 실행 그래프에
+  // 포함되지 않으므로(`active_agent_member_ids()`) 캔버스 노드가
+  // 아니라 별도 띠로만 보여준다(거짓 없는 시각화).
+  const teamCardHtml = (t) => {
+    const activeAgentMembers = activeAgentMembersOf(t);
+    const humanMembers = t.members.filter(m => m.member_type === "human");
+    const humanStripHtml = humanMembers.length
+      ? '<p class="muted">결재/참여 인력: ' +
+        humanMembers.map(m => esc(m.member_name || ("#" + m.member_id)) +
+          (m.role_label ? "(" + esc(m.role_label) + ")" : "")).join(", ") +
+        '</p>'
+      : "";
+    // 사용자 보고(2026-10-21, "노드 크기 변경 기능... 지금 노드 크기
+    // 조절은 안되고 너무 커 모든 노드가 표시되지 않음") — 축소/확대/
+    // 전체 보기 버튼을 캔버스 바깥(Drawflow가 관리하는 DOM 트리
+    // 밖)에 둬서 Drawflow의 pan/zoom 변환에 영향받지 않게 한다.
+    const canvasHtml = activeAgentMembers.length
+      ? '<div class="team-canvas-wrap" style="margin-bottom:0.6rem">' +
+        '<div class="team-canvas-toolbar" style="margin-bottom:0.3rem">' +
+        '<button type="button" class="small" data-canvas-zoom-out="' + t.id + '">축소 −</button> ' +
+        '<button type="button" class="small" data-canvas-zoom-in="' + t.id + '">확대 +</button> ' +
+        '<button type="button" class="small" data-canvas-zoom-fit="' + t.id + '">전체 보기</button>' +
+        '</div>' +
+        '<div class="team-canvas" id="team-canvas-' + t.id + '" style="height:260px;border:1px solid var(--color-border);border-radius:6px;background:#fafbfc;overflow:hidden"></div>' +
+        '<p class="muted" style="margin:0.3rem 0 0">노드를 좌우로 드래그하면 순차 릴레이 순서가 바뀝니다(hierarchical에서는 순서가 의미 없어 드래그가 반영되지 않습니다). 노드의 "매니저로 지정" 버튼으로 매니저를 바꿀 수 있습니다. Ctrl+스크롤(모바일은 두 손가락)로도 확대/축소할 수 있습니다.</p>' +
+        '</div>'
+      : '<p class="muted">온보딩(active)된 Agent 멤버가 있어야 워크플로우를 미리 볼 수 있습니다.</p>';
+    return '<section class="card" data-team-card="' + t.id + '">' +
+      '<h3>#' + t.id + " " + esc(t.name) + (t.is_active ? "" : ' <span class="gate-badge gate-warn">비활성</span>') + '</h3>' +
+      (t.description ? '<p class="muted">' + esc(t.description) + '</p>' : "") +
+      humanStripHtml +
+      canvasHtml +
+      table(["타입", "멤버", "역할 라벨", "동작"], t.members.map(m => [
+        esc(label(m.member_type)), esc(m.member_name || ("#" + m.member_id)), esc(m.role_label),
+        '<button class="small danger" data-remove-member="' + t.id + ':' + m.id + '">제외</button>',
+      ])) +
+      '<form class="inline" data-add-member-form="' + t.id + '">' +
+      '<select data-member-select required style="min-width:180px">' + memberOptionsHtml + '</select>' +
+      '<input data-role-label placeholder="역할 라벨(선택)" style="width:140px">' +
+      '<button class="small" type="submit">멤버 추가</button></form>' +
+      teamDefaultsFormHtml(t) +
+      '<div class="actions" style="margin-top:0.5rem">' +
+      '<button class="small" data-toggle-active="' + t.id + '" data-next-active="' + (t.is_active ? "0" : "1") + '">' +
+      (t.is_active ? "비활성화" : "활성화") + '</button>' +
+      (isAdmin ? '<button class="small danger" data-delete-team="' + t.id + '">팀 삭제</button>' : "") +
+      '</div>' +
+      '</section>';
+  };
 
   content.innerHTML =
     '<section class="card"><h2>팀 — 복수 사람·Agent 그룹 등록</h2>' +
@@ -5354,6 +5521,26 @@ async function renderTeams(content) {
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
+  });
+
+  // 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — innerHTML을
+  // 다 채운 뒤(컨테이너가 실제 DOM에 붙은 뒤)에만 Drawflow를 그 자리에
+  // 꽂을 수 있다. refresh()가 renderTeams 전체를 다시 부르는 기존
+  // 관례 그대로 — 멤버 추가/제외/기본값 저장 등 어떤 변경도 항상
+  // 깨끗한 최신 상태로 캔버스를 다시 그린다(특별한 재초기화 훅 불필요).
+  teams.forEach(t => {
+    const activeAgentMembers = activeAgentMembersOf(t);
+    if (!activeAgentMembers.length) return;
+    const canvasControls = _initTeamWorkflowCanvas(
+      document.getElementById("team-canvas-" + t.id), t, activeAgentMembers
+    );
+    if (!canvasControls) return;
+    const zoomOutBtn = content.querySelector('[data-canvas-zoom-out="' + t.id + '"]');
+    const zoomInBtn = content.querySelector('[data-canvas-zoom-in="' + t.id + '"]');
+    const zoomFitBtn = content.querySelector('[data-canvas-zoom-fit="' + t.id + '"]');
+    if (zoomOutBtn) zoomOutBtn.onclick = canvasControls.zoomOut;
+    if (zoomInBtn) zoomInBtn.onclick = canvasControls.zoomIn;
+    if (zoomFitBtn) zoomFitBtn.onclick = canvasControls.fit;
   });
 }
 
@@ -5776,6 +5963,27 @@ async function renderCrewBuilder(content) {
 // — `crew_history.get_run()`이 그 두 함수가 기대하는 모양 그대로
 // `agents`/`delegations`/`gate_scores`/`tcr`/`token_usage`/
 // `final_output`을 돌려준다).
+// 사용자 요청(2026-10-21, "Layer 2 — 실행 가시성 강화") — "실행
+// 이력" 테이블과 실패 상세 화면 양쪽이 각자 `expected`(= manager가
+// 있으면 agent_ids에서 매니저 제외)를 중복 계산하던 걸 하나로
+// 합친다. 숫자 계산 자체는 기존과 동일 — 표시만 텍스트에서 진행
+// 바로 바뀐다.
+function crewRunExpectedCount(run) {
+  const expected = run.manager_agent_id !== null
+    ? run.agent_ids.length - 1 : run.agent_ids.length;
+  return Math.max(expected, 1);
+}
+
+function crewRunProgressHtml(run) {
+  const total = crewRunExpectedCount(run);
+  const completed = run.status === "failed"
+    ? run.completed_agent_ids.length : run.progress.length;
+  const pct = Math.round((completed / total) * 100);
+  return '<div class="progress-bar" style="width:80px;display:inline-block;vertical-align:middle;margin-right:0.4rem">' +
+    '<div class="progress-bar-fill' + (run.status === "failed" ? " failed" : "") + '" style="width:' + pct + '%"></div>' +
+    '</div>' + completed + '/' + total;
+}
+
 async function _renderCrewHistory(container) {
   const runs = await api("GET", "/api/crew-runs");
   container.innerHTML =
@@ -5783,9 +5991,8 @@ async function _renderCrewHistory(container) {
     '<p class="muted">팀 Agent 실행·즉석 실행 둘 다 여기 기록됩니다(즉석 테스트 샌드박스는 지금도 저장되지 않습니다). 진행 중인 실행은 "진행" 열에서 지금까지 끝난 Agent 수를 볼 수 있습니다 — 새로고침하면 갱신됩니다.</p>' +
     (runs.length
       ? table(["ID", "업무", "종류", "process", "상태", "진행", "시작", "동작"], runs.map(r => {
-          const expected = r.manager_agent_id !== null ? r.agent_ids.length - 1 : r.agent_ids.length;
-          const progressText = r.status === "running"
-            ? r.progress.length + "/" + Math.max(expected, 1) + " 완료"
+          const progressText = (r.status === "running" || r.status === "failed")
+            ? crewRunProgressHtml(r)
             : "-";
           return [
             r.id,
@@ -5832,12 +6039,11 @@ async function _renderCrewHistory(container) {
 // Agent 수와 남은 Agent 수를 보여주고 재시도 버튼을 제공한다.
 function _renderFailedCrewRun(resultBox, run, historyContainer) {
   const completedCount = run.completed_agent_ids.length;
-  const expected = run.manager_agent_id !== null ? run.agent_ids.length - 1 : run.agent_ids.length;
-  const remaining = expected - completedCount;
+  const remaining = crewRunExpectedCount(run) - completedCount;
   resultBox.innerHTML =
     '<section class="card">' +
     '<p class="msg error">이 실행은 실패했습니다: ' + esc(run.error || "원인 미상") + '</p>' +
-    '<p class="muted">' + completedCount + '/' + Math.max(expected, 1) + '명 완료 — ' +
+    '<p class="muted">' + crewRunProgressHtml(run) + '명 완료 — ' +
     (completedCount > 0 ? '완료된 Agent의 결과물은 이미 이 업무의 결과물로 저장됐습니다.' : '아무도 완료하지 못했습니다.') +
     '</p>' +
     (remaining > 0
@@ -6321,28 +6527,178 @@ async function renderCrew(content) {
    경우 등) 화살표 대신 아래 "확인 안 된 위임" 목록에 원문을 남긴다.
    외부 차트 라이브러리 없이 순수 inline SVG로 그린다(이 앱의 기존
    무의존성 원칙과 동일). */
-function crewDiagramSvg(result) {
-  const agents = result.agents;
-  const manager = agents.find(a => a.output === null) || null;
-  const workers = agents.filter(a => a !== manager);
-  const isHierarchical = result.process === "hierarchical";
+// 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — crewDiagramSvg()
+// 의 노드 좌표 계산(구조선 — 실행 결과와 무관하게 process+매니저+멤버
+// 목록만으로 계산 가능한 부분)을 떼어내 "팀 관리" 화면의 실행 전
+// 미리보기 캔버스와 공유한다. `agentList`는 `role_name`(필수, 위치를
+// 찾는 키 — CrewAI가 실제로 보고하는 coworker 문자열과 일치해야 해서
+// 건드리면 안 됨)을 가진 객체 배열. `managerMember`는 `agentList`의
+// 원소 중 하나(명시적 매니저) 또는 null/undefined(hierarchical인데
+// 매니저 미지정 — CrewAI 자동 배정, 합성 노드로 표시). 이 함수는
+// 순수 좌표 계산만 하고 SVG 문자열은 만들지 않는다 — 호출자(아래
+// crewDiagramSvg, 새 팀 캔버스)가 각자 자신에게 맞는 방식(raw SVG
+// `<line>` vs Drawflow `addConnection()`)으로 그린다.
+function _crewStructuralLayout(agentList, process, managerMember) {
+  const isHierarchical = process === "hierarchical";
   const nodeW = 150, nodeH = 44, gapX = 190;
   const positions = {};
   let managerNode = null;
+  let workers = agentList;
   let svgWidth, svgHeight;
 
   if (isHierarchical) {
+    workers = agentList.filter(a => a !== managerMember);
     svgWidth = Math.max(workers.length, 1) * gapX + 20;
     svgHeight = 170;
-    managerNode = manager || { role_name: "매니저(LLM 자동 배정)", synthetic: true };
+    managerNode = managerMember || { role_name: "매니저(LLM 자동 배정)", synthetic: true };
     positions[managerNode.role_name] = { x: svgWidth / 2 - nodeW / 2, y: 16 };
     workers.forEach((a, i) => { positions[a.role_name] = { x: i * gapX + 20, y: 112 }; });
   } else {
-    svgWidth = Math.max(agents.length, 1) * gapX + 20;
+    svgWidth = Math.max(agentList.length, 1) * gapX + 20;
     svgHeight = 90;
-    agents.forEach((a, i) => { positions[a.role_name] = { x: i * gapX + 20, y: 23 }; });
+    agentList.forEach((a, i) => { positions[a.role_name] = { x: i * gapX + 20, y: 23 }; });
   }
-  let maxY = svgHeight;  // 위임 곡선이 마지막 행 아래로 처지면 viewBox가 그만큼 커져야 잘리지 않는다.
+  return { positions, svgWidth, svgHeight, nodeW, nodeH, gapX, isHierarchical, managerNode, workers };
+}
+
+// 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — "팀 관리"
+// 화면에서 `_crewStructuralLayout()`이 계산한 좌표를 Drawflow 캔버스에
+// 그린다. 캔버스는 서버 상태(process/매니저/순서)의 투영이다 — 연결선은
+// 항상 자동으로 그려지고, 사용자가 직접 선을 긋거나 지우지 않는다.
+// 사용자가 하는 일은 노드를 드래그해 순서를 바꾸거나(sequential에서만
+// 의미 있음) "매니저로 지정"을 누르는 것뿐 — 그 결과가 서버에 반영되면
+// `refresh()`가 전체를 다시 그려 항상 정돈된 모습으로 돌아온다.
+// Drawflow CDN 로드에 실패해도(오프라인 등) 조용히 아무 것도 안 그리고
+// 끝난다 — 기존 멤버 표 CRUD는 전혀 영향받지 않는다(이 설계의 핵심
+// 안전장치).
+function _initTeamWorkflowCanvas(container, team, activeAgentMembers) {
+  if (!container || typeof Drawflow === "undefined") return null;
+  container.innerHTML = "";
+  const editor = new Drawflow(container);
+  // 사용자 보고(2026-10-21, "노드 크기 변경 기능... 지금 노드 크기
+  // 조절은 안되고 너무 커 모든 노드가 표시되지 않음") — _crewStructuralLayout
+  // 의 nodeW=150/gapX=190은 원래 SVG(viewBox로 컨테이너 폭에 자동
+  // 맞춰짐)용 상수라, Drawflow의 실제 DOM 좌표에 그대로 쓰면 멤버가
+  // 몇 명만 넘어도 컨테이너 밖으로 넘친다. zoom_min을 넉넉히 낮게 둬
+  // 아래 fitToContainer()가 멤버 수가 많아도 전부 보이게 축소할 수
+  // 있게 한다.
+  editor.zoom_min = 0.2;
+  editor.zoom_max = 1.6;
+  editor.zoom_value = 0.1;
+  editor.start();
+
+  const process = team.default_process || "sequential";
+  const managerMember = activeAgentMembers.find(a => a.id === team.default_manager_agent_id) || null;
+  const layout = _crewStructuralLayout(activeAgentMembers, process, managerMember);
+  const nodeIdByRoleName = {};
+
+  const nodeHtml = (a, isManager) =>
+    '<div class="team-canvas-node' + (isManager ? " team-canvas-node-manager" : "") + '">' +
+    '<div class="team-canvas-node-label">' + esc(agentDisplayLabel(a)) + '</div>' +
+    (process === "hierarchical" && !isManager
+      ? '<button type="button" class="small" data-set-manager="' + a.id + '">매니저로 지정</button>'
+      : "") +
+    "</div>";
+
+  const allNodes = layout.isHierarchical ? [layout.managerNode].concat(layout.workers) : activeAgentMembers;
+  allNodes.forEach(a => {
+    if (a.synthetic) return;  // CrewAI 자동 배정 매니저 — 실제 Agent가 아니라 노드로 안 그림
+    const pos = layout.positions[a.role_name];
+    const isManager = a === layout.managerNode;
+    const nodeId = editor.addNode(
+      "agent", 1, 1, pos.x, pos.y,
+      isManager ? "team-canvas-manager" : "team-canvas-worker",
+      { agentId: a.id }, nodeHtml(a, isManager)
+    );
+    nodeIdByRoleName[a.role_name] = nodeId;
+  });
+
+  if (layout.isHierarchical && !layout.managerNode.synthetic) {
+    layout.workers.forEach(a => {
+      editor.addConnection(
+        nodeIdByRoleName[layout.managerNode.role_name], nodeIdByRoleName[a.role_name],
+        "output_1", "input_1"
+      );
+    });
+  } else if (!layout.isHierarchical) {
+    for (let i = 0; i < activeAgentMembers.length - 1; i++) {
+      editor.addConnection(
+        nodeIdByRoleName[activeAgentMembers[i].role_name],
+        nodeIdByRoleName[activeAgentMembers[i + 1].role_name],
+        "output_1", "input_1"
+      );
+    }
+  }
+
+  container.querySelectorAll("[data-set-manager]").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        await api("PATCH", "/api/teams/" + team.id, {
+          default_manager_agent_id: Number(btn.dataset.setManager),
+        });
+        showMsg("global-msg", "매니저를 지정했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  if (!layout.isHierarchical && activeAgentMembers.length > 1) {
+    editor.on("nodeMoved", async () => {
+      let exported;
+      try {
+        exported = editor.export().drawflow.Home.data;
+      } catch (e) { return; }  // Drawflow 내부 구조가 예상과 다르면 조용히 무시(기존 순서 유지)
+      const nodes = Object.values(exported);
+      nodes.sort((a, b) => a.pos_x - b.pos_x);
+      const orderedRowIds = nodes
+        .map(n => {
+          const agent = activeAgentMembers.find(x => x.id === n.data.agentId);
+          return agent ? agent.teamMemberRowId : null;
+        })
+        .filter(Boolean);
+      if (orderedRowIds.length !== activeAgentMembers.length) return;  // 안전장치 — 집합이 안 맞으면 저장 안 함
+      try {
+        await api("PATCH", "/api/teams/" + team.id + "/members/order", {
+          member_row_ids: orderedRowIds,
+        });
+        showMsg("global-msg", "순서를 저장했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  }
+
+  // Drawflow는 zoom_in()/zoom_out()(0.1 단위)만 공개 API로 제공하고
+  // 현재 배율을 직접 읽는 API는 없다 — 시작값은 항상 1.0(Drawflow
+  // 기본값)이므로 이후 변화는 이 클로저에서 직접 추적한다.
+  let currentZoom = 1.0;
+  const applyZoomSteps = (targetZoom) => {
+    const clamped = Math.max(editor.zoom_min, Math.min(editor.zoom_max, targetZoom));
+    const steps = Math.round((clamped - currentZoom) / editor.zoom_value);
+    for (let i = 0; i < Math.abs(steps); i++) {
+      if (steps < 0) editor.zoom_out(); else editor.zoom_in();
+    }
+    currentZoom = clamped;
+  };
+  const fitToContainer = () => {
+    const w = container.clientWidth || 600;
+    const h = container.clientHeight || 260;
+    applyZoomSteps(Math.min(1, w / layout.svgWidth, h / layout.svgHeight));
+  };
+  fitToContainer();  // 최초 렌더부터 전체 노드가 보이게
+
+  return {
+    zoomIn: () => applyZoomSteps(currentZoom + editor.zoom_value),
+    zoomOut: () => applyZoomSteps(currentZoom - editor.zoom_value),
+    fit: fitToContainer,
+  };
+}
+
+function crewDiagramSvg(result) {
+  const agents = result.agents;
+  const manager = agents.find(a => a.output === null) || null;
+  const layout = _crewStructuralLayout(agents, result.process, manager);
+  const { positions, svgWidth, nodeW, nodeH, isHierarchical, managerNode, workers } = layout;
+  let maxY = layout.svgHeight;  // 위임 곡선이 마지막 행 아래로 처지면 viewBox가 그만큼 커져야 잘리지 않는다.
 
   let body = "";
 
@@ -6620,99 +6976,120 @@ async function renderPerformance(content) {
 
 /* ---------- 매니저 대시보드(Phase 5, 사용자 요청 2026-09-28) ---------- */
 
-// 사용자 요청(2026-10-13) — Gate A-G 7개 점수를 숫자 나열 대신 레이더
-// 차트로. 값은 항상 0.0~1.0(agent_evaluation.GATE_IDS 채점 스케일)이라
-// 반지름 0~1을 그 범위에 그대로 매핑한다. not_measured(null) 축은 점을
-// 중심(0)에 찍어 "측정 안 됨"이 눈에 띄게 낮게 보이도록 한다(평균
-// 계산에서는 이미 제외돼 있으므로 차트 모양에만 영향).
-function renderGateRadarSvg(gateAverages) {
-  const gates = ["A", "B", "C", "D", "E", "F", "G"];
-  const cx = 110, cy = 100, r = 80;
-  const angle = i => -Math.PI / 2 + i * (2 * Math.PI / gates.length);
-  const pt = (i, frac) => [cx + Math.cos(angle(i)) * r * frac, cy + Math.sin(angle(i)) * r * frac];
-
-  const rings = [0.25, 0.5, 0.75, 1.0].map(frac =>
-    '<polygon points="' + gates.map((_, i) => pt(i, frac).join(",")).join(" ") +
-    '" fill="none" stroke="#e0e0e0" stroke-width="1"/>'
-  ).join("");
-
-  const spokes = gates.map((_, i) => {
-    const [x, y] = pt(i, 1);
-    return '<line x1="' + cx + '" y1="' + cy + '" x2="' + x + '" y2="' + y + '" stroke="#e0e0e0" stroke-width="1"/>';
-  }).join("");
-
-  const values = gates.map(g => gateAverages[g]);
-  const dataPoints = gates.map((_, i) => pt(i, Math.max(0, Math.min(1, values[i] || 0))));
-  const dataPolygon = '<polygon points="' + dataPoints.map(p => p.join(",")).join(" ") +
-    '" fill="#4a90d9" fill-opacity="0.25" stroke="#4a90d9" stroke-width="2"/>';
-  const dataDots = dataPoints.map((p, i) => values[i] === null ? "" :
-    '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="3" fill="#4a90d9"><title>Gate ' + gates[i] + ": " +
-    values[i].toFixed(2) + '</title></circle>'
-  ).join("");
-
-  const labels = gates.map((g, i) => {
-    const [x, y] = pt(i, 1.18);
-    const v = values[i];
-    return '<text x="' + x + '" y="' + y + '" text-anchor="middle" font-size="11" font-weight="bold">' +
-      g + '</text><text x="' + x + '" y="' + (y + 13) + '" text-anchor="middle" font-size="9" fill="#666">' +
-      (v === null ? "미측정" : v.toFixed(2)) + '</text>';
-  }).join("");
-
-  return '<svg width="220" height="230" style="max-width:100%">' +
-    rings + spokes + dataPolygon + dataDots + labels + '</svg>';
+// 사용자 요청(2026-10-21, "Layer 3 — 데이터 시각화 정리") — 손수
+// 좌표를 계산하던 SVG를 이미 로드된 Chart.js(CDN)로 교체한다.
+// `renderGateRadarChart()`는 canvas 자리만 반환하고(HTML 문자열
+// 조립 시점엔 아직 DOM에 안 붙어 있어 Chart.js를 바로 못 그린다),
+// 실제 차트 생성은 `_initGateRadarChart()`가 `content.innerHTML = ...`
+// 로 그 canvas가 실제 DOM에 붙은 **뒤에** 호출돼야 한다(`renderDashboard`
+// 참고). not_measured(`null`)는 그래프 값은 기존처럼 0으로 클램프해
+// "측정 안 됨이 낮게 보이도록" 하되, 그 점이 0이 아니라 "미측정"이라는
+// 사실은 툴팁 콜백으로 전달한다(JSON만 주고받는 범용 `data-chart-config`
+// 메커니즘, webui.py의 `_activateRichBlocks` 참고 — 은 함수 콜백을
+// 못 담아서 여기선 못 쓴다, 그래서 직접 `new Chart()`를 호출한다).
+function renderGateRadarChart() {
+  return '<canvas id="gate-radar-canvas" width="220" height="230" style="max-width:100%"></canvas>';
 }
 
-// 사용자 요청(2026-10-13) — "비용 변경 이력" 테이블을 라인 차트로.
-// cost_trend는 최신순(DESC)·여러 리소스(subject_type+subject_id)가
-// 뒤섞인 단가 변경 이벤트 목록이라, 그냥 순서대로 한 줄로 이으면 서로
-// 다른 리소스의 단가가 이어진 것처럼 보여 오해를 준다 — 리소스별로
-// 선을 나누고, x축은 전체 이벤트의 시간순 인덱스를 공유해 "누가 언제"를
-// 같은 좌표계에서 비교할 수 있게 한다.
-function renderCostTrendSvg(trend) {
+function _initGateRadarChart(gateAverages) {
+  const canvas = document.getElementById("gate-radar-canvas");
+  if (!canvas) return;
+  if (typeof Chart === "undefined") {
+    canvas.insertAdjacentHTML("afterend", '<p class="muted">차트 라이브러리를 불러오지 못했습니다.</p>');
+    return;
+  }
+  const gates = ["A", "B", "C", "D", "E", "F", "G"];
+  const rawValues = gates.map(g => gateAverages[g]);
+  const plotValues = rawValues.map(v => Math.max(0, Math.min(1, v || 0)));
+  new Chart(canvas, {
+    type: "radar",
+    data: {
+      labels: gates,
+      datasets: [{
+        data: plotValues,
+        backgroundColor: "rgba(74,144,217,0.25)",
+        borderColor: "#4a90d9",
+        pointBackgroundColor: "#4a90d9",
+      }],
+    },
+    options: {
+      responsive: false,
+      scales: { r: { min: 0, max: 1, ticks: { display: false } } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const v = rawValues[ctx.dataIndex];
+              return "Gate " + gates[ctx.dataIndex] + ": " + (v === null ? "미측정" : v.toFixed(2));
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+// 사용자 요청(2026-10-21, "Layer 3") — "비용 변경 이력"을 Chart.js
+// 멀티 데이터셋 라인 차트로. cost_trend는 최신순(DESC)·여러 리소스
+// (subject_type+subject_id)가 뒤섞인 단가 변경 이벤트 목록이라,
+// 리소스별로 데이터셋을 나누고 x축(이벤트의 시간순 인덱스)을
+// 공유해 "누가 언제"를 같은 좌표계에서 비교할 수 있게 한다(기존 SVG
+// 설계 그대로). **`responsive: false`가 핵심** — 이벤트가 많아지면
+// canvas 자체를 넓게 그려 `overflow-x:auto`로 가로 스크롤하게 하려는
+// 의도적 설계(기존 SVG도 `max-width:none`으로 똑같이 했다) — Chart.js
+// 기본 반응형(컨테이너에 맞춰 쪼그라듦)을 그대로 두면 이 설계가 깨진다.
+function renderCostTrendChart(trend) {
   if (!trend.length) return '<p class="muted">비용 변경 이력이 없습니다.</p>';
-  const asc = trend.slice().reverse(); // DESC로 오므로 오래된 것 → 최신으로 뒤집는다
-  const seriesKeys = [...new Set(asc.map(t => t.subject_type + ":" + t.subject_id))];
-  const colors = ["#4a90d9", "#8e5fd9", "#3fa34d", "#e0a030", "#d9534f", "#2aa8a8", "#c2538f"];
-  const colorOf = key => colors[seriesKeys.indexOf(key) % colors.length];
-
   const padding = 34;
-  const width = Math.max(260, padding * 2 + (asc.length - 1) * 40);
-  const height = 180;
-  const values = asc.map(t => t.cost_estimate);
-  const minV = Math.min(0, ...values), maxV = Math.max(1, ...values);
-  const xOf = i => padding + i * ((width - padding * 2) / Math.max(1, asc.length - 1));
-  const yOf = v => (height - padding) - ((v - minV) / (maxV - minV || 1)) * (height - padding * 2);
+  const width = Math.max(260, padding * 2 + (trend.length - 1) * 40);
+  return '<div style="overflow-x:auto"><canvas id="cost-trend-canvas" width="' + width + '" height="180"></canvas></div>';
+}
 
+function _initCostTrendChart(trend) {
+  if (!trend.length) return;
+  const canvas = document.getElementById("cost-trend-canvas");
+  if (!canvas) return;
+  if (typeof Chart === "undefined") {
+    canvas.insertAdjacentHTML("afterend", '<p class="muted">차트 라이브러리를 불러오지 못했습니다.</p>');
+    return;
+  }
+  const asc = trend.slice().reverse(); // DESC로 오므로 오래된 것 → 최신으로 뒤집는다
+  const colors = ["#4a90d9", "#8e5fd9", "#3fa34d", "#e0a030", "#d9534f", "#2aa8a8", "#c2538f"];
   const bySeries = {};
   asc.forEach((t, i) => {
     const key = t.subject_type + ":" + t.subject_id;
-    (bySeries[key] = bySeries[key] || []).push({ i, v: t.cost_estimate, t });
+    (bySeries[key] = bySeries[key] || []).push({ x: i, y: t.cost_estimate, t });
   });
-
-  const lines = Object.entries(bySeries).map(([key, pts]) => {
-    const color = colorOf(key);
-    const path = pts.map((p, idx) => (idx === 0 ? "M" : "L") + xOf(p.i) + "," + yOf(p.v)).join(" ");
-    const dots = pts.map(p =>
-      '<circle cx="' + xOf(p.i) + '" cy="' + yOf(p.v) + '" r="3" fill="' + color + '"><title>' +
-      esc(label(p.t.subject_type)) + " #" + p.t.subject_id + " · " + esc(p.t.created_at) + " · " + p.v +
-      '</title></circle>'
-    ).join("");
-    return (pts.length > 1 ? '<path d="' + path + '" fill="none" stroke="' + color + '" stroke-width="2"/>' : "") + dots;
-  }).join("");
-
-  const axisY = minV < 0 ? yOf(0) : height - padding;
-  const axis = '<line x1="' + padding + '" y1="' + axisY + '" x2="' + (width - padding) + '" y2="' + axisY + '" stroke="#ccc"/>' +
-    '<line x1="' + padding + '" y1="' + padding + '" x2="' + padding + '" y2="' + (height - padding) + '" stroke="#ccc"/>' +
-    '<text x="4" y="' + (padding + 4) + '" font-size="9" fill="#888">' + maxV + '</text>' +
-    '<text x="4" y="' + (height - padding + 4) + '" font-size="9" fill="#888">' + minV + '</text>';
-
-  const legend = seriesKeys.map(key => {
+  const datasets = Object.entries(bySeries).map(([key, pts], idx) => {
     const [stype, sid] = key.split(":");
-    return '<span style="color:' + colorOf(key) + '">■</span> ' + esc(label(stype)) + " #" + sid;
-  }).join("&nbsp;&nbsp;");
-
-  return '<div style="overflow-x:auto"><svg width="' + width + '" height="' + height + '" style="max-width:none">' +
-    axis + lines + '</svg></div><p class="muted" style="font-size:0.85em">' + legend + '</p>';
+    return {
+      label: label(stype) + " #" + sid,
+      data: pts,
+      borderColor: colors[idx % colors.length],
+      backgroundColor: colors[idx % colors.length],
+      showLine: pts.length > 1,  // 포인트가 1개뿐인 시리즈는 점만(기존 SVG와 동일)
+    };
+  });
+  new Chart(canvas, {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: false,
+      maintainAspectRatio: false,
+      scales: { x: { type: "linear", ticks: { stepSize: 1, display: false } } },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const t = ctx.raw.t;
+              return label(t.subject_type) + " #" + t.subject_id + " · " + t.created_at + " · " + t.cost_estimate;
+            },
+          },
+        },
+      },
+    },
+  });
 }
 
 async function renderDashboard(content) {
@@ -6764,7 +7141,7 @@ async function renderDashboard(content) {
     '</ul>' +
     '<div class="dashboard-grid">' +
     '<div class="card"><h3>팀 Agent 평균 Gate 점수(표본 ' + gs.sample_count + '건)</h3>' +
-    '<div style="text-align:center">' + renderGateRadarSvg(gs.gate_averages) + '</div>' +
+    '<div style="text-align:center">' + renderGateRadarChart() + '</div>' +
     '<details class="muted"><summary>숫자로 보기</summary>' + gateRow + '</details>' +
     '<div class="stat-row"><span>평균 TCR</span><span>' + (gs.avg_tcr === null ? "-" : gs.avg_tcr.toFixed(1) + "%") + '</span></div></div>' +
     '<div class="card"><h3>대기 승인 건수</h3><p style="font-size:2em;margin:0">' + d.pending_approval_count + '</p></div>' +
@@ -6774,11 +7151,16 @@ async function renderDashboard(content) {
     '<h3>주의 필요(' + d.bottlenecks.length + '건)</h3><ul>' + bottleneckRows + '</ul>' +
     '<h3>Agent 주의 필요(' + (d.agent_bottlenecks || []).length + '건)</h3><ul>' + agentBottleneckRows + '</ul>' +
     '<h3>비용 변경 이력(최근 ' + d.cost_trend.length + '건)</h3>' +
-    renderCostTrendSvg(d.cost_trend) +
+    renderCostTrendChart(d.cost_trend) +
     '<details class="muted"><summary>표로 보기</summary>' +
     table(["시각", "대상 종류", "대상 ID", "변경된 단가"], trendRows) +
     '</details>' +
     '</section>';
+  // 사용자 요청(2026-10-21, "Layer 3") — Chart.js는 실제 DOM에 붙은
+  // <canvas>가 있어야 그릴 수 있다 — content.innerHTML 대입이 끝난
+  // 뒤(canvas가 실제로 DOM에 붙은 뒤)에만 호출해야 한다.
+  _initGateRadarChart(gs.gate_averages);
+  _initCostTrendChart(d.cost_trend);
 }
 
 /* ---------- 비용 ---------- */

@@ -72,6 +72,7 @@ from hair_platform.auth import (
 )
 from hair_platform.models import (
     AdhocCrewExecuteRequest,
+    AgentCreateDirect,
     AgentExecuteRequest,
     AgentModelConfig,
     AgentNameUpdate,
@@ -123,6 +124,7 @@ from hair_platform.models import (
     TeamDefaultsUpdate,
     TeamLeaderUpdate,
     TeamMemberAdd,
+    TeamMemberReorder,
     ToolActiveUpdate,
     ToolPoolCreate,
     ToolPoolUpdate,
@@ -2158,6 +2160,34 @@ def create_app(db_path: str | None = None) -> FastAPI:
             conn, brief_id, payload.task_ids, user["id"], generator=generator
         )
 
+    @app.post("/api/agent-pool", status_code=201)
+    def create_agent_direct(
+        payload: AgentCreateDirect,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-21, "Agent 직접 생성" — CrewAI Studio UI
+        참조) — Brief/Task 분해 없이 역할명·goal·backstory·
+        expected_output·skill_tags를 한 번에 입력해 즉시 Agent를
+        등록한다("AI 에이전트 생성" 탭의 두 번째 모드). 기존 Task 기반
+        생성과 동일하게 `pending_onboarding`으로 시작 — 온보딩 승인
+        (`POST /api/agent-pool/{id}/onboard`)은 그대로 admin 전용."""
+        try:
+            agent_id = agent_runtime.create_agent_directly(
+                conn,
+                user["id"],
+                payload.role_name,
+                payload.skill_tags,
+                goal=payload.goal,
+                backstory=payload.backstory,
+                expected_output=payload.expected_output,
+            )
+        except ValueError as exc:
+            detail = {
+                "empty_role_name": "역할명을 입력하세요",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from exc
+        return {"id": agent_id, "role_name": payload.role_name, "status": "pending_onboarding"}
+
     @app.post("/api/jobs/{job_id}/items/{item_id}/retry")
     def retry_job_item(
         job_id: int,
@@ -2833,6 +2863,30 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=404, detail="팀 멤버를 찾을 수 없습니다"
             ) from exc
         return {"id": member_row_id, "deleted": True}
+
+    @app.patch("/api/teams/{team_id}/members/order")
+    def reorder_team_members_endpoint(
+        team_id: int,
+        payload: TeamMemberReorder,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — 팀
+        관리 화면의 Drawflow 캔버스에서 노드를 드래그해 순서를 바꾸면
+        호출된다. `teams.reorder_team_members()` 참고."""
+        try:
+            teams.reorder_team_members(
+                conn, user["id"], team_id, payload.member_row_ids
+            )
+        except ValueError as exc:
+            if str(exc) == "team_not_found":
+                raise HTTPException(
+                    status_code=404, detail="팀을 찾을 수 없습니다"
+                ) from exc
+            detail = {
+                "member_row_ids_mismatch": "이 팀의 현재 Agent 멤버 전체와 정확히 일치하지 않습니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from exc
+        return teams.get_team(conn, team_id)
 
     # ---------- 파이프라인 빌더(사용자 요청 2026-10-18) ----------
 

@@ -226,6 +226,14 @@ class TeamMemberAdd(BaseModel):
     role_label: str = ""
 
 
+class TeamMemberReorder(BaseModel):
+    """사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — 이 팀의
+    현재 Agent 타입 멤버(team_members.id) 전체를 원하는 순서로 나열한
+    리스트. `teams.reorder_team_members()` 참고."""
+
+    member_row_ids: list[int]
+
+
 class DeliverableCreate(BaseModel):
     """협업 워크스페이스(사용자 요청, 2026-09-28) — 사람이 작성한 결과물을
     올린다.
@@ -416,6 +424,19 @@ class AgentPersonaConfig(BaseModel):
     goal: str | None = None
     backstory: str | None = None
     expected_output: str | None = None
+
+
+class AgentCreateDirect(BaseModel):
+    """사용자 요청(2026-10-21, "Agent 직접 생성" — CrewAI Studio UI
+    참조) — Brief/Task 분해 없이 role_name·goal·backstory·
+    expected_output·skill_tags를 한 번에 입력해 즉시 Agent를
+    등록한다. `agent_runtime.create_agent_directly()` 참고."""
+
+    role_name: str
+    skill_tags: list[str] = []
+    goal: str = ""
+    backstory: str = ""
+    expected_output: str = ""
 
 
 class CrewRunRequest(BaseModel):

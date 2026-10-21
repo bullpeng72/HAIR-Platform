@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+import pytest
+
 from hair_platform import crew_runtime, pool_registry
 
 
@@ -472,5 +474,91 @@ def test_run_crew_expected_outputs_param_overrides_agent_default(client_and_conn
             provider="openai",
             expected_outputs=["파이프라인 단계 기본값"],
         )
-
     assert captured["crew"].tasks[0].expected_output == "파이프라인 단계 기본값"
+
+
+# ---------- Agent 직접 생성(2026-10-21, CrewAI Studio UI 참조) ----------
+
+
+def test_create_agent_directly_persists_fields_and_starts_pending_onboarding(
+    client_and_conn,
+):
+    client, conn = client_and_conn
+    from hair_platform import agent_runtime
+
+    admin_id = _admin_id(conn)
+    agent_id = agent_runtime.create_agent_directly(
+        conn,
+        admin_id,
+        "  보안 전문가  ",
+        ["security", "pentest"],
+        goal="취약점을 찾아낸다.",
+        backstory="10년차 보안 엔지니어.",
+        expected_output="취약점 리포트",
+    )
+    row = conn.execute("SELECT * FROM agent_pool WHERE id = ?", (agent_id,)).fetchone()
+    assert row["role_name"] == "보안 전문가"  # strip됨
+    assert json.loads(row["skill_tags"]) == ["security", "pentest"]
+    assert row["goal"] == "취약점을 찾아낸다."
+    assert row["backstory"] == "10년차 보안 엔지니어."
+    assert row["expected_output"] == "취약점 리포트"
+    assert row["status"] == "pending_onboarding"
+    assert row["framework"] == "manual"
+
+
+def test_create_agent_directly_rejects_empty_role_name(client_and_conn):
+    client, conn = client_and_conn
+    from hair_platform import agent_runtime
+
+    admin_id = _admin_id(conn)
+    with pytest.raises(ValueError, match="empty_role_name"):
+        agent_runtime.create_agent_directly(conn, admin_id, "   ", [])
+
+
+def test_create_agent_direct_endpoint_requires_admin_or_manager(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    resp = client.post("/api/agent-pool", json={"role_name": "테스터"})
+    assert resp.status_code == 403, resp.text
+
+
+def test_create_agent_direct_endpoint_rejects_blank_role_name(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    resp = client.post("/api/agent-pool", json={"role_name": "   "})
+    assert resp.status_code == 400, resp.text
+
+
+def test_create_agent_direct_endpoint_happy_path_then_onboardable(client_and_conn):
+    """직접 생성 → pending_onboarding → 기존 온보딩 승인 엔드포인트로
+    active 전환까지 — 기존 상태 머신과의 통합 확인."""
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    resp = client.post(
+        "/api/agent-pool",
+        json={
+            "role_name": "디자이너",
+            "skill_tags": ["figma"],
+            "goal": "일관된 디자인 시스템을 유지한다.",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["role_name"] == "디자이너"
+    assert body["status"] == "pending_onboarding"
+    agent_id = body["id"]
+
+    resp = client.get("/api/agent-pool")
+    row = next(a for a in resp.json() if a["id"] == agent_id)
+    assert row["status"] == "pending_onboarding"
+    assert row["skill_tags"] == ["figma"]
+    assert row["goal"] == "일관된 디자인 시스템을 유지한다."
+
+    # manager는 온보딩 승인을 못 한다(admin 전용) — 기존 제약 그대로.
+    resp = client.post(f"/api/agent-pool/{agent_id}/onboard")
+    assert resp.status_code == 403, resp.text
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(f"/api/agent-pool/{agent_id}/onboard")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "active"

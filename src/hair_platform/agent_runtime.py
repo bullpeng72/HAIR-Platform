@@ -341,3 +341,53 @@ def set_persona(conn: sqlite3.Connection, agent_id: int, actor_id: int, **fields
         (agent_id,),
     ).fetchone()
     return dict(updated)
+
+
+def create_agent_directly(
+    conn: sqlite3.Connection,
+    actor_id: int,
+    role_name: str,
+    skill_tags: list[str],
+    goal: str = "",
+    backstory: str = "",
+    expected_output: str = "",
+) -> int:
+    """사용자 요청(2026-10-21, "Agent 직접 생성" — CrewAI Studio UI
+    참조) — 지금까지 Agent 생성은 Brief→Task 분해를 거쳐야만 했고
+    (`jobs._run_item()`), role_name/skill_tags가 전부 선택한 Task에서
+    그대로 왔다. 이 함수는 Brief/Task 없이 관리자가 역할명·스킬·
+    goal/backstory/expected_output을 직접 입력해 즉시 `agent_pool`에
+    등록한다 — `status`는 INSERT에 안 넣어 기존 생성 경로와 똑같이
+    DB 기본값(`pending_onboarding`)에 맡긴다(기존 온보딩 승인 버튼이
+    그대로 작동). goal/backstory/expected_output이 빈 문자열이면
+    `set_persona()`와 같은 폴백 규칙(`crew_runtime.py`가 소비할 때
+    `row["goal"] or _agent_goal(...)`)으로 자동 생성된다 — 새 규칙을
+    만들지 않는다. `framework='manual'`로 저장해 Task 기반 생성
+    (stub/simple_llm/crewai)과 구분한다(순수 표시용 — 다른 분기
+    로직 없음, webui.py의 생성방식 열에만 쓰임)."""
+    role_name = role_name.strip()
+    if not role_name:
+        raise ValueError("empty_role_name")
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, goal, backstory, "
+        "expected_output, framework) VALUES (?, ?, ?, ?, ?, 'manual')",
+        (
+            role_name,
+            json.dumps(skill_tags, ensure_ascii=False),
+            goal,
+            backstory,
+            expected_output,
+        ),
+    )
+    agent_id = cur.lastrowid
+    assert agent_id is not None
+    audit.record(
+        conn,
+        actor_id,
+        "agent_created_directly",
+        "agent_pool",
+        agent_id,
+        after={"role_name": role_name, "skill_tags": skill_tags},
+    )
+    conn.commit()
+    return agent_id

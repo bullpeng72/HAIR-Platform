@@ -365,3 +365,177 @@ def test_gc234_multiple_confirmed_assignments_coexist_without_explicit_replace(
     by_resource = {r["resource_id"]: r["status"] for r in rows}
     assert by_resource[human_a] == "confirmed"
     assert by_resource[human_b] == "confirmed"
+
+
+# ---------- 팀 워크플로우 노드 캔버스(2026-10-21) — 멤버 순서(sequence_order) ----------
+
+
+def _make_active_agent(conn, role_name):
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[]', 'active')",
+        (role_name,),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def test_get_team_falls_back_to_insertion_order_when_sequence_order_unset(
+    client_and_conn,
+):
+    """레거시 팀(한 번도 캔버스로 순서를 정한 적 없는 — sequence_order
+    전부 NULL)은 기존처럼 삽입 순서(`team_members.id`)를 그대로 쓴다
+    — 회귀 없음 확인."""
+    client, conn = client_and_conn
+    team_id = _create_team(client, "순서테스트팀")
+    agent1 = _make_active_agent(conn, "첫번째")
+    agent2 = _make_active_agent(conn, "두번째")
+    agent3 = _make_active_agent(conn, "세번째")
+
+    _login(client, "admin1", "adminpass")
+    for agent_id in (agent1, agent2, agent3):
+        resp = client.post(
+            f"/api/teams/{team_id}/members",
+            json={"member_type": "agent", "member_id": agent_id},
+        )
+        assert resp.status_code == 201, resp.text
+
+    resp = client.get(f"/api/teams/{team_id}")
+    member_ids = [m["member_id"] for m in resp.json()["members"]]
+    assert member_ids == [agent1, agent2, agent3]
+    assert all(m["sequence_order"] is None for m in resp.json()["members"])
+
+
+def test_reorder_team_members_persists_and_reflects_in_get_team(client_and_conn):
+    client, conn = client_and_conn
+    team_id = _create_team(client, "재정렬팀")
+    agent1 = _make_active_agent(conn, "A")
+    agent2 = _make_active_agent(conn, "B")
+    agent3 = _make_active_agent(conn, "C")
+
+    _login(client, "admin1", "adminpass")
+    row_ids = []
+    for agent_id in (agent1, agent2, agent3):
+        resp = client.post(
+            f"/api/teams/{team_id}/members",
+            json={"member_type": "agent", "member_id": agent_id},
+        )
+        row_ids.append(resp.json()["id"])
+
+    # 기본 순서(A,B,C)를 뒤집어 재정렬(C,A,B) — row_id 기준으로 지정.
+    new_order = [row_ids[2], row_ids[0], row_ids[1]]
+    resp = client.patch(
+        f"/api/teams/{team_id}/members/order", json={"member_row_ids": new_order}
+    )
+    assert resp.status_code == 200, resp.text
+    member_ids = [m["member_id"] for m in resp.json()["members"]]
+    assert member_ids == [agent3, agent1, agent2]
+
+    # 새로고침(GET 재조회)해도 유지되는지.
+    resp = client.get(f"/api/teams/{team_id}")
+    member_ids = [m["member_id"] for m in resp.json()["members"]]
+    assert member_ids == [agent3, agent1, agent2]
+
+
+def test_reorder_team_members_rejects_mismatched_set(client_and_conn):
+    """다른 팀 멤버가 섞이거나, 일부가 누락되거나, 중복되면 조용히
+    일부만 반영하지 않고 즉시 400으로 거부한다."""
+    client, conn = client_and_conn
+    team_id = _create_team(client, "불일치테스트팀")
+    agent1 = _make_active_agent(conn, "A")
+    agent2 = _make_active_agent(conn, "B")
+
+    _login(client, "admin1", "adminpass")
+    row_ids = []
+    for agent_id in (agent1, agent2):
+        resp = client.post(
+            f"/api/teams/{team_id}/members",
+            json={"member_type": "agent", "member_id": agent_id},
+        )
+        row_ids.append(resp.json()["id"])
+
+    # 누락
+    resp = client.patch(
+        f"/api/teams/{team_id}/members/order",
+        json={"member_row_ids": [row_ids[0]]},
+    )
+    assert resp.status_code == 400, resp.text
+
+    # 중복
+    resp = client.patch(
+        f"/api/teams/{team_id}/members/order",
+        json={"member_row_ids": [row_ids[0], row_ids[0]]},
+    )
+    assert resp.status_code == 400, resp.text
+
+    # 존재하지 않는 team_members.id가 섞임
+    resp = client.patch(
+        f"/api/teams/{team_id}/members/order",
+        json={"member_row_ids": [row_ids[0], row_ids[1], 999999]},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_reorder_team_members_human_members_excluded_and_unaffected(client_and_conn):
+    """Human 멤버는 CrewAI 실행 그래프 대상이 아니므로 재정렬 집합에
+    아예 포함되지 않는다 — Agent만으로 집합을 맞춰야 한다."""
+    client, conn = client_and_conn
+    team_id = _create_team(client, "휴먼포함팀")
+    agent1 = _make_active_agent(conn, "A")
+
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/human-pool", json={"name": "이과장", "role": "리더"}
+    )
+    human_id = resp.json()["id"]
+    client.post(
+        f"/api/teams/{team_id}/members",
+        json={"member_type": "human", "member_id": human_id, "role_label": "팀장"},
+    )
+    resp = client.post(
+        f"/api/teams/{team_id}/members",
+        json={"member_type": "agent", "member_id": agent1},
+    )
+    agent_row_id = resp.json()["id"]
+
+    # Human row_id를 끼워 넣으면 집합 불일치로 거부된다(Agent만 대상).
+    resp = client.patch(
+        f"/api/teams/{team_id}/members/order",
+        json={"member_row_ids": [agent_row_id, agent_row_id + 999]},
+    )
+    assert resp.status_code == 400, resp.text
+
+    # Agent 하나만 정확히 지정하면 정상 처리되고, Human 멤버는 그대로 남는다.
+    resp = client.patch(
+        f"/api/teams/{team_id}/members/order",
+        json={"member_row_ids": [agent_row_id]},
+    )
+    assert resp.status_code == 200, resp.text
+    members = resp.json()["members"]
+    assert {m["member_type"] for m in members} == {"human", "agent"}
+
+
+def test_reorder_team_members_endpoint_requires_admin_or_manager(client_and_conn):
+    client, conn = client_and_conn
+    team_id = _create_team(client, "권한테스트팀")
+    agent1 = _make_active_agent(conn, "A")
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        f"/api/teams/{team_id}/members",
+        json={"member_type": "agent", "member_id": agent1},
+    )
+    row_id = resp.json()["id"]
+
+    _login(client, "member1", "memberpass")
+    resp = client.patch(
+        f"/api/teams/{team_id}/members/order", json={"member_row_ids": [row_id]}
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_reorder_team_members_endpoint_404_for_missing_team(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.patch(
+        "/api/teams/999999/members/order", json={"member_row_ids": []}
+    )
+    assert resp.status_code == 404, resp.text

@@ -40,6 +40,7 @@ def _member_row_to_dict(row: sqlite3.Row) -> dict:
         "member_id": row["member_id"],
         "role_label": row["role_label"],
         "member_name": row["member_name"],
+        "sequence_order": row["sequence_order"],
     }
 
 
@@ -49,7 +50,7 @@ def get_team(conn: sqlite3.Connection, team_id: int) -> dict | None:
         return None
     members = conn.execute(
         """
-        SELECT tm.id, tm.member_type, tm.member_id, tm.role_label,
+        SELECT tm.id, tm.member_type, tm.member_id, tm.role_label, tm.sequence_order,
                CASE WHEN tm.member_type = 'human' THEN hp.name
                     ELSE COALESCE(ap.name, ap.role_name) END
                    AS member_name
@@ -57,7 +58,7 @@ def get_team(conn: sqlite3.Connection, team_id: int) -> dict | None:
         LEFT JOIN human_pool hp ON hp.id = tm.member_id AND tm.member_type = 'human'
         LEFT JOIN agent_pool ap ON ap.id = tm.member_id AND tm.member_type = 'agent'
         WHERE tm.team_id = ?
-        ORDER BY tm.id
+        ORDER BY tm.sequence_order IS NULL, tm.sequence_order, tm.id
         """,
         (team_id,),
     ).fetchall()
@@ -234,6 +235,45 @@ def remove_team_member(
         "team",
         team_id,
         before={"member_type": row["member_type"], "member_id": row["member_id"]},
+    )
+    conn.commit()
+
+
+def reorder_team_members(
+    conn: sqlite3.Connection, actor_id: int, team_id: int, member_row_ids: list[int]
+) -> None:
+    """사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — Agent
+    멤버의 순차 릴레이 순서를 캔버스에서 드래그로 바꿀 수 있게 한다.
+    `member_row_ids`는 이 팀의 **현재 Agent 타입 멤버 전체**를 원하는
+    순서로 나열한 리스트여야 한다 — 집합이 정확히 일치하지 않으면
+    (다른 팀 멤버 섞임, 일부 누락, 중복) 조용히 일부만 반영하는 대신
+    즉시 거부한다(캔버스가 알고 있는 "전체 노드 목록"과 서버가 아는
+    목록이 어긋났다는 뜻이라 — 추측해서 처리하지 않는다). Human
+    멤버는 CrewAI 실행 그래프에 포함되지 않으므로(`active_agent_
+    member_ids()` 참고) 이 함수의 대상이 아니다."""
+    team = conn.execute("SELECT id FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if team is None:
+        raise ValueError("team_not_found")
+    current = conn.execute(
+        "SELECT id FROM team_members WHERE team_id = ? AND member_type = 'agent'",
+        (team_id,),
+    ).fetchall()
+    current_ids = {r["id"] for r in current}
+    if set(member_row_ids) != current_ids or len(member_row_ids) != len(current_ids):
+        raise ValueError("member_row_ids_mismatch")
+
+    for index, member_row_id in enumerate(member_row_ids):
+        conn.execute(
+            "UPDATE team_members SET sequence_order = ? WHERE id = ?",
+            (index, member_row_id),
+        )
+    audit.record(
+        conn,
+        actor_id,
+        "team_members_reordered",
+        "team",
+        team_id,
+        after={"member_row_ids": member_row_ids},
     )
     conn.commit()
 
