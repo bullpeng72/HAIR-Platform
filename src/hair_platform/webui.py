@@ -1156,11 +1156,17 @@ async function fetchModelsByProvider() {
   const byProvider = { anthropic: [], openai: [], ollama: [] };
   let models;
   try {
-    models = await api("GET", "/api/model-registry");
+    // 사용자 보고(2026-10-22, "member 권한으로 대화시 모델 프로바이더를
+    // 선택해도 등록된 모델이 불려오지 않음") — `/api/model-registry`는
+    // admin+manager 전용이라 member/viewer는 403을 받고 여기서 조용히
+    // 빈 목록으로 폴백했다(드롭다운이 "기본값 사용"/"직접 입력..."만
+    // 보임). `/api/model-registry/names`(모든 role 허용, provider+모델명
+    // 만 노출)로 바꾼다.
+    models = await api("GET", "/api/model-registry/names");
   } catch (e) {
     return byProvider;
   }
-  models.filter(m => m.is_active).forEach(m => {
+  models.forEach(m => {
     if (byProvider[m.provider]) byProvider[m.provider].push(m.name);
   });
   return byProvider;

@@ -2693,6 +2693,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
     ):
         return model_registry.list_models(conn, provider=provider)
 
+    @app.get("/api/model-registry/names")
+    def list_model_registry_names(
+        provider: str | None = None,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 보고(2026-10-22, 스크린샷 — "member 권한으로 대화시
+        모델 프로바이더를 선택해도 등록된 모델이 불려오지 않음") —
+        `/api/model-registry`(바로 위)는 admin+manager 전용인데,
+        `webui.py`의 `fetchModelsByProvider()`가 이걸로 조회하고
+        403을 조용히 빈 목록으로 폴백한다(`catch (e) { return
+        byProvider; }`) — "AI 에이전트 생성"·"AI 에이전트 관리(모델
+        설정)"·"Crew 실행"·대화 워크스페이스 4곳 전부 member/viewer가
+        쓰는 화면인데 모델 드롭다운만 "기본값 사용"/"직접 입력..."으로
+        비어 보였다. `model_registry`엔 provider/모델명뿐 민감 정보가
+        없으므로(`/api/skill-pool/names`와 같은 이유), id/is_active
+        같은 관리용 필드는 빼고 provider+name만 모든 role에 노출하는
+        조회 전용 엔드포인트를 따로 둔다(`/api/model-registry`의
+        admin+manager 제한은 그대로 — 등록/수정/삭제 RBAC 테스트
+        `test_gc223_model_registry_rbac`가 이미 그 경계를 검증한다)."""
+        return [
+            {"provider": m["provider"], "name": m["name"]}
+            for m in model_registry.list_models(conn, provider=provider)
+            if m["is_active"]
+        ]
+
     @app.get("/api/model-registry/fetch")
     def fetch_model_registry_candidates(
         provider: str,

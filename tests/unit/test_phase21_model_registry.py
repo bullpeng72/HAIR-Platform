@@ -117,6 +117,44 @@ def test_gc223_model_registry_rbac(client_and_conn):
     assert client.get("/api/model-registry").status_code == 403
 
 
+def test_gc_model_registry_names_endpoint_open_to_all_roles_no_sensitive_fields(
+    client_and_conn,
+):
+    """사용자 보고(2026-10-22, 스크린샷 — "member 권한으로 대화시 모델
+    프로바이더를 선택해도 등록된 모델이 불려오지 않음") — `/api/model-
+    registry`(위 RBAC 테스트)는 admin+manager 전용으로 유지하되,
+    대화 워크스페이스 등 4개 화면의 provider 드롭다운이 공유하는
+    `fetchModelsByProvider()`는 member/viewer에서도 모델 목록을 받아야
+    한다. `/api/model-registry/names`는 모든 로그인 role에 열려 있고,
+    `id`/`is_active` 같은 관리용 필드 없이 `provider`/`name`만 반환해야
+    한다(활성 모델만)."""
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        "/api/model-registry", json={"provider": "anthropic", "name": "claude-sonnet-5"}
+    )
+    assert resp.status_code == 201, resp.text
+    inactive_id = client.post(
+        "/api/model-registry", json={"provider": "openai", "name": "비활성모델"}
+    ).json()["id"]
+    client.patch(
+        f"/api/model-registry/{inactive_id}/active", json={"is_active": False}
+    )
+
+    for username, password in [
+        ("member1", "memberpass"),
+        ("viewer1", "viewerpass"),
+        ("manager1", "managerpass"),
+    ]:
+        _login(client, username, password)
+        resp = client.get("/api/model-registry/names")
+        assert resp.status_code == 200, (username, resp.text)
+        names = resp.json()
+        assert {"provider": "anthropic", "name": "claude-sonnet-5"} in names
+        assert all(set(n.keys()) == {"provider", "name"} for n in names)
+        assert not any(n["name"] == "비활성모델" for n in names)  # 비활성 제외
+
+
 def test_gc224_fetch_candidates_success_does_not_persist_anything(client_and_conn):
     """ "불러오기"는 조회만 한다 — 결과를 보여줄 뿐 등록하지 않는다(등록은
     사용자가 고른 것만 별도 POST로)."""
