@@ -295,18 +295,20 @@ def create_skill(
     description: str,
     default_tool_pool_ids: list[int] | None = None,
     augmentation_mode: str = "tool",
+    show_in_conversation: bool = True,
 ) -> int:
     if augmentation_mode not in ("tool", "always", "none"):
         raise ValueError(f"unsupported_augmentation_mode:{augmentation_mode}")
     cur = conn.execute(
         "INSERT INTO skill_pool "
-        "(name, description, default_tool_pool_ids, augmentation_mode) "
-        "VALUES (?, ?, ?, ?)",
+        "(name, description, default_tool_pool_ids, augmentation_mode, "
+        "show_in_conversation) VALUES (?, ?, ?, ?, ?)",
         (
             name,
             description,
             json.dumps(default_tool_pool_ids or []),
             augmentation_mode,
+            show_in_conversation,
         ),
     )
     skill_id = cur.lastrowid
@@ -332,6 +334,7 @@ def list_skills(conn: sqlite3.Connection) -> list[dict]:
             "description": r["description"],
             "default_tool_pool_ids": json.loads(r["default_tool_pool_ids"]),
             "augmentation_mode": r["augmentation_mode"],
+            "show_in_conversation": bool(r["show_in_conversation"]),
         }
         for r in rows
     ]
@@ -343,7 +346,12 @@ def update_skill(conn: sqlite3.Connection, actor_id: int, skill_id: int, **field
     돌린다. `name`은 바꿀 수 없다(`update_tool()` 참고 — Agent의
     `skill_tags`가 이 이름 문자열과 정확히 일치해야 매칭되므로, 바꾸면
     그 연결이 조용히 끊어진다)."""
-    allowed = {"description", "default_tool_pool_ids", "augmentation_mode"}
+    allowed = {
+        "description",
+        "default_tool_pool_ids",
+        "augmentation_mode",
+        "show_in_conversation",
+    }
     unknown = set(fields) - allowed
     if unknown:
         raise ValueError(f"unsupported_fields:{sorted(unknown)}")
@@ -545,6 +553,65 @@ SKILL_KNOWLEDGE_GUIDANCE = (
     "실제로 요청한 결과물로 응답하세요(예: 코드를 요청받았다면 설명이 아니라 "
     "실행 가능한 코드로 답하세요)."
 )
+
+# 사용자 보고(2026-10-22, "일반웹검색 스킬 점검해줘" 중 재현된 실측 크래시) —
+# `skill_pool.description`(예: "일반웹검색": "...Agent가 직접 호출할 수
+# 있다")이 CrewAI Tool 루프가 있는 경로(`crew_runtime._agent_backstory()`)
+# 기준으로 써 있어, 실제로는 도구가 전혀 안 붙는 단일 LLM 호출 경로
+# (`llm.system_prompt_for_role()`, `deliverables.
+# skill_grounded_system_prompt()`)에도 그대로 복사된다. 로컬 Ollama의
+# qwen3.5/qwen3-coder 계열 모델(`tools` capability가 있는 모델)이 이
+# 설명을 믿고 실제 tool_call 형식 토큰을 출력하려 하면, `tools=`를
+# 전달하지 않은 이 경로에서 Ollama 서버 자체가 "tool call parsing
+# failed: EOF"로 500을 반환한다(재현 확인 — `ollama/server.log`).
+# `skill_knowledge_text()`가 비지 않을 때만(= 참고 지식에 도구 언급이
+# 있을 수 있을 때만) 이 경고를 덧붙인다 — 두 단일 호출 경로에만 쓴다
+# (`crew_runtime._agent_backstory()`는 실제 도구가 붙으므로 적용 금지 —
+# 거기서 쓰면 진짜 Tool 호출을 모델이 스스로 포기할 위험이 있다).
+NO_TOOL_LOOP_GUARD = (
+    "중요: 이 실행 경로에는 실제로 호출 가능한 도구가 연결되어 있지 않습니다 — "
+    "위 참고 지식에 어떤 도구의 이름이나 기능이 언급되어 있어도 그 도구를 실제로 "
+    "호출할 수 없습니다. tool_call이나 함수 호출 형식의 출력을 절대 생성하지 "
+    "말고, 알고 있는 지식과 위 참고 자료만으로 순수 텍스트 답변을 작성하세요."
+)
+
+
+def unsupported_realtime_skill_names(
+    conn: sqlite3.Connection, skills: list[str]
+) -> list[str]:
+    """`skills` 중 실시간 검색/조회를 의도한(`augmentation_mode`가
+    `'tool'`/`'always'`이고 `default_tool_pool_ids`가 비지 않은) 스킬
+    인데, 그 도구가 `kind='native'`가 아닌(`mcp_remote`/`mcp_stdio`)
+    것들의 이름을 반환한다.
+
+    사용자 요청(2026-10-22, "일반웹검색 스킬 점검해줘" 조사 결과) —
+    `resolve_static_augmentation_targets()`는 그런 스킬을 조용히
+    건너뛴다(native만 정적 텍스트 주입이 가능하다, 주석 참고). 그 결과
+    CrewAI Agent 루프가 없는 호출부(`conversations.run_default_ai_job()`)
+    에서 이런 스킬을 고르면 모델이 "검색하겠습니다"라고 의도만 서술하고
+    끝나는 것처럼 보인다(실측 확인된 버그 리포트) — 호출부가 이 함수로
+    해당 여부를 미리 알아 사용자에게 "이 스킬은 대화창에서 실시간 검색이
+    안 되고 Team 실행에서만 동작한다"고 알릴 수 있게 한다."""
+    if not skills:
+        return []
+    placeholders = ",".join("?" for _ in skills)
+    rows = conn.execute(
+        f"SELECT * FROM skill_pool WHERE name IN ({placeholders}) "
+        "AND augmentation_mode IN ('tool', 'always')",
+        skills,
+    ).fetchall()
+    names = []
+    for row in rows:
+        tool_ids = json.loads(row["default_tool_pool_ids"])
+        for tool_id in tool_ids:
+            trow = conn.execute(
+                "SELECT kind FROM tool_pool WHERE id = ? AND is_active = 1",
+                (tool_id,),
+            ).fetchone()
+            if trow is not None and trow["kind"] != "native":
+                names.append(row["name"])
+                break
+    return names
 
 
 def resolve_pool_tools(

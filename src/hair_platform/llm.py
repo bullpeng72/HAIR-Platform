@@ -168,10 +168,11 @@ def system_prompt_for_role(
         "구체적이고 실질적인 산출물을 작성하세요. 불필요한 설명 없이 산출물 자체에 집중하세요."
     )
     knowledge = pool_registry.skill_knowledge_text(conn, skills)
+    if not knowledge:
+        return base
     return (
         f"{base}\n\n참고 지식({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n{knowledge}"
-        if knowledge
-        else base
+        f"\n\n{pool_registry.NO_TOOL_LOOP_GUARD}"
     )
 
 

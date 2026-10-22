@@ -792,6 +792,7 @@ def skill_grounded_system_prompt(
             base
             + f"\n\n참고 지식({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n"
             + knowledge
+            + f"\n\n{pool_registry.NO_TOOL_LOOP_GUARD}"
         )
     return base
 

@@ -124,6 +124,21 @@ INDEX_HTML = """<!DOCTYPE html>
   .mention-tag { display: inline-block; font-weight: 600; padding: 0 0.35rem; border-radius: 4px; }
   .mention-tag.mention-agent { background: #ede9fe; color: #6d28d9; }
   .mention-tag.mention-human { background: #dbeafe; color: #1d4ed8; }
+  /* 사용자 요청(2026-10-22, "호출된 사람,에이전트가 대화 내용과
+     구분되도록 해줘 (볼드, 색구분 등) ... 입력창에서도 적용해줘") —
+     대화 카드(.mention-tag, 위)는 이미 멘션을 pill로 감싸지만,
+     타이핑 중인 input은 plain text라 그 방식(padding 있는 inline-block
+     pill)을 그대로 못 쓴다 — input 위에 똑같은 텍스트를 그리는 투명
+     오버레이(mirror) div를 겹쳐서, 실제 입력은 투명하게(캐럿만 보이게)
+     하고 mirror가 보이는 텍스트를 담당한다. pill처럼 padding/배경을
+     넣으면 그 구간만 글자 폭이 늘어나 mirror와 실제 input의 글자 위치가
+     어긋나므로(그 뒤로 입력한 글자가 캐럿과 안 맞아 보임), 폭이 안
+     바뀌는 font-weight+color만 쓴다(배경/패딩 없음).*/
+  #conv-message-highlight { position: absolute; inset: 0; margin: 0; padding: 0.35rem; border: 1px solid transparent; border-radius: 4px; font-size: 0.85rem; font-family: inherit; line-height: normal; white-space: pre; overflow: hidden; box-sizing: border-box; pointer-events: none; background: #fff; z-index: 0; }
+  #conv-message-highlight .mention-inline-agent { font-weight: 600; color: #6d28d9; }
+  #conv-message-highlight .mention-inline-human { font-weight: 600; color: #1d4ed8; }
+  #conv-message-input { position: relative; z-index: 1; background: transparent; color: transparent; caret-color: #111; }
+  #conv-message-input::placeholder { color: #888; }
   .mention-dropdown { position: absolute; z-index: 20; top: 100%; left: 0; width: 100%; max-height: 10rem; overflow-y: auto; margin: 2px 0 0; padding: 0.2rem 0; list-style: none; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
   .mention-dropdown li { padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
   .mention-dropdown li:hover, .mention-dropdown li.active { background: #eef6ff; }
@@ -1914,6 +1929,55 @@ function _highlightMentions(content, participants) {
   return result;
 }
 
+// 사용자 요청(2026-10-22, "호출된 사람,에이전트가 대화 내용과
+// 구분되도록 ... 입력창에서도 적용해줘") — `_highlightMentions()`와
+// 같은 매칭 로직이지만 두 가지가 다르다: (1) 입력창은 보내기 전 raw
+// 텍스트를 `marked`/DOMPurify 없이 곧장 mirror div의 innerHTML에
+// 꽂으므로, 멘션이 아닌 나머지 텍스트도 먼저 전부 `esc()`해야 한다
+// (`_highlightMentions()`는 이후 markdown 렌더링 파이프라인을 믿고
+// 멘션이 아닌 부분은 이스케이프하지 않는다 — 입력창엔 그 안전망이
+// 없다). (2) pill(.mention-tag, padding 있는 inline-block)을 쓰면
+// 그 구간만 글자 폭이 달라져 투명 input 위의 실제 캐럿 위치와 mirror
+// 텍스트가 어긋나므로, 폭을 안 바꾸는 font-weight+color만 쓴다.
+function _highlightMentionsForInput(content, participants) {
+  const escaped = esc(content || "");
+  const mentions = (participants || [])
+    .filter(p => p.display_name)
+    .map(p => ({
+      marker: esc("@" + p.display_name),
+      cls: p.participant_type === "human" ? "mention-inline-human" : "mention-inline-agent",
+    }))
+    .sort((a, b) => b.marker.length - a.marker.length);
+  let result = escaped;
+  mentions.forEach(({ marker, cls }) => {
+    if (!result.includes(marker)) return;
+    result = result.split(marker).join('<span class="' + cls + '">' + marker + '</span>');
+  });
+  return result;
+}
+
+// 타이핑 중인 input 위에 겹친 투명 오버레이(mirror) div를 실시간으로
+// 동기화한다 — IME(한글) 조합 중에도 `input` 이벤트가 그대로 발생하므로
+// 별도 처리가 필요 없다. 가로 스크롤(긴 텍스트가 input 폭을 넘었을 때)도
+// `scrollLeft`를 그대로 맞춰준다.
+function setupMentionInputMirror(inputEl, mirrorEl, participants) {
+  function sync() {
+    mirrorEl.innerHTML = _highlightMentionsForInput(inputEl.value, participants);
+    mirrorEl.scrollLeft = inputEl.scrollLeft;
+  }
+  inputEl.addEventListener("input", sync);
+  inputEl.addEventListener("keyup", sync);
+  inputEl.addEventListener("click", sync);
+  inputEl.addEventListener("scroll", sync);
+  sync();
+  // `insertMention()`(드롭다운 클릭으로 멘션 삽입)은 `inputEl.value`를
+  // 직접 대입하는데, 이건 `input` 이벤트를 발생시키지 않는다(vanilla JS
+  // 속성 — 사용자 타이핑만 이벤트를 낸다) — 호출부가 `onMentionSelected`
+  // 콜백에서 이 `sync`를 직접 불러줘야 드롭다운으로 멘션을 고른 직후에도
+  // mirror가 갱신된다.
+  return { sync };
+}
+
 // 사용자 요청(2026-10-21, "Layer 4") — `who`는 이미 `esc()` 처리된
 // 표시 이름 문자열("AI (claude-sonnet-5)", "코드리뷰 Agent (AI ·
 // gpt-4o-mini)", "사용자 #3" 등) — 괄호 뒤 provider/model 부가정보는
@@ -1971,7 +2035,7 @@ async function renderConversationDetail(conversationId, containerId) {
     conv = await api("GET", "/api/conversations/" + conversationId);
     participants = await api("GET", "/api/conversations/" + conversationId + "/participants");
     messages = await api("GET", "/api/conversations/" + conversationId + "/messages");
-    skillNames = await api("GET", "/api/skill-pool/names");
+    skillNames = await api("GET", "/api/skill-pool/names?conversation=true");
     // 사용자 요청(2026-10-19, "대화를 닫고 다시 연 상태에서 아직 결과
     // 완료 전인 상황에서 작업 중임을 알려주는 메시지가 출력되는지") —
     // 이 대화를 열 때마다 아직 안 끝난 Job이 있는지 직접 확인한다
@@ -2069,6 +2133,7 @@ async function renderConversationDetail(conversationId, containerId) {
     skillNames.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join("") +
     '</select>' +
     '<div class="mention-wrap" style="position:relative;flex:1;min-width:200px">' +
+    '<div id="conv-message-highlight" aria-hidden="true"></div>' +
     '<input id="conv-message-input" placeholder="메시지(@참가자이름으로 호출 가능)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
     '<ul class="mention-dropdown" id="conv-mention-dropdown" style="display:none"></ul>' +
     '</div>' +
@@ -2087,6 +2152,8 @@ async function renderConversationDetail(conversationId, containerId) {
 
   const mentionInput = document.getElementById("conv-message-input");
   const mentionDropdown = document.getElementById("conv-mention-dropdown");
+  const mentionHighlight = document.getElementById("conv-message-highlight");
+  const mentionMirror = setupMentionInputMirror(mentionInput, mentionHighlight, participants);
   // 사용자 요청(2026-10-10, "채팅에서 @로 호출하려면 미리 전체 이름을
   // 알고 있어야 해") — 메시지창 자동완성이 이미 초대된 참가자만 보던
   // 것을, 조직 전체 검색(`/api/conversations/mentionable`, 이미
@@ -2096,6 +2163,11 @@ async function renderConversationDetail(conversationId, containerId) {
   setupMentionAutocomplete(mentionInput, mentionDropdown, participants, {
     search: (q) => api("GET", qs("/api/conversations/mentionable", { q })),
     onInvited: (item) => _inviteAndTrackParticipant(conversationId, participants, item),
+    onMentionSelected: () => {
+      const skillSelect = document.getElementById("conv-skill-select");
+      if (skillSelect) skillSelect.value = "";
+      mentionMirror.sync();
+    },
   });
 
   // 삭제/나가기 뒤의 새로고침은 `refresh()`(전역, 현재 탭을 다시
@@ -2183,6 +2255,7 @@ async function renderConversationDetail(conversationId, containerId) {
       const result = await api("POST", "/api/conversations/" + conversationId + "/messages", payload);
       input.value = "";
       document.getElementById("conv-skill-select").value = "";
+      mentionMirror.sync();
       await refreshConversationMessages(conversationId, participants, conv);
       // 사용자 요청(2026-10-18, "어떤 에이전트가 어떤 동작을 하고
       // 있는지... 펼침/닫힘 UI로") — 뭉뚱그린 "N건 진행 중" 대신
@@ -3554,6 +3627,14 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
       } catch (e) { return; } // onInvited가 이미 에러 메시지를 보여줬다
     }
     insertMention(name);
+    // 사용자 요청(2026-10-22, "대화자(Human, Agent) 호출시 Skill 선택은
+    // 취소되도록 해줘") — 스킬을 고른 채로 멘션까지 보내면 Agent/Team
+    // 응답과 별개로 스킬 그라운딩된 "기본 AI" job이 하나 더 떴다(중복
+    // 응답 혼란). 백엔드도 같이 고쳤지만(`app.py` — 멘션이 있으면 스킬이
+    // 선택돼 있어도 기본 AI를 더 안 띄움), 멘션을 고르는 시점에 드롭다운
+    // 선택 자체를 바로 지워서 사용자가 "지금은 스킬이 아니라 멘션 대상이
+    // 응답한다"는 걸 눈으로 바로 알 수 있게 한다.
+    if (opts.onMentionSelected) opts.onMentionSelected();
   }
 
   const keyboardNav = wireDropdownKeyboardNav(
@@ -5104,10 +5185,12 @@ async function renderPoolRegistry(content) {
     '<li>모드 "tool"인 스킬은 기본 도구 ID가 가리키는 도구를 이 스킬(이름이 정확히 일치)을 가진 모든 Agent에게 실행할 때마다 자동으로 붙입니다(run_crew/crewai_agent_generator 실행마다 다시 계산 — 나중에 스킬 설정을 바꾸면 이미 만들어진 Agent에도 다음 실행부터 바로 반영됩니다).</li>' +
     '<li>모드 "none"은 도구 연결 없이 이름표만 붙이는 용도입니다 — 하니스 방법론/agent-evaluator 절차 스킬 17개가 여기 해당합니다(사람 판단이 필요한 절차라 자동 도구화가 안 됨).</li>' +
     '<li>"recommend-fix-workflow" 하나만 예외로 실제 MCP 도구(정적 Gate 조치 지식 조회)가 붙어 있습니다.</li>' +
+    '<li><b>대화창 표시</b>를 꺼두면 대화창의 스킬 선택 드롭다운에는 안 보이지만(선택해서 고를 수 없음), Agent의 skill_tags로는 그대로 쓸 수 있습니다 — mcp_remote/mcp_stdio/custom_python 도구가 붙은 스킬은 대화창 기본 AI(단발 호출, 실행 루프 없음)에서는 실제로 호출이 안 돼 기본값이 꺼짐으로 돼 있습니다(실제 CrewAI Agent 실행에서는 똑같이 동작합니다).</li>' +
     '<li><b>삭제</b>(관리자 전용)는 이 스킬 레코드만 지웁니다 — 같은 이름의 skill_tags를 가진 Agent/사람은 그대로 남고, 다음 실행부터 자동 도구 연결만 안 됩니다.</li>' +
     '</ul>' +
-    table(["ID", "이름", "설명", "기본 도구 ID", "모드", "동작"], skills.map(s => [
+    table(["ID", "이름", "설명", "기본 도구 ID", "모드", "대화창 표시", "동작"], skills.map(s => [
       s.id, esc(s.name), esc(s.description), esc(s.default_tool_pool_ids.join(", ") || "-"), esc(s.augmentation_mode),
+      s.show_in_conversation ? "표시" : "숨김",
       '<div class="actions"><button class="small" data-edit-skill="' + s.id + '">수정</button>' +
         (isAdmin ? '<button class="small danger" data-delete-skill="' + s.id + '">삭제</button>' : "") +
         "</div>",
@@ -5117,6 +5200,7 @@ async function renderPoolRegistry(content) {
     '<input id="sp-description" placeholder="설명" style="flex:1;min-width:160px">' +
     '<input id="sp-tool-ids" placeholder="기본 도구 ID(콤마)" style="width:140px">' +
     '<select id="sp-mode"><option value="tool">tool(자동 호출)</option><option value="always">always</option><option value="none">none</option></select>' +
+    '<label><input type="checkbox" id="sp-show-in-conv" checked> 대화창에 표시</label>' +
     '<button class="primary" type="submit">스킬 등록</button></form>' +
     "</section>";
 
@@ -5174,6 +5258,7 @@ async function renderPoolRegistry(content) {
         description: document.getElementById("sp-description").value,
         default_tool_pool_ids,
         augmentation_mode: document.getElementById("sp-mode").value,
+        show_in_conversation: document.getElementById("sp-show-in-conv").checked,
       });
       showMsg("global-msg", "스킬을 등록했습니다.", "ok");
       refresh();
@@ -5265,11 +5350,12 @@ async function renderPoolRegistry(content) {
           '<option value="' + m + '"' + (m === s.augmentation_mode ? " selected" : "") + '>' + m + "</option>"
         ).join("") +
         "</select></label>" +
+        '<label style="display:block;margin-top:0.6rem"><input type="checkbox" id="spe-show-in-conv"' + (s.show_in_conversation ? " checked" : "") + '> 대화창에 표시</label>' +
         '<div class="actions" style="margin-top:0.6rem"><button class="primary" type="submit">저장</button>' +
         '<button class="small" type="button" id="skill-edit-cancel">취소</button></div>';
       btn.closest("tr").insertAdjacentHTML(
         "afterend",
-        '<tr><td colspan="6"><form id="skill-edit-form" style="padding:0.6rem 0">' + formHtml + "</form></td></tr>"
+        '<tr><td colspan="7"><form id="skill-edit-form" style="padding:0.6rem 0">' + formHtml + "</form></td></tr>"
       );
       const tr = btn.closest("tr").nextElementSibling;
       openSkillEditRow = tr;
@@ -5286,6 +5372,7 @@ async function renderPoolRegistry(content) {
             description: tr.querySelector("#spe-description").value,
             default_tool_pool_ids,
             augmentation_mode: tr.querySelector("#spe-mode").value,
+            show_in_conversation: tr.querySelector("#spe-show-in-conv").checked,
           });
           showMsg("global-msg", "스킬을 수정했습니다.", "ok");
           refresh();

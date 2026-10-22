@@ -307,6 +307,45 @@ def test_gc_invited_agent_mention_has_no_warning(client_and_conn):
     assert messages[1]["content"] == "기획서 작성자 응답"  # 경고 없음
 
 
+def test_gc_skill_selected_with_agent_mention_does_not_also_trigger_default_ai(
+    client_and_conn,
+):
+    """사용자 보고(2026-10-22, 스크린샷 — 스킬을 고른 채로 "@기획서
+    작성자"를 멘션해 보냈더니 Agent 응답과 별개로 "기본 AI" job이 하나
+    더 떴다) — `skill`이 있으면 멘션 여부와 무관하게 무조건 기본 AI도
+    같이 트리거하던 버그. 멘션이 있으면 스킬이 선택돼 있어도 기본 AI를
+    더 띄우지 않아야 한다(멘션 대상만 응답)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent_id = _make_agent(conn, role_name="기획서 작성자")
+    conn.execute(
+        "INSERT INTO skill_pool (name, description) VALUES ('RAG', '지식베이스 검색')"
+    )
+    conn.commit()
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "agent", "participant_id": agent_id},
+    )
+
+    with (
+        patch(
+            "hair_platform.agent_runtime.execute_agent", return_value="기획서 작성자 응답"
+        ),
+        patch("hair_platform.llm.call_llm") as mock_default,
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@기획서 작성자 기획해줘", "skill": "RAG"},
+        )
+        assert resp.status_code == 201, resp.text
+        jobs = resp.json()["triggered_jobs"]
+        assert len(jobs) == 1
+        assert jobs[0]["trigger_type"] == "agent_mention"
+        mock_default.assert_not_called()
+
+
 def test_gc_mentioning_human_participant_suppresses_default_ai(client_and_conn):
     """버그 재현(사용자 보고, 2026-10-14, "대화 중 Human을 호출했지만
     AI가 자동 응답을 했다") — 사람을 멘션하면 실행할 job은 없지만
@@ -760,6 +799,65 @@ def test_gc_unknown_skill_rejected(client_and_conn):
         json={"content": "질문", "skill": "존재안함"},
     )
     assert resp.status_code == 404, resp.text
+
+
+def test_gc_native_skill_actually_searches_in_default_ai_reply(client_and_conn):
+    """사용자 보고(2026-10-22, "일반웹검색 스킬 점검해줘") 재발 방지 —
+    대화창 기본 AI 응답은 과거 skill_pool.description 텍스트만 주입하고
+    실제 조회는 전혀 하지 않아, "검색하겠습니다"라고 의도만 서술하는
+    것처럼 보였다. "외부검색"(kind='native', 기본 시드)을 고르면 실제로
+    `websearch.search()`가 호출되고 그 결과가 system prompt에 들어가야
+    한다."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+
+    with (
+        patch(
+            "hair_platform.websearch.search",
+            return_value=[
+                {"title": "원격근무", "snippet": "원격근무 설명", "url": "https://x"}
+            ],
+        ) as search_mock,
+        patch(
+            "hair_platform.llm.call_llm", return_value="원격근무 설명을 참고한 답변"
+        ) as mock_call,
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "원격근무 정책이 뭐야?", "skill": "외부검색"},
+        )
+        assert resp.status_code == 201, resp.text
+        search_mock.assert_called_once()
+        system_prompt = mock_call.call_args[0][2]
+        assert "원격근무 설명" in system_prompt
+
+    messages = client.get(f"/api/conversations/{conv_id}/messages").json()
+    assert messages[-1]["content"] == "원격근무 설명을 참고한 답변"
+
+
+def test_gc_mcp_remote_skill_warns_instead_of_faking_search(client_and_conn):
+    """"일반웹검색"(kind='mcp_remote', Parallel Search)은 CrewAI Agent
+    루프가 있는 경로에서만 실제 호출이 가능하다 — 대화창 기본 AI는
+    실시간 조회를 할 수 없으므로, 아무 검색도 안 됐다는 걸 사용자에게
+    명시적으로 알려야 한다(모델이 "검색하겠습니다"라고 의도만 서술한
+    채 끝나는 것처럼 보이던 버그 대신)."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+
+    with patch(
+        "hair_platform.llm.call_llm", return_value="검색하겠습니다"
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "최신 동향 찾아줘", "skill": "일반웹검색"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    messages = client.get(f"/api/conversations/{conv_id}/messages").json()
+    assert "구조적 제약" in messages[-1]["content"]
+    assert "검색하겠습니다" in messages[-1]["content"]
 
 
 # ---------- 참가자 초대(조직 전체 검색) ----------

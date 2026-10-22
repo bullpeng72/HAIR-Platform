@@ -46,7 +46,15 @@ import json
 import re
 import sqlite3
 
-from hair_platform import agent_runtime, audit, crew_runtime, deliverables, llm, teams
+from hair_platform import (
+    agent_runtime,
+    audit,
+    crew_runtime,
+    deliverables,
+    llm,
+    pool_registry,
+    teams,
+)
 
 _DEFAULT_SYSTEM_PROMPT = (
     "당신은 HAIR-Platform의 대화형 작업공간에 참여하는 AI 비서입니다. "
@@ -1329,7 +1337,14 @@ def run_default_ai_job(
         provider, model = llm.resolve_provider_and_model(
             conv["llm_provider"], conv["llm_model"]
         )
+        last_human = conn.execute(
+            "SELECT content FROM conversation_messages WHERE conversation_id = ? "
+            "AND author_type = 'human' ORDER BY id DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        skills_for_augmentation: list[str] = []
         if skill:
+            skills_for_augmentation = [skill]
             system = deliverables.skill_grounded_system_prompt(
                 conn, "대화 참여자", [skill]
             )
@@ -1338,22 +1353,50 @@ def run_default_ai_job(
                 "SELECT role_name, required_skills FROM tasks WHERE id = ?",
                 (conv["linked_task_id"],),
             ).fetchone()
-            system = (
-                deliverables.skill_grounded_system_prompt(
-                    conn, task["role_name"], json.loads(task["required_skills"])
+            if task is not None:
+                skills_for_augmentation = json.loads(task["required_skills"])
+                system = deliverables.skill_grounded_system_prompt(
+                    conn, task["role_name"], skills_for_augmentation
                 )
-                if task is not None
-                else _DEFAULT_SYSTEM_PROMPT
-            )
+            else:
+                system = _DEFAULT_SYSTEM_PROMPT
         else:
             system = _DEFAULT_SYSTEM_PROMPT
+        # 사용자 요청(2026-10-22, "일반웹검색 스킬 점검해줘" 조사 결과) —
+        # 이 경로(agent_pool/CrewAI Tool 호출 루프가 전혀 없는 "기본 AI")는
+        # 지금까지 skill_pool.description 텍스트만 주입하고 실제 조회를
+        # 전혀 하지 않았다 — 모델이 "검색하겠습니다"라고 의도만 서술하고
+        # 끝나는 버그로 보고됐다. `agent_runtime.retrieve_context()`(native
+        # 도구: 외부검색/Wikipedia·RAG·관계질의)로 실제 조회 결과를
+        # system prompt에 덧붙인다 — `transcript`(멀티턴 대화 전체)는
+        # 그대로 두고 system에만 추가해, `augment_with_retrieval()`의
+        # "요청: {prompt}" 포맷(단일 프롬프트 호출부 전용)을 건드리지
+        # 않는다.
+        if skills_for_augmentation:
+            query = last_human["content"] if last_human is not None else ""
+            retrieved_context = agent_runtime.retrieve_context(
+                conn, skills_for_augmentation, query
+            )
+            if retrieved_context:
+                system = (
+                    system
+                    + "\n\n[실시간 조회 결과 — 아래 내용을 근거로 답변하세요]\n"
+                    + retrieved_context
+                )
         transcript = _build_transcript(conn, conversation_id)
         output = llm.call_llm(provider, model, system, transcript)
-        last_human = conn.execute(
-            "SELECT content FROM conversation_messages WHERE conversation_id = ? "
-            "AND author_type = 'human' ORDER BY id DESC LIMIT 1",
-            (conversation_id,),
-        ).fetchone()
+        if skills_for_augmentation:
+            unsupported = pool_registry.unsupported_realtime_skill_names(
+                conn, skills_for_augmentation
+            )
+            if unsupported:
+                names = ", ".join(f'"{n}"' for n in unsupported)
+                output = (
+                    f"> ⚠ {names} 스킬은 실시간 외부 검색 도구가 연결돼 있지만, "
+                    "대화창의 기본 AI 응답은 그 도구를 직접 호출할 수 없어 실제 "
+                    "검색 없이 답변했습니다(구조적 제약 — Agent/Team을 멘션해 "
+                    "CrewAI 실행으로 돌리면 실제로 검색합니다).\n\n" + output
+                )
         if last_human is not None:
             uninvited = _uninvited_mention_candidates(
                 conn, conversation_id, last_human["content"]

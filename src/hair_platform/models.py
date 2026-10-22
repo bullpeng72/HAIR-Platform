@@ -695,6 +695,14 @@ class SkillPoolCreate(BaseModel):
     description: str = ""
     default_tool_pool_ids: list[int] = []
     augmentation_mode: AugmentationMode = "tool"
+    # 사용자 요청(2026-10-22, "skill에 대화창 표시 속성 추가, 가능한
+    # 것들만 표시되도록 개선") — 대화창 스킬 드롭다운(`/api/skill-pool/
+    # names?conversation=true`)에 이 스킬을 보여줄지 여부. mcp_remote/
+    # mcp_stdio/custom_python 도구가 붙은 스킬은 대화창 단발 호출
+    # 경로에서 구조적으로 실행이 안 되므로(`pool_registry.
+    # unsupported_realtime_skill_names()`) 기본값 True를 admin이 직접
+    # False로 끌 수 있게 한다.
+    show_in_conversation: bool = True
 
 
 class SkillPoolUpdate(BaseModel):
@@ -706,6 +714,7 @@ class SkillPoolUpdate(BaseModel):
     description: str | None = None
     default_tool_pool_ids: list[int] | None = None
     augmentation_mode: AugmentationMode | None = None
+    show_in_conversation: bool | None = None
 
 
 class ModelRegistryCreate(BaseModel):

@@ -550,6 +550,85 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     assert row["linked_tool_ids"] == []
 
 
+# ---------- show_in_conversation(사용자 요청, 2026-10-22, "skill에
+# 대화창 표시 속성 추가, 가능한 것들만 표시되도록 개선") ----------
+
+
+def test_gc_show_in_conversation_defaults_true_but_backfill_hides_non_native_tool_skills():
+    """새 컬럼은 생성 시 기본 True지만, `init_schema()`가 기본 시드
+    스킬을 깔고 나면 mcp_remote/mcp_stdio/custom_python 도구가 붙은
+    스킬(대화창 기본 AI 경로에서 구조적으로 실행 불가)은 자동으로
+    False가 돼야 한다 — native 3개(rag/graphdb/외부검색)는 그대로
+    True."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    skills = {s["name"]: s for s in pool_registry.list_skills(conn)}
+
+    for name in ("rag", "graphdb", "외부검색"):
+        assert skills[name]["show_in_conversation"] is True
+
+    hidden = {
+        "일반웹검색",
+        "recommend-fix-workflow",
+        "spec-ears-lint",
+        "failure-mode-derivation",
+        "golden-set-coverage-check",
+        "framework-template-generator",
+        "presentation-outline-builder",
+        "test-case-mechanical-derivation",
+    }
+    for name in hidden:
+        assert skills[name]["show_in_conversation"] is False, name
+
+    # 순수 텍스트 지침 스킬(도구 없음)은 건드리지 않는다 — 계속 True.
+    assert skills["tdd-ai-workflow-checklist"]["show_in_conversation"] is True
+
+
+def test_gc_skill_pool_names_conversation_filter(client_and_conn):
+    client, conn = client_and_conn
+    _ = conn
+    client.post("/login", json={"username": "member1", "password": "memberpass"})
+
+    resp = client.get("/api/skill-pool/names")
+    assert resp.status_code == 200
+    all_names = resp.json()
+    assert "일반웹검색" in all_names  # skill_tags 자동완성은 전체를 그대로 받는다.
+
+    resp = client.get("/api/skill-pool/names?conversation=true")
+    assert resp.status_code == 200
+    conv_names = resp.json()
+    assert "일반웹검색" not in conv_names  # 대화창 드롭다운은 숨김 스킬을 뺀다.
+    assert "rag" in conv_names
+    assert "tdd-ai-workflow-checklist" in conv_names
+    assert len(conv_names) < len(all_names)
+
+
+def test_gc_create_and_update_skill_show_in_conversation(client_and_conn):
+    client, conn = client_and_conn
+    _ = conn
+    client.post("/login", json={"username": "admin1", "password": "adminpass"})
+
+    resp = client.post(
+        "/api/skill-pool",
+        json={"name": "임시스킬", "show_in_conversation": False},
+    )
+    assert resp.status_code == 201
+    skill_id = resp.json()["id"]
+    skill = next(
+        s for s in client.get("/api/skill-pool").json() if s["id"] == skill_id
+    )
+    assert skill["show_in_conversation"] is False
+
+    resp = client.patch(
+        f"/api/skill-pool/{skill_id}", json={"show_in_conversation": True}
+    )
+    assert resp.status_code == 200
+    skill = next(
+        s for s in client.get("/api/skill-pool").json() if s["id"] == skill_id
+    )
+    assert skill["show_in_conversation"] is True
+
+
 def test_gc115_run_crew_resolves_tools_from_data_driven_skill_pool_not_hardcoded_sets(
     client_and_conn,
 ):

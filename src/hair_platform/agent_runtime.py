@@ -71,22 +71,34 @@ def augment_with_retrieval(
     동작하는 지점은 `crew_runtime.py`(진짜 Tool 호출 루프가 있는 경로) —
     `'always'`만 Task description에 강제로 끼워 넣고, `'tool'`은 여전히
     Agent 판단에 맡긴다."""
+    context = retrieve_context(conn, skills, prompt)
+    if context is None:
+        return prompt, None
+    return f"{context}\n\n요청: {prompt}", context
+
+
+def retrieve_context(
+    conn: sqlite3.Connection, skills: list[str], query: str
+) -> str | None:
+    """`augment_with_retrieval()`의 실제 조회 부분만 떼어낸 것 — 사용자
+    요청(2026-10-22, "대화창 기본 AI 경로에 실제 검색 연결")으로
+    `conversations.run_default_ai_job()`(멀티턴 transcript를 그대로
+    프롬프트로 써야 해서 `augment_with_retrieval()`의 "요청: {prompt}"
+    포맷을 그대로 못 쓰는 호출부)도 같은 조회 로직을 쓸 수 있도록
+    공용화했다. 매칭되는 native 도구가 없거나 결과가 0건이면 `None`."""
     native_ids = pool_registry.resolve_static_augmentation_targets(
         conn, skills, modes=("always", "tool")
     )
     if "vectordb_search" in native_ids:
-        hits = vectorstore.search(conn, prompt, top_k=3)
-        if hits:
-            context = "\n".join(f"- {h['text']}" for h in hits)
-            return f"참고할 과거 산출물:\n{context}\n\n요청: {prompt}", context
-        return prompt, None
+        hits = vectorstore.search(conn, query, top_k=3)
+        if not hits:
+            return None
+        return "참고할 과거 산출물:\n" + "\n".join(f"- {h['text']}" for h in hits)
     if "graphdb_query" in native_ids:
-        context = graphquery.context_for_prompt(conn)
-        return f"{context}\n\n요청: {prompt}", context
+        return graphquery.context_for_prompt(conn)
     if "web_search" in native_ids:
-        context = websearch.context_for_prompt(prompt)
-        return f"{context}\n\n요청: {prompt}", context
-    return prompt, None
+        return websearch.context_for_prompt(query)
+    return None
 
 
 def index_knowledge(

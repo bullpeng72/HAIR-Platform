@@ -1444,10 +1444,21 @@ def create_app(db_path: str | None = None) -> FastAPI:
         job이라 "이미 실행 중" 가드 없이 동시에 돌 수 있다 — 실제 그룹
         채팅에서 여러 봇이 동시에 응답하는 것과 같은 모델): (1) 멘션된
         Agent마다 `run_agent_mention_job`, (2) 멘션된 Team마다
-        `run_team_mention_job`, (3) `skill`이 명시됐거나(명시적 요청이라
-        항상 트리거) 멘션이 하나도 없고 `ai_auto_reply=1`이면
-        `run_default_ai_job`(멘션이 있으면 기본 AI는 끼어들지 않는다 —
-        응답 중복 방지)."""
+        `run_team_mention_job`, (3) 멘션이 하나도 없을 때만 — `skill`이
+        명시됐거나(명시적 요청이라 항상 트리거) `ai_auto_reply=1`이면
+        `run_default_ai_job`.
+
+        사용자 보고(2026-10-22, 스크린샷 — 스킬을 고른 채로 "@기획서
+        작성자"를 멘션해 보냈더니 Agent 응답과 별개로 "기본 AI" job이
+        하나 더 돌았다) — 이전엔 `skill`이 있으면 멘션 여부와 무관하게
+        무조건 기본 AI도 같이 트리거했다(`result["skill"] or (not
+        has_mentions and ai_auto_reply)` — `or`라 `skill`만으로 조건이
+        참이 됨). 호출 대상(Human/Agent/Team 멘션)이 있으면 그 호출이
+        우선이고, 스킬 선택은 "멘션이 없을 때(= 기본 AI가 응답할 때)
+        어떤 지식으로 그라운딩할지"를 고르는 용도이므로, 멘션이 있으면
+        스킬이 선택돼 있어도 기본 AI를 더 띄우지 않는다(응답 중복
+        방지 — Human 멘션만 있고 Agent/Team 멘션은 없는 경우도
+        `has_mentions=True`라 똑같이 막힌다)."""
         try:
             result = conversations.create_message(
                 conn, conversation_id, user["id"], payload.content, payload.skill
@@ -1508,7 +1519,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     "team_id": team["id"],
                 }
             )
-        if result["skill"] or (not result["has_mentions"] and result["ai_auto_reply"]):
+        if not result["has_mentions"] and (result["skill"] or result["ai_auto_reply"]):
             job_id = conversations.start_default_ai_job(
                 conn, conversation_id, user["id"], result["skill"]
             )
@@ -2586,13 +2597,28 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return pool_registry.list_skills(conn)
 
     @app.get("/api/skill-pool/names")
-    def list_skill_pool_names(user: sqlite3.Row = Depends(get_current_user)):
+    def list_skill_pool_names(
+        conversation: bool = False,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
         """Phase 5 — Skill 자동완성(사용자 요청, "협업 워크스페이스 UX
         개선"). `/api/skill-pool`은 도구 연결 상세(augmentation_mode 등)
         까지 담아 Admin/매니저 전용이지만, 스킬 "이름"만 필요한 자동완성은
         `required_skills`/`skill_tags`를 입력하는 모든 role(팀원 포함)이
-        써야 한다 — 이름만 떼어 노출하는 별도 엔드포인트를 둔다."""
-        return [s["name"] for s in pool_registry.list_skills(conn)]
+        써야 한다 — 이름만 떼어 노출하는 별도 엔드포인트를 둔다.
+
+        `conversation=true`(사용자 요청, 2026-10-22, "skill에 대화창
+        표시 속성 추가, 가능한 것들만 표시되도록 개선") — 대화창 스킬
+        드롭다운(`conv-skill-select`)만 `show_in_conversation=0`인
+        스킬(mcp_remote/mcp_stdio/custom_python 도구가 붙어 대화창
+        단발 호출 경로에서 구조적으로 실행이 안 되는 것들)을 뺀다.
+        Agent/Task의 `skill_tags` 자동완성(`skill-datalist`)은 이
+        파라미터 없이 그대로 호출해 전체 목록을 계속 받는다 — 그
+        경로(CrewAI 실행)는 이 스킬들도 실제로 동작하기 때문이다."""
+        skills = pool_registry.list_skills(conn)
+        if conversation:
+            skills = [s for s in skills if s["show_in_conversation"]]
+        return [s["name"] for s in skills]
 
     @app.post("/api/skill-pool", status_code=201)
     def create_skill_pool_entry(
@@ -2607,6 +2633,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 payload.description,
                 payload.default_tool_pool_ids,
                 payload.augmentation_mode,
+                payload.show_in_conversation,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

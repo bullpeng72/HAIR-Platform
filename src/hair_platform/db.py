@@ -203,7 +203,8 @@ CREATE TABLE IF NOT EXISTS skill_pool (
     description TEXT NOT NULL DEFAULT '',
     default_tool_pool_ids TEXT NOT NULL DEFAULT '[]',
     augmentation_mode TEXT NOT NULL DEFAULT 'tool'
-        CHECK (augmentation_mode IN ('tool', 'always', 'none'))
+        CHECK (augmentation_mode IN ('tool', 'always', 'none')),
+    show_in_conversation INTEGER NOT NULL DEFAULT 1
 );
 
 -- 사용자 요청(2026-10-06, "운영 관리에 사용 가능한 ollama 모델 및
@@ -914,6 +915,33 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 있음) 사용자가 순차 릴레이 순서를 바꿀 수단이 없었다. NULL = "아직
     # 캔버스로 순서를 정한 적 없음" → 기존처럼 `id` 순서로 폴백(하위 호환).
     _ensure_column(conn, "team_members", "sequence_order", "INTEGER")
+    _ensure_column(conn, "skill_pool", "show_in_conversation", "INTEGER NOT NULL DEFAULT 1")
+
+
+def _backfill_show_in_conversation(conn: sqlite3.Connection) -> None:
+    """`show_in_conversation` 컬럼이 막 추가된 직후 1회만 실행 —
+    `augmentation_mode`가 `'tool'`/`'always'`이면서 연결된 도구 중
+    `kind != 'native'`인 것이 있는 스킬(대화창 기본 AI 경로에서 구조적
+    으로 실시간 실행이 불가능한 것들 — `pool_registry.
+    unsupported_realtime_skill_names()`와 같은 기준)을 0으로 끈다."""
+    for row in conn.execute(
+        "SELECT id, default_tool_pool_ids FROM skill_pool "
+        "WHERE augmentation_mode IN ('tool', 'always')"
+    ).fetchall():
+        tool_ids = json.loads(row["default_tool_pool_ids"])
+        has_non_native = False
+        for tool_id in tool_ids:
+            trow = conn.execute(
+                "SELECT kind FROM tool_pool WHERE id = ? AND is_active = 1", (tool_id,)
+            ).fetchone()
+            if trow is not None and trow["kind"] != "native":
+                has_non_native = True
+                break
+        if has_non_native:
+            conn.execute(
+                "UPDATE skill_pool SET show_in_conversation = 0 WHERE id = ?",
+                (row["id"],),
+            )
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:
@@ -1250,6 +1278,17 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
+    # 사용자 요청(2026-10-22, "skill에 대화창 표시 속성 추가, 가능한
+    # 것들만 표시되도록 개선") — `show_in_conversation`이 이번 호출에서
+    # 처음 생기는지를 스키마/시드 전에 미리 기록해둔다. 시드(아래
+    # `_seed_default_pools()`/`reference_pipeline_seeds.seed()`)가 전부
+    # 끝난 뒤에만 백필을 돌려야 한다 — 기존 Agent/Human처럼 skill_pool도
+    # 신규 DB에서는 이 두 호출이 실제로 행을 채우는 지점이라, 그 전에
+    # 백필하면(이전에 `_migrate_schema()` 안에서 돌렸을 때 실측된 버그)
+    # 아직 빈 테이블이라 아무 것도 못 끈다.
+    is_new_show_in_conversation_column = not _column_exists(
+        conn, "skill_pool", "show_in_conversation"
+    )
     conn.executescript(SCHEMA)
     _migrate_schema(conn)
     _seed_default_pools(conn)
@@ -1258,4 +1297,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # 전략 파이프라인(6) Agent 12개와 그 전용 Tool/Skill을 매 기동마다
     # 멱등하게(이미 있으면 건너뜀) 재현한다.
     reference_pipeline_seeds.seed(conn)
+    if is_new_show_in_conversation_column:
+        _backfill_show_in_conversation(conn)
     conn.commit()
