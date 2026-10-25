@@ -85,20 +85,40 @@ def retrieve_context(
     `conversations.run_default_ai_job()`(멀티턴 transcript를 그대로
     프롬프트로 써야 해서 `augment_with_retrieval()`의 "요청: {prompt}"
     포맷을 그대로 못 쓰는 호출부)도 같은 조회 로직을 쓸 수 있도록
-    공용화했다. 매칭되는 native 도구가 없거나 결과가 0건이면 `None`."""
+    공용화했다. 매칭되는 native 도구가 하나도 없거나, 전부 결과가
+    0건이면 `None`.
+
+    실측으로 발견한 버그(2026-10-26, "외부 자료 조사가 에이전트...
+    외부 검색 기능이 있는지 확인해줘") — 이전엔 `if vectordb_search:
+    ...return` → `if graphdb_query: ...return` → `if web_search:
+    ...return` 순서의 if-체인이라, native 스킬을 2개 이상 가진 Agent는
+    먼저 매칭되는 **하나만** 쓰고 나머지는 전혀 조회하지 않았다
+    (vectordb 결과가 있든 없든 동일 — 매칭되면 그 분기에서 무조건
+    return). 실제로 skill_tags에 "rag"+"외부검색"을 같이 가진 "외부
+    자료 조사가" Agent가 대화창 `@멘션`(도구 호출 루프가 없는
+    `execute_agent()` 경로)에서 "rag"에 가려 Wikipedia 검색이 한 번도
+    안 불리는 걸 재현 확인했다. CrewAI 실제 Tool 루프(`resolve_pool_
+    tools()`)는 애초에 매칭되는 도구를 전부 리스트로 붙여 Agent가
+    스스로 고르므로 이 문제가 없다 — 이 단발 호출 경로만 if-체인
+    때문에 뒤처져 있었다. 셋 다 해당하면 셋 다 조회해 하나의 텍스트로
+    이어붙인다."""
     native_ids = pool_registry.resolve_static_augmentation_targets(
         conn, skills, modes=("always", "tool")
     )
+    sections: list[str] = []
     if "vectordb_search" in native_ids:
         hits = vectorstore.search(conn, query, top_k=3)
-        if not hits:
-            return None
-        return "참고할 과거 산출물:\n" + "\n".join(f"- {h['text']}" for h in hits)
+        if hits:
+            sections.append(
+                "참고할 과거 산출물:\n" + "\n".join(f"- {h['text']}" for h in hits)
+            )
     if "graphdb_query" in native_ids:
-        return graphquery.context_for_prompt(conn)
+        sections.append(graphquery.context_for_prompt(conn))
     if "web_search" in native_ids:
-        return websearch.context_for_prompt(query)
-    return None
+        sections.append(websearch.context_for_prompt(query))
+    if not sections:
+        return None
+    return "\n\n".join(sections)
 
 
 def index_knowledge(

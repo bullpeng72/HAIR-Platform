@@ -1169,6 +1169,53 @@ def test_gc195_execute_agent_augments_prompt_for_websearch_role(client_and_conn)
     assert "원격근무 정책이 뭐야?" in augmented_prompt
 
 
+def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
+    client_and_conn,
+):
+    """실측으로 발견한 버그(2026-10-26, "외부 자료 조사가 에이전트...
+    외부 검색 기능이 있는지 확인해줘") — `retrieve_context()`가 예전엔
+    `if vectordb_search: ...return` → `if graphdb_query: ...return` →
+    `if web_search: ...return` 순서의 if-체인이라, native 스킬을 2개
+    이상 가진 Agent는 먼저 매칭되는 하나(rag)만 쓰고 나머지(외부검색)는
+    vectordb 히트 여부와 무관하게 전혀 조회하지 않았다. 실제로
+    "외부 자료 조사가" Agent(skill_tags: 외부검색+일반웹검색+rag)가 이
+    버그로 Wikipedia 검색이 한 번도 안 불렸다 — rag+외부검색을 같이
+    가진 Agent가 이제 vectordb 히트 여부와 무관하게 Wikipedia도 함께
+    조회하는지 확인한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('외부 자료 조사가', '[\"외부검색\", \"rag\"]', 'active')"
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    for vectordb_hits in ([{"text": "과거산출물"}], []):
+        with (
+            patch(
+                "hair_platform.vectorstore.search", return_value=vectordb_hits
+            ) as vs_mock,
+            patch(
+                "hair_platform.websearch.search",
+                return_value=[
+                    {"title": "원격근무", "snippet": "원격근무 설명", "url": "https://x"}
+                ],
+            ) as search_mock,
+            patch("hair_platform.llm.call_llm", return_value="답변") as llm_mock,
+        ):
+            agent_runtime.execute_agent(
+                conn, agent_id, admin_id, "원격근무 정책이 뭐야?", provider="openai"
+            )
+
+        assert vs_mock.called  # vectordb(rag)도 여전히 조회된다
+        search_mock.assert_called_once()  # web_search(외부검색)도 같이 조회된다
+        augmented_prompt = llm_mock.call_args[0][3]
+        assert "원격근무 설명" in augmented_prompt
+
+
 # ---------- index-knowledge ----------
 
 
