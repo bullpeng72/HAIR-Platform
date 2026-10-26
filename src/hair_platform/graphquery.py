@@ -128,3 +128,25 @@ def as_crewai_tool(conn: sqlite3.Connection):
         return context_for_prompt(conn)
 
     return query_org_relationships
+
+
+def stats(conn: sqlite3.Connection) -> dict:
+    """사용자 요청(2026-10-26, "Admin에... GraphDB 관리 기능을 추가해줘
+    (... 간단한 통계 등)") — GraphDB는 별도 저장소가 없어(모듈 docstring
+    참고) "조각 수"류 통계가 성립하지 않는다. 대신 지금 관계 그래프의
+    크기를 가늠할 수 있는 단순 COUNT만 낸다 — 전부 관계 컬럼만 보고
+    성과 컬럼은 여기도 등장하지 않는다."""
+    users_with_manager = conn.execute(
+        "SELECT COUNT(*) AS c FROM users WHERE manager_id IS NOT NULL"
+    ).fetchone()["c"]
+    distinct_managers = conn.execute(
+        "SELECT COUNT(DISTINCT manager_id) AS c FROM users WHERE manager_id IS NOT NULL"
+    ).fetchone()["c"]
+    confirmed_assignments = conn.execute(
+        "SELECT COUNT(*) AS c FROM assignments WHERE status = 'confirmed'"
+    ).fetchone()["c"]
+    return {
+        "users_with_manager_count": users_with_manager,
+        "distinct_managers_count": distinct_managers,
+        "confirmed_assignments_count": confirmed_assignments,
+    }

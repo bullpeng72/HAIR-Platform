@@ -928,6 +928,25 @@ async function api(method, path, body) {
   return data;
 }
 
+// 사용자 요청(2026-10-26, 외부 자료 업로드) — `api()`는 항상
+// `Content-Type: application/json`을 세팅해 멀티파트 파일 업로드에 못
+// 쓴다(서버가 바운더리를 못 찾아 폼 파싱이 깨진다). Content-Type을 직접
+// 세팅하지 않아야 브라우저가 멀티파트 바운더리를 자동으로 넣어준다 —
+// 그 외(토큰 헤더·에러 처리)는 `api()`와 동일하게 맞춘다.
+async function apiUpload(path, formData) {
+  const opts = { method: "POST", headers: {}, credentials: "same-origin", body: formData };
+  const token = sessionStorage.getItem("hair_token");
+  if (token) opts.headers["Authorization"] = "Bearer " + token;
+  const resp = await fetch(path, opts);
+  let data = null;
+  try { data = await resp.json(); } catch (e) { /* no body */ }
+  if (!resp.ok) {
+    const detail = (data && data.detail) ? data.detail : (resp.status + " " + resp.statusText);
+    throw new Error(detail);
+  }
+  return data;
+}
+
 function qs(path, params) {
   const usp = new URLSearchParams();
   for (const k in params) {
@@ -1353,6 +1372,7 @@ const TABS = [
   { id: "teams", label: "팀 관리", group: "admin", roles: ["admin", "manager"], render: renderTeams },
   { id: "pipelines", label: "파이프라인 관리", group: "admin", roles: ["admin", "manager"], render: renderPipelines },
   { id: "modelregistry", label: "모델 레지스트리", group: "admin", roles: ["admin", "manager"], render: renderModelRegistry },
+  { id: "knowledgebase", label: "지식 베이스", group: "admin", roles: ["admin", "manager"], render: renderKnowledgeBase },
   { id: "crew", label: "Crew 빌더", group: "admin", roles: ["admin", "manager"], render: renderCrewBuilder },
   { id: "admin", label: "사용자 관리", group: "admin", roles: ["admin"], adminOnly: true, render: renderAdmin },
 ];
@@ -2143,6 +2163,12 @@ async function renderConversationDetail(conversationId, containerId) {
     '<input id="conv-message-input" placeholder="메시지(@참가자이름으로 호출 가능)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
     '<ul class="mention-dropdown" id="conv-mention-dropdown" style="display:none"></ul>' +
     '</div>' +
+    // 사용자 요청(2026-10-26, "대화에 바로 로컬에 있는 파일을 업로드") —
+    // 버튼은 숨은 파일 입력을 클릭해 트리거만 하고, 실제 업로드는
+    // 파일이 선택되는 즉시(change 이벤트) 바로 일어난다(전송 버튼을
+    // 따로 안 눌러도 됨 — 메시지 입력과 분리된 별도 동작).
+    '<input type="file" id="conv-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf" style="display:none">' +
+    '<button type="button" class="small" id="conv-file-btn" title="자료 업로드(.md/.txt/.html/.pdf)">\U0001F4CE 자료</button>' +
     '<button class="primary" type="submit">전송</button>' +
     '</form>' +
     '</section>';
@@ -2271,6 +2297,33 @@ async function renderConversationDetail(conversationId, containerId) {
       // 늦게 끝나는 Job 때문에 못 보고 기다리지 않게.
       _watchConversationJobs(conversationId, result.triggered_jobs, participants, conv);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  // 사용자 요청(2026-10-26, 2차 — "A안 + B안") — 처음엔 대화 업로드도
+  // 전역 VectorDB에 영구 색인됐는데("대화에 주입되는 문서는... 저장되지
+  // 않고 휘발되는 내용물"이라는 분석으로), 저장 없이 이 대화의 메시지로
+  // 바로 집어넣는 쪽으로 바꿨다(`/api/conversations/{id}/attachments`,
+  // `conversations.create_attachment_message()`) — 이 대화가 지워지면
+  // 같이 사라진다.
+  document.getElementById("conv-file-btn").addEventListener("click", () => {
+    document.getElementById("conv-file-input").click();
+  });
+  document.getElementById("conv-file-input").addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    showMsg("global-msg", "파일을 읽는 중입니다...", "ok");
+    try {
+      const result = await apiUpload("/api/conversations/" + conversationId + "/attachments", formData);
+      showMsg(
+        "global-msg",
+        result.filename + " 첨부 완료(" + result.char_count + "자) — 이 대화에서만 참조됩니다.",
+        "ok"
+      );
+      await refreshConversationMessages(conversationId, participants, conv);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+    ev.target.value = "";
   });
 
   // 경량 폴링 — 이 대화를 보는 동안 주기적으로
@@ -2916,8 +2969,15 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         esc(a.resource_name || ("Agent #" + a.resource_id)) + '</option>').join("") +
       '</select>'
     : '';
+  // 사용자 요청(2026-10-26, "A안 + B안" — 업무 실행에 쓸 참고자료는
+  // 저장 없이 그 1회 실행에만 첨부) — "AI 에이전트 관리" 화면에 있던
+  // 전역 "자료 업로드" 버튼을 폐지하고, 업무 맥락이 실제로 있는 이
+  // 자리로 옮겼다. 선택 사항이라 안 붙여도 기존처럼 그냥 실행된다.
   const executeBtnHtml =
     agentPickerHtml +
+    '<input type="file" id="ws-execute-attachment" accept=".md,.markdown,.txt,.html,.htm,.pdf" style="display:none">' +
+    '<button type="button" class="small" id="ws-execute-attach-btn" title="이번 실행에만 쓸 참고자료 첨부(선택, 저장 안 됨)">\U0001F4CE 참고자료</button>' +
+    '<span class="muted" id="ws-execute-attachment-name"></span> ' +
     '<button class="small" id="ws-execute-agent-btn"' + (executeDisabled ? " disabled" : "") + '>' +
     esc(executeBtnLabel) + '</button>' +
     (!hasRunningJob && !permission.eligible
@@ -3385,20 +3445,34 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   };
 
+  const attachBtn = document.getElementById("ws-execute-attach-btn");
+  const attachInput = document.getElementById("ws-execute-attachment");
+  const attachNameEl = document.getElementById("ws-execute-attachment-name");
+  if (attachBtn) {
+    attachBtn.onclick = () => attachInput.click();
+    attachInput.addEventListener("change", () => {
+      const f = attachInput.files && attachInput.files[0];
+      attachNameEl.textContent = f ? ("첨부됨: " + f.name) : "";
+    });
+  }
+
   const executeBtn = document.getElementById("ws-execute-agent-btn");
   executeBtn.onclick = async () => {
     if (!window.confirm("이 업무에 배정된 AI 에이전트를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
-    const payload = { content_type: document.getElementById("ws-execute-content-type").value };
+    const formData = new FormData();
+    formData.append("content_type", document.getElementById("ws-execute-content-type").value);
     const agentPicker = document.getElementById("ws-agent-picker");
-    if (agentPicker) payload.agent_id = Number(agentPicker.value);
+    if (agentPicker) formData.append("agent_id", agentPicker.value);
     if (isSupervisor) {
       const provider = document.getElementById("ws-provider").value;
       const model = modelSelectValue("ws-model");
-      if (provider) payload.provider = provider;
-      if (model) payload.model = model;
+      if (provider) formData.append("provider", provider);
+      if (model) formData.append("model", model);
     }
+    const attachedFile = attachInput && attachInput.files && attachInput.files[0];
+    if (attachedFile) formData.append("attachment", attachedFile);
     try {
-      const queued = await api("POST", "/api/tasks/" + taskId + "/execute-agent", payload);
+      const queued = await apiUpload("/api/tasks/" + taskId + "/execute-agent", formData);
       // 202 응답 직후 즉시 새로고침해 "생성 중…" 카드를 먼저 보여준다
       // (Phase 4 — 응답이 빨리 오는 게 이 비동기화의 핵심이라, 여기서
       // 폴링이 끝날 때까지 버튼을 막아두면 의미가 없다).
@@ -4826,6 +4900,15 @@ async function renderAgentPool(content) {
       }
       if (canExecute && a.status === "active") {
         actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
+        // "지식 색인"만 남긴다 — 이 Agent 자신의 산출물을 "지식
+        // 베이스"(전역·영구)로 승격하는 기능이라 Agent 화면이 맞는
+        // 자리다. 반면 "참고자료 업로드"(2026-10-26, 1차)는 업무 맥락이
+        // 없는 이 화면에 있던 게 원래 문제였다 — 사용자 분석(2026-10-26,
+        // 2차, "A안 + B안")으로 "업무 실행 1회성 참고자료는 저장 없이
+        // 그 실행에만 첨부돼야 한다"가 정리돼, 실제 업무 맥락이 있는
+        // 협업 워크스페이스의 "AI 에이전트 실행" 카드로 옮기고 여기서는
+        // 없앴다(`renderCollabWorkspace()`의 `ws-execute-attach-btn`
+        // 참고).
         actions += '<button class="small" data-index-knowledge="' + a.id + '">지식 색인</button>';
       }
       let settings = "";
@@ -5887,10 +5970,7 @@ async function renderPipelines(content) {
 
 async function renderModelRegistry(content) {
   const isAdmin = ME.role === "admin";
-  const [models, embeddingConfig] = await Promise.all([
-    api("GET", "/api/model-registry"),
-    api("GET", "/api/embedding-config"),
-  ]);
+  const models = await api("GET", "/api/model-registry");
   const byProvider = (p) => models.filter(m => m.provider === p);
   const providerLabel = { anthropic: "Anthropic", openai: "OpenAI", ollama: "Ollama(로컬)" };
   const providerOptionsHtml = Object.keys(providerLabel)
@@ -5930,42 +6010,7 @@ async function renderModelRegistry(content) {
     providerTableHtml("anthropic") +
     providerTableHtml("openai") +
     providerTableHtml("ollama") +
-    "</section>" +
-    // 사용자 요청(2026-10-26, "embedding 모델 설정 기능을 구현해줘
-    // (하드코딩 하지않도록)") — VectorDB(rag 스킬)가 과거 산출물을
-    // 검색할 때 쓰는 임베딩 provider/모델. 위 "모델 레지스트리"(채팅
-    // 모델 자동완성 카탈로그, 여러 개 등록)와 달리 이건 "지금 시스템이
-    // 실제로 쓰는 단 하나의 설정값"이라 별도 카드로 둔다. Anthropic은
-    // 공개 임베딩 API가 없어 openai/ollama만 고를 수 있다.
-    '<section class="card"><h2>임베딩 모델 설정(VectorDB 검색용)</h2>' +
-    '<ul class="muted help-list">' +
-    '<li>"rag" 스킬을 가진 Agent가 과거 산출물을 검색할 때 쓰는 임베딩 provider/모델입니다 — 채팅용 모델과는 별개입니다.</li>' +
-    '<li>서로 다른 모델로 만든 벡터는 비교하지 않으므로(의미 공간이 다름) 시스템 전체에 하나만 설정합니다. 바꾸면 그 이전에 다른 모델로 색인된 과거 산출물은 더 이상 검색되지 않습니다(다시 색인해야 함).</li>' +
-    '<li>설정한 적이 없으면 자동판별(OPENAI_API_KEY가 있으면 openai, 없으면 로컬 ollama) 결과를 보여줍니다 — 아래 폼으로 저장하면 그걸 명시적으로 고정합니다.</li>' +
-    '</ul>' +
-    '<p>' + (embeddingConfig.is_explicit ? '<b>설정됨</b>' : '<span class="muted">자동판별 중(아직 명시적으로 설정 안 함)</span>') +
-    ' — provider: <b>' + esc(embeddingConfig.provider) + '</b>, 모델: <b>' + esc(embeddingConfig.model) + '</b></p>' +
-    '<form class="inline" id="embedding-config-form">' +
-    '<select id="ec-provider">' +
-    '<option value="openai"' + (embeddingConfig.provider === "openai" ? " selected" : "") + '>OpenAI</option>' +
-    '<option value="ollama"' + (embeddingConfig.provider === "ollama" ? " selected" : "") + '>Ollama(로컬)</option>' +
-    '</select>' +
-    '<input id="ec-model" placeholder="모델명(예: mxbai-embed-large:latest)" value="' + escAttr(embeddingConfig.model) + '" style="flex:1;min-width:220px" required>' +
-    '<button type="submit" class="small primary">저장</button>' +
-    '</form>' +
     "</section>";
-
-  document.getElementById("embedding-config-form").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    try {
-      await api("PUT", "/api/embedding-config", {
-        provider: document.getElementById("ec-provider").value,
-        model: document.getElementById("ec-model").value,
-      });
-      showMsg("global-msg", "임베딩 모델 설정을 저장했습니다.", "ok");
-      refresh();
-    } catch (e) { showMsg("global-msg", e.message, "error"); }
-  });
 
   document.getElementById("mr-fetch-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -6038,6 +6083,194 @@ async function renderModelRegistry(content) {
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
+  });
+}
+
+/* ---------- 지식 베이스(VectorDB/GraphDB 관리) ---------- */
+
+// 사용자 요청(2026-10-26, "공통의 지식을 관리하기 위해 Admin에 VectorDB,
+// GraphDB 관리 기능을 추가해줘") — 페이지네이션 offset을 탭 밖(모듈
+// 스코프)에 둔다. `refresh()`는 `selectTab()`으로 이 함수를 처음부터
+// 다시 부르므로(Crew 빌더의 `_pendingCrewBuilderTaskId`와 같은 이유),
+// "다음" 버튼을 눌렀을 때 이 값이 0으로 되돌아가면 페이지 이동이 전혀
+// 안 되는 것처럼 보인다.
+let _kbChunkOffset = 0;
+const _KB_CHUNK_LIMIT = 20;
+
+async function renderKnowledgeBase(content) {
+  const [embeddingConfig, knowledgeDocs, chunkStats, chunkPage, graphStats, relationships] = await Promise.all([
+    api("GET", "/api/embedding-config"),
+    api("GET", "/api/documents"),
+    api("GET", "/api/knowledge-chunks/stats"),
+    api("GET", qs("/api/knowledge-chunks", { limit: _KB_CHUNK_LIMIT, offset: _kbChunkOffset })),
+    api("GET", "/api/graph/stats"),
+    api("GET", "/api/graph/relationships"),
+  ]);
+
+  const modelBreakdown = chunkStats.by_model.length
+    ? chunkStats.by_model.map(m => esc(m.embedding_provider) + "/" + esc(m.embedding_model) + ": " + m.count + "건").join(", ")
+    : "없음";
+  const chunkRows = chunkPage.items.map(c => [
+    c.source_document_filename ? ("문서: " + esc(c.source_document_filename))
+      : (c.source_agent_role_name ? ("Agent: " + esc(c.source_agent_role_name)) : "기타"),
+    esc(c.text.length > 80 ? c.text.slice(0, 80) + "…" : c.text),
+    String(c.text.length),
+    esc(c.embedding_provider) + "/" + esc(c.embedding_model),
+    esc(c.created_at),
+    '<button class="small danger" data-delete-chunk="' + c.id + '">삭제</button>',
+  ]);
+  const pageStart = chunkPage.total ? _kbChunkOffset + 1 : 0;
+  const pageEnd = Math.min(_kbChunkOffset + _KB_CHUNK_LIMIT, chunkPage.total);
+
+  content.innerHTML =
+    // 사용자 요청(2026-10-26, "embedding 모델 설정 기능을 구현해줘
+    // (하드코딩 하지않도록)") — 원래 "모델 레지스트리" 탭에 있었으나,
+    // VectorDB/GraphDB 관리 기능이 이 탭으로 모이면서 함께 옮겼다
+    // (코드는 그대로, 위치만 이동).
+    '<section class="card"><h2>임베딩 모델 설정(VectorDB 검색용)</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>"rag" 스킬을 가진 Agent가 과거 산출물을 검색할 때 쓰는 임베딩 provider/모델입니다 — 채팅용 모델과는 별개입니다.</li>' +
+    '<li>서로 다른 모델로 만든 벡터는 비교하지 않으므로(의미 공간이 다름) 시스템 전체에 하나만 설정합니다. 바꾸면 그 이전에 다른 모델로 색인된 과거 산출물은 더 이상 검색되지 않습니다(다시 색인해야 함).</li>' +
+    '<li>설정한 적이 없으면 자동판별(OPENAI_API_KEY가 있으면 openai, 없으면 로컬 ollama) 결과를 보여줍니다 — 아래 폼으로 저장하면 그걸 명시적으로 고정합니다.</li>' +
+    '</ul>' +
+    '<p>' + (embeddingConfig.is_explicit ? '<b>설정됨</b>' : '<span class="muted">자동판별 중(아직 명시적으로 설정 안 함)</span>') +
+    ' — provider: <b>' + esc(embeddingConfig.provider) + '</b>, 모델: <b>' + esc(embeddingConfig.model) + '</b></p>' +
+    '<form class="inline" id="embedding-config-form">' +
+    '<select id="ec-provider">' +
+    '<option value="openai"' + (embeddingConfig.provider === "openai" ? " selected" : "") + '>OpenAI</option>' +
+    '<option value="ollama"' + (embeddingConfig.provider === "ollama" ? " selected" : "") + '>Ollama(로컬)</option>' +
+    '</select>' +
+    '<input id="ec-model" placeholder="모델명(예: mxbai-embed-large:latest)" value="' + escAttr(embeddingConfig.model) + '" style="flex:1;min-width:220px" required>' +
+    '<button type="submit" class="small primary">저장</button>' +
+    '</form>' +
+    "</section>" +
+    // 사용자 요청(2026-10-26, "대화창 및 에이전트로 구성된 업무에서
+    // 외부 자료(마크다운, pdf, html)를 입력받을 수 있도록") — 역시
+    // 코드는 그대로, 위치만 이동.
+    '<section class="card"><h2>지식 자료실(RAG 참고 자료 — 파일 업로드)</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>여기 올린 자료는 대화와 무관하게 전체 시스템에서 공유됩니다 — "rag" 스킬을 가진 모든 Agent가 검색할 수 있습니다(대화창·AI 에이전트 관리에서 올린 파일도 똑같은 곳에 쌓입니다).</li>' +
+    '<li>지원 형식: .md / .markdown / .txt / .html / .htm / .pdf (최대 10MB).</li>' +
+    '</ul>' +
+    '<form class="inline" id="kd-upload-form">' +
+    '<input type="file" id="kd-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf" required>' +
+    '<button type="submit" class="small primary">업로드·색인</button>' +
+    '</form>' +
+    table(["파일명", "업로더", "글자수", "조각수", "업로드일", "동작"], knowledgeDocs.map(d => [
+      esc(d.filename),
+      esc(d.uploaded_by_username),
+      String(d.char_count),
+      String(d.chunk_count),
+      esc(d.created_at),
+      '<button class="small danger" data-delete-document="' + d.id + '">삭제</button>',
+    ])) +
+    (knowledgeDocs.length ? "" : '<p class="muted">아직 올린 자료가 없습니다.</p>') +
+    "</section>" +
+    // 신규 — 파일 없이 텍스트를 바로 붙여넣어 색인.
+    '<section class="card"><h2>텍스트 직접 입력</h2>' +
+    '<p class="muted">파일을 만들기 번거로운 짧은 메모·정책 요약 등을 그대로 붙여넣어 색인합니다. 파일 업로드와 같은 전역 VectorDB에 들어갑니다.</p>' +
+    '<form id="kb-text-form">' +
+    '<input id="kb-text-label" placeholder="라벨(예: 2026 휴가 정책 요약 — 비우면 &quot;직접 입력&quot;)" style="width:100%;box-sizing:border-box;margin-bottom:0.4rem">' +
+    '<textarea id="kb-text-body" placeholder="색인할 텍스트를 붙여넣으세요" rows="4" style="width:100%;box-sizing:border-box" required></textarea>' +
+    '<button type="submit" class="small primary" style="margin-top:0.4rem">저장·색인</button>' +
+    '</form>' +
+    "</section>" +
+    // 신규 — 낱개 조각 조회/삭제 + 통계.
+    '<section class="card"><h2>저장된 지식 조각(Chunk)</h2>' +
+    '<p class="muted">전체 ' + chunkStats.total_chunks + '개 조각 · ' + chunkStats.total_characters + '자 · 모델별 ' + modelBreakdown + '</p>' +
+    '<p class="muted">출처 — Agent 산출물: ' + chunkStats.by_source.agent_output + '건, 업로드/직접입력: ' + chunkStats.by_source.uploaded_document + '건, 기타: ' + chunkStats.by_source.other + '건</p>' +
+    table(["출처", "내용(미리보기)", "글자수", "모델", "생성일", "동작"], chunkRows) +
+    (chunkRows.length ? "" : '<p class="muted">저장된 조각이 없습니다.</p>') +
+    '<div class="inline">' +
+    '<button type="button" class="small" id="kb-chunks-prev"' + (_kbChunkOffset <= 0 ? " disabled" : "") + '>이전</button>' +
+    '<span class="muted">' + pageStart + '–' + pageEnd + ' / ' + chunkPage.total + '</span>' +
+    '<button type="button" class="small" id="kb-chunks-next"' + (_kbChunkOffset + _KB_CHUNK_LIMIT >= chunkPage.total ? " disabled" : "") + '>다음</button>' +
+    '</div>' +
+    "</section>" +
+    // 신규 — GraphDB는 별도 저장소가 없어 조회+통계만 제공.
+    '<section class="card"><h2>GraphDB 관계 조회</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>GraphDB는 별도 저장소가 없습니다 — "사람 인력 관리"(상사 지정)·"결재"(배정 승인) 데이터를 관계로 읽어 보여주는 것뿐이라, 여기서 입력/삭제할 대상이 없습니다.</li>' +
+    '<li>관계 자체를 바꾸려면 "사람 인력 관리"에서 상사를 지정하거나, 배정을 승인/반려하세요.</li>' +
+    '</ul>' +
+    '<p class="muted">상사가 지정된 사용자 ' + graphStats.users_with_manager_count + '명 · 직속 관리자 ' + graphStats.distinct_managers_count + '명 · 확정된 배정 ' + graphStats.confirmed_assignments_count + '건</p>' +
+    table(["요청자 ID", "역할", "리소스", "Task ID"], relationships.map(r => [
+      r.requested_by, esc(r.role_name), esc(r.resource_type) + " #" + r.resource_id, r.task_id,
+    ])) +
+    (relationships.length ? "" : '<p class="muted">확정된 배정 관계가 없습니다.</p>') +
+    "</section>";
+
+  document.getElementById("embedding-config-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      await api("PUT", "/api/embedding-config", {
+        provider: document.getElementById("ec-provider").value,
+        model: document.getElementById("ec-model").value,
+      });
+      showMsg("global-msg", "임베딩 모델 설정을 저장했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  document.getElementById("kd-upload-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const fileInput = document.getElementById("kd-file-input");
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const result = await apiUpload("/api/documents", formData);
+      showMsg("global-msg", result.filename + " 업로드 완료(" + result.char_count + "자, " + result.chunk_count + "개 조각으로 색인됨).", "ok");
+      _kbChunkOffset = 0;
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  content.querySelectorAll("[data-delete-document]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!window.confirm("이 자료를 삭제합니다(색인된 조각도 함께 지워집니다). 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/documents/" + btn.getAttribute("data-delete-document"));
+        showMsg("global-msg", "삭제했습니다.", "ok");
+        _kbChunkOffset = 0;
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  });
+
+  document.getElementById("kb-text-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const text = document.getElementById("kb-text-body").value;
+    const label = document.getElementById("kb-text-label").value;
+    try {
+      const result = await api("POST", "/api/documents/text", label ? { text, label } : { text });
+      showMsg("global-msg", "저장 완료(" + result.char_count + "자, " + result.chunk_count + "개 조각으로 색인됨).", "ok");
+      _kbChunkOffset = 0;
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  content.querySelectorAll("[data-delete-chunk]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!window.confirm("이 조각을 삭제합니다. 계속할까요?")) return;
+      try {
+        await api("DELETE", "/api/knowledge-chunks/" + btn.getAttribute("data-delete-chunk"));
+        showMsg("global-msg", "삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  });
+
+  const prevBtn = document.getElementById("kb-chunks-prev");
+  if (prevBtn) prevBtn.addEventListener("click", () => {
+    _kbChunkOffset = Math.max(0, _kbChunkOffset - _KB_CHUNK_LIMIT);
+    refresh();
+  });
+  const nextBtn = document.getElementById("kb-chunks-next");
+  if (nextBtn) nextBtn.addEventListener("click", () => {
+    _kbChunkOffset += _KB_CHUNK_LIMIT;
+    refresh();
   });
 }
 

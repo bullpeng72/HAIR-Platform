@@ -104,7 +104,12 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
     ),
     (
-        "개발자",
+        # 사용자 요청(2026-10-26, "개발자 에이전트 역할이 백엔드이면 역할도
+        # 백엔드 개발자로 수정해줘") — 이 Agent는 "자율 개발 크루"에서
+        # 백엔드를 담당하는데 이름이 범용 "개발자"라 역할이 드러나지
+        # 않았다(프론트엔드/데이터·인프라/풀스택은 전부 이름에 영역이
+        # 드러남). team_members.role_label은 이미 "백엔드"였다.
+        "백엔드 개발자",
         ["tdd-ai-workflow-checklist", "commit-pr-message-rules"],
         # 사용자 보고(2026-10-18, "@자율 개발 크루... 일부 응답이
         # 실패했습니다") 원인 분석 후 조치 — "자율 개발 크루" 12명
@@ -198,48 +203,25 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
         ["frontend-ui-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
         {"temperature": 0.2, "max_retry_limit": 3},
     ),
-    # --- "자율 개발 크루" 확장(10인 개발자 풀, 2026-10-14) — 사용자 요청:
-    # "기획서가 제시되면 이를 받아 자율적으로 개발을 완료할 복수의
-    # 개발자(10명)가 포함된 crewai 에이전트 그룹 구성 방안을 제안해줘
-    # (권한 위임을 통한 자율성을 보장, 가능하면 하네스 방법론 적용)" —
-    # 제안 승인 후 구현. 기존 "개발자"(백엔드 1)·"프론트엔드 개발자"
-    # (프론트 1)에 8명을 더해 총 10명을 만든다. `crew_runtime.run_crew(
-    # process="hierarchical", manager_agent_id=<개발 계획 수립가>)`로
-    # 실행하면 매니저가 설계 산출물을 받아 이 10명(+UI 기획자)에게
-    # 모듈을 동적으로 위임한다(`allow_delegation=True`가 이미
-    # `run_crew()` 전체 기본값이라 추가 코드 없이 바로 동작).
+    # --- "자율 개발 크루" 확장(2026-10-14 도입, 2026-10-26 정리) — 사용자
+    # 요청(2026-10-14): "기획서가 제시되면 이를 받아 자율적으로 개발을
+    # 완료할 복수의 개발자(10명)가 포함된 crewai 에이전트 그룹 구성
+    # 방안을 제안해줘(권한 위임을 통한 자율성을 보장, 가능하면 하네스
+    # 방법론 적용)" — 당시엔 "Agent 10명 = 미리 쪼갠 Task 10개를 1:1
+    # 배정"하는 모델로 "백엔드/프론트엔드 개발자를 각 3~4명씩" 만들었다.
+    #
+    # 그런데 2026-10-18 실측(`crew_runtime.py`의 `hierarchical_with_manager`
+    # 주석 참고)으로 그 전제가 깨졌다 — CrewAI hierarchical은 `Task.agent`를
+    # 무시하고 매니저가 Task를 **하나만** 받아 "Delegate work to coworker"
+    # 도구로 그때그때 동적으로 역할별 하위 과업을 나눈다. 즉 같은 영역
+    # 안의 여러 Agent는 skill_tags·tuning_config가 완전히 동일한 클론이고,
+    # 매니저가 이름만 다른 동명이인을 구분해 쓸 근거가 전혀 없다(실측
+    # 재현: "백엔드 모듈을 구현하세요" 안내문도 전원 글자 하나 안 다름).
+    # 사용자 분석 요청(2026-10-26) 후 영역별 1명으로 정리 — 매니저가
+    # 같은 코워커 한 명에게 하위 과업을 여러 번 나눠 위임하는 것도
+    # 기술적으로 동일하게 동작하므로 기능 손실이 없다.
     (
-        "백엔드 개발자 2",
-        ["tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"temperature": 0.2, "max_retry_limit": 3},
-    ),
-    (
-        "백엔드 개발자 3",
-        ["tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"temperature": 0.2, "max_retry_limit": 3},
-    ),
-    (
-        "백엔드 개발자 4",
-        ["tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"temperature": 0.2, "max_retry_limit": 3},
-    ),
-    (
-        "프론트엔드 개발자 2",
-        ["frontend-ui-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"temperature": 0.2, "max_retry_limit": 3},
-    ),
-    (
-        "프론트엔드 개발자 3",
-        ["frontend-ui-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"temperature": 0.2, "max_retry_limit": 3},
-    ),
-    (
-        "데이터/인프라 개발자 1",
-        ["data-infra-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
-        {"temperature": 0.2, "max_retry_limit": 3},
-    ),
-    (
-        "데이터/인프라 개발자 2",
+        "데이터/인프라 개발자",
         ["data-infra-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
         {"temperature": 0.2, "max_retry_limit": 3},
     ),
@@ -274,25 +256,26 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
 # manager_agent_id는 agent_ids 목록 안에 있어야 함) 매니저도 팀
 # 멤버여야 하므로 함께 넣는다. (role_name, is_manager)
 DEV_CREW_TEAM_NAME = "자율 개발 크루"
+# 사용자 분석 요청(2026-10-26, "같은 업무의 에이전트가 1,2,3 등으로...
+# 각 영역에 하나의 에이전트만 있어도 되지 않는지") 후 정리 — 영역별
+# 복수 인스턴스는 CrewAI hierarchical이 Task를 매니저에게 하나만 주고
+# "Delegate work to coworker"로 동적 위임하는 실제 메커니즘(위
+# `AGENT_SPECS`의 같은 날짜 주석 참고)에서 아무 기능적 차이가 없었다 —
+# 영역별 1명(백엔드/프론트엔드/데이터·인프라/풀스택)으로 줄인다.
 DEV_CREW_TEAM_DESCRIPTION = (
-    "기획서 → 요구사항/스펙/설계 산출물을 받아 모듈을 쪼개고 10명의 개발자"
+    "기획서 → 요구사항/스펙/설계 산출물을 받아 모듈을 쪼개고 4명의 개발자"
     "(+UI 기획자)에게 자율적으로 위임해 개발을 완료하는 크루. 실행 시 "
     "Crew 실행(또는 팀 배정 후 'Crew 실행') 화면에서 process=hierarchical, "
     "매니저=이 팀의 '개발 계획 수립가'로 지정하면 매니저는 조율·위임만 "
-    "하고 나머지 11명이 실제로 모듈을 구현한다(allow_delegation이 전원 "
-    "기본 적용돼 서로 위임·질의도 가능)."
+    "하고 나머지 5명이 실제로 모듈을 구현한다(allow_delegation이 전원 "
+    "기본 적용돼 서로 위임·질의도 가능 — 매니저가 같은 코워커에게 "
+    "하위 과업을 여러 번 나눠 위임할 수도 있다)."
 )
 DEV_CREW_TEAM_MEMBER_SPECS: list[tuple[str, str]] = [
     ("개발 계획 수립가", "매니저(hierarchical 실행 시 지정)"),
-    ("개발자", "백엔드"),
-    ("백엔드 개발자 2", "백엔드"),
-    ("백엔드 개발자 3", "백엔드"),
-    ("백엔드 개발자 4", "백엔드"),
+    ("백엔드 개발자", "백엔드"),
     ("프론트엔드 개발자", "프론트엔드"),
-    ("프론트엔드 개발자 2", "프론트엔드"),
-    ("프론트엔드 개발자 3", "프론트엔드"),
-    ("데이터/인프라 개발자 1", "데이터/인프라"),
-    ("데이터/인프라 개발자 2", "데이터/인프라"),
+    ("데이터/인프라 개발자", "데이터/인프라"),
     ("풀스택 개발자", "풀스택(유동 배치)"),
     ("UI 기획자", "UI/UX"),
 ]
@@ -461,15 +444,9 @@ DEV_PIPELINE_STAGES: list[
         True,
         [
             ("개발 계획 수립가", ""),
-            ("개발자", "백엔드 모듈을 구현하세요."),
-            ("백엔드 개발자 2", "백엔드 모듈을 구현하세요."),
-            ("백엔드 개발자 3", "백엔드 모듈을 구현하세요."),
-            ("백엔드 개발자 4", "백엔드 모듈을 구현하세요."),
+            ("백엔드 개발자", "백엔드 모듈을 구현하세요."),
             ("프론트엔드 개발자", "프론트엔드 모듈을 구현하세요."),
-            ("프론트엔드 개발자 2", "프론트엔드 모듈을 구현하세요."),
-            ("프론트엔드 개발자 3", "프론트엔드 모듈을 구현하세요."),
-            ("데이터/인프라 개발자 1", "데이터/인프라 모듈을 구현하세요."),
-            ("데이터/인프라 개발자 2", "데이터/인프라 모듈을 구현하세요."),
+            ("데이터/인프라 개발자", "데이터/인프라 모듈을 구현하세요."),
             ("풀스택 개발자", "필요한 쪽을 유동적으로 구현하세요."),
             ("UI 기획자", "구현에 필요한 화면 흐름/인터랙션을 정리해 전달하세요."),
         ],

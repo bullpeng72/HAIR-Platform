@@ -872,8 +872,16 @@ def start_agent_execution(
     allow_supervisor_override: bool = False,
     agent_id: int | None = None,
     content_type: str = "text",
+    attachment_text: str | None = None,
 ) -> dict:
     """`POST /api/tasks/{task_id}/execute-agent`(Phase 4로 비동기화) —
+
+    `attachment_text`(사용자 요청, 2026-10-26, "A안 — 업무 수행시 업무에
+    할당된 에이전트에 제공되는 문서는... 저장되지 않고 휘발되는 내용물")
+    — 이번 실행 1회에만 쓸 참고자료를 프롬프트에 직접 이어붙인다.
+    `app.py`가 업로드된 파일에서 `documents.extract_text()`로 뽑은
+    텍스트를 그대로 넘긴다 — **DB 어디에도 저장하지 않는다**(이
+    함수가 조립하는 `prompt` 문자열에만 녹아들고 사라진다).
     이 task의 confirmed agent 배정을 찾아 검증·프롬프트 구성까지만
     동기로 마치고 `agent_execution_jobs`에 `status='running'` 행을 만든
     뒤 즉시 반환한다. 실제 LLM 호출은 `run_agent_execution_job()`이
@@ -958,6 +966,8 @@ def start_agent_execution(
     ]
     if latest_human is not None:
         prompt_parts.append(f"참고할 사람 작성 자료:\n{latest_human['content']}")
+    if attachment_text:
+        prompt_parts.append(f"이번 실행에 첨부된 참고 자료:\n{attachment_text}")
     instruction = _CONTENT_TYPE_INSTRUCTIONS.get(content_type, "")
     if instruction:
         prompt_parts.append(instruction)

@@ -128,14 +128,18 @@ def test_gc61_full_ui_flow_end_to_end(client_and_conn):
     assert client.get("/api/me").json()["role"] == "manager"
 
     # 2) 브리프 제출 + 목록
-    resp = client.post("/api/briefs", json={"raw_text": "백엔드 개발자 1명"})
+    # 사용자 요청(2026-10-26, "개발자 에이전트 역할이 백엔드이면 역할도
+    # 백엔드 개발자로 수정해줘")으로 "백엔드 개발자"가 기본 시드에 실제로
+    # 등록된 Agent 역할명이 됐다 — 이 테스트는 "아직 후보가 없는 역할"
+    # 단계부터 검증해야 하므로, 시드와 충돌하지 않는 역할명을 쓴다.
+    resp = client.post("/api/briefs", json={"raw_text": "모바일 개발자 1명"})
     brief_id = resp.json()["id"]
     assert brief_id in {b["id"] for b in client.get("/api/briefs").json()}
 
     # 3) Task 분해 + 목록
     resp = client.post(
         f"/api/briefs/{brief_id}/tasks",
-        json={"tasks": [{"role_name": "백엔드 개발자", "required_skills": ["python"]}]},
+        json={"tasks": [{"role_name": "모바일 개발자", "required_skills": ["python"]}]},
     )
     task_id = resp.json()["tasks"][0]["id"]
     assert client.get(f"/api/briefs/{brief_id}/tasks").json()[0]["id"] == task_id

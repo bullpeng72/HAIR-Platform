@@ -180,6 +180,10 @@ CREATE TABLE IF NOT EXISTS team_members (
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_agent_id INTEGER REFERENCES agent_pool(id),
+    -- 사용자 요청(2026-10-26, 외부 자료 업로드) — `source_agent_id`와
+    -- 별개 출처. 하나는 "이 청크가 어느 Agent의 산출물이었는지", 이건
+    -- "이 청크가 어느 업로드 문서(`documents`)에서 나왔는지"를 가리킨다.
+    source_document_id INTEGER REFERENCES documents(id),
     text TEXT NOT NULL,
     embedding TEXT NOT NULL,
     embedding_provider TEXT NOT NULL,
@@ -372,6 +376,24 @@ CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id
     ON conversation_messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_conversation_jobs_conversation_id
     ON conversation_jobs(conversation_id);
+
+-- 사용자 요청(2026-10-26, "대화창 및 에이전트로 구성된 업무에서 외부
+-- 자료(마크다운, pdf, html)를 입력받을 수 있도록") — 업로드한 파일의
+-- 메타데이터만 여기 저장한다. 실제 텍스트/임베딩은 `knowledge_chunks`
+-- (아래 `source_document_id`)에 청크 단위로 쪼개져 들어간다 — VectorDB
+-- 검색은 전역이라(`vectorstore.search()`가 `source_agent_id`로 필터링
+--하지 않는 것과 같은 원칙), `conversation_id`는 "어디서 올렸는지"
+-- 추적용일 뿐 검색 범위를 좁히지 않는다.
+CREATE TABLE IF NOT EXISTS documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL DEFAULT '',
+    uploaded_by INTEGER NOT NULL REFERENCES users(id),
+    conversation_id INTEGER REFERENCES conversations(id),
+    char_count INTEGER NOT NULL DEFAULT 0,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 CREATE TABLE IF NOT EXISTS agent_evaluations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -932,6 +954,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 캔버스로 순서를 정한 적 없음" → 기존처럼 `id` 순서로 폴백(하위 호환).
     _ensure_column(conn, "team_members", "sequence_order", "INTEGER")
     _ensure_column(conn, "skill_pool", "show_in_conversation", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "knowledge_chunks", "source_document_id", "INTEGER REFERENCES documents(id)")
 
 
 def _backfill_show_in_conversation(conn: sqlite3.Connection) -> None:

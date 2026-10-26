@@ -140,10 +140,10 @@ def test_recommend_for_agent_end_to_end(monkeypatch):
     model_registry.create_model(conn, admin_id, "anthropic", "claude-opus-4-1")
     model_registry.create_model(conn, admin_id, "anthropic", "claude-haiku-5-5")
 
-    agent_id = _make_agent(conn, "개발자", ["tdd-ai-workflow-checklist"], provider="anthropic", model="claude-opus-4-1")
+    agent_id = _make_agent(conn, "백엔드 개발자", ["tdd-ai-workflow-checklist"], provider="anthropic", model="claude-opus-4-1")
     rec = opt.recommend_for_agent(conn, agent_id)
 
-    assert rec["role_name"] == "개발자"
+    assert rec["role_name"] == "백엔드 개발자"
     assert rec["tier"] == opt.TIER_PRECISION_FAST
     assert rec["classification_source"] == "known_role"
     # 추천 모델은 항상 활성 레지스트리 안에 있어야 한다.
@@ -162,7 +162,7 @@ def test_recommend_for_agent_missing_agent_raises():
 def test_recommend_all_excludes_deprecated():
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
-    active_id = _make_agent(conn, "개발자", [])
+    active_id = _make_agent(conn, "백엔드 개발자", [])
     deprecated_id = _make_agent(conn, "QA 기능테스터", [])
     conn.execute("UPDATE agent_pool SET status='deprecated' WHERE id=?", (deprecated_id,))
     conn.commit()
@@ -235,7 +235,7 @@ def test_refine_with_llm_rejects_hallucinated_model(monkeypatch):
 def test_optimize_recommendation_endpoint_permissions_and_shape(client_and_conn, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     client, conn = client_and_conn
-    agent_id = _make_agent(conn, "개발자", ["tdd-ai-workflow-checklist"])
+    agent_id = _make_agent(conn, "백엔드 개발자", ["tdd-ai-workflow-checklist"])
 
     resp = client.post("/login", json={"username": "member1", "password": "memberpass"})
     assert resp.status_code == 200
@@ -257,7 +257,7 @@ def test_optimize_recommendation_endpoint_permissions_and_shape(client_and_conn,
 def test_optimize_recommendation_bulk_endpoint(client_and_conn, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     client, conn = client_and_conn
-    _make_agent(conn, "개발자", [])
+    _make_agent(conn, "백엔드 개발자", [])
     _make_agent(conn, "DA", [])
 
     client.post("/login", json={"username": "manager1", "password": "managerpass"})

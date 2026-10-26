@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hair-platform"
-version = "0.0.4"
+version = "0.1.0"
 description = "HAIR(Human-AI Resource Management) 협업 플랫폼 — 사람과 AI Agent를 하나의 조직도에서 배치·배분·승인·성과리뷰하는 도구. AgentForge의 자매 프로젝트."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -55,6 +55,12 @@ crewai = ["crewai>=1.0.0", "litellm>=1.0.0"]
 # 단계가 이렇게 실패하는 걸 확인). `mcpadapt`가 새 이름을 따라잡을
 # 때까지 `mcp`를 1.x로 묶어둔다.
 mcp = ["crewai-tools[mcp]>=1.0.0", "mcp>=1.10.1,<2.0"]
+# documents.py가 지연 import한다 — 대화창/지식 자료실에서 .pdf·.html
+# 파일을 업로드했을 때만 필요하다(.md/.txt는 추가 라이브러리 없이 그대로
+# 처리한다). pypdf는 순수 Python(시스템 의존성 없음), beautifulsoup4는
+# 표준 라이브러리 html.parser를 백엔드로 써서(lxml 불필요) 로컬/온프레미스
+# 우선 원칙과 맞는다.
+documents = ["pypdf>=4.0.0", "beautifulsoup4>=4.12.0"]
 
 [project.scripts]
 # 통합 CLI(2026-10-10) — `hair serve`/`hair bootstrap-admin`/`hair eval`

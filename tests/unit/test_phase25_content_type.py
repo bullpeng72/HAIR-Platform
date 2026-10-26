@@ -197,8 +197,11 @@ def test_gc247_execute_agent_prompt_and_deliverable_use_content_type(client_and_
     with patch(
         "hair_platform.llm.call_llm", return_value="```python\nprint(1)\n```"
     ) as mock_call:
+        # 사용자 요청(2026-10-26, "A안 + B안")으로 이 엔드포인트가
+        # 멀티파트(Form)로 바뀌었다 — JSON 바디는 파싱되지 않고 조용히
+        # 기본값으로 떨어지므로 `data=`로 보내야 한다.
         resp = client.post(
-            f"/api/tasks/{task_id}/execute-agent", json={"content_type": "code"}
+            f"/api/tasks/{task_id}/execute-agent", data={"content_type": "code"}
         )
     assert resp.status_code == 202, resp.text
 

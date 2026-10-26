@@ -33,7 +33,7 @@ _NEW_ROLE_NAMES = {
 _REUSED_ROLE_NAMES = {
     "요구사항 분석가",
     "스펙 작성자",
-    "개발자",
+    "백엔드 개발자",
     "코드 검증가",
     "QA 기능테스터",
 }
@@ -86,8 +86,9 @@ def test_gc_module_decomposition_skill_matches_dev_plan_agent():
 
 
 def test_gc_two_developer_agents_exist_for_module_split_work():
-    """사용자가 명시한 "복수의 개발자" 요건 — 기존 "개발자"(범용/백엔드) +
-    신규 "프론트엔드 개발자"로 최소 2개 이상이어야 한다."""
+    """사용자가 명시한 "복수의 개발자" 요건 — 기존 "개발자"(2026-10-26,
+    역할이 드러나도록 "백엔드 개발자"로 개명) + 신규 "프론트엔드 개발자"로
+    최소 2개 이상이어야 한다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
 
@@ -98,7 +99,7 @@ def test_gc_two_developer_agents_exist_for_module_split_work():
         ).fetchall()
     ]
     assert len(dev_roles) >= 2
-    assert "개발자" in dev_roles
+    assert "백엔드 개발자" in dev_roles
     assert "프론트엔드 개발자" in dev_roles
 
 

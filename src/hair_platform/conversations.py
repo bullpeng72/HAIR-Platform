@@ -983,6 +983,51 @@ def create_message(
     }
 
 
+def create_attachment_message(
+    conn: sqlite3.Connection,
+    conversation_id: int,
+    actor_id: int,
+    filename: str,
+    text: str,
+) -> int:
+    """사용자 요청(2026-10-26, "A안 — 대화에 주입되는 문서는... 저장되지
+    않고 휘발되는 내용물") — 업로드한 파일을 VectorDB(영구·전역)에
+    색인하는 대신, 그 대화의 메시지로 직접 집어넣는다. 이렇게 하면
+    `conversations._build_transcript()`가 기존 대화 메시지와 똑같이
+    이 내용을 프롬프트에 포함시키고, 이 대화가 지워지면(이미 있는
+    `_cascade_delete_conversation()`) 같이 사라진다 — 별도 보관/만료
+    설계가 필요 없다(휘발성이 저장을 안 함으로써 구조적으로 보장됨).
+
+    `create_message()`와 같은 INSERT 모양이지만 멘션 감지·`ai_auto_reply`
+    트리거 판정은 하지 않는다(파일 첨부 자체는 "누군가를 호출"하는
+    행위가 아니라서 — 호출은 뒤따르는 별도 메시지에서 사람이 직접
+    한다)."""
+    conv = get_conversation(conn, conversation_id)
+    if conv is None:
+        raise ValueError("conversation_not_found")
+    if not is_participant(conn, conversation_id, actor_id):
+        raise PermissionError("not_a_participant")
+
+    content = f"\U0001F4CE 첨부 자료 — {filename}\n\n{text}"
+    cur = conn.execute(
+        "INSERT INTO conversation_messages (conversation_id, author_type, author_id, content) "
+        "VALUES (?, 'human', ?, ?)",
+        (conversation_id, actor_id, content),
+    )
+    message_id = cur.lastrowid
+    assert message_id is not None
+    audit.record(
+        conn,
+        actor_id,
+        "conversation_attachment_added",
+        "conversation_messages",
+        message_id,
+        after={"conversation_id": conversation_id, "filename": filename, "char_count": len(text)},
+    )
+    conn.commit()
+    return message_id
+
+
 # ---------- 공용 job 마감 처리 ----------
 
 

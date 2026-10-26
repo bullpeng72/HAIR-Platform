@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hair_platform import agent_runtime, crew_runtime, graphquery, vectorstore
+from hair_platform import agent_runtime, crew_runtime, documents, graphquery, vectorstore
 
 
 def _login(client, username, password):
@@ -1318,3 +1318,165 @@ def test_gc94_index_knowledge_fails_clearly_with_no_text(client_and_conn):
     _login(client, "manager1", "managerpass")
     resp = client.post(f"/api/agent-pool/{agent_id}/index-knowledge", json={})
     assert resp.status_code == 400
+
+
+# ---------- Admin "지식 베이스" 탭(2026-10-26, "공통의 지식을 관리하기
+# 위해 Admin에 VectorDB, GraphDB 관리 기능을 추가해줘") ----------
+
+
+def _admin_id(conn):
+    return conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()["id"]
+
+
+def _fake_embed(text, provider=None, model=None):
+    return (provider or "openai", model or "text-embedding-3-small", [0.1, 0.2, 0.3])
+
+
+def test_gc95_list_chunks_paginates_and_joins_source_labels(client_and_conn):
+    _, conn = client_and_conn
+    admin_id = _admin_id(conn)
+    agent_cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status, last_output) VALUES "
+        "('기획자', '[]', 'active', '기획서')"
+    )
+    agent_id = agent_cur.lastrowid
+    conn.commit()
+
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        vectorstore.index_text(conn, agent_id, "에이전트 산출물 조각")
+        documents.ingest_text(conn, admin_id, "업로드된 텍스트 조각", label="메모")
+
+    page = vectorstore.list_chunks(conn, limit=1, offset=0)
+    assert page["total"] == 2
+    assert len(page["items"]) == 1
+    assert page["items"][0]["text"] == "업로드된 텍스트 조각"  # id DESC
+    assert page["items"][0]["source_document_filename"] == "메모"
+
+    page2 = vectorstore.list_chunks(conn, limit=1, offset=1)
+    assert page2["items"][0]["text"] == "에이전트 산출물 조각"
+    assert page2["items"][0]["source_agent_role_name"] == "기획자"
+
+
+def test_gc96_delete_chunk_removes_row_and_rejects_missing(client_and_conn):
+    _, conn = client_and_conn
+    admin_id = _admin_id(conn)
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        vectorstore.index_text(conn, None, "지울 조각")
+    chunk_id = conn.execute("SELECT id FROM knowledge_chunks").fetchone()["id"]
+
+    vectorstore.delete_chunk(conn, admin_id, chunk_id)
+    assert conn.execute(
+        "SELECT 1 FROM knowledge_chunks WHERE id = ?", (chunk_id,)
+    ).fetchone() is None
+
+    with pytest.raises(ValueError, match="chunk_not_found"):
+        vectorstore.delete_chunk(conn, admin_id, chunk_id)
+
+
+def test_gc97_vectorstore_stats_counts_by_model_and_source(client_and_conn):
+    _, conn = client_and_conn
+    admin_id = _admin_id(conn)
+    agent_cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status, last_output) VALUES "
+        "('기획자', '[]', 'active', '기획서')"
+    )
+    agent_id = agent_cur.lastrowid
+    conn.commit()
+
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        vectorstore.index_text(conn, agent_id, "산출물")
+        documents.ingest_text(conn, admin_id, "업로드 텍스트")
+
+    result = vectorstore.stats(conn)
+    assert result["total_chunks"] == 2
+    assert result["total_characters"] == len("산출물") + len("업로드 텍스트")
+    assert result["by_source"]["agent_output"] == 1
+    assert result["by_source"]["uploaded_document"] == 1
+    assert result["by_source"]["other"] == 0
+    assert sum(m["count"] for m in result["by_model"]) == 2
+
+
+def test_gc98_graphquery_stats_counts_relationships_without_performance_columns(
+    client_and_conn,
+):
+    client, conn = client_and_conn
+    manager_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'manager1'"
+    ).fetchone()["id"]
+    conn.execute(
+        "UPDATE users SET manager_id = ? WHERE username = 'member1'", (manager_id,)
+    )
+    brief_cur = conn.execute(
+        "INSERT INTO briefs (raw_text, submitted_by) VALUES ('테스트 브리프', ?)",
+        (manager_id,),
+    )
+    brief_id = brief_cur.lastrowid
+    task_cur = conn.execute(
+        "INSERT INTO tasks (brief_id, role_name, status) VALUES (?, '개발자', 'queued')",
+        (brief_id,),
+    )
+    task_id = task_cur.lastrowid
+    member_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'member1'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO assignments (task_id, resource_type, resource_id, requested_by, status) "
+        "VALUES (?, 'human', ?, ?, 'confirmed')",
+        (task_id, member_id, member_id),
+    )
+    conn.commit()
+
+    result = graphquery.stats(conn)
+    assert result["users_with_manager_count"] >= 1
+    assert result["distinct_managers_count"] >= 1
+    assert result["confirmed_assignments_count"] >= 1
+    assert "performance_score" not in str(result)
+
+
+def test_gc99_knowledge_base_endpoints_require_admin_or_manager(client_and_conn):
+    client, conn = client_and_conn
+    admin_id = _admin_id(conn)
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        vectorstore.index_text(conn, None, "조각")
+    chunk_id = conn.execute("SELECT id FROM knowledge_chunks").fetchone()["id"]
+
+    _login(client, "member1", "memberpass")
+    assert client.get("/api/knowledge-chunks").status_code == 403
+    assert client.get("/api/knowledge-chunks/stats").status_code == 403
+    assert client.delete(f"/api/knowledge-chunks/{chunk_id}").status_code == 403
+    assert client.get("/api/graph/relationships").status_code == 403
+    assert client.get("/api/graph/stats").status_code == 403
+
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/knowledge-chunks")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["total"] >= 1
+    assert client.get("/api/knowledge-chunks/stats").status_code == 200
+    assert client.get("/api/graph/relationships").status_code == 200
+    assert client.get("/api/graph/stats").status_code == 200
+
+    resp = client.delete(f"/api/knowledge-chunks/{chunk_id}")
+    assert resp.status_code == 200, resp.text
+    assert client.delete(f"/api/knowledge-chunks/{chunk_id}").status_code == 404
+
+
+def test_gc100_manual_text_endpoint_requires_admin_or_manager_and_rejects_empty(
+    client_and_conn,
+):
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        resp = client.post("/api/documents/text", json={"text": "내용"})
+    assert resp.status_code == 403
+
+    _login(client, "admin1", "adminpass")
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        resp = client.post("/api/documents/text", json={"text": "   "})
+    assert resp.status_code == 400
+
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        resp = client.post(
+            "/api/documents/text", json={"text": "실제 내용", "label": "메모"}
+        )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["filename"] == "메모"

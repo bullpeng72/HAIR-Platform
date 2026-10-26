@@ -138,6 +138,14 @@ def _truncate_for_embedding(text: str, model: str) -> str:
     return text[-limit:] if len(text) > limit else text
 
 
+def max_embed_chars(model: str) -> int:
+    """`documents.py`가 업로드 파일을 모델 한도에 맞는 청크로 쪼갤 때 쓰는
+    글자수 한도 — `_truncate_for_embedding()`과 같은 표를 그대로 노출만
+    한다. 색인 시점에 조용히 잘리는 대신(`index_text()`가 그대로 하듯),
+    청크를 미리 이 한도 이내로 나눠서 내용이 안 버려지게 한다."""
+    return _MAX_EMBED_CHARS_BY_MODEL.get(model, _DEFAULT_MAX_EMBED_CHARS)
+
+
 def embed_text(
     text: str, provider: str | None = None, model: str | None = None
 ) -> tuple[str, str, list[float]]:
@@ -297,3 +305,72 @@ def as_crewai_tool(conn: sqlite3.Connection, top_k: int = 3):
         return "\n".join(f"- {h['text']}" for h in hits)
 
     return search_knowledge_base
+
+
+# ---------- Admin "지식 베이스" 탭(사용자 요청, 2026-10-26, "공통의
+# 지식을 관리하기 위해 Admin에 VectorDB, GraphDB 관리 기능을 추가해줘
+# (데이터 입력/삭제/조회 및 간단한 통계 등)") ----------
+
+
+def list_chunks(conn: sqlite3.Connection, limit: int = 50, offset: int = 0) -> dict:
+    """`GET /api/audit-log`와 같은 `{"items", "total", "limit", "offset"}`
+    페이지네이션 규약(`app.py`의 `get_audit_log` 참고). 출처를 한눈에
+    보이게 Agent 산출물(`source_agent_id`)·업로드 문서(`source_document_id`)
+    이름까지 LEFT JOIN으로 같이 가져온다(둘 다 NULL이면 "직접 입력"이거나
+    출처 추적이 없는 과거 데이터)."""
+    limit = max(1, min(limit, 200))
+    rows = conn.execute(
+        "SELECT kc.id, kc.text, kc.embedding_provider, kc.embedding_model, kc.created_at, "
+        "kc.source_agent_id, a.role_name AS source_agent_role_name, "
+        "kc.source_document_id, d.filename AS source_document_filename "
+        "FROM knowledge_chunks kc "
+        "LEFT JOIN agent_pool a ON a.id = kc.source_agent_id "
+        "LEFT JOIN documents d ON d.id = kc.source_document_id "
+        "ORDER BY kc.id DESC LIMIT ? OFFSET ?",
+        (limit, offset),
+    ).fetchall()
+    total = conn.execute("SELECT COUNT(*) AS c FROM knowledge_chunks").fetchone()["c"]
+    return {
+        "items": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def delete_chunk(conn: sqlite3.Connection, actor_id: int, chunk_id: int) -> None:
+    row = conn.execute(
+        "SELECT id FROM knowledge_chunks WHERE id = ?", (chunk_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("chunk_not_found")
+    conn.execute("DELETE FROM knowledge_chunks WHERE id = ?", (chunk_id,))
+    audit.record(conn, actor_id, "knowledge_chunk_deleted", "knowledge_chunks", chunk_id)
+    conn.commit()
+
+
+def stats(conn: sqlite3.Connection) -> dict:
+    """"지식 베이스" 탭의 VectorDB 통계 줄 — 전부 가벼운 COUNT/SUM이라
+    매번 새로 계산해도 된다(캐시 불필요)."""
+    totals = conn.execute(
+        "SELECT COUNT(*) AS total_chunks, COALESCE(SUM(LENGTH(text)), 0) AS total_characters "
+        "FROM knowledge_chunks"
+    ).fetchone()
+    by_model = conn.execute(
+        "SELECT embedding_provider, embedding_model, COUNT(*) AS count "
+        "FROM knowledge_chunks GROUP BY embedding_provider, embedding_model "
+        "ORDER BY count DESC"
+    ).fetchall()
+    by_source = conn.execute(
+        "SELECT "
+        "SUM(CASE WHEN source_agent_id IS NOT NULL THEN 1 ELSE 0 END) AS agent_output, "
+        "SUM(CASE WHEN source_document_id IS NOT NULL THEN 1 ELSE 0 END) AS uploaded_document, "
+        "SUM(CASE WHEN source_agent_id IS NULL AND source_document_id IS NULL THEN 1 ELSE 0 END) AS other "
+        "FROM knowledge_chunks"
+    ).fetchone()
+    return {
+        "total_chunks": totals["total_chunks"],
+        "total_characters": totals["total_characters"],
+        "by_model": [dict(row) for row in by_model],
+        "by_source": dict(by_source),
+    }

@@ -304,25 +304,6 @@ class AssistRequest(BaseModel):
     content_type: ContentType = "text"
 
 
-class ExecuteAgentRequest(BaseModel):
-    """협업 워크스페이스 — task에 배정된 Agent를 실행한다.
-
-    `agent_id`는 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2)
-    으로 추가했다 — "다중 confirmed 허용"으로 한 task에 confirmed agent
-    배정이 여러 건 공존할 수 있게 되면서, "그중 어떤 Agent를 실행할지"가
-    더 이상 자명하지 않다. 비워두면 기존처럼 confirmed agent가 정확히
-    1건일 때만 자동으로 그걸 쓰고, 여러 건이면 명시를 요구한다(하위
-    호환 — 지금까지의 유일한 실사용 패턴인 "1 task 1 confirmed agent"는
-    동작이 전혀 안 바뀐다)."""
-
-    provider: LlmProvider | None = None
-    model: str | None = None
-    agent_id: int | None = None
-    # 2026-10-07, Tier 2 — 비워두면(기존 동작 그대로) 'text'로 저장되고
-    # 프롬프트에 형식 지시를 추가하지 않는다.
-    content_type: ContentType = "text"
-
-
 class GenerateRequest(BaseModel):
     """생성 버튼. 부족한 역할(Task)들을 지정해 배치로 Agent 생성을 트리거한다.
 
@@ -743,6 +724,15 @@ class EmbeddingConfigUpdate(BaseModel):
 
     provider: Literal["openai", "ollama"]
     model: str
+
+
+class ManualKnowledgeTextCreate(BaseModel):
+    """사용자 요청(2026-10-26, "Admin에 VectorDB... 관리 기능을 추가해줘
+    (데이터 입력...)") — 파일 없이 "지식 베이스" 탭에서 텍스트를 바로
+    붙여넣어 색인할 때 쓴다(`documents.ingest_text()`)."""
+
+    text: str
+    label: str = "직접 입력"
 
 
 class ConversationCreate(BaseModel):

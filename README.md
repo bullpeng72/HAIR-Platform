@@ -14,7 +14,7 @@ Task 종속 대화 흡수 + Brief 승격 공존), 단계형 개발 파이프라�
 (Gate A-G 기준 자동 재시도/에스컬레이션, BMAD-METHOD식 계획 승인
 1회 + 최소 HITL), Agent별 LLM 모델/설정 최적화 추천(admin), **통합
 CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
-쓸 수 있다. `pytest` 500건 통과, API 엔드포인트 139개. 개념·아키텍처
+쓸 수 있다. `pytest` 569건 통과, API 엔드포인트 155개. 개념·아키텍처
 전체 설명은
 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은 `git log`
 (커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를 참고.
@@ -68,6 +68,11 @@ CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
   일반 지식)·Parallel AI(일반 웹검색, MCP)를 전부 CrewAI Tool로 노출해
   Agent가 필요 여부를 스스로 판단해 호출
 - MCP(stdio/remote) 외부 도구를 Agent별로 연결 가능
+- 대화창·AI 에이전트 관리·지식 자료실 세 곳에서 로컬 파일(.md/.pdf/
+  .html) 업로드 또는 텍스트 직접 입력으로 VectorDB에 즉시 색인
+  (`documents.py`) — 색인되면 `rag` 스킬을 가진 모든 Agent가 대화창
+  단발 호출·CrewAI 실행 양쪽에서 똑같이 찾아냄. Admin "지식 베이스"
+  탭에서 색인된 조각 조회/삭제+통계, GraphDB 관계 조회+통계까지 관리
 
 ### Tool/Skill/Model 등록 — "등록 → 재사용" 패턴
 - **Tool Pool·Skill Pool**(`pool_registry.py`) — "스킬 → 자동 도구 연결"
@@ -87,7 +92,7 @@ CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
 - 데이터 삭제/초기화(도구·스킬·사람·Agent·brief/task, confirmed 배정이
   있는 대상은 보호) + 보관기간 정책(`retention.py`, assignment_history
   1년 — audit_log는 append-only 트리거를 이 모듈만 통제된 방식으로 해제)
-- Web UI 25개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
+- Web UI 26개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
   분리(원래 "내 업무"/"공용 조회"/"운영 관리" 3구역이었으나 이후
   2구역으로 재편)
 
@@ -102,7 +107,7 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 500건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 569건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -161,6 +166,13 @@ export ANTHROPIC_API_KEY=...               # 또는 OPENAI_API_KEY
 # 목록은 "모델 레지스트리" 탭에 등록해두면 전 화면에서 드롭다운으로 공유된다.
 ```
 
+대화창·AI 에이전트 관리·지식 자료실에서 `.pdf`/`.html` 파일을 업로드해
+VectorDB에 색인하려면(`.md`/`.txt`는 추가 설치 없이 바로 동작):
+
+```bash
+pip install -e ".[documents]"              # pypdf·beautifulsoup4 설치
+```
+
 Web UI 실행(부트스트랩으로 만든 ADMIN 계정으로 로그인):
 
 ```bash
@@ -185,7 +197,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(139개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(155개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   approvals.py       # 다단계 결재라인(조직도 매니저 체인)
@@ -202,7 +214,7 @@ src/hair_platform/
   agent_evaluation.py # Gate A-G 평가를 Agent 실행 경로에 상시 연결(agent_evaluations 테이블)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
   cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/eval
-  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 25개 탭)
+  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 26개 탭)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
   model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용")
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
@@ -211,6 +223,7 @@ src/hair_platform/
   vectorstore.py     # 지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
   graphquery.py      # 관계분석 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
   websearch.py       # 외부 일반 지식 검색(Wikipedia native 도구 + Parallel AI MCP)
+  documents.py       # 외부 자료(.md/.pdf/.html) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
   pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화, CrewAI Tool 조립
   data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호)
   deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)
@@ -218,13 +231,13 @@ src/hair_platform/
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이)
   conversations.py   # 대화 중심 작업공간 — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩, Brief 승격
   pipeline_runtime.py # 단계형 개발 파이프라인 엔진(단독/순차 릴레이/병행 위임 단계, Gate A-G 기준 자동 재시도·에스컬레이션)
-  reference_pipeline_seeds.py # 레퍼런스 Agent 28종 + Skill/Tool Pool + 소프트웨어 개발 파이프라인 기본 시드
+  reference_pipeline_seeds.py # 레퍼런스 Agent 22종 + Skill/Tool Pool + 소프트웨어 개발 파이프라인 기본 시드
   agent_optimizer.py # Agent별 LLM provider/model/tuning_config 최적화 추천(규칙 기반 + 선택적 LLM 보정, admin)
 docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 500건 통과(1건은 무관한 사전 실패 — 재현 확인됨)
+tests/unit/                            # 골든셋 569건 통과(1건은 무관한 사전 실패 — 재현 확인됨)
 ```
 
 ## 로드맵
@@ -237,6 +250,30 @@ tests/unit/                            # 골든셋 500건 통과(1건은 무관�
 
 버전별 핵심 변경만 요약한다 — 세부 배경·버그 재현 과정은 커밋 메시지
 (`git log --oneline --all`)에 날짜·사용자 요청 원문과 함께 남아 있다.
+
+### v0.1.0 (2026-10-26) — 외부 자료 업로드(RAG) + Admin 지식 베이스 관리 + 응답 형식 일관성
+
+- ✨ 대화창·AI 에이전트 관리·지식 자료실에서 로컬 파일(.md/.pdf/.html)
+  업로드 또는 텍스트 직접 입력으로 VectorDB 자동 색인(`documents.py`
+  신설) — 청크 분할 없이 통째로 넣던 기존 색인 경로의 "긴 문서는
+  대부분 잘려나가는" 문제도 같이 수정
+- ✨ Admin "지식 베이스" 탭 신설 — 색인된 조각(Chunk) 조회/삭제+통계,
+  GraphDB 관계 조회+통계(GraphDB는 별도 저장소가 없어 조회·통계만)
+- ✨ 임베딩(VectorDB) provider/모델 하드코딩을 admin이 바꿀 수 있는
+  설정으로 분리
+- 🔧 "자율 개발 크루"의 영역별 중복 개발자(백엔드 4명·프론트엔드 3명·
+  데이터/인프라 2명)를 영역별 1명으로 정리(레퍼런스 Agent 28→22개,
+  팀 12→6명) — CrewAI hierarchical이 Task를 매니저에게 하나만 주고
+  동적으로 위임하는 실제 메커니즘에서 skill_tags가 완전히 동일한
+  클론을 여러 개 둬도 기능 차이가 없었다(실측 확인). 남은 "개발자"는
+  역할이 드러나도록 "백엔드 개발자"로 개명
+- 🐛 Agent persona `expected_output`이 지금까지 CrewAI 실행에서만
+  반영되고 대화창 `@멘션` 단발 호출에는 무시되던 비일관 수정
+- 🐛 외부 검색(Wikipedia) 실패를 "관련 자료 없음"으로 은폐하던 문제,
+  `rag`+`외부검색`처럼 native 스킬을 2개 이상 가진 Agent가 if-체인
+  때문에 첫 번째 매칭만 쓰던 버그 수정
+- 🐛 member/viewer 권한에서도 모델 레지스트리 조회가 되도록 엔드포인트
+  분리, 대화창 스킬 그라운딩 실시간 실행 갭 수정 + 멘션 UX 개선
 
 ### v0.0.4 (2026-10-20) — Crew 빌더(멀티에이전트 실행 통합) + 배정 취소 + 버그 수정
 

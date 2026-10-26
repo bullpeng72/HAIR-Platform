@@ -76,7 +76,7 @@ def test_create_template_and_add_stages_round_trip():
     s2 = pr.add_stage(conn, admin_id, tid, "설계", "sequential_relay",
                        [("AA", "AA 역할"), ("DA", "DA 역할")])
     s3 = pr.add_stage(conn, admin_id, tid, "구현", "parallel_delegated",
-                       [("개발 계획 수립가", ""), ("개발자", "백엔드")],
+                       [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")],
                        lead_role_name="개발 계획 수립가")
 
     tpl = pr.get_pipeline_template(conn, tid)
@@ -125,7 +125,10 @@ def test_default_software_dev_pipeline_is_seeded_idempotently():
     assert all(not s["requires_human_approval"] for s in tpl["stages"][1:])
     impl_stage = tpl["stages"][3]
     assert impl_stage["lead_role_name"] == "개발 계획 수립가"
-    assert len(impl_stage["agents"]) == 12  # 리드 1 + 개발자 10 + UI 기획자 1
+    # 2026-10-26 정리(사용자 분석 요청) — 영역별 중복 개발자를 1명으로
+    # 줄였다: 리드 1 + 개발자 4(백엔드/프론트엔드/데이터인프라/풀스택) +
+    # UI 기획자 1 = 6.
+    assert len(impl_stage["agents"]) == 6
 
 
 # ---------- 실행 엔진: 3가지 mode ----------
@@ -169,7 +172,7 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
     pr.add_stage(conn, admin_id, tid, "설계", "sequential_relay",
                  [("AA", "AA 역할"), ("DA", "DA 역할")])
     pr.add_stage(conn, admin_id, tid, "구현", "parallel_delegated",
-                 [("개발 계획 수립가", ""), ("개발자", "백엔드")],
+                 [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")],
                  lead_role_name="개발 계획 수립가")
 
     calls = []
@@ -210,7 +213,7 @@ def test_is_primary_deliverable_round_trips_through_add_stage_and_template():
 
     tid = pr.create_pipeline_template(conn, admin_id, "p-primary", "", "x")
     s1 = pr.add_stage(conn, admin_id, tid, "설계", "single", [("AA", "")])
-    s2 = pr.add_stage(conn, admin_id, tid, "구현", "single", [("개발자", "")],
+    s2 = pr.add_stage(conn, admin_id, tid, "구현", "single", [("백엔드 개발자", "")],
                        is_primary_deliverable=True)
 
     tpl = pr.get_pipeline_template(conn, tid)
@@ -236,7 +239,7 @@ def test_primary_deliverable_stage_output_identifiable_via_list_pipeline_runs_fo
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p3", "", "x")
-    pr.add_stage(conn, admin_id, tid, "구현", "single", [("개발자", "")],
+    pr.add_stage(conn, admin_id, tid, "구현", "single", [("백엔드 개발자", "")],
                  is_primary_deliverable=True)
     pr.add_stage(conn, admin_id, tid, "품질 관리 최종 판정", "single", [("코드 검증가", "")])
 
@@ -302,7 +305,7 @@ def test_execute_stage_attempt_passes_stage_expected_output_to_run_crew():
     tid = pr.create_pipeline_template(conn, admin_id, "p-eo-passthrough", "", "x")
     pr.add_stage(
         conn, admin_id, tid, "구현", "sequential_relay",
-        [("AA", ""), ("개발자", "")],
+        [("AA", ""), ("백엔드 개발자", "")],
         expected_output="동작하는 코드 한 벌",
     )
 

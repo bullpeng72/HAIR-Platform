@@ -1156,7 +1156,14 @@ def test_suggest_agents_for_task_ranks_role_match_then_skill_overlap(client_and_
         json={
             "tasks": [
                 {
-                    "role_name": "백엔드 개발자",
+                    # 사용자 요청(2026-10-26, "개발자 에이전트 역할이
+                    # 백엔드이면 역할도 백엔드 개발자로 수정해줘")으로
+                    # "백엔드 개발자"가 실제 레퍼런스 시드 역할명이 됐다
+                    # (이 테스트는 `client_and_conn`이 매번 레퍼런스
+                    # Agent를 같이 시드하는 DB를 쓴다) — 그 시드와
+                    # 충돌하지 않는 이름을 써서 "역할 완전일치" 후보를
+                    # 이 테스트가 만든 agent 하나로만 고정한다.
+                    "role_name": "주니어 백엔드 개발자",
                     "required_skills": ["python", "sql", "api설계"],
                 }
             ]
@@ -1172,7 +1179,7 @@ def test_suggest_agents_for_task_ranks_role_match_then_skill_overlap(client_and_
         conn.commit()
         return cur.lastrowid
 
-    exact_role = _agent("백엔드 개발자", [])  # 역할 완전일치, 교집합 0
+    exact_role = _agent("주니어 백엔드 개발자", [])  # 역할 완전일치, 교집합 0
     high_overlap = _agent("풀스택 개발자", ["python", "sql"])  # 교집합 2
     low_overlap = _agent("데이터 엔지니어", ["python"])  # 교집합 1
     unrelated = _agent("디자이너", ["figma"])  # 교집합 0 + 역할 불일치 → 제외

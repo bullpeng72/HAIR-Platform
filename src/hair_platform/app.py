@@ -29,7 +29,16 @@ import sqlite3
 from functools import partial
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -47,7 +56,9 @@ from hair_platform import (
     data_admin,
     db,
     deliverables,
+    documents,
     fairness,
+    graphquery,
     inbox,
     jobs,
     model_registry,
@@ -96,13 +107,13 @@ from hair_platform.models import (
     DeliverableCommentCreate,
     DeliverableCreate,
     EmbeddingConfigUpdate,
-    ExecuteAgentRequest,
     GenerateRequest,
     HumanPoolCreate,
     HumanPoolUpdate,
     KnowledgeIndexRequest,
     LoginRequest,
     ManagerUpdate,
+    ManualKnowledgeTextCreate,
     ModelActiveUpdate,
     ModelRegistryCreate,
     PerformanceScoreRequest,
@@ -1569,6 +1580,156 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail=detail) from None
         return {"id": message_id, "deleted": True}
 
+    # ---------- 외부 자료 업로드(사용자 요청, 2026-10-26, "대화창 및
+    # 에이전트로 구성된 업무에서 외부 자료(마크다운, pdf, html)를
+    # 입력받을 수 있도록") ----------
+    # 2차 결정(2026-10-26, "A안(휘발성) + B안(UI 재배치)") — 처음엔
+    # 대화창 업로드도 이 전역 VectorDB로 들어갔는데, 사용자 분석으로
+    # "대화/업무 자료는 그때그때 쓰고 버려야 하는데 전부 영구화되고
+    # 있다"는 문제가 드러나 대화 첨부는 아래 `/api/conversations/{id}/
+    # attachments`(저장 없이 메시지로 직접 주입)로 분리했다. 이
+    # `/api/documents`는 이제 "지식 베이스"(admin/manager 전용 공통·
+    # 영구 지식)만 다룬다.
+    _MAX_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
+
+    @app.post("/api/documents", status_code=201)
+    async def upload_document(
+        file: UploadFile,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        raw_bytes = await file.read()
+        if len(raw_bytes) > _MAX_DOCUMENT_UPLOAD_BYTES:
+            raise HTTPException(status_code=400, detail="파일이 너무 큽니다(최대 10MB)")
+
+        try:
+            return documents.ingest_document(
+                conn, user["id"], file.filename or "업로드 파일", raw_bytes
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # ---------- 대화 첨부(저장 없이 그 대화 메시지로 직접 주입 — "A안")
+    # ----------
+
+    @app.post("/api/conversations/{conversation_id}/attachments", status_code=201)
+    async def upload_conversation_attachment(
+        conversation_id: int,
+        file: UploadFile,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """대화의 참가자만(역할 무관) 올릴 수 있다. VectorDB/문서 저장소를
+        전혀 거치지 않고 추출한 텍스트를 그대로 대화 메시지로 남긴다 —
+        `conversations.create_attachment_message()` 참고(휘발성 설계)."""
+        if not conversations.is_participant(conn, conversation_id, user["id"]):
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 파일을 올릴 수 있습니다"
+            )
+        raw_bytes = await file.read()
+        if len(raw_bytes) > _MAX_DOCUMENT_UPLOAD_BYTES:
+            raise HTTPException(status_code=400, detail="파일이 너무 큽니다(최대 10MB)")
+
+        filename = file.filename or "첨부 파일"
+        try:
+            text = documents.extract_text(filename, raw_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            message_id = conversations.create_attachment_message(
+                conn, conversation_id, user["id"], filename, text
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="대화를 찾을 수 없습니다"
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 파일을 올릴 수 있습니다"
+            ) from exc
+
+        return {
+            "conversation_message_id": message_id,
+            "filename": filename,
+            "char_count": len(text),
+        }
+
+    @app.get("/api/documents")
+    def list_documents_endpoint(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        return documents.list_documents(conn)
+
+    @app.delete("/api/documents/{document_id}")
+    def delete_document_endpoint(
+        document_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            documents.delete_document(conn, user["id"], document_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="문서를 찾을 수 없습니다"
+            ) from exc
+        return {"id": document_id, "deleted": True}
+
+    # ---------- "지식 베이스" 탭(사용자 요청, 2026-10-26, "공통의 지식을
+    # 관리하기 위해 Admin에 VectorDB, GraphDB 관리 기능을 추가해줘") ----------
+
+    @app.post("/api/documents/text", status_code=201)
+    def upload_document_text(
+        payload: ManualKnowledgeTextCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """파일 없이 텍스트를 바로 붙여넣어 색인한다(`지식 자료실`의
+        업로드와 같은 색인기, 추출 단계만 없음)."""
+        try:
+            return documents.ingest_text(conn, user["id"], payload.text, payload.label)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/knowledge-chunks")
+    def list_knowledge_chunks_endpoint(
+        limit: int = 50,
+        offset: int = 0,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        return vectorstore.list_chunks(conn, limit, offset)
+
+    @app.get("/api/knowledge-chunks/stats")
+    def get_knowledge_chunks_stats(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        return vectorstore.stats(conn)
+
+    @app.delete("/api/knowledge-chunks/{chunk_id}")
+    def delete_knowledge_chunk_endpoint(
+        chunk_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            vectorstore.delete_chunk(conn, user["id"], chunk_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="조각을 찾을 수 없습니다"
+            ) from exc
+        return {"id": chunk_id, "deleted": True}
+
+    @app.get("/api/graph/relationships")
+    def list_graph_relationships(
+        limit: int = 100,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """GraphDB는 별도 저장소가 없어(`graphquery.py` 참고) 조회만
+        제공한다 — 관계 자체를 바꾸려면 "사람 인력 관리"에서 상사를
+        지정하거나 배정을 승인/반려해야 한다."""
+        return graphquery.org_chart_summary(conn, limit=max(1, min(limit, 200)))
+
+    @app.get("/api/graph/stats")
+    def get_graph_stats(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        return graphquery.stats(conn)
+
     @app.get("/api/tasks/{task_id}/deliverables")
     def list_task_deliverables(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)
@@ -1765,10 +1926,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return {"draft": draft}
 
     @app.post("/api/tasks/{task_id}/execute-agent", status_code=202)
-    def trigger_agent_execution(
+    async def trigger_agent_execution(
         task_id: int,
-        payload: ExecuteAgentRequest,
         background_tasks: BackgroundTasks,
+        provider: str | None = Form(None),
+        model: str | None = Form(None),
+        agent_id: int | None = Form(None),
+        content_type: str = Form("text"),
+        attachment: UploadFile | None = File(None),
         user: sqlite3.Row = Depends(get_current_user),
     ):
         """Phase 4로 비동기화 — task에 배정된 Agent 실행을 큐에
@@ -1776,22 +1941,42 @@ def create_app(db_path: str | None = None) -> FastAPI:
         (비용 발생)은 응답 전송 후 백그라운드에서 진행된다 — Web UI는
         `GET .../agent-execution-jobs`로 폴링해 완료를 확인한다. 요청자
         본인 또는 매니저/관리자(감독 대리 실행 허용 — "작성"과
-        달리 "지금 실행시켜라"는 대리해도 저자성이 안 흐려짐)."""
-        if user["role"] not in ("admin", "manager") and (
-            payload.provider or payload.model
-        ):
+        달리 "지금 실행시켜라"는 대리해도 저자성이 안 흐려짐).
+
+        사용자 요청(2026-10-26, "A안 + B안")으로 멀티파트로 전환했다 —
+        `attachment`(선택)는 이번 1회 실행에만 쓸 참고자료다. 추출한
+        텍스트만 `deliverables.start_agent_execution()`에 넘기고 그
+        원본 파일이나 텍스트는 어디에도 저장하지 않는다(감사 로그엔
+        파일명·글자수만 남김). "AI 에이전트 관리" 화면의 전역 "자료
+        업로드" 버튼(지난 설계)은 업무 맥락이 없어 폐지했고, 그 자리를
+        여기(업무에 실제로 배정된 실행 경로)가 대신한다."""
+        if user["role"] not in ("admin", "manager") and (provider or model):
             raise HTTPException(
                 status_code=400,
                 detail="팀원은 provider/model을 직접 선택할 수 없습니다",
             )
+
+        attachment_text: str | None = None
+        attachment_filename: str | None = None
+        if attachment is not None and attachment.filename:
+            raw_bytes = await attachment.read()
+            if len(raw_bytes) > 10 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="첨부 파일이 너무 큽니다(최대 10MB)")
+            attachment_filename = attachment.filename
+            try:
+                attachment_text = documents.extract_text(attachment_filename, raw_bytes)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         try:
             job = deliverables.start_agent_execution(
                 conn,
                 task_id,
                 user["id"],
                 allow_supervisor_override=user["role"] in ("admin", "manager"),
-                agent_id=payload.agent_id,
-                content_type=payload.content_type,
+                agent_id=agent_id,
+                content_type=content_type,
+                attachment_text=attachment_text,
             )
         except ValueError:
             raise HTTPException(
@@ -1812,6 +1997,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=409,
                 detail="이 업무에 확정된 AI 에이전트 배정이 없습니다",
             ) from None
+        if attachment_text is not None:
+            audit.record(
+                conn,
+                user["id"],
+                "agent_execution_attachment_used",
+                "agent_execution_jobs",
+                job["job_id"],
+                after={"filename": attachment_filename, "char_count": len(attachment_text)},
+            )
+            conn.commit()
         background_tasks.add_task(
             deliverables.run_agent_execution_job,
             conn,
@@ -1821,9 +2016,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
             user["id"],
             job["role_name"],
             job["prompt"],
-            payload.provider,
-            payload.model,
-            payload.content_type,
+            provider,
+            model,
+            content_type,
         )
         return {"job_id": job["job_id"], "status": "running"}
 

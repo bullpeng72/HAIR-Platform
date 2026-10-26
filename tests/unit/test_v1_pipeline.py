@@ -68,14 +68,18 @@ def test_gc9_f2_task_decomposition_and_f3_pool_search(client_and_conn):
 def test_gc10_matching_returns_score_breakdown_f14(client_and_conn):
     client, _ = client_and_conn
 
+    # 사용자 요청(2026-10-26, "개발자 에이전트 역할이 백엔드이면 역할도
+    # 백엔드 개발자로 수정해줘")으로 "백엔드 개발자"가 기본 시드에 실제로
+    # 등록된 Agent 역할명이 됐다 — 이 테스트는 "후보가 전혀 없을 때"를
+    # 검증해야 하므로, 시드와 충돌하지 않는 역할명을 쓴다.
     _login(client, "manager1", "managerpass")
-    resp = client.post("/api/briefs", json={"raw_text": "백엔드 개발자 1명"})
+    resp = client.post("/api/briefs", json={"raw_text": "모바일 개발자 1명"})
     brief_id = resp.json()["id"]
     resp = client.post(
         f"/api/briefs/{brief_id}/tasks",
         json={
             "tasks": [
-                {"role_name": "백엔드 개발자", "required_skills": ["python", "fastapi"]}
+                {"role_name": "모바일 개발자", "required_skills": ["python", "fastapi"]}
             ]
         },
     )
@@ -90,7 +94,7 @@ def test_gc10_matching_returns_score_breakdown_f14(client_and_conn):
         "/api/human-pool",
         json={
             "name": "박도전",
-            "role": "백엔드 개발자",
+            "role": "모바일 개발자",
             "skill_tags": ["python"],
             "cost_estimate": 60.0,
         },
