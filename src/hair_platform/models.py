@@ -734,6 +734,17 @@ class ModelActiveUpdate(BaseModel):
     is_active: bool
 
 
+class EmbeddingConfigUpdate(BaseModel):
+    """사용자 요청(2026-10-26, "embedding 모델 설정 기능을 구현해줘
+    (하드코딩 하지않도록)") — `vectorstore.py`의 임베딩 provider/모델명
+    하드코딩을 admin이 바꿀 수 있는 설정값으로 뺀다. Anthropic은 공개
+    임베딩 API가 없어 `LlmProvider`(3종)가 아니라 openai/ollama만
+    받는다(`vectorstore.embed_text()`와 같은 제약)."""
+
+    provider: Literal["openai", "ollama"]
+    model: str
+
+
 class ConversationCreate(BaseModel):
     """2026-10-08 — 로그인 직후 바로
     쓸 수 있는 독립 대화, 또는 특정 Task에 종속된 대화. `linked_task_id`

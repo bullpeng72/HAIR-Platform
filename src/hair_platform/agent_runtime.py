@@ -107,7 +107,19 @@ def retrieve_context(
     )
     sections: list[str] = []
     if "vectordb_search" in native_ids:
-        hits = vectorstore.search(conn, query, top_k=3)
+        # 실측으로 발견한 버그(2026-10-26, 같은 조사) — vectordb 임베딩
+        # 호출은 websearch.py와 달리 실패를 스스로 삼키지 않는다(임베딩
+        # API가 키 누락·quota·일시 장애로 실패하면 `openai.OpenAIError`/
+        # `httpx.HTTPError`가 그대로 올라온다) — 여기서 잡아두지 않으면
+        # "있으면 좋은 보강"이어야 할 vectordb 검색 하나 때문에 Agent의
+        # 응답 전체가 날아간다(실제로 "외부 자료 조사가" Agent가 이걸로
+        # 전체 실행이 죽었었다). websearch.search()가 이미 지키는
+        # "검색 실패가 Agent 실행 자체를 막으면 안 된다" 원칙을 여기도
+        # 똑같이 적용한다.
+        try:
+            hits = vectorstore.search(conn, query, top_k=3)
+        except Exception:  # noqa: BLE001 — 임베딩 API 실패를 보강 실패로만 취급
+            hits = []
         if hits:
             sections.append(
                 "참고할 과거 산출물:\n" + "\n".join(f"- {h['text']}" for h in hits)
@@ -196,6 +208,17 @@ def execute_agent(
         effective_provider, effective_model
     )
     system = llm.system_prompt_for_role(conn, agent["role_name"], skills)
+    # 사용자 요청(2026-10-26, "프레젠테이션 자료 작성자의 최종 결과를
+    # HTML 형태로 생성되도록 개선해줘") — `agent_pool.expected_output`
+    # (`PATCH .../persona`로 admin이 저장한 Agent별 기본 산출물 형식
+    # 지시)은 지금까지 `crew_runtime.py`의 실제 Crew 실행(Task.
+    # expected_output)에서만 반영되고, 이 단발 실행 경로(대화창
+    # `@멘션`·"LLM으로 도와줘"급 호출 포함)에서는 완전히 무시됐다 —
+    # admin이 persona 화면에서 "HTML로 작성" 같은 지시를 저장해도
+    # @멘션으로 부르면 그 지시가 전혀 안 먹혀서 Crew 실행과 결과 형식이
+    # 달라지는 비일관이 있었다. 설정돼 있으면 여기서도 똑같이 반영한다.
+    if agent["expected_output"]:
+        system = system + f"\n\n기대 산출물 형식: {agent['expected_output']}"
     augmented_prompt, retrieved_context = augment_with_retrieval(conn, skills, prompt)
     if retrieval_sink is not None:
         retrieval_sink["retrieved_context"] = retrieved_context

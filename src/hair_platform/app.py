@@ -57,6 +57,7 @@ from hair_platform import (
     pool_registry,
     retention,
     teams,
+    vectorstore,
     webui,
 )
 from hair_platform import approvals as approvals_mod
@@ -94,6 +95,7 @@ from hair_platform.models import (
     DelegateAgentRequest,
     DeliverableCommentCreate,
     DeliverableCreate,
+    EmbeddingConfigUpdate,
     ExecuteAgentRequest,
     GenerateRequest,
     HumanPoolCreate,
@@ -2787,6 +2789,41 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=404, detail="모델을 찾을 수 없습니다"
             ) from exc
         return {"id": model_id, "deleted": True}
+
+    # ---------- 임베딩 모델 설정(사용자 요청, 2026-10-26, "embedding
+    # 모델 설정 기능을 구현해줘 (하드코딩 하지않도록)") ----------
+    # `vectorstore.py`의 임베딩 provider/모델명이 코드 상수로 박혀 있던
+    # 것("mxbai-embed-large:latest로 맞춰줘"처럼 바꾸려면 매번 소스를
+    # 고쳐야 했다)을 admin이 직접 바꿀 수 있는 설정으로 뺀다. model_
+    # registry(여러 개 등록해두고 고르는 카탈로그)와 달리 이건 "지금
+    # 시스템이 실제로 쓰는 단 하나의 설정값"이라 GET/PUT 단일 리소스로
+    # 둔다(목록·삭제 없음).
+
+    @app.get("/api/embedding-config")
+    def get_embedding_config_endpoint(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """admin이 명시적으로 설정해둔 값이 있으면 그걸, 없으면 지금
+        실제로 쓰이는 자동판별 결과를 `is_explicit=False`로 알려준다 —
+        화면에 "지금 뭐가 쓰이고 있는지"를 항상 보여줄 수 있게 한다."""
+        configured = vectorstore.get_embedding_config(conn)
+        if configured is not None:
+            return {**configured, "is_explicit": True}
+        provider, model = vectorstore.resolve_default_provider_and_model(conn)
+        return {"provider": provider, "model": model, "is_explicit": False}
+
+    @app.put("/api/embedding-config")
+    def set_embedding_config_endpoint(
+        payload: EmbeddingConfigUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            vectorstore.set_embedding_config(
+                conn, user["id"], payload.provider, payload.model
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"provider": payload.provider, "model": payload.model}
 
     # ---------- 팀(사용자 요청, 2026-10-06) ----------
     # "복수의 사람이 복수의 Agent와 또는 CrewAI 장점인 역할에 따른 Agent를

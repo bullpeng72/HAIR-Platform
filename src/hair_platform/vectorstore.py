@@ -9,7 +9,19 @@ SQLite(`knowledge_chunks`)에 임베딩을 JSON으로 저장하고 검색은 애
 
 **비용 발생 지점**: `embed_text()`(따라서 `index_text()`·`search()`)를 호출하면
 실제 임베딩 API가 호출된다 — 호출부(`app.py`)에서 opt-in으로 게이팅한다.
-"""
+
+**실측으로 발견한 버그(2026-10-26, "외부 자료 조사가" Agent가 대화창
+`@멘션`에서 "Error code: 401 - ... Missing credentials"로 크래시)** —
+`embed_text()`가 `provider` 생략 시 무조건 `"openai"`로 하드코딩돼
+있었다. 이 Agent의 LLM provider는 `ollama`(OPENAI_API_KEY 없음)인데,
+skill_tags에 "rag"가 있어 `agent_runtime.retrieve_context()`가 매
+실행마다 `vectorstore.search()`(→`embed_text()`)를 호출했고, OpenAI
+키가 없는 이 환경에서는 Agent 자신의 provider와 무관하게 항상 즉시
+크래시했다(네트워크 호출 전, 클라이언트 생성 단계에서 실패해 0.2초
+만에 터짐 — 실측 확인). 위에 적은 "로컬/온프레미스 우선 원칙"이
+실제로는 기본 provider 선택에 반영돼 있지 않았던 것 — `OPENAI_API_KEY`
+가 없으면 로컬 Ollama 임베딩으로 자동 전환한다(`_default_embedding_
+provider()`)."""
 
 from __future__ import annotations
 
@@ -18,10 +30,81 @@ import math
 import os
 import sqlite3
 
+from hair_platform import audit
+
 DEFAULT_EMBEDDING_MODELS = {
     "openai": "text-embedding-3-small",
-    "ollama": "nomic-embed-text",
+    # 사용자 결정(2026-10-26, "mxbai-embed-large:latest 모델 레지스트리에
+    # 등록했어... 맞춰줘") — 이 환경엔 `nomic-embed-text`가 안 받아져
+    # 있고 `mxbai-embed-large:latest`가 이미 받아져 있어 그걸 기본값으로
+    # 맞췄다. 아래 `_MAX_EMBED_CHARS_BY_MODEL`도 같이 봐야 한다 —
+    # `nomic-embed-text`(8192토큰)와 컨텍스트 한도가 16배 다르다.
+    "ollama": "mxbai-embed-large:latest",
 }
+
+
+def _default_embedding_provider() -> str:
+    """`llm._auto_detect()`와 같은 패턴 — `OPENAI_API_KEY`가 있으면
+    openai, 없으면 키가 필요 없는 로컬 Ollama로 자동 판별한다(이
+    파일 docstring의 "로컬/온프레미스 우선 원칙")."""
+    return "openai" if os.environ.get("OPENAI_API_KEY") else "ollama"
+
+
+def get_embedding_config(conn: sqlite3.Connection) -> dict | None:
+    """admin이 설정해둔 임베딩 provider/모델 — 한 번도 설정한 적
+    없으면(행이 없으면) `None`(호출부가 자동판별로 폴백한다)."""
+    row = conn.execute(
+        "SELECT provider, model FROM embedding_config WHERE id = 1"
+    ).fetchone()
+    if row is None:
+        return None
+    return {"provider": row["provider"], "model": row["model"]}
+
+
+def set_embedding_config(
+    conn: sqlite3.Connection, actor_id: int, provider: str, model: str
+) -> None:
+    """사용자 요청(2026-10-26, "embedding 모델 설정 기능을 구현해줘
+    (하드코딩 하지않도록)") — 임베딩 공간은 시스템 전체에 하나만 둬야
+    하므로(서로 다른 모델로 만든 벡터는 같은 공간이 아니라 비교하지
+    않는다 — 이 파일의 `search()` 자체 설계 원칙) Agent별 설정이 아니라
+    `id=1` 고정 단일 행이다."""
+    if provider not in ("openai", "ollama"):
+        raise ValueError(f"unsupported_provider:{provider!r}")
+    model = (model or "").strip()
+    if not model:
+        raise ValueError("empty_model")
+    before = get_embedding_config(conn)
+    conn.execute(
+        "INSERT INTO embedding_config (id, provider, model) VALUES (1, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, "
+        "model = excluded.model",
+        (provider, model),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "embedding_config_updated",
+        "embedding_config",
+        1,
+        before=before,
+        after={"provider": provider, "model": model},
+    )
+    conn.commit()
+
+
+def resolve_default_provider_and_model(conn: sqlite3.Connection) -> tuple[str, str]:
+    """`search()`/`index_text()`가 `provider`/`model`을 안 받았을 때
+    쓸 기본값을 고른다 — admin이 명시적으로 설정해둔 `embedding_config`
+    가 있으면 그걸 우선하고, 없으면 기존 자동판별(`_default_embedding_
+    provider()`)+하드코딩 기본 모델로 폴백한다(동작 변경 없음,
+    설정하면 그게 우선할 뿐)."""
+    configured = get_embedding_config(conn)
+    if configured is not None:
+        return configured["provider"], configured["model"]
+    provider = _default_embedding_provider()
+    return provider, DEFAULT_EMBEDDING_MODELS[provider]
+
 
 # 사용자 보고(2026-10-14, "Error code: 400 - ... maximum context length is
 # 8192 tokens") — 실측으로 확인한 원인: `agent_runtime.
@@ -33,11 +116,26 @@ DEFAULT_EMBEDDING_MODELS = {
 # 이 프로젝트 의존성이 아니라서 보수적인 문자 수 상한으로 잘라낸다(한국어는
 # 영어보다 문자당 토큰 밀도가 높아 넉넉히 잡는다) — 검색 질의는 최근 맥락이
 # 더 중요하므로 앞부분이 아니라 뒷부분을 남긴다.
-_MAX_EMBED_CHARS = 6000
+#
+# 모델별 한도(2026-10-26, "mxbai-embed-large:latest로 맞춰줘") — 기본
+# Ollama 임베딩 모델을 `mxbai-embed-large:latest`로 바꾸면서 실측
+# 확인(`ollama show mxbai-embed-large:latest`): BERT 계열이라 컨텍스트가
+# **512 토큰뿐**이다(nomic-embed-text/OpenAI의 8192토큰 대비 16분의 1).
+# 하나의 전역 상수를 그대로 쓰면 보통 길이의 산출물만 임베딩해도 Ollama가
+# 조용히 잘라내거나(에러 없이) 의미가 깨진 임베딩을 돌려줄 위험이 크다 —
+# 같은 보수적 비율(8192토큰→6000자)로 모델별 한도를 따로 둔다. 등록되지
+# 않은 모델은 더 짧은 쪽(512토큰 기준)으로 안전하게 가정한다.
+_MAX_EMBED_CHARS_BY_MODEL: dict[str, int] = {
+    "text-embedding-3-small": 6000,
+    "nomic-embed-text": 6000,
+    "mxbai-embed-large:latest": 350,
+}
+_DEFAULT_MAX_EMBED_CHARS = 350
 
 
-def _truncate_for_embedding(text: str) -> str:
-    return text[-_MAX_EMBED_CHARS:] if len(text) > _MAX_EMBED_CHARS else text
+def _truncate_for_embedding(text: str, model: str) -> str:
+    limit = _MAX_EMBED_CHARS_BY_MODEL.get(model, _DEFAULT_MAX_EMBED_CHARS)
+    return text[-limit:] if len(text) > limit else text
 
 
 def embed_text(
@@ -50,10 +148,10 @@ def embed_text(
     같은 `OLLAMA_BASE_URL` 환경변수·httpx 패턴). Anthropic은 여전히
     지원하지 않는다 — 공개 임베딩 API 자체가 없다.
     """
-    text = _truncate_for_embedding(text)
-    provider = provider or "openai"
+    provider = provider or _default_embedding_provider()
     if provider == "openai":
         model = model or DEFAULT_EMBEDDING_MODELS["openai"]
+        text = _truncate_for_embedding(text, model)
 
         import openai  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
@@ -62,6 +160,7 @@ def embed_text(
         return provider, model, resp.data[0].embedding
     if provider == "ollama":
         model = model or DEFAULT_EMBEDDING_MODELS["ollama"]
+        text = _truncate_for_embedding(text, model)
 
         import httpx  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
@@ -86,7 +185,15 @@ def index_text(
     provider: str | None = None,
     model: str | None = None,
 ) -> int:
-    """텍스트를 임베딩해 `knowledge_chunks`에 저장한다(비용 발생)."""
+    """텍스트를 임베딩해 `knowledge_chunks`에 저장한다(비용 발생).
+
+    `provider`/`model`을 안 넘기면 admin이 설정해둔 `embedding_config`
+    (없으면 자동판별)를 쓴다 — `embed_text()` 자체는 `conn`이 없어
+    DB 설정을 못 읽으므로, 여기서 먼저 해석해 넘긴다."""
+    if provider is None or model is None:
+        default_provider, default_model = resolve_default_provider_and_model(conn)
+        provider = provider or default_provider
+        model = model or default_model
     resolved_provider, resolved_model, embedding = embed_text(text, provider, model)
     cur = conn.execute(
         "INSERT INTO knowledge_chunks "
@@ -125,7 +232,15 @@ def search(
 
     서로 다른 임베딩 모델로 만든 벡터는 같은 공간에 있지 않으므로 비교하지
     않는다 — 쿼리와 같은 provider/model로 색인된 청크만 후보로 삼는다.
-    """
+
+    `provider`/`model`을 안 넘기면 `index_text()`와 같은 방식으로
+    `embedding_config`(없으면 자동판별)를 쓴다 — 색인할 때와 검색할
+    때 기본값이 서로 달라지면 매칭되는 청크가 하나도 없어 보이므로
+    반드시 같은 해석 경로를 거쳐야 한다."""
+    if provider is None or model is None:
+        default_provider, default_model = resolve_default_provider_and_model(conn)
+        provider = provider or default_provider
+        model = model or default_model
     resolved_provider, resolved_model, query_embedding = embed_text(
         query, provider, model
     )

@@ -19,6 +19,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from hair_platform import crew_runtime, pool_registry, retention, vectorstore
 
 
@@ -414,6 +416,45 @@ def test_gc207_always_mode_also_augments_single_shot_execute_agent(client_and_co
 # ---------- (8) VectorDB Ollama 임베딩 지원 ----------
 
 
+def test_gc_embed_text_defaults_to_ollama_without_openai_api_key(monkeypatch):
+    """실측으로 발견한 버그(2026-10-26, "외부 자료 조사가" Agent가
+    대화창 `@멘션`에서 "Error code: 401 - ... Missing credentials"로
+    크래시) — `embed_text()`가 provider 생략 시 무조건 "openai"로
+    하드코딩돼 있어, Agent 자신의 LLM provider가 ollama라도 OPENAI_API_KEY
+    가 없으면 즉시 실패했다. 이제 키가 없으면 로컬 Ollama로 자동
+    전환해야 한다(이 파일의 "로컬/온프레미스 우선 원칙")."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    fake_resp = MagicMock()
+    fake_resp.json.return_value = {"embedding": [0.1, 0.2]}
+    fake_resp.raise_for_status.return_value = None
+
+    with patch("httpx.post", return_value=fake_resp) as post_mock:
+        provider, model, embedding = vectorstore.embed_text("텍스트")
+
+    assert provider == "ollama"
+    assert model == "mxbai-embed-large:latest"
+    post_mock.assert_called_once()
+
+
+def test_gc_embed_text_defaults_to_openai_when_api_key_present(monkeypatch):
+    """반대 사례 — OPENAI_API_KEY가 있으면 기존처럼 openai를 기본값으로
+    쓴다(하위 호환, 기존 "openai가 기본값" 가정을 쓰던 호출부가 안
+    깨진다)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    item = MagicMock()
+    item.embedding = [0.1, 0.2]
+    resp = MagicMock()
+    resp.data = [item]
+    fake_client = MagicMock()
+    fake_client.embeddings.create.return_value = resp
+
+    with patch("openai.OpenAI", return_value=fake_client):
+        provider, model, embedding = vectorstore.embed_text("텍스트")
+
+    assert provider == "openai"
+    assert model == "text-embedding-3-small"
+
+
 def test_gc208_embed_text_supports_ollama_via_local_http_api():
     fake_resp = MagicMock()
     fake_resp.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
@@ -425,12 +466,12 @@ def test_gc208_embed_text_supports_ollama_via_local_http_api():
         )
 
     assert provider == "ollama"
-    assert model == "nomic-embed-text"
+    assert model == "mxbai-embed-large:latest"
     assert embedding == [0.1, 0.2, 0.3]
     url = post_mock.call_args[0][0]
     assert url == "http://localhost:11434/api/embeddings"
     assert post_mock.call_args.kwargs["json"] == {
-        "model": "nomic-embed-text",
+        "model": "mxbai-embed-large:latest",
         "prompt": "테스트 텍스트",
     }
 
@@ -445,3 +486,124 @@ def test_gc209_embed_text_ollama_respects_base_url_env(monkeypatch):
         vectorstore.embed_text("텍스트", provider="ollama", model="mxbai-embed-large")
 
     assert post_mock.call_args[0][0] == "http://custom-host:11434/api/embeddings"
+
+
+# ---------- 임베딩 모델 설정(사용자 요청, 2026-10-26, "embedding 모델
+# 설정 기능을 구현해줘 (하드코딩 하지않도록)") ----------
+
+
+def test_gc_embedding_config_defaults_to_none_until_explicitly_set():
+    conn = __import__("sqlite3").connect(":memory:")
+    conn.row_factory = __import__("sqlite3").Row
+    from hair_platform import db
+
+    db.init_schema(conn)
+    assert vectorstore.get_embedding_config(conn) is None
+
+
+def test_gc_set_embedding_config_persists_and_overrides_autodetect(monkeypatch):
+    conn = __import__("sqlite3").connect(":memory:")
+    conn.row_factory = __import__("sqlite3").Row
+    from hair_platform import db
+
+    db.init_schema(conn)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    # 설정 전 — 자동판별(ollama) 결과를 쓴다.
+    provider, model = vectorstore.resolve_default_provider_and_model(conn)
+    assert provider == "ollama"
+
+    vectorstore.set_embedding_config(conn, 1, "openai", "text-embedding-3-large")
+    config = vectorstore.get_embedding_config(conn)
+    assert config == {"provider": "openai", "model": "text-embedding-3-large"}
+
+    # 설정 후 — OPENAI_API_KEY가 없어도(자동판별이면 ollama였을 상황)
+    # 명시적 설정이 우선한다.
+    provider, model = vectorstore.resolve_default_provider_and_model(conn)
+    assert (provider, model) == ("openai", "text-embedding-3-large")
+
+    # 재설정(ON CONFLICT UPDATE)도 덮어써야 한다.
+    vectorstore.set_embedding_config(conn, 1, "ollama", "mxbai-embed-large:latest")
+    assert vectorstore.get_embedding_config(conn) == {
+        "provider": "ollama",
+        "model": "mxbai-embed-large:latest",
+    }
+
+
+def test_gc_set_embedding_config_rejects_bad_input():
+    conn = __import__("sqlite3").connect(":memory:")
+    conn.row_factory = __import__("sqlite3").Row
+    from hair_platform import db
+
+    db.init_schema(conn)
+    with pytest.raises(ValueError):
+        vectorstore.set_embedding_config(conn, 1, "anthropic", "claude-something")
+    with pytest.raises(ValueError):
+        vectorstore.set_embedding_config(conn, 1, "openai", "  ")
+
+
+def test_gc_search_and_index_text_use_configured_embedding_without_explicit_args():
+    """`provider`/`model`을 안 넘기면 `embedding_config`를 따라야 한다 —
+    색인할 때와 검색할 때 서로 다른 기본값을 쓰면 매칭되는 청크가 하나도
+    없어 보이므로, 이 둘이 같은 해석 경로를 타는지가 핵심이다."""
+    conn = __import__("sqlite3").connect(":memory:")
+    conn.row_factory = __import__("sqlite3").Row
+    from hair_platform import db
+
+    db.init_schema(conn)
+    vectorstore.set_embedding_config(conn, 1, "ollama", "mxbai-embed-large:latest")
+
+    fake_resp = MagicMock()
+    fake_resp.json.return_value = {"embedding": [1.0, 0.0]}
+    fake_resp.raise_for_status.return_value = None
+
+    with patch("httpx.post", return_value=fake_resp) as post_mock:
+        vectorstore.index_text(conn, None, "과거 산출물 텍스트")
+        hits = vectorstore.search(conn, "질의")
+
+    assert len(hits) == 1
+    assert hits[0]["text"] == "과거 산출물 텍스트"
+    for call in post_mock.call_args_list:
+        assert call.kwargs["json"]["model"] == "mxbai-embed-large:latest"
+
+
+def test_gc_embedding_config_endpoints_rbac_and_roundtrip(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    assert client.get("/api/embedding-config").status_code == 403
+    assert (
+        client.put(
+            "/api/embedding-config", json={"provider": "ollama", "model": "x"}
+        ).status_code
+        == 403
+    )
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get("/api/embedding-config")
+    assert resp.status_code == 200
+    assert resp.json()["is_explicit"] is False  # 아직 설정 안 함 — 자동판별
+
+    resp = client.put(
+        "/api/embedding-config",
+        json={"provider": "ollama", "model": "mxbai-embed-large:latest"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = client.get("/api/embedding-config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {
+        "provider": "ollama",
+        "model": "mxbai-embed-large:latest",
+        "is_explicit": True,
+    }
+
+    resp = client.put(
+        "/api/embedding-config", json={"provider": "anthropic", "model": "x"}
+    )
+    assert resp.status_code == 422  # anthropic은 Literal["openai","ollama"] 밖
+
+    resp = client.put(
+        "/api/embedding-config", json={"provider": "openai", "model": "  "}
+    )
+    assert resp.status_code == 400  # 공백만 있는 모델명은 거부(set_embedding_config)

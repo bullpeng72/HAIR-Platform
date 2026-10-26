@@ -222,6 +222,22 @@ CREATE TABLE IF NOT EXISTS model_registry (
     UNIQUE(provider, name)
 );
 
+-- 사용자 요청(2026-10-26, "embedding 모델 설정 기능을 구현해줘 (하드코딩
+-- 하지않도록)") — `vectorstore.py`의 임베딩 provider/모델명이 지금까지
+-- `DEFAULT_EMBEDDING_MODELS` 코드 상수로 박혀 있어("mxbai-embed-large:
+-- latest로 맞춰줘"처럼 바꾸려면 매번 소스를 고쳐야 했다), admin이 직접
+-- 바꿀 수 있는 설정값으로 뺀다. 한 시스템에 임베딩 공간은 하나만 둬야
+-- 서로 다른 모델로 만든 벡터를 섞어 비교하지 않는다(vectorstore.py
+-- 자체 설계 원칙) — 그래서 Agent별 설정이 아니라 `id=1` 고정 단일
+-- 행(싱글턴)이다. 행이 아예 없으면(= 한 번도 설정 안 함) 기존 자동판별
+-- (OPENAI_API_KEY 유무 → 없으면 ollama)+하드코딩 기본 모델로 그대로
+-- 폴백한다(동작 안 바뀜, 설정하면 그게 우선).
+CREATE TABLE IF NOT EXISTS embedding_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    provider TEXT NOT NULL CHECK (provider IN ('openai', 'ollama')),
+    model TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agent_tool_links (
     agent_id INTEGER NOT NULL REFERENCES agent_pool(id),
     tool_pool_id INTEGER NOT NULL REFERENCES tool_pool(id),

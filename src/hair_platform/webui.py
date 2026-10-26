@@ -5887,7 +5887,10 @@ async function renderPipelines(content) {
 
 async function renderModelRegistry(content) {
   const isAdmin = ME.role === "admin";
-  const models = await api("GET", "/api/model-registry");
+  const [models, embeddingConfig] = await Promise.all([
+    api("GET", "/api/model-registry"),
+    api("GET", "/api/embedding-config"),
+  ]);
   const byProvider = (p) => models.filter(m => m.provider === p);
   const providerLabel = { anthropic: "Anthropic", openai: "OpenAI", ollama: "Ollama(로컬)" };
   const providerOptionsHtml = Object.keys(providerLabel)
@@ -5927,7 +5930,42 @@ async function renderModelRegistry(content) {
     providerTableHtml("anthropic") +
     providerTableHtml("openai") +
     providerTableHtml("ollama") +
+    "</section>" +
+    // 사용자 요청(2026-10-26, "embedding 모델 설정 기능을 구현해줘
+    // (하드코딩 하지않도록)") — VectorDB(rag 스킬)가 과거 산출물을
+    // 검색할 때 쓰는 임베딩 provider/모델. 위 "모델 레지스트리"(채팅
+    // 모델 자동완성 카탈로그, 여러 개 등록)와 달리 이건 "지금 시스템이
+    // 실제로 쓰는 단 하나의 설정값"이라 별도 카드로 둔다. Anthropic은
+    // 공개 임베딩 API가 없어 openai/ollama만 고를 수 있다.
+    '<section class="card"><h2>임베딩 모델 설정(VectorDB 검색용)</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>"rag" 스킬을 가진 Agent가 과거 산출물을 검색할 때 쓰는 임베딩 provider/모델입니다 — 채팅용 모델과는 별개입니다.</li>' +
+    '<li>서로 다른 모델로 만든 벡터는 비교하지 않으므로(의미 공간이 다름) 시스템 전체에 하나만 설정합니다. 바꾸면 그 이전에 다른 모델로 색인된 과거 산출물은 더 이상 검색되지 않습니다(다시 색인해야 함).</li>' +
+    '<li>설정한 적이 없으면 자동판별(OPENAI_API_KEY가 있으면 openai, 없으면 로컬 ollama) 결과를 보여줍니다 — 아래 폼으로 저장하면 그걸 명시적으로 고정합니다.</li>' +
+    '</ul>' +
+    '<p>' + (embeddingConfig.is_explicit ? '<b>설정됨</b>' : '<span class="muted">자동판별 중(아직 명시적으로 설정 안 함)</span>') +
+    ' — provider: <b>' + esc(embeddingConfig.provider) + '</b>, 모델: <b>' + esc(embeddingConfig.model) + '</b></p>' +
+    '<form class="inline" id="embedding-config-form">' +
+    '<select id="ec-provider">' +
+    '<option value="openai"' + (embeddingConfig.provider === "openai" ? " selected" : "") + '>OpenAI</option>' +
+    '<option value="ollama"' + (embeddingConfig.provider === "ollama" ? " selected" : "") + '>Ollama(로컬)</option>' +
+    '</select>' +
+    '<input id="ec-model" placeholder="모델명(예: mxbai-embed-large:latest)" value="' + escAttr(embeddingConfig.model) + '" style="flex:1;min-width:220px" required>' +
+    '<button type="submit" class="small primary">저장</button>' +
+    '</form>' +
     "</section>";
+
+  document.getElementById("embedding-config-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      await api("PUT", "/api/embedding-config", {
+        provider: document.getElementById("ec-provider").value,
+        model: document.getElementById("ec-model").value,
+      });
+      showMsg("global-msg", "임베딩 모델 설정을 저장했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
 
   document.getElementById("mr-fetch-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();

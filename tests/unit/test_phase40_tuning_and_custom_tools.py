@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
-from hair_platform import crew_runtime, pool_registry
+from hair_platform import agent_runtime, crew_runtime, pool_registry
 
 
 def _login(client, username, password):
@@ -443,6 +443,45 @@ def test_run_crew_uses_stored_persona_when_set_else_autogenerates(client_and_con
         conn, "프론트엔드 개발자", []
     )
     assert crew.tasks[1].expected_output == crew_runtime.DEFAULT_EXPECTED_OUTPUT
+
+
+def test_execute_agent_honors_stored_expected_output(client_and_conn):
+    """사용자 요청(2026-10-26, "프레젠테이션 자료 작성자의 최종 결과를
+    HTML 형태로 생성되도록 개선해줘") 재발 방지 — `agent_pool.
+    expected_output`은 지금까지 `crew_runtime.py`의 실제 Crew 실행
+    (Task.expected_output)에서만 반영되고, 대화창 `@멘션`/"LLM으로
+    도와줘"급 단발 호출(`agent_runtime.execute_agent()`)에서는 완전히
+    무시됐다 — admin이 persona 화면에서 저장한 형식 지시가 @멘션으로
+    부르면 전혀 안 먹혀 Crew 실행과 결과 형식이 달라지는 비일관이
+    있었다. 이제 단발 호출에서도 반영돼야 한다."""
+    client, conn = client_and_conn
+    agent_id = _make_active_agent(conn, "프레젠테이션 자료 작성자")
+    admin_id = _admin_id(conn)
+    agent_runtime.set_persona(
+        conn,
+        agent_id,
+        admin_id,
+        expected_output=(
+            "완전한 HTML 문서(<!DOCTYPE html>부터 </html>까지, 인라인 "
+            "<style>만 사용, 외부 리소스 참조 금지)로 작성하세요."
+        ),
+    )
+
+    with patch("hair_platform.llm.call_llm", return_value="<!DOCTYPE html>...") as llm_mock:
+        agent_runtime.execute_agent(
+            conn, agent_id, admin_id, "발표자료 만들어줘", provider="openai"
+        )
+
+    system_prompt = llm_mock.call_args[0][2]
+    assert "완전한 HTML 문서" in system_prompt
+
+    # 대조군 — expected_output을 설정 안 한 Agent는 기존처럼 영향이 없다.
+    other_id = _make_active_agent(conn, "다른 역할")
+    with patch("hair_platform.llm.call_llm", return_value="답변") as llm_mock2:
+        agent_runtime.execute_agent(
+            conn, other_id, admin_id, "아무거나", provider="openai"
+        )
+    assert "기대 산출물 형식" not in llm_mock2.call_args[0][2]
 
 
 def test_run_crew_expected_outputs_param_overrides_agent_default(client_and_conn):

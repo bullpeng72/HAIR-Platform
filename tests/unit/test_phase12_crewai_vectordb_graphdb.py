@@ -897,9 +897,11 @@ def test_gc83_vectorstore_index_and_search_ranks_by_cosine_similarity(client_and
         }
     )
     with patch("openai.OpenAI", return_value=fake_client):
-        vectorstore.index_text(conn, None, "파이썬 백엔드 설계 문서")
-        vectorstore.index_text(conn, None, "프론트엔드 UI 문서")
-        hits = vectorstore.search(conn, "백엔드 아키텍처가 궁금해", top_k=1)
+        vectorstore.index_text(conn, None, "파이썬 백엔드 설계 문서", provider="openai")
+        vectorstore.index_text(conn, None, "프론트엔드 UI 문서", provider="openai")
+        hits = vectorstore.search(
+            conn, "백엔드 아키텍처가 궁금해", top_k=1, provider="openai"
+        )
 
     assert len(hits) == 1
     assert hits[0]["text"] == "파이썬 백엔드 설계 문서"
@@ -920,7 +922,7 @@ def test_gc84_vectorstore_ignores_embeddings_from_different_model():
     conn.commit()
     fake_client = _fake_openai_embeddings({"query": [1.0, 0.0]})
     with patch("openai.OpenAI", return_value=fake_client):
-        hits = vectorstore.search(conn, "query")
+        hits = vectorstore.search(conn, "query", provider="openai")
     assert hits == []  # 다른 임베딩 모델의 벡터와는 비교하지 않는다
 
 
@@ -931,14 +933,27 @@ def test_gc85_embed_text_rejects_non_openai_provider():
 
 def test_gc87_truncate_for_embedding_leaves_short_text_untouched():
     short = "짧은 텍스트"
-    assert vectorstore._truncate_for_embedding(short) == short
+    assert vectorstore._truncate_for_embedding(short, "text-embedding-3-small") == short
 
 
 def test_gc87_truncate_for_embedding_caps_long_text_to_the_tail():
-    long_text = "가" * (vectorstore._MAX_EMBED_CHARS + 500)
-    truncated = vectorstore._truncate_for_embedding(long_text)
-    assert len(truncated) == vectorstore._MAX_EMBED_CHARS
-    assert truncated == long_text[-vectorstore._MAX_EMBED_CHARS :]
+    limit = vectorstore._MAX_EMBED_CHARS_BY_MODEL["text-embedding-3-small"]
+    long_text = "가" * (limit + 500)
+    truncated = vectorstore._truncate_for_embedding(long_text, "text-embedding-3-small")
+    assert len(truncated) == limit
+    assert truncated == long_text[-limit:]
+
+
+def test_gc87_truncate_for_embedding_uses_shorter_limit_for_mxbai():
+    """실측으로 발견(2026-10-26, "mxbai-embed-large:latest로 맞춰줘") —
+    mxbai-embed-large는 BERT 계열이라 컨텍스트가 512토큰뿐이다
+    (text-embedding-3-small/nomic-embed-text의 8192토큰 대비 16분의 1).
+    모델별로 다른 한도를 적용해야 한다."""
+    limit = vectorstore._MAX_EMBED_CHARS_BY_MODEL["mxbai-embed-large:latest"]
+    assert limit < vectorstore._MAX_EMBED_CHARS_BY_MODEL["text-embedding-3-small"]
+    long_text = "가" * (limit + 100)
+    truncated = vectorstore._truncate_for_embedding(long_text, "mxbai-embed-large:latest")
+    assert len(truncated) == limit
 
 
 def test_gc87_embed_text_sends_truncated_input_to_openai():
@@ -958,13 +973,14 @@ def test_gc87_embed_text_sends_truncated_input_to_openai():
     client = MagicMock()
     client.embeddings.create.side_effect = _create
 
-    huge_text = "질문입니다 " * 3000  # _MAX_EMBED_CHARS(6000)보다 한참 긺
-    assert len(huge_text) > vectorstore._MAX_EMBED_CHARS
+    limit = vectorstore._MAX_EMBED_CHARS_BY_MODEL["text-embedding-3-small"]
+    huge_text = "질문입니다 " * 3000  # limit(6000)보다 한참 긺
+    assert len(huge_text) > limit
     with patch("openai.OpenAI", return_value=client):
-        vectorstore.embed_text(huge_text)
+        vectorstore.embed_text(huge_text, provider="openai")
 
-    assert len(captured["input"]) == vectorstore._MAX_EMBED_CHARS
-    assert captured["input"] == huge_text[-vectorstore._MAX_EMBED_CHARS :]
+    assert len(captured["input"]) == limit
+    assert captured["input"] == huge_text[-limit:]
 
 
 # ---------- graphquery(GraphDB 관계분석 Agent) + 성과 데이터 경계 ----------
@@ -1214,6 +1230,50 @@ def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
         search_mock.assert_called_once()  # web_search(외부검색)도 같이 조회된다
         augmented_prompt = llm_mock.call_args[0][3]
         assert "원격근무 설명" in augmented_prompt
+
+
+def test_gc_retrieve_context_survives_vectordb_embedding_failure(client_and_conn):
+    """실측으로 재현한 크래시(2026-10-26, "외부 자료 조사가" Agent가
+    대화창 `@멘션`에서 "Error code: 401 - ... Missing credentials"로
+    전체 실행이 죽음) — `vectorstore.search()`(임베딩 API 호출, OpenAI
+    키 누락·quota·일시 장애로 실패할 수 있음)가 예외를 올려도 Agent의
+    나머지 응답(여기선 web_search 결과)까지 전부 날아가면 안 된다 —
+    websearch.py가 이미 지키는 "검색 실패가 전체 실행을 막으면 안
+    된다" 원칙을 vectordb에도 적용한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('외부 자료 조사가', '[\"외부검색\", \"rag\"]', 'active')"
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    with (
+        patch(
+            "hair_platform.vectorstore.search",
+            side_effect=RuntimeError(
+                "Error code: 401 - {'error': {'message': 'Your API key has "
+                "been invalidated.'}}"
+            ),
+        ),
+        patch(
+            "hair_platform.websearch.search",
+            return_value=[
+                {"title": "원격근무", "snippet": "원격근무 설명", "url": "https://x"}
+            ],
+        ),
+        patch("hair_platform.llm.call_llm", return_value="답변") as llm_mock,
+    ):
+        output = agent_runtime.execute_agent(
+            conn, agent_id, admin_id, "원격근무 정책이 뭐야?", provider="openai"
+        )
+
+    assert output == "답변"  # 전체 실행이 죽지 않고 끝까지 완료된다
+    augmented_prompt = llm_mock.call_args[0][3]
+    assert "원격근무 설명" in augmented_prompt  # web_search 결과는 그대로 살아있다
 
 
 # ---------- index-knowledge ----------
