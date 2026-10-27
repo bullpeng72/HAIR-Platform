@@ -135,7 +135,9 @@ def test_gc_throttle_enforces_minimum_interval_between_real_calls():
     # 분씩 잠들 위험이 있다 — 반드시 원래 값(0.0, 모듈 로드 시 기본값)
     # 으로 되돌린다.
     try:
-        with patch("hair_platform.websearch.time.monotonic", side_effect=fake_monotonic):
+        with patch(
+            "hair_platform.websearch.time.monotonic", side_effect=fake_monotonic
+        ):
             websearch._last_request_at = 0.0  # 이전 테스트의 잔여 상태 제거
             with patch("hair_platform.websearch.time.sleep", side_effect=fake_sleep):
                 websearch._throttle()  # 마지막 호출 이후 한참 지남 — 안 기다림
@@ -155,6 +157,92 @@ def test_gc194_as_crewai_tool_wraps_context_for_prompt():
     tool = websearch.as_crewai_tool(conn=None, top_k=2)
     with patch(
         "hair_platform.websearch.context_for_prompt", return_value="검색 결과 텍스트"
+    ) as ctx_mock:
+        result = tool.func("질문 내용")
+    ctx_mock.assert_called_once_with("질문 내용", top_k=2)
+    assert result == "검색 결과 텍스트"
+
+
+# ---------- Tavily 실시간 웹 검색(사용자 요청, 2026-10-26, "대화에서
+# 외부 검색이 가능한 방법을 제안해줘") ----------
+# "일반 웹 검색(Parallel Search)"이 MCP(`kind='mcp_remote'`)라 CrewAI
+# Agent 루프 없는 대화창 경로에서 구조적으로 호출이 안 되던 갭을
+# 메운다 — Wikipedia와 같은 "순수 HTTP 호출 네이티브 함수" 모양으로
+# 만들어 대화창 정적 주입·Crew 실행 양쪽에서 동일하게 동작시킨다.
+
+
+def test_gc195_tavily_context_for_prompt_formats_results_and_answer(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    payload = {
+        "answer": "T3Q는 데이터 분석 솔루션을 제공하는 한국 기업입니다.",
+        "results": [
+            {
+                "title": "T3Q 공식 홈페이지",
+                "content": "빅데이터 분석 플랫폼",
+                "url": "https://t3q.example",
+            },
+        ],
+    }
+    with patch("httpx.post", return_value=_mock_response(payload)) as post_mock:
+        text = websearch.tavily_context_for_prompt("T3Q 한국 기업", top_k=3)
+
+    assert post_mock.call_args.kwargs["json"]["api_key"] == "test-key"
+    assert post_mock.call_args.kwargs["json"]["query"] == "T3Q 한국 기업"
+    assert "요약: T3Q는 데이터 분석 솔루션을 제공하는 한국 기업입니다." in text
+    assert "실시간 웹 검색 결과(Tavily)" in text
+    assert "T3Q 공식 홈페이지: 빅데이터 분석 플랫폼 (https://t3q.example)" in text
+
+
+def test_gc196_tavily_context_for_prompt_reports_no_results_without_answer(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    with patch("httpx.post", return_value=_mock_response({"results": []})):
+        text = websearch.tavily_context_for_prompt("아무거나")
+    assert "찾지 못했습니다" in text
+
+
+def test_gc197_tavily_context_for_prompt_distinguishes_missing_api_key(monkeypatch):
+    """API 키가 아예 없으면 네트워크 호출을 시도조차 하지 않고 바로
+    실패시켜야 한다 — 설정 실수를 명확히 드러낸다."""
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    with patch("httpx.post") as post_mock:
+        text = websearch.tavily_context_for_prompt("질문")
+    post_mock.assert_not_called()
+    assert "검색 실패" in text
+    assert "TAVILY_API_KEY" in text
+
+
+def test_gc198_tavily_context_for_prompt_distinguishes_search_failure_from_empty_results(
+    monkeypatch,
+):
+    """Wikipedia와 같은 "실패≠0건" 구분 — Tavily API 호출 자체가
+    실패했을 때와 정상 응답에 결과가 0건일 때를 다른 문구로 알린다."""
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    import httpx
+
+    with patch("httpx.post", return_value=_mock_response({}, status_ok=False)):
+        text = websearch.tavily_context_for_prompt("질문")
+    assert "검색 실패" in text
+    assert "찾지 못했습니다" not in text
+
+    with patch("httpx.post", side_effect=httpx.ConnectError("no network")):
+        text = websearch.tavily_context_for_prompt("질문")
+    assert "검색 실패" in text
+
+    with patch("httpx.post", return_value=_mock_response({"results": []})):
+        text = websearch.tavily_context_for_prompt("질문")
+    assert "찾지 못했습니다" in text
+    assert "검색 실패" not in text
+
+
+def test_gc199_as_tavily_crewai_tool_has_ascii_name_and_wraps_context_for_prompt():
+    """`as_crewai_tool()`(Wikipedia)과 같은 ASCII 함수명 제약 — 한글만
+    있는 이름은 CrewAI의 `sanitize_tool_name()`이 빈 문자열로 만들어
+    즉시 크래시하므로, LLM에 전달되는 함수명은 ASCII여야 한다."""
+    tool = websearch.as_tavily_crewai_tool(conn=None, top_k=2)
+    assert tool.name == "realtime_web_search"
+    with patch(
+        "hair_platform.websearch.tavily_context_for_prompt",
+        return_value="검색 결과 텍스트",
     ) as ctx_mock:
         result = tool.func("질문 내용")
     ctx_mock.assert_called_once_with("질문 내용", top_k=2)

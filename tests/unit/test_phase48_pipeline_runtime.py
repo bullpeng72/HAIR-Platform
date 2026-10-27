@@ -16,7 +16,8 @@ from unittest.mock import patch
 
 import pytest
 
-from hair_platform import db, pipeline_runtime as pr
+from hair_platform import db
+from hair_platform import pipeline_runtime as pr
 from hair_platform.app import create_app
 from hair_platform.auth import Role, create_user
 
@@ -41,14 +42,31 @@ def _make_task(conn):
 
 
 def _good_run_crew(gate_scores=None, tcr=90.0):
-    gate_scores = gate_scores or {"A": {"score": 0.9, "passed": True}, "B": {"not_measured": True}}
+    gate_scores = gate_scores or {
+        "A": {"score": 0.9, "passed": True},
+        "B": {"not_measured": True},
+    }
 
-    def _fn(conn, agent_ids, task_descriptions, actor_id, process="sequential",
-            provider=None, model=None, manager_agent_id=None, expected_outputs=None):
+    def _fn(
+        conn,
+        agent_ids,
+        task_descriptions,
+        actor_id,
+        process="sequential",
+        provider=None,
+        model=None,
+        manager_agent_id=None,
+        expected_outputs=None,
+    ):
         return {
             "final_output": "최종산출물",
             "agents": [
-                {"agent_id": aid, "role_name": "role", "name": None, "output": f"output-{aid}"}
+                {
+                    "agent_id": aid,
+                    "role_name": "role",
+                    "name": None,
+                    "output": f"output-{aid}",
+                }
                 for aid in agent_ids
             ],
             "gate_scores": gate_scores,
@@ -70,14 +88,35 @@ def test_create_template_and_add_stages_round_trip():
     db.init_schema(conn)
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
 
-    tid = pr.create_pipeline_template(conn, admin_id, "테스트 파이프라인", "설명", "software_dev")
-    s1 = pr.add_stage(conn, admin_id, tid, "요구분석", "single", [("요구사항 분석가", "")],
-                       requires_human_approval=True)
-    s2 = pr.add_stage(conn, admin_id, tid, "설계", "sequential_relay",
-                       [("AA", "AA 역할"), ("DA", "DA 역할")])
-    s3 = pr.add_stage(conn, admin_id, tid, "구현", "parallel_delegated",
-                       [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")],
-                       lead_role_name="개발 계획 수립가")
+    tid = pr.create_pipeline_template(
+        conn, admin_id, "테스트 파이프라인", "설명", "software_dev"
+    )
+    s1 = pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "요구분석",
+        "single",
+        [("요구사항 분석가", "")],
+        requires_human_approval=True,
+    )
+    s2 = pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "설계",
+        "sequential_relay",
+        [("AA", "AA 역할"), ("DA", "DA 역할")],
+    )
+    s3 = pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "구현",
+        "parallel_delegated",
+        [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")],
+        lead_role_name="개발 계획 수립가",
+    )
 
     tpl = pr.get_pipeline_template(conn, tid)
     assert [s["seq_order"] for s in tpl["stages"]] == [1, 2, 3]
@@ -88,8 +127,18 @@ def test_create_template_and_add_stages_round_trip():
     # 역할 1개 제약(단독), 리드 포함 2개 이상 제약(병행 위임)
     with pytest.raises(ValueError, match="single_mode_requires_exactly_one_agent"):
         pr.add_stage(conn, admin_id, tid, "x", "single", [("a", ""), ("b", "")])
-    with pytest.raises(ValueError, match="parallel_delegated_requires_at_least_one_coworker"):
-        pr.add_stage(conn, admin_id, tid, "y", "parallel_delegated", [("a", "")], lead_role_name="a")
+    with pytest.raises(
+        ValueError, match="parallel_delegated_requires_at_least_one_coworker"
+    ):
+        pr.add_stage(
+            conn,
+            admin_id,
+            tid,
+            "y",
+            "parallel_delegated",
+            [("a", "")],
+            lead_role_name="a",
+        )
 
     pr.reorder_stage(conn, admin_id, s2, "down")
     tpl2 = pr.get_pipeline_template(conn, tid)
@@ -99,7 +148,10 @@ def test_create_template_and_add_stages_round_trip():
     assert [s["name"] for s in tpl3["stages"]] == ["요구분석", "설계", "구현"]
 
     pr.update_stage(conn, admin_id, s1, instructions="갱신된 지시문")
-    assert pr.get_pipeline_template(conn, tid)["stages"][0]["instructions"] == "갱신된 지시문"
+    assert (
+        pr.get_pipeline_template(conn, tid)["stages"][0]["instructions"]
+        == "갱신된 지시문"
+    )
 
     pr.delete_stage(conn, admin_id, s3)
     assert len(pr.get_pipeline_template(conn, tid)["stages"]) == 2
@@ -112,14 +164,23 @@ def test_default_software_dev_pipeline_is_seeded_idempotently():
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     db.init_schema(conn)  # 재시드해도 중복 안 됨
-    templates = [t for t in pr.list_pipeline_templates(conn) if t["name"] == "소프트웨어 개발 파이프라인"]
+    templates = [
+        t
+        for t in pr.list_pipeline_templates(conn)
+        if t["name"] == "소프트웨어 개발 파이프라인"
+    ]
     assert len(templates) == 1
     tpl = pr.get_pipeline_template(conn, templates[0]["id"])
     assert len(tpl["stages"]) == 7
     modes = [s["mode"] for s in tpl["stages"]]
     assert modes == [
-        "single", "sequential_relay", "single", "parallel_delegated",
-        "single", "sequential_relay", "single",
+        "single",
+        "sequential_relay",
+        "single",
+        "parallel_delegated",
+        "single",
+        "sequential_relay",
+        "single",
     ]
     assert tpl["stages"][0]["requires_human_approval"] is True
     assert all(not s["requires_human_approval"] for s in tpl["stages"][1:])
@@ -140,8 +201,15 @@ def test_single_mode_stage_requiring_approval_pauses_run():
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p1", "", "x")
-    pr.add_stage(conn, admin_id, tid, "s1", "single", [("요구사항 분석가", "")],
-                 requires_human_approval=True)
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "s1",
+        "single",
+        [("요구사항 분석가", "")],
+        requires_human_approval=True,
+    )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
         run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
@@ -169,20 +237,57 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p2", "", "x")
-    pr.add_stage(conn, admin_id, tid, "설계", "sequential_relay",
-                 [("AA", "AA 역할"), ("DA", "DA 역할")])
-    pr.add_stage(conn, admin_id, tid, "구현", "parallel_delegated",
-                 [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")],
-                 lead_role_name="개발 계획 수립가")
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "설계",
+        "sequential_relay",
+        [("AA", "AA 역할"), ("DA", "DA 역할")],
+    )
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "구현",
+        "parallel_delegated",
+        [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")],
+        lead_role_name="개발 계획 수립가",
+    )
 
     calls = []
 
-    def _tracking_run_crew(conn, agent_ids, task_descriptions, actor_id, process="sequential",
-                            provider=None, model=None, manager_agent_id=None, expected_outputs=None):
-        calls.append({"agent_ids": agent_ids, "process": process, "manager_agent_id": manager_agent_id,
-                      "descriptions": task_descriptions, "expected_outputs": expected_outputs})
-        return _good_run_crew()(conn, agent_ids, task_descriptions, actor_id, process, provider,
-                                 model, manager_agent_id, expected_outputs)
+    def _tracking_run_crew(
+        conn,
+        agent_ids,
+        task_descriptions,
+        actor_id,
+        process="sequential",
+        provider=None,
+        model=None,
+        manager_agent_id=None,
+        expected_outputs=None,
+    ):
+        calls.append(
+            {
+                "agent_ids": agent_ids,
+                "process": process,
+                "manager_agent_id": manager_agent_id,
+                "descriptions": task_descriptions,
+                "expected_outputs": expected_outputs,
+            }
+        )
+        return _good_run_crew()(
+            conn,
+            agent_ids,
+            task_descriptions,
+            actor_id,
+            process,
+            provider,
+            model,
+            manager_agent_id,
+            expected_outputs,
+        )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew):
         run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
@@ -194,13 +299,17 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
     assert calls[0]["process"] == "sequential"
     assert calls[0]["manager_agent_id"] is None
     assert calls[1]["process"] == "hierarchical"
-    assert calls[1]["manager_agent_id"] == calls[1]["agent_ids"][0]  # 리드가 매니저로 지정됨
+    assert (
+        calls[1]["manager_agent_id"] == calls[1]["agent_ids"][0]
+    )  # 리드가 매니저로 지정됨
 
     deliverables_rows = conn.execute(
         "SELECT * FROM deliverables WHERE task_id=?", (task_id,)
     ).fetchall()
     assert len(deliverables_rows) == 2
-    assert all(d["status"] == "approved" for d in deliverables_rows)  # 승인 불필요 단계는 자동 승인
+    assert all(
+        d["status"] == "approved" for d in deliverables_rows
+    )  # 승인 불필요 단계는 자동 승인
 
 
 def test_is_primary_deliverable_round_trips_through_add_stage_and_template():
@@ -213,8 +322,15 @@ def test_is_primary_deliverable_round_trips_through_add_stage_and_template():
 
     tid = pr.create_pipeline_template(conn, admin_id, "p-primary", "", "x")
     s1 = pr.add_stage(conn, admin_id, tid, "설계", "single", [("AA", "")])
-    s2 = pr.add_stage(conn, admin_id, tid, "구현", "single", [("백엔드 개발자", "")],
-                       is_primary_deliverable=True)
+    s2 = pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "구현",
+        "single",
+        [("백엔드 개발자", "")],
+        is_primary_deliverable=True,
+    )
 
     tpl = pr.get_pipeline_template(conn, tid)
     assert tpl["stages"][0]["is_primary_deliverable"] is False
@@ -239,9 +355,18 @@ def test_primary_deliverable_stage_output_identifiable_via_list_pipeline_runs_fo
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p3", "", "x")
-    pr.add_stage(conn, admin_id, tid, "구현", "single", [("백엔드 개발자", "")],
-                 is_primary_deliverable=True)
-    pr.add_stage(conn, admin_id, tid, "품질 관리 최종 판정", "single", [("코드 검증가", "")])
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "구현",
+        "single",
+        [("백엔드 개발자", "")],
+        is_primary_deliverable=True,
+    )
+    pr.add_stage(
+        conn, admin_id, tid, "품질 관리 최종 판정", "single", [("코드 검증가", "")]
+    )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
         run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
@@ -274,13 +399,21 @@ def test_expected_output_round_trips_through_add_stage_and_update_stage():
     tid = pr.create_pipeline_template(conn, admin_id, "p-expected-output", "", "x")
     s1 = pr.add_stage(conn, admin_id, tid, "설계", "single", [("AA", "")])
     s2 = pr.add_stage(
-        conn, admin_id, tid, "QA 기능테스트", "single", [("QA", "")],
+        conn,
+        admin_id,
+        tid,
+        "QA 기능테스트",
+        "single",
+        [("QA", "")],
         expected_output="실제로 실행 가능한 테스트 코드와 통과/실패 리포트",
     )
 
     tpl = pr.get_pipeline_template(conn, tid)
     assert tpl["stages"][0]["expected_output"] == ""  # 기본값
-    assert tpl["stages"][1]["expected_output"] == "실제로 실행 가능한 테스트 코드와 통과/실패 리포트"
+    assert (
+        tpl["stages"][1]["expected_output"]
+        == "실제로 실행 가능한 테스트 코드와 통과/실패 리포트"
+    )
 
     pr.update_stage(conn, admin_id, s1, expected_output="설계 문서(ERD/API 스펙)")
     tpl2 = pr.get_pipeline_template(conn, tid)
@@ -304,18 +437,40 @@ def test_execute_stage_attempt_passes_stage_expected_output_to_run_crew():
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p-eo-passthrough", "", "x")
     pr.add_stage(
-        conn, admin_id, tid, "구현", "sequential_relay",
+        conn,
+        admin_id,
+        tid,
+        "구현",
+        "sequential_relay",
         [("AA", ""), ("백엔드 개발자", "")],
         expected_output="동작하는 코드 한 벌",
     )
 
     calls = []
 
-    def _tracking(conn, agent_ids, task_descriptions, actor_id, process="sequential",
-                  provider=None, model=None, manager_agent_id=None, expected_outputs=None):
+    def _tracking(
+        conn,
+        agent_ids,
+        task_descriptions,
+        actor_id,
+        process="sequential",
+        provider=None,
+        model=None,
+        manager_agent_id=None,
+        expected_outputs=None,
+    ):
         calls.append(expected_outputs)
-        return _good_run_crew()(conn, agent_ids, task_descriptions, actor_id, process,
-                                 provider, model, manager_agent_id, expected_outputs)
+        return _good_run_crew()(
+            conn,
+            agent_ids,
+            task_descriptions,
+            actor_id,
+            process,
+            provider,
+            model,
+            manager_agent_id,
+            expected_outputs,
+        )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking):
         run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
@@ -331,18 +486,42 @@ def test_gate_failure_retries_with_feedback_then_escalates():
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p3", "", "x")
-    pr.add_stage(conn, admin_id, tid, "코드검증", "single", [("코드 검증가", "")],
-                 max_retry=2, min_gate_pass_ratio=0.9)
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "코드검증",
+        "single",
+        [("코드 검증가", "")],
+        max_retry=2,
+        min_gate_pass_ratio=0.9,
+    )
 
     bad_gate = {"A": {"score": 0.1, "passed": False}}
     descriptions_seen = []
 
-    def _bad_run_crew(conn, agent_ids, task_descriptions, actor_id, process="sequential",
-                       provider=None, model=None, manager_agent_id=None, expected_outputs=None):
+    def _bad_run_crew(
+        conn,
+        agent_ids,
+        task_descriptions,
+        actor_id,
+        process="sequential",
+        provider=None,
+        model=None,
+        manager_agent_id=None,
+        expected_outputs=None,
+    ):
         descriptions_seen.append(task_descriptions[0])
         return _good_run_crew(gate_scores=bad_gate, tcr=10.0)(
-            conn, agent_ids, task_descriptions, actor_id, process, provider, model,
-            manager_agent_id, expected_outputs,
+            conn,
+            agent_ids,
+            task_descriptions,
+            actor_id,
+            process,
+            provider,
+            model,
+            manager_agent_id,
+            expected_outputs,
         )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_bad_run_crew):
@@ -355,15 +534,20 @@ def test_gate_failure_retries_with_feedback_then_escalates():
     run = conn.execute("SELECT * FROM pipeline_runs WHERE id=?", (run_id,)).fetchone()
     assert run["status"] == "paused_for_approval"
     stages = conn.execute(
-        "SELECT * FROM pipeline_run_stages WHERE pipeline_run_id=? ORDER BY attempt", (run_id,)
+        "SELECT * FROM pipeline_run_stages WHERE pipeline_run_id=? ORDER BY attempt",
+        (run_id,),
     ).fetchall()
     assert [s["status"] for s in stages] == ["failed_retrying", "escalated"]
-    approval = conn.execute("SELECT * FROM approvals WHERE subject_type='pipeline_run_stage'").fetchone()
+    approval = conn.execute(
+        "SELECT * FROM approvals WHERE subject_type='pipeline_run_stage'"
+    ).fetchone()
     assert approval["subject_id"] == stages[-1]["id"]
 
     # 반려(재시도 소진) → run 완전 실패
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_bad_run_crew):
-        pr.resolve_stage_decision(conn, admin_id, approval["subject_id"], approved=False)
+        pr.resolve_stage_decision(
+            conn, admin_id, approval["subject_id"], approved=False
+        )
     run = conn.execute("SELECT * FROM pipeline_runs WHERE id=?", (run_id,)).fetchone()
     assert run["status"] == "failed"
 
@@ -374,8 +558,15 @@ def test_resolve_stage_decision_approve_advances_to_next_stage():
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p4", "", "x")
-    pr.add_stage(conn, admin_id, tid, "s1", "single", [("요구사항 분석가", "")],
-                 requires_human_approval=True)
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "s1",
+        "single",
+        [("요구사항 분석가", "")],
+        requires_human_approval=True,
+    )
     pr.add_stage(conn, admin_id, tid, "s2", "single", [("AA", "")])
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
@@ -391,7 +582,9 @@ def test_resolve_stage_decision_approve_advances_to_next_stage():
             conn, admin_id, approval["subject_id"], approved=True
         )
         assert returned_run_id == run_id
-        run = conn.execute("SELECT * FROM pipeline_runs WHERE id=?", (run_id,)).fetchone()
+        run = conn.execute(
+            "SELECT * FROM pipeline_runs WHERE id=?", (run_id,)
+        ).fetchone()
         assert run["status"] == "running"
         assert run["current_stage_seq"] == 2
         # 실측 버그(2026-10-19, "내게 필요한 조치"에 같은 업무가 중복
@@ -416,8 +609,16 @@ def test_resolve_stage_decision_reject_also_rejects_the_deliverable():
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p5", "", "x")
-    pr.add_stage(conn, admin_id, tid, "s1", "single", [("요구사항 분석가", "")],
-                 requires_human_approval=True, max_retry=0)
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "s1",
+        "single",
+        [("요구사항 분석가", "")],
+        requires_human_approval=True,
+        max_retry=0,
+    )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
         run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
@@ -428,7 +629,9 @@ def test_resolve_stage_decision_reject_also_rejects_the_deliverable():
         rejected_run_stage = conn.execute(
             "SELECT * FROM pipeline_run_stages WHERE id=?", (approval["subject_id"],)
         ).fetchone()
-        pr.resolve_stage_decision(conn, admin_id, approval["subject_id"], approved=False)
+        pr.resolve_stage_decision(
+            conn, admin_id, approval["subject_id"], approved=False
+        )
 
     d = conn.execute(
         "SELECT status FROM deliverables WHERE id=?",
@@ -449,24 +652,40 @@ def test_pipeline_builder_http_endpoints_round_trip():
 
     with TestClient(app) as client:
         _login(client)
-        r = client.post("/api/pipeline-templates", json={
-            "name": "HTTP 테스트 파이프라인", "description": "d", "domain": "software_dev",
-        })
+        r = client.post(
+            "/api/pipeline-templates",
+            json={
+                "name": "HTTP 테스트 파이프라인",
+                "description": "d",
+                "domain": "software_dev",
+            },
+        )
         assert r.status_code == 201, r.text
         template_id = r.json()["id"]
 
-        r = client.post(f"/api/pipeline-templates/{template_id}/stages", json={
-            "name": "요구분석", "mode": "single",
-            "agents": [{"role_name": "요구사항 분석가", "instructions": ""}],
-            "requires_human_approval": True,
-        })
+        r = client.post(
+            f"/api/pipeline-templates/{template_id}/stages",
+            json={
+                "name": "요구분석",
+                "mode": "single",
+                "agents": [{"role_name": "요구사항 분석가", "instructions": ""}],
+                "requires_human_approval": True,
+            },
+        )
         assert r.status_code == 201, r.text
         stage1_id = r.json()["id"]
 
-        r = client.post(f"/api/pipeline-templates/{template_id}/stages", json={
-            "name": "설계", "mode": "sequential_relay",
-            "agents": [{"role_name": "AA", "instructions": "a"}, {"role_name": "DA", "instructions": "b"}],
-        })
+        r = client.post(
+            f"/api/pipeline-templates/{template_id}/stages",
+            json={
+                "name": "설계",
+                "mode": "sequential_relay",
+                "agents": [
+                    {"role_name": "AA", "instructions": "a"},
+                    {"role_name": "DA", "instructions": "b"},
+                ],
+            },
+        )
         assert r.status_code == 201, r.text
 
         r = client.get(f"/api/pipeline-templates/{template_id}")
@@ -484,8 +703,10 @@ def test_pipeline_builder_http_endpoints_round_trip():
 
         task_id = _make_task(conn)
         with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
-            r = client.post(f"/api/tasks/{task_id}/execute-pipeline",
-                             json={"pipeline_template_id": template_id})
+            r = client.post(
+                f"/api/tasks/{task_id}/execute-pipeline",
+                json={"pipeline_template_id": template_id},
+            )
             assert r.status_code == 202, r.text
             run_id = r.json()["run_id"]
 
@@ -499,7 +720,10 @@ def test_pipeline_builder_http_endpoints_round_trip():
         # 응답과 같은 요청 안에서 동기적으로 실행한다.
         assert runs[0]["status"] == "paused_for_approval"
         statuses = [sr["status"] for sr in runs[0]["stage_results"]]
-        assert statuses == ["passed", "passed"]  # 1단계 통과 + 2단계(승인 대상) 통과 기록
+        assert statuses == [
+            "passed",
+            "passed",
+        ]  # 1단계 통과 + 2단계(승인 대상) 통과 기록
 
         # 자기 승인 방지(decide_approval의 self-approval 차단과 같은
         # 원칙) — 파이프라인을 실행시킨 admin1 본인은 이 결재함에서

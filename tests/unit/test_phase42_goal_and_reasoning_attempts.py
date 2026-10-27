@@ -33,7 +33,9 @@ def _make_active_agent(conn, role_name, skill_tags):
 
 
 def _admin_id(conn):
-    return conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()["id"]
+    return conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()[
+        "id"
+    ]
 
 
 def _crew_output(raw, task_raws):
@@ -51,7 +53,9 @@ def _crew_output(raw, task_raws):
 
 
 def test_agent_goal_mentions_skills_and_completion_discipline():
-    goal = crew_runtime._agent_goal("스펙 작성자", ["spec-driven-artifacts", "docs-style-guide"])
+    goal = crew_runtime._agent_goal(
+        "스펙 작성자", ["spec-driven-artifacts", "docs-style-guide"]
+    )
     assert "spec-driven-artifacts" in goal
     assert "docs-style-guide" in goal
     assert "완료 기준" in goal
@@ -60,7 +64,10 @@ def test_agent_goal_mentions_skills_and_completion_discipline():
 
 def test_agent_goal_unchanged_when_no_skills():
     goal = crew_runtime._agent_goal("개발자", [])
-    assert goal == "'개발자' 역할로서 주어진 업무를 실무에 바로 쓸 수 있는 수준으로 완수한다."
+    assert (
+        goal
+        == "'개발자' 역할로서 주어진 업무를 실무에 바로 쓸 수 있는 수준으로 완수한다."
+    )
 
 
 def test_agent_goal_differs_from_backstory_content(client_and_conn):
@@ -70,7 +77,12 @@ def test_agent_goal_differs_from_backstory_content(client_and_conn):
     from hair_platform import pool_registry
 
     pool_registry.create_skill(
-        conn, 1, "절차스킬", "이 역할은 산출물 제출 전 체크리스트를 확인한다.", [], "none"
+        conn,
+        1,
+        "절차스킬",
+        "이 역할은 산출물 제출 전 체크리스트를 확인한다.",
+        [],
+        "none",
     )
     goal = crew_runtime._agent_goal("개발자", ["절차스킬"])
     backstory = crew_runtime._agent_backstory(conn, "개발자", ["절차스킬"])
@@ -89,9 +101,7 @@ def test_run_crew_passes_max_reasoning_attempts_to_crewai_agent(client_and_conn)
         (json.dumps({"reasoning": True, "max_reasoning_attempts": 2}), agent_id),
     )
     conn.commit()
-    _resp = client.post(
-        "/login", json={"username": "admin1", "password": "adminpass"}
-    )
+    _resp = client.post("/login", json={"username": "admin1", "password": "adminpass"})
     assert _resp.status_code == 200
 
     with patch("crewai.Crew.kickoff", return_value=_crew_output("결과", ["결과"])):

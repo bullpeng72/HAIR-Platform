@@ -14,7 +14,7 @@ Task 종속 대화 흡수 + Brief 승격 공존), 단계형 개발 파이프라�
 (Gate A-G 기준 자동 재시도/에스컬레이션, BMAD-METHOD식 계획 승인
 1회 + 최소 HITL), Agent별 LLM 모델/설정 최적화 추천(admin), **통합
 CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
-쓸 수 있다. `pytest` 569건 통과, API 엔드포인트 155개. 개념·아키텍처
+쓸 수 있다. `pytest` 586건 통과, API 엔드포인트 157개. 개념·아키텍처
 전체 설명은
 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은 `git log`
 (커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를 참고.
@@ -64,9 +64,11 @@ CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
 - 실제 `crewai` 패키지 연동(`crew_runtime.py`) — sequential/hierarchical
   프로세스, `allow_delegation`, 실제 위임(delegation) 관계를 이벤트로
   캡처해 협업 관계 다이어그램(SVG)으로 시각화
-- VectorDB(과거 산출물 검색)·GraphDB(조직 관계 질의)·Wikipedia(외부
-  일반 지식)·Parallel AI(일반 웹검색, MCP)를 전부 CrewAI Tool로 노출해
-  Agent가 필요 여부를 스스로 판단해 호출
+- VectorDB(과거 산출물 검색)·GraphDB(조직 관계 질의)·Tavily(실시간
+  웹검색, 대화창·Crew 양쪽 동작)·Parallel AI(일반 웹검색, MCP, Crew
+  전용)를 전부 CrewAI Tool로 노출해 Agent가 필요 여부를 스스로 판단해
+  호출(Wikipedia 검색은 이 배포 환경 IP가 지속 차단돼 있어 기본
+  시드에서 뺐다 — `websearch.py`에 코드는 남아 있음)
 - MCP(stdio/remote) 외부 도구를 Agent별로 연결 가능
 - 대화창·AI 에이전트 관리·지식 자료실 세 곳에서 로컬 파일(.md/.pdf/
   .html) 업로드 또는 텍스트 직접 입력으로 VectorDB에 즉시 색인
@@ -106,8 +108,13 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest tests/ -q        # 골든셋 569건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pip install -e ".[dev,all]"
+# `[dev]`만 설치하면 `tests/unit`의 CrewAI 연동 테스트 9개가 테스트
+# 실행 시점에 `ModuleNotFoundError`로 깨진다(2026-10-27 패키징 점검
+# 발견 — `test_documents.py`만 `pytest.importorskip()`로 이 문제를
+# 스스로 막고 있었다). `all`(= crewai+mcp+llm+documents 묶음, pyproject.toml
+# 참고)까지 같이 설치해야 아래 골든셋이 전부 오프라인으로 깨끗하게 통과한다.
+pytest tests/ -q        # 골든셋 586건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -145,7 +152,7 @@ pip install -e ".[mcp]"
 실제 LLM 연동을 쓰려면(Anthropic·OpenAI·Ollama 중 선택):
 
 ```bash
-pip install -e ".[llm]"                    # anthropic·openai·httpx SDK 설치
+pip install -e ".[llm]"                    # anthropic·openai SDK 설치(httpx는 기본 의존성에 포함)
 
 # 방법 A — 프로젝트 루트에 .env 파일(git에 커밋되지 않음, .gitignore 처리됨):
 #   ANTHROPIC_API_KEY=...
@@ -173,6 +180,13 @@ VectorDB에 색인하려면(`.md`/`.txt`는 추가 설치 없이 바로 동작):
 pip install -e ".[documents]"              # pypdf·beautifulsoup4 설치
 ```
 
+"실시간웹검색" 스킬(Tavily, 대화창·Crew 실행 양쪽에서 동작하는 실시간
+웹 검색)을 쓰려면 `.env`에 키를 추가:
+
+```bash
+#   TAVILY_API_KEY=...                       # https://tavily.com 무료 발급
+```
+
 Web UI 실행(부트스트랩으로 만든 ADMIN 계정으로 로그인):
 
 ```bash
@@ -197,7 +211,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(155개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(157개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   approvals.py       # 다단계 결재라인(조직도 매니저 체인)
@@ -216,13 +230,13 @@ src/hair_platform/
   cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/eval
   webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 26개 탭)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
-  model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용")
+  model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용") + 모델별 LLM 설정 최적화 tier(deep_reasoning/precision_fast/standard) 직접 매핑
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
   crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임 + 다이어그램)
   crew_history.py    # Crew 실행 이력(crew_runs) — 팀/즉석 실행의 진행상태·협업다이어그램·토큰사용량 영구 저장
   vectorstore.py     # 지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
   graphquery.py      # 관계분석 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
-  websearch.py       # 외부 일반 지식 검색(Wikipedia native 도구 + Parallel AI MCP)
+  websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(Crew 전용). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)
   documents.py       # 외부 자료(.md/.pdf/.html) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
   pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화, CrewAI Tool 조립
   data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호)
@@ -237,7 +251,7 @@ docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 569건 통과(1건은 무관한 사전 실패 — 재현 확인됨)
+tests/unit/                            # 골든셋 586건 통과
 ```
 
 ## 로드맵

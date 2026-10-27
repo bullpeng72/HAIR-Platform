@@ -786,6 +786,22 @@ document.addEventListener("click", (ev) => {
   if (fillOptBtn) {
     const id = fillOptBtn.dataset.fillOptimize;
     const payload = JSON.parse(fillOptBtn.dataset.optimizePayload || "{}");
+    // admin이 "등록된 모델 중 선택" 셀렉트에서 1위 추천과 다른 후보를
+    // 골랐으면 그 선택을 우선한다(레지스트리 밖 값은 애초에 옵션으로
+    // 나타나지 않으므로 여기서 가져온 provider/model은 항상 등록된
+    // 활성 모델이다).
+    const pickSelId = fillOptBtn.dataset.optimizePickSel;
+    if (pickSelId) {
+      const pickSel = document.getElementById(pickSelId);
+      if (pickSel) {
+        const cands = JSON.parse(pickSel.dataset.candidates || "[]");
+        const chosen = cands[Number(pickSel.value)];
+        if (chosen) {
+          payload.provider = chosen.provider;
+          payload.model = chosen.model;
+        }
+      }
+    }
     const providerSel = document.getElementById("provider-" + id);
     const modelSel = document.getElementById("model-" + id);
     if (providerSel && payload.provider) {
@@ -1006,7 +1022,10 @@ function headerColClass(h) {
   // 안 정해주면 짧은 열(ID/권한 등)과 균등하게 나눠 가져가 버려, 그 안의
   // select/input/button이 셀 폭을 넘기고(overflow: visible 기본값) 옆
   // 칸 위로 그대로 흘러나온다. "동작"과 같은 폭(col-actions)을 준다.
-  if (h === "동작" || h === "상사 지정" || h === "비밀번호 재설정" || h === "계정 상태 변경") return "col-actions";
+  // 사용자 보고(2026-10-27, 스크린샷 — "LLM 설정 최적화" 일괄 화면의
+  // "추천 Provider/Model" 열(모델 선택 <select>)이 "tuning 변경 필드"
+  // 열과 겹쳐 보임) — 바로 위 두 사례와 원인이 같다.
+  if (h === "동작" || h === "상사 지정" || h === "비밀번호 재설정" || h === "계정 상태 변경" || h === "추천 Provider/Model") return "col-actions";
   // 사용자 보고(2026-10-14, 스크린샷 — "스킬" 열이 단어 하나씩
   // 줄바꿈될 만큼 좁게 눌려 있음) — table-layout:fixed에서 폭을
   // 안 정해주면 ID/상태처럼 짧은 열과 똑같이 나눠 가져가 버린다.
@@ -1927,7 +1946,7 @@ function _conversationDelegationBadge(m) {
 // 마크다운 경로를 탄다(오탐 거의 없음).
 function _looksLikeFullHtmlDocument(raw) {
   const unwrapped = stripOuterFence((raw || "").trim());
-  return /^<!DOCTYPE\s+html/i.test(unwrapped) || /^<html[\s>]/i.test(unwrapped);
+  return /^<!DOCTYPE\\s+html/i.test(unwrapped) || /^<html[\\s>]/i.test(unwrapped);
 }
 
 // 사용자 보고(2026-10-19, 스크린샷 — "@자율 개발 크루 위 기획을
@@ -2168,7 +2187,7 @@ async function renderConversationDetail(conversationId, containerId) {
     // 파일이 선택되는 즉시(change 이벤트) 바로 일어난다(전송 버튼을
     // 따로 안 눌러도 됨 — 메시지 입력과 분리된 별도 동작).
     '<input type="file" id="conv-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf" style="display:none">' +
-    '<button type="button" class="small" id="conv-file-btn" title="자료 업로드(.md/.txt/.html/.pdf)">\U0001F4CE 자료</button>' +
+    '<button type="button" class="small" id="conv-file-btn" title="자료 업로드(.md/.txt/.html/.pdf)">\U0001f4ce 자료</button>' +
     '<button class="primary" type="submit">전송</button>' +
     '</form>' +
     '</section>';
@@ -2976,7 +2995,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const executeBtnHtml =
     agentPickerHtml +
     '<input type="file" id="ws-execute-attachment" accept=".md,.markdown,.txt,.html,.htm,.pdf" style="display:none">' +
-    '<button type="button" class="small" id="ws-execute-attach-btn" title="이번 실행에만 쓸 참고자료 첨부(선택, 저장 안 됨)">\U0001F4CE 참고자료</button>' +
+    '<button type="button" class="small" id="ws-execute-attach-btn" title="이번 실행에만 쓸 참고자료 첨부(선택, 저장 안 됨)">\U0001f4ce 참고자료</button>' +
     '<span class="muted" id="ws-execute-attachment-name"></span> ' +
     '<button class="small" id="ws-execute-agent-btn"' + (executeDisabled ? " disabled" : "") + '>' +
     esc(executeBtnLabel) + '</button>' +
@@ -3938,7 +3957,7 @@ async function renderDecomposeForm(briefId, stubRoles) {
     '<button class="primary" type="submit">할 일 추가</button></form>' +
     '<ul class="muted help-list">' +
     '<li>필요 스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거).</li>' +
-    '<li>자동완성 중 "외부검색"은 위키백과 검색만 지원하고, "일반웹검색"은 위키백과가 아니라 전체 인터넷(Parallel Search)을 검색하는 별도 스킬입니다.</li>' +
+    '<li>자동완성 중 "실시간웹검색"(Tavily)은 대화창·Crew 실행 양쪽에서 동작하고, "일반웹검색"(Parallel Search)은 Crew 실행에서만 동작합니다.</li>' +
     '<li>목록에 없는 이름도 자유롭게 추가할 수 있습니다.</li>' +
     '</ul>' +
     skillDatalist;
@@ -4790,8 +4809,26 @@ function _renderOptimizeRecommendation(agentId, rec, source) {
     html += '<p class="muted">⚠ AI 보정 실패 — 규칙 기반 추천을 그대로 유지합니다(' +
       esc(rec.llm_error || "") + ")</p>";
   }
+  // 사용자 요청(2026-10-26, "모델 추천의 경우 모델 레지스트리에 등록된
+  // 모델을 선택할 수 있도록 해줘") — 1위 추천만 고정해 채우지 않고,
+  // `agent_optimizer.recommend_model()`이 함께 돌려준 "등록된 활성
+  // 모델 전체(이 tier 기준 순위)" 후보 목록을 셀렉트로 보여줘 admin이
+  // 2위/3위 등 다른 레지스트리 모델을 직접 골라 채울 수 있게 한다.
+  const candidates = (rec.recommended && rec.recommended.candidates) || [];
+  const pickSelId = "optimize-model-pick-" + agentId;
+  if (candidates.length) {
+    html += '<div style="margin-top:0.3rem"><label>등록된 모델 중 선택: ' +
+      '<select id="' + pickSelId + '" data-candidates="' + escAttr(JSON.stringify(candidates)) + '">' +
+      candidates.map((c, i) => {
+        const selected = (c.provider === target.provider && c.model === target.model) ? " selected" : "";
+        const label = (c.tier_mapped ? "★ " : "") + c.provider + " / " + c.model;
+        return '<option value="' + i + '"' + selected + '>' + esc(label) + '</option>';
+      }).join("") +
+      '</select> <span class="muted">(★ = 이 역할 tier에 관리자가 직접 매핑한 모델)</span></label></div>';
+  }
   html += '<button class="small" data-fill-optimize="' + agentId + '" data-optimize-payload="' +
-    escAttr(JSON.stringify(target)) + '">추천값 입력란에 채우기</button> ';
+    escAttr(JSON.stringify(target)) + '" data-optimize-pick-sel="' +
+    (candidates.length ? pickSelId : "") + '">추천값 입력란에 채우기</button> ';
   if (source !== "llm") {
     html += '<button class="small" data-refine-optimize="' + agentId + '">AI 의견 보기(비용 발생)</button>';
   }
@@ -5180,27 +5217,52 @@ async function renderAgentOptimization(content) {
   const changedCount = recs.filter(r => r.changed).length;
   content.innerHTML = '<section class="card"><h2>LLM 설정 최적화 추천</h2>' +
     '<ul class="muted help-list">' +
-    '<li>모델 등급 추정은 모델명 패턴 기반이며 실제 벤치마크 데이터가 아닙니다 — 참고용으로만 쓰세요.</li>' +
+    '<li>모델 랭킹은 기본적으로 모델명 패턴 추정(실제 벤치마크 데이터 아님)이지만, "모델 레지스트리" 화면에서 모델별로 심층추론/정밀·신속/표준 tier를 직접 매핑해두면(★ 표시) 그 매핑이 패턴 추정보다 항상 우선합니다 — 새 모델 출시·provider 교체 시 여기 코드가 아니라 그 화면에서 매핑만 바꾸면 됩니다.</li>' +
     '<li>이 화면은 <b>일괄 적용</b> 화면입니다 — 체크한 Agent는 "선택 적용"을 누르면 미리보기 없이 바로 모델/파인튜닝 설정이 저장됩니다. 하나씩 검토하려면 "AI 에이전트 관리" 화면의 "⚡ 최적화 추천" 버튼을 쓰세요(그쪽은 입력란에 채우기만 하고 저장은 admin이 직접 합니다).</li>' +
+    // 사용자 요청(2026-10-26, "llm 설정 최적화에는 에이전트를 추천
+    // 설정된 에이전트도 재선택하고 다시 추천 모델을 적용할 수 있도록
+    // UI/기능 개선") — 이전엔 `r.changed`(1위 추천이 이미 현재 설정과
+    // 같음)인 Agent는 체크박스/모델 선택 자체가 없어서, "이미 적용함"
+    // 또는 "이미 최적"인 Agent를 다시 선택해 다른 등록 모델로 바꾸거나
+    // 재적용할 방법이 없었다. 체크박스·모델 선택은 이제 전체 Agent에
+    // 항상 뜬다 — "변경 필요"는 그냥 참고 표시일 뿐, 체크 자체를
+    // 막지 않는다.
+    '<li>"변경 필요"가 아니어도(이미 추천과 같거나 한 번 적용한 Agent) 체크하고 "추천 Provider/Model"의 셀렉트에서 다른 등록 모델을 골라 다시 적용할 수 있습니다.</li>' +
     "</ul>" +
     '<button id="apply-selected-optimize" class="small">선택 적용</button> ' +
     '<span class="muted">변경 필요 ' + changedCount + "/" + recs.length + "건</span>" +
-    table(["적용", "역할", "분류", "현재 Provider/Model", "추천 Provider/Model", "tuning 변경 필드", "근거"], recs.map(r => [
-      r.changed
-        ? '<input type="checkbox" class="optimize-apply-check" data-agent-id="' + r.agent_id +
+    table(["적용", "역할", "분류", "현재 Provider/Model", "추천 Provider/Model", "tuning 변경 필드", "근거"], recs.map(r => {
+      // 사용자 요청(2026-10-26, "모델 추천의 경우 모델 레지스트리에
+      // 등록된 모델을 선택할 수 있도록 해줘") — 일괄 적용 화면에서도
+      // 1위 추천 고정이 아니라, 레지스트리 활성 모델 후보 중 다른 걸
+      // 골라 적용할 수 있게 셀렉트로 보여준다(`r.changed` 여부와
+      // 무관하게 항상 — 바로 위 help-list 항목 참고).
+      const candidates = r.recommended.candidates || [];
+      const modelCell = candidates.length
+        ? '<select class="optimize-model-pick" data-agent-id="' + r.agent_id +
+          '" data-candidates="' + escAttr(JSON.stringify(candidates)) + '">' +
+          candidates.map((c, i) => {
+            const selected = (c.provider === r.recommended.provider && c.model === r.recommended.model) ? " selected" : "";
+            const label = (c.tier_mapped ? "★ " : "") + c.provider + " / " + c.model;
+            return '<option value="' + i + '"' + selected + '>' + esc(label) + '</option>';
+          }).join("") +
+          '</select>'
+        : esc(r.recommended.provider || "(기본값)") + " / " + esc(r.recommended.model || "(기본값)");
+      return [
+        '<input type="checkbox" class="optimize-apply-check" data-agent-id="' + r.agent_id +
           '" data-payload="' + escAttr(JSON.stringify({
             provider: r.recommended.provider,
             model: r.recommended.model,
             tuning_config: r.recommended.tuning_config,
-          })) + '">'
-        : '<span class="muted">—</span>',
-      esc(r.role_name),
-      esc(_OPTIMIZE_TIER_LABELS[r.tier] || r.tier),
-      esc(r.current.provider || "(기본값)") + " / " + esc(r.current.model || "(기본값)"),
-      esc(r.recommended.provider || "(기본값)") + " / " + esc(r.recommended.model || "(기본값)"),
-      Object.keys(r.tuning_diff).length ? esc(Object.keys(r.tuning_diff).join(", ")) : "(없음)",
-      '<span class="muted">' + esc(r.rationale) + "</span>",
-    ])) +
+          })) + '">',
+        esc(r.role_name),
+        esc(_OPTIMIZE_TIER_LABELS[r.tier] || r.tier),
+        esc(r.current.provider || "(기본값)") + " / " + esc(r.current.model || "(기본값)"),
+        modelCell,
+        Object.keys(r.tuning_diff).length ? esc(Object.keys(r.tuning_diff).join(", ")) : "(없음)",
+        '<span class="muted">' + esc(r.rationale) + "</span>",
+      ];
+    })) +
     "</section>";
 
   document.getElementById("apply-selected-optimize").onclick = async () => {
@@ -5211,6 +5273,15 @@ async function renderAgentOptimization(content) {
     for (const chk of checks) {
       const id = chk.dataset.agentId;
       const payload = JSON.parse(chk.dataset.payload);
+      const pickSel = content.querySelector('.optimize-model-pick[data-agent-id="' + id + '"]');
+      if (pickSel) {
+        const cands = JSON.parse(pickSel.dataset.candidates || "[]");
+        const chosen = cands[Number(pickSel.value)];
+        if (chosen) {
+          payload.provider = chosen.provider;
+          payload.model = chosen.model;
+        }
+      }
       try {
         if (payload.provider) {
           await api("PATCH", "/api/agent-pool/" + id + "/model", { provider: payload.provider, model: payload.model });
@@ -5239,8 +5310,8 @@ async function renderPoolRegistry(content) {
   content.innerHTML =
     '<section class="card"><h2>Tool Pool — 재사용 가능한 도구</h2>' +
     '<ul class="muted help-list">' +
-    '<li>MCP 서버나 native 도구(VectorDB/GraphDB/외부 자료 검색)를 이름으로 등록해 여러 Agent가 재사용합니다.</li>' +
-    '<li>native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"} 또는 {"native_id": "web_search"}(Wikipedia 검색, API 키 불필요·무료 — skill_tags에 "외부검색"을 넣으면 매칭됩니다)를 지원합니다.</li>' +
+    '<li>MCP 서버나 native 도구(VectorDB/GraphDB/실시간 웹 검색)를 이름으로 등록해 여러 Agent가 재사용합니다.</li>' +
+    '<li>native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"} 또는 {"native_id": "tavily_search"}(Tavily 실시간 웹 검색, API 키 필요(TAVILY_API_KEY) — skill_tags에 "실시간웹검색"을 넣으면 매칭됩니다)를 지원합니다.</li>' +
     '<li>mcp_stdio/mcp_remote는 {"command":...,"args":[...]} 또는 {"url":...,"transport":...} 형태입니다 — 이 두 종류는 Agent가 실행될 때마다 실제로 서버(로컬 프로세스 또는 원격)에 접속을 시도하므로, 잘못된 command/url을 등록해두면 그 스킬을 가진 Agent 실행이 접속 단계에서 실패합니다.</li>' +
     // 사용자 요청(2026-10-13, "@데코레이터 툴을 추가 생성할 수 있는 기능을
     // 제공해줘") — mcp_stdio와 같은 신뢰 등급(admin 전용)이라는 걸 화면에도
@@ -5975,12 +6046,32 @@ async function renderModelRegistry(content) {
   const providerLabel = { anthropic: "Anthropic", openai: "OpenAI", ollama: "Ollama(로컬)" };
   const providerOptionsHtml = Object.keys(providerLabel)
     .map(p => '<option value="' + p + '">' + providerLabel[p] + "</option>").join("");
+  // 사용자 요청(2026-10-26, "모델 레지스트리에 llm 설정 최적화 각
+  // tier에 적용되는 모델을 매핑하는 기능을 제공... 향후 새로운 모델
+  // 출시되거나 모델 프로바이더 변경시에도 각 Tier별 모델 맵핑 변경
+  // 하여 관리, 일단 설정된 후 변경할 수 있는 기능이 제공되지 않아") —
+  // "tier 직접 매핑으로 변경"(premium/balanced/economy 등급 간접
+  // 매핑 대신, agent_optimizer의 tier 이름 자체에 모델을 직접 매핑).
+  // 체크박스 — 모델 하나가 여러 tier에 동시 매핑될 수 있다. 전부
+  // 체크 해제한 뒤 저장하면 그 모델은 다시 이름 패턴 추정으로
+  // 돌아간다(초기화) — 몇 번이든 다시 바꿀 수 있다.
+  const _OPTIMIZATION_TIER_LABELS = {
+    deep_reasoning: "심층추론", precision_fast: "정밀·신속", standard: "표준",
+  };
+  const tierMappingHtml = (m) =>
+    Object.keys(_OPTIMIZATION_TIER_LABELS).map(t =>
+      '<label style="white-space:nowrap;margin-right:0.5rem"><input type="checkbox" class="mr-tier-pick" data-model-id="' + m.id +
+      '" value="' + t + '"' + ((m.optimization_tiers || []).includes(t) ? " checked" : "") + '> ' +
+      esc(_OPTIMIZATION_TIER_LABELS[t]) + "</label>"
+    ).join("") +
+    '<button class="small" data-save-optimization-tiers="' + m.id + '">저장</button>';
   const providerTableHtml = (provider) => {
     const rows = byProvider(provider);
     return "<h3>" + providerLabel[provider] + "</h3>" +
-      table(["모델명", "상태", "동작"], rows.map(m => [
+      table(["모델명", "상태", "최적화 Tier 매핑", "동작"], rows.map(m => [
         esc(m.name),
         m.is_active ? "활성" : "비활성",
+        tierMappingHtml(m),
         '<div class="actions">' +
           '<button class="small" data-toggle-model-active="' + m.id + '" data-active="' + (m.is_active ? "0" : "1") + '">' +
           (m.is_active ? "비활성화" : "활성화") + "</button>" +
@@ -5996,6 +6087,7 @@ async function renderModelRegistry(content) {
     '<li><b>불러오기</b>는 Ollama면 로컬 서버(OLLAMA_BASE_URL)에서, OpenAI/Anthropic이면 그 계정의 API 키로 실제 보유 중인 모델 목록을 조회합니다(토큰을 생성하지 않는 카탈로그 조회라 과금되지 않습니다) — 조회만으로는 아무것도 저장되지 않고, 선택 후 "선택한 모델 등록"을 눌러야 저장됩니다.</li>' +
     '<li><b>비활성화</b>는 자동완성에서만 빼고 등록 자체는 유지합니다.</li>' +
     '<li><b>삭제</b>(관리자 전용)는 레지스트리 항목만 지웁니다 — 이미 Agent에 저장된 모델 설정 자체는 안 바뀝니다.</li>' +
+    '<li><b>최적화 Tier 매핑</b>은 "LLM 설정 최적화"(Agent 관리 화면의 "⚡ 최적화 추천")가 심층추론/정밀·신속/표준 역할에 이 모델을 최우선으로 추천할지 직접 지정합니다(모델 하나가 여러 tier에 동시 매핑될 수 있습니다) — 아무것도 체크하지 않으면 모델명 패턴 추정으로 폴백합니다. 새 모델 출시·provider 교체 시 여기 매핑만 바꾸면 되고, 몇 번이든 다시 바꿀 수 있습니다.</li>' +
     '</ul>' +
     '<form class="inline" id="mr-fetch-form">' +
     '<select id="mr-fetch-provider">' + providerOptionsHtml + "</select>" +
@@ -6080,6 +6172,19 @@ async function renderModelRegistry(content) {
       try {
         await api("DELETE", "/api/model-registry/" + btn.dataset.deleteModel);
         showMsg("global-msg", "삭제했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-save-optimization-tiers]").forEach(btn => {
+    btn.onclick = async () => {
+      const modelId = btn.dataset.saveOptimizationTiers;
+      const checks = content.querySelectorAll('.mr-tier-pick[data-model-id="' + modelId + '"]:checked');
+      try {
+        await api("PATCH", "/api/model-registry/" + modelId + "/optimization-tiers", {
+          optimization_tiers: Array.from(checks).map(c => c.value),
+        });
+        showMsg("global-msg", "최적화 Tier 매핑을 저장했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };

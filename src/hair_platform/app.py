@@ -115,6 +115,7 @@ from hair_platform.models import (
     ManagerUpdate,
     ManualKnowledgeTextCreate,
     ModelActiveUpdate,
+    ModelOptimizationTiersUpdate,
     ModelRegistryCreate,
     PerformanceScoreRequest,
     PipelineExecuteRequest,
@@ -1893,7 +1894,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: AssistRequest,
         user: sqlite3.Row = Depends(get_current_user),
     ):
-        """"LLM으로 도와줘". 실제 LLM API를 호출하므로 비용이
+        """ "LLM으로 도와줘". 실제 LLM API를 호출하므로 비용이
         발생한다. 결과는 저장하지 않는다 — 검토 후 별도로 제출해야 한다.
         팀원/뷰어는 provider/model을 선택할 수 없다(RBAC 결정, 비용
         통제)."""
@@ -1961,7 +1962,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if attachment is not None and attachment.filename:
             raw_bytes = await attachment.read()
             if len(raw_bytes) > 10 * 1024 * 1024:
-                raise HTTPException(status_code=400, detail="첨부 파일이 너무 큽니다(최대 10MB)")
+                raise HTTPException(
+                    status_code=400, detail="첨부 파일이 너무 큽니다(최대 10MB)"
+                )
             attachment_filename = attachment.filename
             try:
                 attachment_text = documents.extract_text(attachment_filename, raw_bytes)
@@ -2004,7 +2007,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "agent_execution_attachment_used",
                 "agent_execution_jobs",
                 job["job_id"],
-                after={"filename": attachment_filename, "char_count": len(attachment_text)},
+                after={
+                    "filename": attachment_filename,
+                    "char_count": len(attachment_text),
+                },
             )
             conn.commit()
         background_tasks.add_task(
@@ -2394,7 +2400,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "empty_role_name": "역할명을 입력하세요",
             }.get(str(exc), str(exc))
             raise HTTPException(status_code=400, detail=detail) from exc
-        return {"id": agent_id, "role_name": payload.role_name, "status": "pending_onboarding"}
+        return {
+            "id": agent_id,
+            "role_name": payload.role_name,
+            "status": "pending_onboarding",
+        }
 
     @app.post("/api/jobs/{job_id}/items/{item_id}/retry")
     def retry_job_item(
@@ -2633,7 +2643,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def list_agent_optimize_recommendations(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """"LLM 설정 최적화" 일괄 화면용 — 전체 Agent(deprecated 제외)의
+        """ "LLM 설정 최적화" 일괄 화면용 — 전체 Agent(deprecated 제외)의
         규칙 기반 추천을 한 번에 반환한다(비용 없음)."""
         return agent_optimizer.recommend_all(conn)
 
@@ -2972,6 +2982,32 @@ def create_app(db_path: str | None = None) -> FastAPI:
             ) from exc
         return {"id": model_id, "is_active": payload.is_active}
 
+    @app.patch("/api/model-registry/{model_id}/optimization-tiers")
+    def set_model_registry_optimization_tiers(
+        model_id: int,
+        payload: ModelOptimizationTiersUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-26, "모델 레지스트리에 llm 설정 최적화
+        각 tier에 적용되는 모델을 매핑하는 기능을 제공") — `agent_
+        optimizer.py`가 이름 패턴 추정 대신 이 모델을 어떤 tier
+        (deep_reasoning/precision_fast/standard)의 최우선 후보로 쓸지
+        admin이 직접 지정한다. `optimization_tiers: []`로 다시 호출하면
+        매핑을 지워 패턴 추정으로 되돌아간다 — 몇 번이든 다시 호출해
+        바꿀 수 있다(하위 호환: 설정 안 한 모델은 기존처럼 패턴 추정
+        그대로 동작)."""
+        try:
+            model_registry.set_optimization_tiers(
+                conn, user["id"], model_id, payload.optimization_tiers
+            )
+        except ValueError as exc:
+            if str(exc) == "model_not_found":
+                raise HTTPException(
+                    status_code=404, detail="모델을 찾을 수 없습니다"
+                ) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": model_id, "optimization_tiers": payload.optimization_tiers}
+
     @app.delete("/api/model-registry/{model_id}")
     def delete_model_registry_entry(
         model_id: int,
@@ -3187,7 +3223,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
     ):
         template = pipeline_runtime.get_pipeline_template(conn, template_id)
         if template is None:
-            raise HTTPException(status_code=404, detail="파이프라인 템플릿을 찾을 수 없습니다")
+            raise HTTPException(
+                status_code=404, detail="파이프라인 템플릿을 찾을 수 없습니다"
+            )
         return template
 
     @app.post("/api/pipeline-templates", status_code=201)
@@ -3232,7 +3270,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 if str(exc) == "pipeline_template_has_run_history"
                 else "파이프라인 템플릿을 찾을 수 없습니다"
             )
-            status_code = 409 if str(exc) == "pipeline_template_has_run_history" else 404
+            status_code = (
+                409 if str(exc) == "pipeline_template_has_run_history" else 404
+            )
             raise HTTPException(status_code=status_code, detail=detail) from exc
         return {"id": template_id, "deleted": True}
 
@@ -3304,7 +3344,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         try:
-            pipeline_runtime.reorder_stage(conn, user["id"], stage_id, payload.direction)
+            pipeline_runtime.reorder_stage(
+                conn, user["id"], stage_id, payload.direction
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": stage_id}
@@ -3428,20 +3470,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return crew_history.list_recent_runs(conn, limit=limit)
 
     @app.get("/api/crew-runs/{run_id}")
-    def get_crew_run(
-        run_id: int, user: sqlite3.Row = Depends(get_current_user)
-    ):
+    def get_crew_run(run_id: int, user: sqlite3.Row = Depends(get_current_user)):
         """단건 상세 — 협업 다이어그램·토큰 사용량·Gate 점수까지 포함된
         전체 데이터(`crewDiagramSvg()`/`renderCrewResult()`가 그대로
         쓸 수 있는 모양). 권한은 그 Crew 실행이 속한 Task의 참가자
         판정과 동일(파이프라인 실행 이력 조회와 같은 기준)."""
         run = crew_history.get_run(conn, run_id)
         if run is None:
-            raise HTTPException(status_code=404, detail="Crew 실행 이력을 찾을 수 없습니다")
-        if user["role"] not in ("admin", "manager") and (
-            deliverables.task_participant_relationship(
-                conn, run["task_id"], user["id"]
+            raise HTTPException(
+                status_code=404, detail="Crew 실행 이력을 찾을 수 없습니다"
             )
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, run["task_id"], user["id"])
             is None
         ):
             raise HTTPException(
@@ -3462,11 +3502,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
         `get_crew_run`과 동일(참가자 또는 admin/manager)."""
         run = crew_history.get_run(conn, run_id)
         if run is None:
-            raise HTTPException(status_code=404, detail="Crew 실행 이력을 찾을 수 없습니다")
-        if user["role"] not in ("admin", "manager") and (
-            deliverables.task_participant_relationship(
-                conn, run["task_id"], user["id"]
+            raise HTTPException(
+                status_code=404, detail="Crew 실행 이력을 찾을 수 없습니다"
             )
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, run["task_id"], user["id"])
             is None
         ):
             raise HTTPException(
@@ -3762,9 +3802,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if row is None:
             raise HTTPException(status_code=404, detail="Agent를 찾을 수 없습니다")
         name = (payload.name.strip() if payload.name else "") or None
-        conn.execute(
-            "UPDATE agent_pool SET name = ? WHERE id = ?", (name, agent_id)
-        )
+        conn.execute("UPDATE agent_pool SET name = ? WHERE id = ?", (name, agent_id))
         audit.record(
             conn,
             user["id"],

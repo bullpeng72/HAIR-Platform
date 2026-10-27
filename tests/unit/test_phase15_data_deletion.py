@@ -234,9 +234,10 @@ def test_gc119b_cancel_assignment_endpoint_unblocks_brief_delete(client_and_conn
     # 이제 confirmed 배정이 없으니 brief 삭제가 통과한다.
     resp = client.delete(f"/api/briefs/{brief_id}")
     assert resp.status_code == 200, resp.text
-    assert conn.execute(
-        "SELECT * FROM briefs WHERE id = ?", (brief_id,)
-    ).fetchone() is None
+    assert (
+        conn.execute("SELECT * FROM briefs WHERE id = ?", (brief_id,)).fetchone()
+        is None
+    )
 
 
 def test_gc119c_cancel_assignment_while_requested_closes_pending_approval(

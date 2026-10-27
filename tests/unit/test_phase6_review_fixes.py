@@ -160,9 +160,7 @@ def test_gc185_admin_can_reset_user_password(client_and_conn):
     )
     assert resp.status_code == 200, resp.text
 
-    resp = client.post(
-        "/login", json={"username": "member1", "password": "memberpass"}
-    )
+    resp = client.post("/login", json={"username": "member1", "password": "memberpass"})
     assert resp.status_code == 401
 
     resp = client.post(
@@ -195,17 +193,13 @@ def test_gc186_admin_can_deactivate_and_reactivate_user(client_and_conn):
     row = next(u for u in resp.json() if u["id"] == member_id)
     assert row["is_active"] is False
 
-    resp = client.post(
-        "/login", json={"username": "member1", "password": "memberpass"}
-    )
+    resp = client.post("/login", json={"username": "member1", "password": "memberpass"})
     assert resp.status_code == 401
 
     _login(client, "admin1", "adminpass")
     resp = client.patch(f"/api/users/{member_id}/status", json={"is_active": True})
     assert resp.status_code == 200
-    resp = client.post(
-        "/login", json={"username": "member1", "password": "memberpass"}
-    )
+    resp = client.post("/login", json={"username": "member1", "password": "memberpass"})
     assert resp.status_code == 200
 
     _login(client, "manager1", "managerpass")

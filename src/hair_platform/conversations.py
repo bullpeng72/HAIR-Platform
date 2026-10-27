@@ -86,8 +86,8 @@ _ANTI_ANCHORING_NOTE = (
     "구현하지 않은 기능을 구현했다고 설명하지 마세요 — 실제로 작성한 "
     "코드에 있는 것만 설명하세요. 당신의 이번 응답 자체에 실제로 "
     "완성된 산출물(코드 전체 등)을 직접 포함해야 합니다 — "
-    "\"위에 이미 완성돼 있습니다\", \"이전 내용을 참고하세요\", "
-    "\"위 코드는 이미 동작합니다\"처럼 산출물 제시를 생략하거나 대화 "
+    '"위에 이미 완성돼 있습니다", "이전 내용을 참고하세요", '
+    '"위 코드는 이미 동작합니다"처럼 산출물 제시를 생략하거나 대화 '
     "기록의 다른 메시지를 가리키기만 하는 응답은 금지합니다. 그런 "
     "메시지가 보이더라도 당신이 맡은 작업의 결과물은 이번 응답 안에 "
     "처음부터 끝까지 직접 작성하세요."
@@ -377,7 +377,9 @@ def list_participants(conn: sqlite3.Connection, conversation_id: int) -> list[di
                 "SELECT role_name, name FROM agent_pool WHERE id = ?",
                 (entry["participant_id"],),
             ).fetchone()
-            entry["display_name"] = (r["name"] or r["role_name"]) if r is not None else None
+            entry["display_name"] = (
+                (r["name"] or r["role_name"]) if r is not None else None
+            )
         elif entry["participant_type"] == "team":
             r = conn.execute(
                 "SELECT name FROM teams WHERE id = ?", (entry["participant_id"],)
@@ -456,7 +458,9 @@ def search_mentionable(conn: sqlite3.Connection, query: str, actor_id: int) -> d
         # 있어(사용자 요청, 2026-10-13) 키를 바꾸면 그 화면들을 전부
         # 고쳐야 한다. 값만 바뀌므로 그 화면들은 자동으로 이름을 쓰게
         # 된다.
-        "agents": [{"id": r["id"], "role_name": r["name"] or r["role_name"]} for r in agents],
+        "agents": [
+            {"id": r["id"], "role_name": r["name"] or r["role_name"]} for r in agents
+        ],
         "teams": [{"id": r["id"], "name": r["name"]} for r in teams_rows],
     }
 
@@ -911,7 +915,8 @@ def _build_transcript(
         (conversation_id, limit),
     ).fetchall()
     lines = [
-        ("AI" if row["author_type"] == "agent" else "사용자") + ": "
+        ("AI" if row["author_type"] == "agent" else "사용자")
+        + ": "
         + _strip_large_code_fences(row["content"])
         for row in reversed(rows)
     ]
@@ -961,7 +966,9 @@ def create_message(
         after={"conversation_id": conversation_id, "author_type": "human"},
     )
 
-    mentions = _detect_mentions(conn, conversation_id, content, author_human_id=actor_id)
+    mentions = _detect_mentions(
+        conn, conversation_id, content, author_human_id=actor_id
+    )
     conn.commit()
 
     return {
@@ -1008,7 +1015,7 @@ def create_attachment_message(
     if not is_participant(conn, conversation_id, actor_id):
         raise PermissionError("not_a_participant")
 
-    content = f"\U0001F4CE 첨부 자료 — {filename}\n\n{text}"
+    content = f"\U0001f4ce 첨부 자료 — {filename}\n\n{text}"
     cur = conn.execute(
         "INSERT INTO conversation_messages (conversation_id, author_type, author_id, content) "
         "VALUES (?, 'human', ?, ?)",
@@ -1022,7 +1029,11 @@ def create_attachment_message(
         "conversation_attachment_added",
         "conversation_messages",
         message_id,
-        after={"conversation_id": conversation_id, "filename": filename, "char_count": len(text)},
+        after={
+            "conversation_id": conversation_id,
+            "filename": filename,
+            "char_count": len(text),
+        },
     )
     conn.commit()
     return message_id
@@ -1263,7 +1274,9 @@ def run_team_mention_job(
         agent_ids = teams.active_agent_member_ids(conn, team_id)
         if not agent_ids:
             raise ValueError("team_has_no_active_agents")
-        transcript = (_build_transcript(conn, conversation_id) or "대화를 시작합니다.") + _ANTI_ANCHORING_NOTE
+        transcript = (
+            _build_transcript(conn, conversation_id) or "대화를 시작합니다."
+        ) + _ANTI_ANCHORING_NOTE
         task_descriptions = [transcript] * len(agent_ids)
         manager_agent_id = teams.manager_agent_id_for_team(conn, team_id)
         if manager_agent_id is not None:

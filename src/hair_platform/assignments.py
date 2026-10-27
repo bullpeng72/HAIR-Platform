@@ -242,7 +242,10 @@ def resolve_assignment_decision(
 
 
 def cancel_assignment(
-    conn: sqlite3.Connection, actor_id: int, assignment_id: int, reason: str | None = None
+    conn: sqlite3.Connection,
+    actor_id: int,
+    assignment_id: int,
+    reason: str | None = None,
 ) -> dict:
     """사용자 보고(2026-10-19, "업무 요청 삭제가 '확정된 배정이 있어
     삭제할 수 없습니다 — 먼저 정리하세요'로 막히는데, 정리할 방법(배정

@@ -32,9 +32,12 @@ def test_gc_admin_can_seed_demo_data(client_and_conn):
         "SELECT * FROM briefs WHERE id = ?", (body["brief_id"],)
     ).fetchone()
     assert brief_row is not None
-    assert brief_row["submitted_by"] == conn.execute(
-        "SELECT id FROM users WHERE username = 'admin1'"
-    ).fetchone()["id"]
+    assert (
+        brief_row["submitted_by"]
+        == conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()[
+            "id"
+        ]
+    )
 
     task_count = conn.execute(
         "SELECT COUNT(*) AS c FROM tasks WHERE brief_id = ?", (body["brief_id"],)
@@ -48,7 +51,7 @@ def test_gc_admin_can_seed_demo_data(client_and_conn):
 
 
 def test_gc_non_admin_cannot_seed_demo_data(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "manager1", "managerpass")
     resp = client.post("/api/demo/seed")
     assert resp.status_code == 403, resp.text
@@ -59,7 +62,7 @@ def test_gc_non_admin_cannot_seed_demo_data(client_and_conn):
 
 
 def test_gc_seeding_twice_creates_separate_data(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "admin1", "adminpass")
     first = client.post("/api/demo/seed").json()
     second = client.post("/api/demo/seed").json()

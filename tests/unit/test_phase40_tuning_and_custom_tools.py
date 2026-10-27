@@ -150,9 +150,9 @@ def test_run_crew_applies_tuning_config_without_crewai_validation_error(
 
 
 def _admin_id(conn):
-    return conn.execute(
-        "SELECT id FROM users WHERE username = 'admin1'"
-    ).fetchone()["id"]
+    return conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()[
+        "id"
+    ]
 
 
 # ---------- 2) Task.guardrail(1차 품질 방어선) ----------
@@ -187,7 +187,9 @@ def test_create_custom_python_tool_requires_admin(client_and_conn):
         json={
             "name": "커스텀 도구",
             "kind": "custom_python",
-            "config": {"function_source": "def tool_fn(query: str) -> str:\n    return query"},
+            "config": {
+                "function_source": "def tool_fn(query: str) -> str:\n    return query"
+            },
         },
     )
     assert resp.status_code == 403
@@ -198,7 +200,9 @@ def test_create_custom_python_tool_requires_admin(client_and_conn):
         json={
             "name": "커스텀 도구",
             "kind": "custom_python",
-            "config": {"function_source": "def tool_fn(query: str) -> str:\n    return query"},
+            "config": {
+                "function_source": "def tool_fn(query: str) -> str:\n    return query"
+            },
         },
     )
     assert resp.status_code == 201, resp.text
@@ -219,7 +223,9 @@ def test_create_custom_python_tool_rejects_invalid_source(client_and_conn):
         json={
             "name": "함수명 틀림",
             "kind": "custom_python",
-            "config": {"function_source": "def other_fn(query: str) -> str:\n    return query"},
+            "config": {
+                "function_source": "def other_fn(query: str) -> str:\n    return query"
+            },
         },
     )
     assert resp.status_code == 400
@@ -229,7 +235,9 @@ def test_create_custom_python_tool_rejects_invalid_source(client_and_conn):
         json={
             "name": "문법 오류",
             "kind": "custom_python",
-            "config": {"function_source": "def tool_fn(query: str) -> str:\n    return query("},
+            "config": {
+                "function_source": "def tool_fn(query: str) -> str:\n    return query("
+            },
         },
     )
     assert resp.status_code == 400
@@ -250,8 +258,7 @@ def test_custom_python_tool_executes_via_resolve_pool_tools(client_and_conn):
             "description": "질의를 대문자로 바꿔 돌려준다",
             "config": {
                 "function_source": (
-                    "def tool_fn(query: str) -> str:\n"
-                    "    return query.upper()\n"
+                    "def tool_fn(query: str) -> str:\n" "    return query.upper()\n"
                 ),
                 "timeout_seconds": 10,
             },
@@ -300,9 +307,7 @@ def test_custom_python_tool_timeout_returns_error_string_not_exception(
         },
     )
     tool_id = resp.json()["id"]
-    row = conn.execute(
-        "SELECT * FROM tool_pool WHERE id = ?", (tool_id,)
-    ).fetchone()
+    row = conn.execute("SELECT * FROM tool_pool WHERE id = ?", (tool_id,)).fetchone()
     tool = pool_registry._custom_python_crewai_tool(row)
     output = tool.run(query="x")
     assert "오류" in output or "시간 초과" in output or "sandbox timeout" in output
@@ -318,9 +323,7 @@ def test_set_agent_persona_requires_admin_or_manager_and_persists(client_and_con
     agent_id = _make_active_agent(conn, "백엔드 개발자")
 
     _login(client, "member1", "memberpass")
-    resp = client.patch(
-        f"/api/agent-pool/{agent_id}/persona", json={"goal": "x"}
-    )
+    resp = client.patch(f"/api/agent-pool/{agent_id}/persona", json={"goal": "x"})
     assert resp.status_code == 403
 
     _login(client, "manager1", "managerpass")
@@ -454,7 +457,7 @@ def test_execute_agent_honors_stored_expected_output(client_and_conn):
     무시됐다 — admin이 persona 화면에서 저장한 형식 지시가 @멘션으로
     부르면 전혀 안 먹혀 Crew 실행과 결과 형식이 달라지는 비일관이
     있었다. 이제 단발 호출에서도 반영돼야 한다."""
-    client, conn = client_and_conn
+    _client, conn = client_and_conn
     agent_id = _make_active_agent(conn, "프레젠테이션 자료 작성자")
     admin_id = _admin_id(conn)
     agent_runtime.set_persona(
@@ -467,7 +470,9 @@ def test_execute_agent_honors_stored_expected_output(client_and_conn):
         ),
     )
 
-    with patch("hair_platform.llm.call_llm", return_value="<!DOCTYPE html>...") as llm_mock:
+    with patch(
+        "hair_platform.llm.call_llm", return_value="<!DOCTYPE html>..."
+    ) as llm_mock:
         agent_runtime.execute_agent(
             conn, agent_id, admin_id, "발표자료 만들어줘", provider="openai"
         )
@@ -522,7 +527,7 @@ def test_run_crew_expected_outputs_param_overrides_agent_default(client_and_conn
 def test_create_agent_directly_persists_fields_and_starts_pending_onboarding(
     client_and_conn,
 ):
-    client, conn = client_and_conn
+    _client, conn = client_and_conn
     from hair_platform import agent_runtime
 
     admin_id = _admin_id(conn)
@@ -546,7 +551,7 @@ def test_create_agent_directly_persists_fields_and_starts_pending_onboarding(
 
 
 def test_create_agent_directly_rejects_empty_role_name(client_and_conn):
-    client, conn = client_and_conn
+    _client, conn = client_and_conn
     from hair_platform import agent_runtime
 
     admin_id = _admin_id(conn)
@@ -555,14 +560,14 @@ def test_create_agent_directly_rejects_empty_role_name(client_and_conn):
 
 
 def test_create_agent_direct_endpoint_requires_admin_or_manager(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     resp = client.post("/api/agent-pool", json={"role_name": "테스터"})
     assert resp.status_code == 403, resp.text
 
 
 def test_create_agent_direct_endpoint_rejects_blank_role_name(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "manager1", "managerpass")
     resp = client.post("/api/agent-pool", json={"role_name": "   "})
     assert resp.status_code == 400, resp.text
@@ -571,7 +576,7 @@ def test_create_agent_direct_endpoint_rejects_blank_role_name(client_and_conn):
 def test_create_agent_direct_endpoint_happy_path_then_onboardable(client_and_conn):
     """직접 생성 → pending_onboarding → 기존 온보딩 승인 엔드포인트로
     active 전환까지 — 기존 상태 머신과의 통합 확인."""
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "manager1", "managerpass")
     resp = client.post(
         "/api/agent-pool",

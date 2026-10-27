@@ -31,7 +31,7 @@ def _create_second_member(client, username="member2"):
 
 
 def test_gc_creator_can_delete_conversation(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "지울 방"}).json()["id"]
 
@@ -68,7 +68,7 @@ def test_gc_deleting_cascades_messages_participants_jobs(client_and_conn):
 
 
 def test_gc_non_creator_participant_cannot_delete(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
     member2_id = _create_second_member(client)
@@ -86,7 +86,7 @@ def test_gc_non_creator_participant_cannot_delete(client_and_conn):
 
 
 def test_gc_non_participant_cannot_delete(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
 
@@ -97,7 +97,7 @@ def test_gc_non_participant_cannot_delete(client_and_conn):
 
 
 def test_gc_delete_nonexistent_conversation_404(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     resp = client.delete("/api/conversations/999999")
     assert resp.status_code == 404, resp.text
@@ -107,7 +107,7 @@ def test_gc_creator_who_already_left_cannot_delete_from_outside(client_and_conn)
     """나간 뒤에는 "원 제작자"라는 이유로 바깥에서 남은 사람들의 대화를
     지울 수 없다 — `leave_conversation()`의 참가자 제거가 삭제 권한도
     함께 거둬간다."""
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
     member2_id = _create_second_member(client)
@@ -163,7 +163,7 @@ def test_gc_leaving_with_others_remaining_keeps_conversation(client_and_conn):
 
 
 def test_gc_last_participant_leaving_deletes_conversation(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
 
@@ -179,7 +179,7 @@ def test_gc_last_participant_leaving_deletes_conversation(client_and_conn):
 
 
 def test_gc_non_participant_cannot_leave(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
 
@@ -190,7 +190,7 @@ def test_gc_non_participant_cannot_leave(client_and_conn):
 
 
 def test_gc_leave_nonexistent_conversation_404(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     resp = client.post("/api/conversations/999999/leave")
     assert resp.status_code == 404, resp.text

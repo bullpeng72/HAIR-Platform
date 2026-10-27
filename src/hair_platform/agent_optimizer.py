@@ -41,7 +41,11 @@ TIER_STANDARD = "standard"
 # 알려지지 않은 role_name에만 쓰는 tier별 기본 tuning_config(알려진 역할은
 # 항상 AGENT_SPECS의 실제 값을 그대로 추천한다).
 _TIER_DEFAULT_TUNING: dict[str, dict] = {
-    TIER_DEEP_REASONING: {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
+    TIER_DEEP_REASONING: {
+        "reasoning": True,
+        "max_reasoning_attempts": 2,
+        "temperature": 0.3,
+    },
     TIER_PRECISION_FAST: {"temperature": 0.2, "max_retry_limit": 3},
     TIER_STANDARD: {"temperature": 0.3},
 }
@@ -97,8 +101,15 @@ def classify_role(role_name: str, skill_tags: list[str]) -> tuple[str, dict, str
     # Agent 대다수가 결국 구현/산출물 작성 역할이라는 실제 분포를 반영).
     for tag in skill_tags:
         tag_lower = tag.lower()
-        if any(k in tag_lower for k in ("implementation", "workflow", "checklist", "commit")):
-            return TIER_PRECISION_FAST, dict(_TIER_DEFAULT_TUNING[TIER_PRECISION_FAST]), "skill_heuristic"
+        if any(
+            k in tag_lower
+            for k in ("implementation", "workflow", "checklist", "commit")
+        ):
+            return (
+                TIER_PRECISION_FAST,
+                dict(_TIER_DEFAULT_TUNING[TIER_PRECISION_FAST]),
+                "skill_heuristic",
+            )
 
     return TIER_STANDARD, dict(_TIER_DEFAULT_TUNING[TIER_STANDARD]), "default_fallback"
 
@@ -108,8 +119,16 @@ _CAPABILITY_BALANCED = "balanced"
 _CAPABILITY_ECONOMY = "economy"
 
 _TIER_MODEL_PREFERENCE: dict[str, list[str]] = {
-    TIER_DEEP_REASONING: [_CAPABILITY_PREMIUM, _CAPABILITY_BALANCED, _CAPABILITY_ECONOMY],
-    TIER_PRECISION_FAST: [_CAPABILITY_BALANCED, _CAPABILITY_PREMIUM, _CAPABILITY_ECONOMY],
+    TIER_DEEP_REASONING: [
+        _CAPABILITY_PREMIUM,
+        _CAPABILITY_BALANCED,
+        _CAPABILITY_ECONOMY,
+    ],
+    TIER_PRECISION_FAST: [
+        _CAPABILITY_BALANCED,
+        _CAPABILITY_PREMIUM,
+        _CAPABILITY_ECONOMY,
+    ],
     TIER_STANDARD: [_CAPABILITY_ECONOMY, _CAPABILITY_BALANCED, _CAPABILITY_PREMIUM],
 }
 
@@ -122,7 +141,11 @@ _TIER_MODEL_PREFERENCE: dict[str, list[str]] = {
 _TIER_PREFERRED_TAG: dict[str, str] = {TIER_PRECISION_FAST: "code"}
 
 
-def _capability_sort_key(provider: str, name: str, tier: str, preference: list[str]) -> tuple[int, int]:
+def _pattern_sort_key(
+    provider: str, name: str, tier: str, preference: list[str]
+) -> tuple[int, int]:
+    """이름 패턴 추정(`model_capability()`) 기반 랭킹 — admin이 이 tier에
+    명시적으로 매핑한 모델이 하나도 없을 때의 폴백 전용(기존 동작)."""
     cap, tags = model_capability(provider, name)
     primary = preference.index(cap) if cap in preference else len(preference)
     preferred_tag = _TIER_PREFERRED_TAG.get(tier)
@@ -148,7 +171,11 @@ def model_capability(provider: str, name: str) -> tuple[str, set[str]]:
         return _CAPABILITY_BALANCED, tags  # sonnet 등
 
     if provider == "openai":
-        if re.search(r"\bo[134]\b", n) or "gpt-4.1" in n or ("gpt-4o" in n and "mini" not in n):
+        if (
+            re.search(r"\bo[134]\b", n)
+            or "gpt-4.1" in n
+            or ("gpt-4o" in n and "mini" not in n)
+        ):
             return _CAPABILITY_PREMIUM, tags
         if "mini" in n or "nano" in n or "3.5" in n:
             return _CAPABILITY_ECONOMY, tags
@@ -181,61 +208,84 @@ def recommend_model(
             "changed": False,
             "note": "모델 레지스트리에 등록된 활성 모델이 없어 추천할 수 없습니다 — "
             "먼저 '모델 레지스트리'에서 사용할 모델을 등록하세요.",
+            "candidates": [],
         }
 
     preference = _TIER_MODEL_PREFERENCE[tier]
 
-    def rank_key(provider: str, name: str) -> tuple[int, int]:
-        return _capability_sort_key(provider, name, tier, preference)
-
-    if current_provider and current_model:
-        current_active = any(
-            m["provider"] == current_provider and m["name"] == current_model for m in active
+    # 사용자 요청(2026-10-26, "모델 레지스트리에 llm 설정 최적화 각
+    # tier에 적용되는 모델을 매핑하는 기능을 제공") — admin이 이 tier에
+    # 직접 매핑해둔 모델이 있으면(`optimization_tiers`에 이 tier가
+    # 포함) 이름 패턴 추정을 거치지 않고 항상 최우선 후보가 된다. 매핑된
+    # 모델이 하나도 없으면(기존 동작 100% 유지) 이름 패턴 추정+tier
+    # 선호 등급(`_pattern_sort_key`)으로 폴백한다.
+    def rank_key(m: dict) -> tuple[int, int, int]:
+        is_unmapped = 0 if tier in (m.get("optimization_tiers") or []) else 1
+        pattern_primary, pattern_secondary = _pattern_sort_key(
+            m["provider"], m["name"], tier, preference
         )
-        if current_active and rank_key(current_provider, current_model) == (0, 0):
+        return (is_unmapped, pattern_primary, pattern_secondary)
+
+    # 사용자 요청(2026-10-26, "모델 추천의 경우 모델 레지스트리에 등록된
+    # 모델을 선택할 수 있도록 해줘") — "가장 적합한 모델 1개"만이 아니라
+    # API 키가 있는 provider의 활성 레지스트리 모델 전체를 이 tier
+    # 기준으로 순위 매겨 후보 목록으로 같이 반환한다 — admin이 1위를
+    # 그대로 받거나 2위/3위 등 다른 등록 모델을 직접 골라 적용할 수
+    # 있게 한다(등록 안 된 모델은 후보에 아예 나타나지 않는다 — 이
+    # 함수가 보는 소스가 model_registry뿐이라 애초에 레지스트리 밖
+    # 모델은 추천 대상이 될 수 없다).
+    candidates = sorted(
+        (m for m in active if _provider_available(m["provider"])),
+        key=lambda m: (
+            rank_key(m),
+            m["provider"] != current_provider,
+            m["provider"],
+            m["name"],
+        ),
+    )
+    candidate_list = [
+        {
+            "provider": m["provider"],
+            "model": m["name"],
+            "tier_mapped": tier in (m.get("optimization_tiers") or []),
+        }
+        for m in candidates
+    ]
+
+    if current_provider and current_model and candidates:
+        top = candidates[0]
+        if top["provider"] == current_provider and top["name"] == current_model:
             return {
                 "provider": current_provider,
                 "model": current_model,
                 "changed": False,
                 "note": "현재 설정이 이미 이 역할의 특성에 적합합니다.",
+                "candidates": candidate_list,
             }
 
-    provider_order = [current_provider] if current_provider else []
-    provider_order += [p for p in ("anthropic", "openai", "ollama") if p != current_provider]
-
-    best: dict | None = None
-    best_key = (len(preference) + 1, 1)
-    for provider in provider_order:
-        if not _provider_available(provider):
-            continue
-        candidates = sorted(
-            (m for m in active if m["provider"] == provider), key=lambda m: m["name"]
-        )
-        for m in candidates:
-            key = rank_key(provider, m["name"])
-            if key < best_key:
-                best = {"provider": provider, "model": m["name"]}
-                best_key = key
-        if best is not None and best_key == (0, 0):
-            break  # 이 provider에서 최선(비용등급+태그 모두 만족)을 찾았으면 더 볼 필요 없음
-
-    if best is None:
+    if not candidate_list:
         return {
             "provider": current_provider,
             "model": current_model,
             "changed": False,
             "note": "API 키가 설정된 provider 중 활성 모델을 찾지 못해 현재 설정을 유지합니다.",
+            "candidates": [],
         }
 
+    best = candidate_list[0]
     changed = best["provider"] != current_provider or best["model"] != current_model
+    if not changed:
+        note = "현재 설정을 유지합니다."
+    elif best["tier_mapped"]:
+        note = f"관리자가 '{_TIER_LABELS[tier]}' tier에 직접 매핑한 모델로 전환을 추천합니다."
+    else:
+        note = f"{tier} 역할 특성에 더 적합한 모델로 전환을 추천합니다(이름 패턴 기반 추정)."
     return {
         "provider": best["provider"],
         "model": best["model"],
         "changed": changed,
-        "note": (
-            "현재 설정을 유지합니다." if not changed
-            else f"{tier} 역할 특성에 더 적합한 모델로 전환을 추천합니다(이름 패턴 기반 추정)."
-        ),
+        "note": note,
+        "candidates": candidate_list,
     }
 
 
@@ -295,6 +345,7 @@ def recommend_for_agent(conn: sqlite3.Connection, agent_id: int) -> dict:
             "provider": model_rec["provider"],
             "model": model_rec["model"],
             "tuning_config": recommended_tuning,
+            "candidates": model_rec["candidates"],
         },
         "tuning_diff": tuning_diff,
         "changed": changed,
@@ -319,7 +370,9 @@ def refine_with_llm(conn: sqlite3.Connection, agent_id: int) -> dict:
     (절대 사용할 수 없는 모델을 추천하지 않는다)."""
     rule_based = recommend_for_agent(conn, agent_id)
 
-    row = conn.execute("SELECT skill_tags FROM agent_pool WHERE id = ?", (agent_id,)).fetchone()
+    row = conn.execute(
+        "SELECT skill_tags FROM agent_pool WHERE id = ?", (agent_id,)
+    ).fetchone()
     skill_tags = json.loads(row["skill_tags"]) if row else []
     skill_descriptions = []
     if skill_tags:
@@ -338,8 +391,8 @@ def refine_with_llm(conn: sqlite3.Connection, agent_id: int) -> dict:
     system = (
         "당신은 AI 에이전트 플랫폼의 LLM 설정 최적화 보좌관입니다. 규칙 기반 "
         "1차 추천을 검토해 필요하면 보정하세요. 반드시 JSON 객체 하나만 "
-        "출력하세요: {\"provider\": ..., \"model\": ..., \"tuning_config\": "
-        "{...}, \"rationale\": \"...\"}. provider/model은 아래 '사용 가능한 "
+        '출력하세요: {"provider": ..., "model": ..., "tuning_config": '
+        '{...}, "rationale": "..."}. provider/model은 아래 \'사용 가능한 '
         "활성 모델' 목록에 실제로 있는 값만 쓸 수 있습니다 — 목록에 없는 "
         "모델은 절대 추천하지 마세요. tuning_config는 다음 키만 선택적으로 "
         "포함하세요: max_iter, max_rpm, max_execution_time, max_retry_limit, "
@@ -372,7 +425,8 @@ def refine_with_llm(conn: sqlite3.Connection, agent_id: int) -> dict:
         tuning = AgentTuningConfig(**(parsed.get("tuning_config") or {})).model_dump(
             exclude_none=True
         )
-    except Exception as exc:  # noqa: BLE001 — 어떤 이유든 실패하면 안전하게 규칙 기반으로.
+    except Exception as exc:  # noqa: BLE001
+        # 어떤 이유든 실패하면 안전하게 규칙 기반으로 되돌아간다.
         return {
             **rule_based,
             "source": "rule_based_fallback",

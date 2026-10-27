@@ -244,7 +244,9 @@ def test_gc_remove_dependency(client_and_conn):
     ).json()["tasks"][0]["id"]
 
     _login(client, "member1", "memberpass")
-    client.post(f"/api/tasks/{task_a}/dependencies", json={"depends_on_task_id": task_b})
+    client.post(
+        f"/api/tasks/{task_a}/dependencies", json={"depends_on_task_id": task_b}
+    )
     resp = client.delete(f"/api/tasks/{task_a}/dependencies/{task_b}")
     assert resp.status_code == 200, resp.text
 
@@ -263,7 +265,9 @@ def test_gc_dependency_activity_recorded_in_task_activity(client_and_conn):
     ).json()["tasks"][0]["id"]
 
     _login(client, "member1", "memberpass")
-    client.post(f"/api/tasks/{task_a}/dependencies", json={"depends_on_task_id": task_b})
+    client.post(
+        f"/api/tasks/{task_a}/dependencies", json={"depends_on_task_id": task_b}
+    )
 
     resp = client.get(f"/api/tasks/{task_a}/activity")
     assert resp.status_code == 200, resp.text
@@ -298,7 +302,9 @@ def test_gc_bottlenecks_detects_blocked_task(client_and_conn):
     ).json()["tasks"][0]["id"]
 
     _login(client, "member1", "memberpass")
-    client.post(f"/api/tasks/{task_a}/dependencies", json={"depends_on_task_id": task_b})
+    client.post(
+        f"/api/tasks/{task_a}/dependencies", json={"depends_on_task_id": task_b}
+    )
 
     _login(client, "admin1", "adminpass")
     resp = client.get("/api/dashboard/bottlenecks")
@@ -320,9 +326,9 @@ def test_gc_bottlenecks_detects_repeated_rejection(client_and_conn):
         deliverable_id = resp.json()["id"]
         client.post(f"/api/deliverables/{deliverable_id}/submit")
         resp = client.get(f"/api/tasks/{task_id}/deliverables")
-        approval_id = next(
-            d for d in resp.json() if d["id"] == deliverable_id
-        )["approval_id"]
+        approval_id = next(d for d in resp.json() if d["id"] == deliverable_id)[
+            "approval_id"
+        ]
         _login(client, "admin1", "adminpass")
         client.post(f"/api/approvals/{approval_id}/decide", json={"approve": False})
 
@@ -333,7 +339,7 @@ def test_gc_bottlenecks_detects_repeated_rejection(client_and_conn):
 
 
 def test_gc_dashboard_summary_includes_workload_and_bottlenecks(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "admin1", "adminpass")
     resp = client.get("/api/dashboard")
     assert resp.status_code == 200, resp.text

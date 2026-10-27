@@ -108,7 +108,12 @@ def test_update_tool_rejects_kind_change_and_revalidates_config(client_and_conn)
         "SELECT id FROM users WHERE username = 'admin1'"
     ).fetchone()["id"]
     tool_id = pool_registry.create_tool(
-        conn, admin_id, "웹검색 도구", "설명 v1", "native", {"native_id": "web_search"}
+        conn,
+        admin_id,
+        "웹검색 도구",
+        "설명 v1",
+        "native",
+        {"native_id": "tavily_search"},
     )
 
     pool_registry.update_tool(conn, admin_id, tool_id, description="설명 v2")
@@ -178,16 +183,14 @@ def test_update_tool_and_skill_pool_endpoints_rbac(client_and_conn):
         "SELECT id FROM users WHERE username = 'admin1'"
     ).fetchone()["id"]
     native_tool_id = pool_registry.create_tool(
-        conn, admin_id, "네이티브 도구", "", "native", {"native_id": "web_search"}
+        conn, admin_id, "네이티브 도구", "", "native", {"native_id": "tavily_search"}
     )
     mcp_tool_id = pool_registry.create_tool(
         conn, admin_id, "MCP 도구", "", "mcp_remote", {"url": "http://localhost:9000"}
     )
     skill_id = pool_registry.create_skill(conn, admin_id, "임시스킬2", "")
 
-    resp = client.post(
-        "/login", json={"username": "member1", "password": "memberpass"}
-    )
+    resp = client.post("/login", json={"username": "member1", "password": "memberpass"})
     assert resp.status_code == 200
     resp = client.patch(f"/api/tool-pool/{native_tool_id}", json={"description": "x"})
     assert resp.status_code == 403
@@ -202,7 +205,9 @@ def test_update_tool_and_skill_pool_endpoints_rbac(client_and_conn):
         f"/api/tool-pool/{native_tool_id}", json={"description": "매니저 수정"}
     )
     assert resp.status_code == 200
-    resp = client.patch(f"/api/skill-pool/{skill_id}", json={"description": "매니저 수정"})
+    resp = client.patch(
+        f"/api/skill-pool/{skill_id}", json={"description": "매니저 수정"}
+    )
     assert resp.status_code == 200
     # mcp_remote는 매니저가 수정 못 한다(등록과 같은 제한).
     resp = client.patch(
@@ -324,46 +329,52 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     assert [t.name for t in tools] == ["knowledge_base_search"]
 
 
-def test_gc196_init_schema_seeds_websearch_pool(client_and_conn):
+def test_gc196_init_schema_seeds_tavily_realtime_search_pool(client_and_conn):
     """사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
-    API(가능한 무료)를... 추가해줘") — 같은 방식으로, 외부 자료
-    검색(Wikipedia) native Tool과 "외부검색" skill_pool 항목이 스키마
-    초기화 시 자동으로 채워지고, "외부검색" 스킬을 가진 Agent에 실제로
-    그 Tool이 연결되는지 확인한다.
+    API(가능한 무료)를... 추가해줘") — 같은 방식으로, 실시간 웹 검색
+    native Tool과 "실시간웹검색" skill_pool 항목이 스키마 초기화 시
+    자동으로 채워지고, 그 스킬을 가진 Agent에 실제로 그 Tool이
+    연결되는지 확인한다.
 
     **정정(2026-10-06)**: 원래 "websearch"/"외부검색" 두 별칭이 모두
     있었으나, "필요 스킬" 자동완성에 완전히 같은 뜻이 두 번 떠 중복으로
-    보인다는 리포트로 "외부검색" 하나로 통합했다."""
+    보인다는 리포트로 "외부검색" 하나로 통합했다.
+
+    **대체(2026-10-26, "도구/skill에서 동작하지 않는 검색은
+    삭제해줘")**: 그 "외부검색"(Wikipedia)이 지속적인 Wikimedia IP
+    차단으로 시드에서 빠지고, 같은 자리를 "실시간웹검색"(Tavily)이
+    대신한다 — 이 테스트가 검증하는 "native 도구/스킬 시드 + Agent 연결"
+    메커니즘 자체는 동일하게 유효하다."""
     from contextlib import ExitStack
 
     _client, conn = client_and_conn
 
     tools = pool_registry.list_tools(conn)
     tool_names = {t["name"] for t in tools}
-    assert "외부 자료 검색(Wikipedia)" in tool_names
-    web_tool = next(t for t in tools if t["name"] == "외부 자료 검색(Wikipedia)")
-    assert web_tool["kind"] == "native"
-    assert web_tool["is_active"] is True
+    assert "실시간 웹 검색(Tavily)" in tool_names
+    tavily_tool = next(t for t in tools if t["name"] == "실시간 웹 검색(Tavily)")
+    assert tavily_tool["kind"] == "native"
+    assert tavily_tool["is_active"] is True
 
     skills = pool_registry.list_skills(conn)
     skill_names = {s["name"] for s in skills}
-    assert "외부검색" in skill_names
-    assert "websearch" not in skill_names
+    assert "실시간웹검색" in skill_names
+    assert "외부검색" not in skill_names  # 지속 차단으로 시드에서 제거됨
     for s in skills:
-        if s["name"] == "외부검색":
+        if s["name"] == "실시간웹검색":
             assert s["augmentation_mode"] == "tool"
 
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부지식 Agent', '[\"외부검색\"]', 'active')"
+        "('외부지식 Agent', '[\"실시간웹검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
     with ExitStack() as stack:
         resolved = pool_registry.resolve_pool_tools(
-            conn, stack, ["외부검색"], agent_id=agent_id
+            conn, stack, ["실시간웹검색"], agent_id=agent_id
         )
-    assert [t.name for t in resolved] == ["external_knowledge_search"]
+    assert [t.name for t in resolved] == ["realtime_web_search"]
 
 
 class _FakeGeneralWebSearchMCPAdapter:
@@ -419,11 +430,13 @@ def test_gc197_init_schema_seeds_general_websearch_mcp_pool(client_and_conn):
     agent_id = cur.lastrowid
     conn.commit()
 
-    with patch("crewai_tools.MCPServerAdapter", _FakeGeneralWebSearchMCPAdapter):
-        with ExitStack() as stack:
-            resolved = pool_registry.resolve_pool_tools(
-                conn, stack, ["일반웹검색"], agent_id=agent_id
-            )
+    with (
+        patch("crewai_tools.MCPServerAdapter", _FakeGeneralWebSearchMCPAdapter),
+        ExitStack() as stack,
+    ):
+        resolved = pool_registry.resolve_pool_tools(
+            conn, stack, ["일반웹검색"], agent_id=agent_id
+        )
     assert [t.name for t in resolved] == ["web_search"]
 
 
@@ -448,12 +461,15 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
 
     resp = client.get("/api/tool-pool")
     assert resp.status_code == 200
-    # 시드된 VectorDB/GraphDB/recommend_fix/외부검색/일반웹검색(5) +
-    # 2026-10-14 "기본 배포에 Tool을 포함해줘"로 추가된 레퍼런스 파이프라인
-    # custom_python 도구 5개(Spec EARS 린터·실패모드 기계적 도출·골든셋
-    # 커버리지 체커·분석 프레임워크 템플릿 생성기·발표자료 아웃라인 생성기) +
-    # 2026-10-14(PM/AA/DA 등 기획→개발 팀 구성)로 추가된 "테스트 케이스
-    # 기계적 도출" 1개(= 10 + 1 = 11).
+    # 시드된 VectorDB/GraphDB/recommend_fix/일반웹검색/Tavily 실시간웹검색
+    # (5 — 2026-10-26 "대화에서 외부 검색이 가능한 방법을 제안해줘"로
+    # Tavily를 추가하고, 같은 날 "도구/skill에서 동작하지 않는 검색은
+    # 삭제해줘"로 지속 차단된 외부검색(Wikipedia)을 빼서 개수는 그대로
+    # 5) + 2026-10-14 "기본 배포에 Tool을 포함해줘"로 추가된 레퍼런스
+    # 파이프라인 custom_python 도구 5개(Spec EARS 린터·실패모드 기계적
+    # 도출·골든셋 커버리지 체커·분석 프레임워크 템플릿 생성기·발표자료
+    # 아웃라인 생성기) + 2026-10-14(PM/AA/DA 등 기획→개발 팀 구성)로
+    # 추가된 "테스트 케이스 기계적 도출" 1개(= 10 + 1 = 11).
     assert len(resp.json()) == 11
 
     # 사용자 결정(2026-09-29, "(a) MCP 종류만 admin 전용으로 좁히기") —
@@ -472,11 +488,11 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.post(
         "/api/tool-pool", json={"name": "이상한도구", "kind": "native", "config": {}}
     )
-    assert resp.status_code == 400  # native인데 native_id가 없음(매니저도 native는 가능)
+    assert (
+        resp.status_code == 400
+    )  # native인데 native_id가 없음(매니저도 native는 가능)
 
-    resp = client.post(
-        "/login", json={"username": "admin1", "password": "adminpass"}
-    )
+    resp = client.post("/login", json={"username": "admin1", "password": "adminpass"})
     assert resp.status_code == 200
 
     resp = client.post(
@@ -509,10 +525,12 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     assert resp.status_code == 200
     assert (
         len(resp.json()) == 47
-    )  # 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 외부검색 1 +
-    # 일반웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복 통합으로
-    # 제거됨 — "websearch"는 "외부검색"과 완전히 같은 뜻이라 2026-10-06에
-    # 하나로 통합했다.
+    )  # 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 일반웹검색 1 +
+    # 실시간웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복
+    # 통합으로 제거됨. 2026-10-26 "대화에서 외부 검색이 가능한 방법을
+    # 제안해줘"로 실시간웹검색(Tavily)을 추가하고, 같은 날 "도구/skill
+    # 에서 동작하지 않는 검색은 삭제해줘"로 지속 차단된 외부검색
+    # (Wikipedia)을 빼서 개수는 그대로 22(1증1감).
     # + 2026-10-14 "기본 배포에 Skill을 포함해줘"로 추가된 레퍼런스
     # 파이프라인 Skill 15개(= 22 + 15 = 37).
     # + 2026-10-14(PM/AA/DA 등 기획→개발 팀 구성)로 추가된 Skill 9개
@@ -558,13 +576,13 @@ def test_gc_show_in_conversation_defaults_true_but_backfill_hides_non_native_too
     """새 컬럼은 생성 시 기본 True지만, `init_schema()`가 기본 시드
     스킬을 깔고 나면 mcp_remote/mcp_stdio/custom_python 도구가 붙은
     스킬(대화창 기본 AI 경로에서 구조적으로 실행 불가)은 자동으로
-    False가 돼야 한다 — native 3개(rag/graphdb/외부검색)는 그대로
+    False가 돼야 한다 — native 3개(rag/graphdb/실시간웹검색)는 그대로
     True."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     skills = {s["name"]: s for s in pool_registry.list_skills(conn)}
 
-    for name in ("rag", "graphdb", "외부검색"):
+    for name in ("rag", "graphdb", "실시간웹검색"):
         assert skills[name]["show_in_conversation"] is True
 
     hidden = {
@@ -614,18 +632,14 @@ def test_gc_create_and_update_skill_show_in_conversation(client_and_conn):
     )
     assert resp.status_code == 201
     skill_id = resp.json()["id"]
-    skill = next(
-        s for s in client.get("/api/skill-pool").json() if s["id"] == skill_id
-    )
+    skill = next(s for s in client.get("/api/skill-pool").json() if s["id"] == skill_id)
     assert skill["show_in_conversation"] is False
 
     resp = client.patch(
         f"/api/skill-pool/{skill_id}", json={"show_in_conversation": True}
     )
     assert resp.status_code == 200
-    skill = next(
-        s for s in client.get("/api/skill-pool").json() if s["id"] == skill_id
-    )
+    skill = next(s for s in client.get("/api/skill-pool").json() if s["id"] == skill_id)
     assert skill["show_in_conversation"] is True
 
 

@@ -14,11 +14,16 @@ Agent"의 실제 동작이다. 관계분석 쪽은 경계를 지키기 위해 `g
 
 사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
 API(가능한 무료)를... 추가해줘")로 "외부검색" skill_tags도
-같은 방식으로 지원한다 — `websearch.context_for_prompt()`(Wikipedia
+같은 방식으로 지원했다 — `websearch.context_for_prompt()`(Wikipedia
 검색, API 키 불필요·무료)로 VectorDB/GraphDB가 못 다루는 "조직 밖
-일반 지식"을 보강한다. ("websearch"/"vectordb"/"관계질의"는 각각
+일반 지식"을 보강했다. ("websearch"/"vectordb"/"관계질의"는 각각
 "외부검색"/"rag"/"graphdb"와 완전히 같은 뜻의 별칭이었으나 자동완성
-중복 리포트로 2026-10-06에 한쪽으로 통합됨.)
+중복 리포트로 2026-10-06에 한쪽으로 통합됨.) **이후(2026-10-26, "도구/
+skill에서 동작하지 않는 검색은 삭제해줘")** Wikimedia가 이 배포 환경의
+IP를 지속 차단해 "외부검색"은 시드에서 빠졌고, 같은 역할을 "실시간
+웹검색"(Tavily)이 대신한다 — 아래 처리 방식도 동일한 패턴
+(`pool_registry.resolve_static_augmentation_targets()`가 skill_pool
+데이터로 판별)을 그대로 쓴다.
 """
 
 from __future__ import annotations
@@ -30,7 +35,6 @@ from hair_platform import audit, graphquery, llm, pool_registry, vectorstore, we
 
 VECTORDB_SKILL_TAGS = {"rag"}
 GRAPHDB_SKILL_TAGS = {"graphdb"}
-WEBSEARCH_SKILL_TAGS = {"외부검색"}
 
 
 def augment_with_retrieval(
@@ -126,8 +130,14 @@ def retrieve_context(
             )
     if "graphdb_query" in native_ids:
         sections.append(graphquery.context_for_prompt(conn))
-    if "web_search" in native_ids:
-        sections.append(websearch.context_for_prompt(query))
+    if "tavily_search" in native_ids:
+        # 사용자 요청(2026-10-26, "대화에서 외부 검색이 가능한 방법을
+        # 제안해줘") — Parallel Search(MCP)는 대화창에서 구조적으로
+        # 호출 불가능했던 갭을 메운다. `tavily_context_for_prompt()`
+        # 자체가 실패를 문자열로 삼켜 돌려주는 계약이라(websearch.
+        # context_for_prompt()와 동일) 여기서 별도 예외 처리가 필요
+        # 없다.
+        sections.append(websearch.tavily_context_for_prompt(query))
     if not sections:
         return None
     return "\n\n".join(sections)
@@ -306,7 +316,9 @@ def set_model_config(
     return resolved_provider, resolved_model
 
 
-def set_tuning_config(conn: sqlite3.Connection, agent_id: int, actor_id: int, tuning: dict) -> dict:
+def set_tuning_config(
+    conn: sqlite3.Connection, agent_id: int, actor_id: int, tuning: dict
+) -> dict:
     """사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해 Finetuning
     하는 기능") — CrewAI `Agent`/`LLM`의 동작 파라미터(max_iter/max_rpm/
     max_execution_time/max_retry_limit/reasoning/allow_code_execution/
@@ -343,7 +355,9 @@ def set_tuning_config(conn: sqlite3.Connection, agent_id: int, actor_id: int, tu
     return cleaned
 
 
-def set_persona(conn: sqlite3.Connection, agent_id: int, actor_id: int, **fields) -> dict:
+def set_persona(
+    conn: sqlite3.Connection, agent_id: int, actor_id: int, **fields
+) -> dict:
     """사용자 요청(2026-10-20, "CrewAI 에이전트... goal, backstory...
     상세조정하고 수정하기 위한 고급 에이전트 관리 기능") — 지금까지
     `Agent.goal`/`backstory`/`Task.expected_output`은 전부
@@ -378,7 +392,7 @@ def set_persona(conn: sqlite3.Connection, agent_id: int, actor_id: int, **fields
     set_clauses = [f"{key} = ?" for key in fields]
     values = list(fields.values()) + [agent_id]
     conn.execute(
-        f"UPDATE agent_pool SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+        f"UPDATE agent_pool SET {', '.join(set_clauses)} WHERE id = ?",
         values,
     )
     audit.record(

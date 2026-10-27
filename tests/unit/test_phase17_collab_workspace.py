@@ -534,9 +534,9 @@ def test_gc173_admin_approves_submitted_human_deliverable(client_and_conn):
     client.post(f"/api/deliverables/{deliverable_id}/submit")
 
     resp = client.get(f"/api/tasks/{task_id}/deliverables")
-    approval_id = next(
-        d for d in resp.json() if d["id"] == deliverable_id
-    )["approval_id"]
+    approval_id = next(d for d in resp.json() if d["id"] == deliverable_id)[
+        "approval_id"
+    ]
 
     _login(client, "admin1", "adminpass")
     resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
@@ -631,9 +631,9 @@ def test_gc178_my_work_reflects_approved_final_result(client_and_conn):
     client.post(f"/api/deliverables/{deliverable_id}/submit")
 
     tasks_resp = client.get(f"/api/tasks/{task_id}/deliverables")
-    approval_id = next(
-        d for d in tasks_resp.json() if d["id"] == deliverable_id
-    )["approval_id"]
+    approval_id = next(d for d in tasks_resp.json() if d["id"] == deliverable_id)[
+        "approval_id"
+    ]
 
     _login(client, "admin1", "adminpass")
     client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
@@ -659,9 +659,9 @@ def test_gc179_rejected_deliverable_is_not_reported_as_final_result(client_and_c
     client.post(f"/api/deliverables/{deliverable_id}/submit")
 
     tasks_resp = client.get(f"/api/tasks/{task_id}/deliverables")
-    approval_id = next(
-        d for d in tasks_resp.json() if d["id"] == deliverable_id
-    )["approval_id"]
+    approval_id = next(d for d in tasks_resp.json() if d["id"] == deliverable_id)[
+        "approval_id"
+    ]
 
     _login(client, "admin1", "adminpass")
     client.post(f"/api/approvals/{approval_id}/decide", json={"approve": False})
@@ -1239,7 +1239,7 @@ def test_gc189_execute_agent_records_and_exposes_retrieved_context(client_and_co
     `agent_execution_jobs.retrieved_context`에 남기고 job 조회 응답으로
     노출해야 한다."""
     client, conn = client_and_conn
-    brief_id, task_id = _make_brief_and_task(client, "정책 문의 응답", ["rag"])
+    _brief_id, task_id = _make_brief_and_task(client, "정책 문의 응답", ["rag"])
     _login(client, "admin1", "adminpass")
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[\"rag\"]', 'active')",
@@ -1262,7 +1262,9 @@ def test_gc189_execute_agent_records_and_exposes_retrieved_context(client_and_co
     _login(client, "manager1", "managerpass")
     with (
         patch("openai.OpenAI", return_value=fake_client),
-        patch("hair_platform.llm.call_llm", return_value="수습 기간 중이라 불가합니다."),
+        patch(
+            "hair_platform.llm.call_llm", return_value="수습 기간 중이라 불가합니다."
+        ),
     ):
         resp = client.post(f"/api/tasks/{task_id}/execute-agent", json={})
     assert resp.status_code == 202, resp.text
@@ -1311,9 +1313,7 @@ def test_gc211_users_names_endpoint_exposes_minimal_fields_to_admin_and_manager(
     필요한 최소 필드(id/username/role)만 돌려준다. 비활성 계정은
     연결 대상이 아니므로 제외한다."""
     client, conn = client_and_conn
-    conn.execute(
-        "UPDATE users SET is_active = 0 WHERE username = 'viewer1'"
-    )
+    conn.execute("UPDATE users SET is_active = 0 WHERE username = 'viewer1'")
     conn.commit()
 
     _login(client, "manager1", "managerpass")
@@ -1409,13 +1409,17 @@ def test_gc215_match_result_flags_unlinked_human_candidate(client_and_conn):
     둘 다 정확히 구분돼야 한다."""
     client, conn = client_and_conn
     member1_id = _member1_id(conn)
-    brief_id, task_id = _make_brief_and_task(client, "백엔드 개발자", ["python"])
+    _brief_id, task_id = _make_brief_and_task(client, "백엔드 개발자", ["python"])
 
     _login(client, "admin1", "adminpass")
     resp = client.post(
         "/api/human-pool",
-        json={"name": "연결됨", "role": "백엔드 개발자", "skill_tags": ["python"],
-              "user_id": member1_id},
+        json={
+            "name": "연결됨",
+            "role": "백엔드 개발자",
+            "skill_tags": ["python"],
+            "user_id": member1_id,
+        },
     )
     linked_id = resp.json()["id"]
     resp = client.post(
@@ -1463,8 +1467,8 @@ def test_gc217_list_task_assignments_shows_current_and_superseded_status(
     재배치로 기존 confirmed가 superseded로 바뀌는 것까지 구분해서
     보여야 "업무 요청" 화면의 할 일 상세가 정확한 현재 상태를 그릴 수
     있다."""
-    client, conn = client_and_conn
-    brief_id, task_id = _make_brief_and_task(client, "백엔드 개발자")
+    client, _conn = client_and_conn
+    _brief_id, task_id = _make_brief_and_task(client, "백엔드 개발자")
 
     resp = client.post(
         "/api/human-pool", json={"name": "김과장", "role": "백엔드 개발자"}

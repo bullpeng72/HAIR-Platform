@@ -103,9 +103,9 @@ def test_gc38_sandbox_failure_cannot_be_bypassed_into_success(client_and_conn):
     # 빈 상태로 시작하지 않는다(레퍼런스 파이프라인 Agent 12개가 항상
     # 시드돼 있음) — 그래서 "0건"이 아니라 "이 테스트가 시작하기 전
     # 대비 늘지 않았는지"를 기준으로 삼는다.
-    baseline_count = conn.execute(
-        "SELECT COUNT(*) AS c FROM agent_pool"
-    ).fetchone()["c"]
+    baseline_count = conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()[
+        "c"
+    ]
     brief_id, task_id = _make_brief_with_task(client, "디자이너")
 
     with patch(

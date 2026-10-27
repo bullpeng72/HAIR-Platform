@@ -192,8 +192,8 @@ def _static_augmentation(
             )
     if "graphdb_query" in native_ids:
         parts.append(graphquery.context_for_prompt(conn))
-    if "web_search" in native_ids:
-        parts.append(websearch.context_for_prompt(description))
+    if "tavily_search" in native_ids:
+        parts.append(websearch.tavily_context_for_prompt(description))
     if not parts:
         return description
     return "\n\n".join(parts) + f"\n\n요청: {description}"
@@ -228,10 +228,10 @@ def _reset_crewai_local_task_output_storage() -> None:
         )
 
         KickoffTaskOutputsSQLiteStorage().delete_all()
-    except Exception:
-        # 이 캐시는 우리 기능에 전혀 쓰이지 않는 CrewAI 내부 전용
-        # replay 스토리지다 — 비우기 자체가 실패해도(예: 파일 권한)
-        # Crew 실행 자체를 막을 이유는 없다.
+    except Exception:  # noqa: S110, BLE001 — 이 캐시는 우리 기능에 전혀 쓰이지
+        # 않는 CrewAI 내부 전용 replay 스토리지다 — 비우기 자체가 실패해도
+        # (예: 파일 권한) Crew 실행 자체를 막을 이유가 없고, 아무도 보지
+        # 않는 내부 캐시 정리 실패를 로그로 남길 가치도 없다.
         pass
 
 
@@ -662,7 +662,9 @@ def run_crew(
                 "한 번에 하나씩):\n"
                 '{"task": "로그인 화면의 입력 검증 로직을 구현하세요", '
                 '"context": "이메일 형식과 비밀번호 길이를 검사해야 합니다", '
-                '"coworker": "' + (worker_rows[0]["role_name"] if worker_rows else "") + '"}\n'
+                '"coworker": "'
+                + (worker_rows[0]["role_name"] if worker_rows else "")
+                + '"}\n'
                 "절대 금지(이렇게 배열로 여러 명을 한 번에 묶어 보내면 "
                 "형식 오류로 위임 자체가 실패합니다): "
                 '[{"task": "...", "coworker": "A"}, {"task": "...", "coworker": "B"}]'
@@ -761,7 +763,7 @@ def run_crew(
             if on_task_complete is not None:
                 try:
                     on_task_complete(completion)
-                except Exception:  # noqa: BLE001 — 진행 상황 기록은 부가 기능
+                except Exception:  # noqa: S110, BLE001 — 진행 상황 기록은 부가 기능
                     pass
 
         crew_kwargs: dict[str, object] = {

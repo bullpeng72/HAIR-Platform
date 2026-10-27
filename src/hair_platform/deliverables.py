@@ -233,7 +233,9 @@ def list_participants(conn: sqlite3.Connection, task_id: int) -> list[dict]:
                 "SELECT role_name, name FROM agent_pool WHERE id = ?",
                 (entry["participant_id"],),
             ).fetchone()
-            entry["display_name"] = (agent["name"] or agent["role_name"]) if agent else None
+            entry["display_name"] = (
+                (agent["name"] or agent["role_name"]) if agent else None
+            )
         else:
             user = conn.execute(
                 "SELECT username FROM users WHERE id = ?", (entry["participant_id"],)
@@ -1100,7 +1102,8 @@ def run_agent_execution_job(
             },
         )
         conn.commit()
-    except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계, 위 docstring 참고
+    except Exception as exc:  # noqa: BLE001
+        # 백그라운드 작업의 최종 경계다 — 위 docstring 참고.
         conn.rollback()
         friendly_error = _friendly_execution_error(exc)
         conn.execute(
@@ -1248,7 +1251,7 @@ def start_adhoc_crew_execution(
         raise ValueError("no_agents_selected")
     placeholders = ",".join("?" * len(agent_ids))
     active_count = conn.execute(
-        f"SELECT COUNT(*) AS c FROM agent_pool WHERE id IN ({placeholders}) "  # noqa: S608
+        f"SELECT COUNT(*) AS c FROM agent_pool WHERE id IN ({placeholders}) "
         "AND status = 'active'",
         agent_ids,
     ).fetchone()["c"]
@@ -1295,7 +1298,9 @@ def _persist_partial_crew_outputs(
     측정 불가능하다 — 거짓 점수를 채우지 않고 전부 `not_measured`로
     정직하게 남긴다(이미 있는 Gate B/E "미평가" 배지 표시를 그대로
     재사용)."""
-    not_measured_gate_scores = {gid: {"not_measured": True} for gid in agent_evaluation.GATE_IDS}
+    not_measured_gate_scores = {
+        gid: {"not_measured": True} for gid in agent_evaluation.GATE_IDS
+    }
     for agent_id, output_raw in partial_outputs.items():
         job_id = job_by_agent_id.get(agent_id)
         if job_id is None:
@@ -1386,8 +1391,14 @@ def run_adhoc_crew_job(
             partial_outputs[c["agent_id"]] = c["output_raw"]
 
     run_id = crew_history.create_run(
-        conn, task_id, "adhoc", actor_id, agent_ids, process,
-        manager_agent_id=manager_agent_id, task_descriptions=task_descriptions,
+        conn,
+        task_id,
+        "adhoc",
+        actor_id,
+        agent_ids,
+        process,
+        manager_agent_id=manager_agent_id,
+        task_descriptions=task_descriptions,
     )
     crew_run_completed = False
     try:
@@ -1429,7 +1440,9 @@ def run_adhoc_crew_job(
             agent_evaluation.record_evaluation(
                 conn, deliverable_id, result["gate_scores"], result["tcr"]
             )
-            approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
+            approvals.create_approval_chain(
+                conn, actor_id, "deliverable", deliverable_id
+            )
             conn.execute(
                 "UPDATE agent_execution_jobs SET status = 'succeeded', deliverable_id = ?, "
                 "finished_at = datetime('now') WHERE id = ?",
@@ -1474,7 +1487,11 @@ def run_adhoc_crew_job(
                 "agent_execution_failed",
                 "agent_execution_jobs",
                 job_id,
-                after={"task_id": task_id, "agent_id": agent_id, "error": friendly_error},
+                after={
+                    "task_id": task_id,
+                    "agent_id": agent_id,
+                    "error": friendly_error,
+                },
             )
         conn.commit()
 
@@ -1527,8 +1544,14 @@ def run_team_crew_job(
             partial_outputs[c["agent_id"]] = c["output_raw"]
 
     run_id = crew_history.create_run(
-        conn, task_id, "team", actor_id, agent_ids_for_history, process,
-        manager_agent_id=manager_agent_id, team_id=team_id,
+        conn,
+        task_id,
+        "team",
+        actor_id,
+        agent_ids_for_history,
+        process,
+        manager_agent_id=manager_agent_id,
+        team_id=team_id,
     )
     crew_run_completed = False
     try:
@@ -1564,7 +1587,9 @@ def run_team_crew_job(
             agent_evaluation.record_evaluation(
                 conn, deliverable_id, result["gate_scores"], result["tcr"]
             )
-            approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
+            approvals.create_approval_chain(
+                conn, actor_id, "deliverable", deliverable_id
+            )
             conn.execute(
                 "UPDATE agent_execution_jobs SET status = 'succeeded', deliverable_id = ?, "
                 "finished_at = datetime('now') WHERE id = ?",
@@ -1610,7 +1635,11 @@ def run_team_crew_job(
                 "agent_execution_failed",
                 "agent_execution_jobs",
                 job_id,
-                after={"task_id": task_id, "agent_id": agent_id, "error": friendly_error},
+                after={
+                    "task_id": task_id,
+                    "agent_id": agent_id,
+                    "error": friendly_error,
+                },
             )
         conn.commit()
 
@@ -1667,7 +1696,7 @@ def start_crew_run_retry(
     if completed_agent_ids:
         rows = conn.execute(
             "SELECT author_id, content FROM deliverables WHERE task_id = ? "
-            "AND author_type = 'agent' AND author_id IN ({})".format(  # noqa: S608
+            "AND author_type = 'agent' AND author_id IN ({})".format(
                 ",".join("?" * len(completed_agent_ids))
             ),
             (run["task_id"], *completed_agent_ids),
@@ -2008,9 +2037,7 @@ def task_dependency_graph(conn: sqlite3.Connection, task_id: int) -> dict:
         nodes.append(dict(row))
     return {
         "nodes": nodes,
-        "edges": [
-            {"task_id": a, "depends_on_task_id": b} for a, b in sorted(edge_set)
-        ],
+        "edges": [{"task_id": a, "depends_on_task_id": b} for a, b in sorted(edge_set)],
     }
 
 

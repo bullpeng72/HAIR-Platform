@@ -166,8 +166,8 @@ def _ingest(
     model: str | None,
 ) -> dict:
     if provider is None or model is None:
-        default_provider, default_model = vectorstore.resolve_default_provider_and_model(
-            conn
+        default_provider, default_model = (
+            vectorstore.resolve_default_provider_and_model(conn)
         )
         provider = provider or default_provider
         model = model or default_model
@@ -221,10 +221,14 @@ def list_documents(conn: sqlite3.Connection) -> list[dict]:
 
 
 def delete_document(conn: sqlite3.Connection, actor_id: int, document_id: int) -> None:
-    row = conn.execute("SELECT id FROM documents WHERE id = ?", (document_id,)).fetchone()
+    row = conn.execute(
+        "SELECT id FROM documents WHERE id = ?", (document_id,)
+    ).fetchone()
     if row is None:
         raise ValueError("document_not_found")
-    conn.execute("DELETE FROM knowledge_chunks WHERE source_document_id = ?", (document_id,))
+    conn.execute(
+        "DELETE FROM knowledge_chunks WHERE source_document_id = ?", (document_id,)
+    )
     conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
     audit.record(conn, actor_id, "document_deleted", "documents", document_id)
     conn.commit()

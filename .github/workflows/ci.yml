@@ -15,7 +15,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev]"
+      # 2026-10-27 패키징 점검 발견 — `tests/unit`의 CrewAI 연동 테스트
+      # 9개가 테스트 함수 안에서(수집 시점이 아니라 실행 시점에)
+      # `from crewai... import ...`를 하는데, `[dev]`만 설치하면
+      # crewai가 없어 그 테스트들이 `ModuleNotFoundError`로 깨진다
+      # (README "빠른 시작"의 같은 문제와 원인 동일). `all`(=
+      # crewai+mcp+llm+documents 묶음, pyproject.toml 참고)까지 같이
+      # 설치해야 전체 골든셋이 통과한다.
+      - run: pip install -e ".[dev,all]"
       - run: pytest tests/ -v
       - run: ruff check src tests
       - run: black --check --target-version py311 src tests

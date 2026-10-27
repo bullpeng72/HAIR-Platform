@@ -107,7 +107,8 @@ def test_gc_mention_triggers_agent_and_posts_comment_only(client_and_conn):
     deliverable_id = resp.json()["id"]
 
     with patch(
-        "hair_platform.agent_runtime.execute_agent", return_value="호출에 대한 답변입니다"
+        "hair_platform.agent_runtime.execute_agent",
+        return_value="호출에 대한 답변입니다",
     ) as mock_exec:
         resp = client.post(
             f"/api/deliverables/{deliverable_id}/comments",
@@ -169,7 +170,7 @@ def test_gc_mention_of_uninvited_agent_does_not_trigger(client_and_conn):
     client, conn = client_and_conn
     _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
     _login(client, "admin1", "adminpass")
-    cur = conn.execute(
+    conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[]', 'active')",
         ("초대 안 된 Agent",),
     )
@@ -279,9 +280,7 @@ def test_gc_activity_includes_comment_triggered_execution(client_and_conn):
     )
     deliverable_id = resp.json()["id"]
 
-    with patch(
-        "hair_platform.agent_runtime.execute_agent", return_value="응답"
-    ):
+    with patch("hair_platform.agent_runtime.execute_agent", return_value="응답"):
         client.post(
             f"/api/deliverables/{deliverable_id}/comments",
             json={"content": "@호출용 Agent 활동 기록 확인"},

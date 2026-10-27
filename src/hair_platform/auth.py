@@ -90,7 +90,7 @@ def get_current_user(request: Request) -> sqlite3.Row:
         # 탭별 토큰(위 주석) — 있으면 쿠키 세션보다 우선한다. 같은 브라우저의
         # 다른 탭이 로그인/로그아웃해도 이 탭의 계정에는 영향이 없어야 한다.
         user_id = decode_session_token(
-            request.app.state.secret_key, auth_header[len("Bearer "):]
+            request.app.state.secret_key, auth_header[len("Bearer ") :]
         )
         if user_id is None:
             raise HTTPException(status_code=401, detail="세션이 유효하지 않습니다")

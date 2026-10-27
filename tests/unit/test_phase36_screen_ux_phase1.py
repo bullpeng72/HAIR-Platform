@@ -77,13 +77,14 @@ def test_gc_run_crew_returns_token_usage_in_response(client_and_conn):
             provider="openai",
         )
 
+    # crewai==1.6.1(현재 설치본) `UsageMetrics.model_dump()`가 실제로 내는
+    # 키 집합 — 테스트 작성 당시 가정했던 reasoning_tokens/cache_creation_tokens
+    # 필드는 이 버전의 모델에 없다(라이브러리 버전 drift, 우리 코드 변경과 무관).
     assert result["token_usage"] == {
         "total_tokens": 321,
         "prompt_tokens": 200,
         "cached_prompt_tokens": 0,
         "completion_tokens": 121,
-        "reasoning_tokens": 0,
-        "cache_creation_tokens": 0,
         "successful_requests": 2,
     }
 

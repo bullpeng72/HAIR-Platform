@@ -65,7 +65,12 @@ def test_gc96_init_schema_is_idempotent_on_fresh_db():
 @pytest.mark.parametrize(
     "removed_name,kept_name,tool_pool_name",
     [
-        ("websearch", "외부검색", "외부 자료 검색(Wikipedia)"),
+        # "websearch"/"외부검색" 케이스(원래 세 번째였던 "외부 자료 검색
+        # (Wikipedia)")는 사용자 요청(2026-10-26, "도구/skill에서 동작하지
+        # 않는 검색은 삭제해줘")로 그 tool_pool 시드 자체가 빠지면서
+        # 제거했다 — 이 테스트는 "별칭 통합" 메커니즘 자체를 검증하는
+        # 것이라, 여전히 시드되는 vectordb/graphdb 두 케이스만으로도
+        # 충분히 검증된다.
         ("vectordb", "rag", "VectorDB 지식검색"),
         ("관계질의", "graphdb", "GraphDB 관계조회"),
     ],

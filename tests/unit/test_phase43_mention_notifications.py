@@ -141,7 +141,8 @@ def test_opening_conversation_marks_mentions_as_read(client_and_conn):
     # 그 뒤에 온 새 멘션은 다시 "안 읽음"으로 떠야 한다.
     _login(client, "admin1", "adminpass")
     client.post(
-        f"/api/conversations/{conv_id}/messages", json={"content": "@member1 두 번째 호출"}
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "@member1 두 번째 호출"},
     )
     _login(client, "member1", "memberpass")
     second = client.get("/api/conversations/my-mentions").json()
@@ -154,7 +155,9 @@ def test_my_mentions_does_not_leak_mentions_from_conversations_i_am_not_in(
 ):
     client, _conn = client_and_conn
     _login(client, "admin1", "adminpass")
-    conv_id = client.post("/api/conversations", json={"title": "admin만의 방"}).json()["id"]
+    conv_id = client.post("/api/conversations", json={"title": "admin만의 방"}).json()[
+        "id"
+    ]
     # member1을 초대하지 않는다 — 참가자가 아니면 멘션돼도 안 보여야 한다.
     client.post(
         f"/api/conversations/{conv_id}/messages", json={"content": "@member1 안 초대됨"}

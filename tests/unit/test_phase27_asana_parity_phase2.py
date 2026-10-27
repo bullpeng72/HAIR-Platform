@@ -112,7 +112,7 @@ def test_gc_participant_can_invite_outsider(client_and_conn):
 def test_gc_non_participant_cannot_invite(client_and_conn):
     client, conn = client_and_conn
     _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
-    outsider_id = _create_outsider(client, "outsider1")
+    _create_outsider(client, "outsider1")
     another_id = _create_outsider(client, "outsider2")
 
     _login(client, "outsider1", "outsiderpass")
@@ -138,7 +138,7 @@ def test_gc_admin_can_invite_even_without_participation(client_and_conn):
 
 def test_gc_invited_human_can_comment_but_not_author_deliverable(client_and_conn):
     client, conn = client_and_conn
-    _brief_id, task_id, human_id = _setup_human_assignee_task(client, conn)
+    _brief_id, task_id, _human_id = _setup_human_assignee_task(client, conn)
     outsider_id = _create_outsider(client)
 
     _login(client, "admin1", "adminpass")

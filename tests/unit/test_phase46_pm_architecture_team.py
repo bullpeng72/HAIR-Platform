@@ -140,7 +140,9 @@ def test_gc_test_case_mechanical_derivation_tool_handles_no_requirements():
     ).fetchone()
     config = json.loads(row["config"])
     out = pool_registry._run_custom_python_tool(
-        config["function_source"], "요구사항이 전혀 없는 평문입니다.", config["timeout_seconds"]
+        config["function_source"],
+        "요구사항이 전혀 없는 평문입니다.",
+        config["timeout_seconds"],
     )
     assert "EARS" in out
 

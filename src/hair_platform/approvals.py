@@ -88,7 +88,9 @@ def skip_remaining_steps(
     )
 
 
-def describe_subject(conn: sqlite3.Connection, subject_type: str, subject_id: int) -> dict:
+def describe_subject(
+    conn: sqlite3.Connection, subject_type: str, subject_id: int
+) -> dict:
     """결재 대상을 사람이 알아볼 수 있는 정보로 풀어준다.
 
     사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나

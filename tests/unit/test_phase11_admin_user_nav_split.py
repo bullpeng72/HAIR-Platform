@@ -90,7 +90,11 @@ def test_gc74_every_tab_has_a_group_assigned():
     entries = _parse_tab_entries()
     assert len(entries) >= 13  # 회귀 방지: 탭이 실수로 통째로 사라지지 않았는지
     for e in entries:
-        assert e["group"] in ("user", "common", "admin"), f"{e['id']}에 group이 없습니다"
+        assert e["group"] in (
+            "user",
+            "common",
+            "admin",
+        ), f"{e['id']}에 group이 없습니다"
 
 
 def test_gc75_group_classification_matches_existing_rbac_roles():
@@ -103,13 +107,14 @@ def test_gc75_group_classification_matches_existing_rbac_roles():
     for e in entries:
         has_general_role = "member" in e["roles"] or "viewer" in e["roles"]
         if not has_general_role:
-            assert e["group"] == "admin", (
-                f"{e['id']}: roles={e['roles']}인데 group={e['group']} (기대값 admin)"
-            )
+            assert (
+                e["group"] == "admin"
+            ), f"{e['id']}: roles={e['roles']}인데 group={e['group']} (기대값 admin)"
         else:
-            assert e["group"] in ("user", "common"), (
-                f"{e['id']}: roles={e['roles']}인데 group={e['group']}"
-            )
+            assert e["group"] in (
+                "user",
+                "common",
+            ), f"{e['id']}: roles={e['roles']}인데 group={e['group']}"
 
 
 def test_gc76_admin_only_tab_is_flagged_and_truly_admin_only():
@@ -126,7 +131,7 @@ def test_gc76_admin_only_tab_is_flagged_and_truly_admin_only():
 
 
 def test_gc77_common_group_is_exactly_the_pure_reference_screens():
-    """"공용 조회" 그룹은 역할과 무관한 순수 조회 화면(인력 검색·조직도)만
+    """ "공용 조회" 그룹은 역할과 무관한 순수 조회 화면(인력 검색·조직도)만
     포함해야 한다 — 사용자 요청(2026-09-29, "관리자와 사용자 고유 업무와
     공통 업무를 구분해줘")에서 실측으로 뽑은 분류를 그대로 반영한다."""
     entries = {e["id"]: e for e in _parse_tab_entries()}

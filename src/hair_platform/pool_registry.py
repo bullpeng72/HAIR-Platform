@@ -33,7 +33,13 @@ from hair_platform import audit, graphquery, sandbox, vectorstore, websearch
 NATIVE_TOOL_FACTORIES = {
     "vectordb_search": vectorstore.as_crewai_tool,
     "graphdb_query": graphquery.as_crewai_tool,
-    "web_search": websearch.as_crewai_tool,
+    # "web_search"(Wikipedia)는 사용자 요청(2026-10-26, "도구/skill에서
+    # 동작하지 않는 검색은 삭제해줘")로 뺐다 — Wikimedia가 이 배포
+    # 환경의 IP를 지속 차단 중이라 db.py 시드에서도 빠졌다(세부 사유는
+    # `db.py`의 `_seed_default_pools()` 주석 참고). 코드 자체
+    # (`websearch.as_crewai_tool`)는 지우지 않았다 — 되살리려면 여기에
+    # 다시 추가.
+    "tavily_search": websearch.as_tavily_crewai_tool,
 }
 
 
@@ -210,7 +216,9 @@ def set_tool_active(
     conn.commit()
 
 
-def update_tool(conn: sqlite3.Connection, actor_id: int, tool_id: int, **fields) -> None:
+def update_tool(
+    conn: sqlite3.Connection, actor_id: int, tool_id: int, **fields
+) -> None:
     """사용자 요청(2026-10-20, "도구/스킬 Pool에 수정 기능을 추가해줘")
     — 지금까지 Tool Pool은 등록·활성화 토글·삭제만 있고, 설명이나
     config를 고치려면 지우고 다시 만들어야 했다. `kind`는 바꿀 수
@@ -249,7 +257,7 @@ def update_tool(conn: sqlite3.Connection, actor_id: int, tool_id: int, **fields)
         values.append(value)
     values.append(tool_id)
     conn.execute(
-        f"UPDATE tool_pool SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+        f"UPDATE tool_pool SET {', '.join(set_clauses)} WHERE id = ?",
         values,
     )
     audit.record(
@@ -340,7 +348,9 @@ def list_skills(conn: sqlite3.Connection) -> list[dict]:
     ]
 
 
-def update_skill(conn: sqlite3.Connection, actor_id: int, skill_id: int, **fields) -> None:
+def update_skill(
+    conn: sqlite3.Connection, actor_id: int, skill_id: int, **fields
+) -> None:
     """사용자 요청(2026-10-20, "도구/스킬 Pool에 수정 기능을 추가해줘")
     — `create_skill()`과 같은 검증(augmentation_mode 허용값)을 다시
     돌린다. `name`은 바꿀 수 없다(`update_tool()` 참고 — Agent의
@@ -375,7 +385,7 @@ def update_skill(conn: sqlite3.Connection, actor_id: int, skill_id: int, **field
         values.append(value)
     values.append(skill_id)
     conn.execute(
-        f"UPDATE skill_pool SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+        f"UPDATE skill_pool SET {', '.join(set_clauses)} WHERE id = ?",
         values,
     )
     audit.record(

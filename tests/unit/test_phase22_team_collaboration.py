@@ -483,9 +483,7 @@ def test_reorder_team_members_human_members_excluded_and_unaffected(client_and_c
     agent1 = _make_active_agent(conn, "A")
 
     _login(client, "admin1", "adminpass")
-    resp = client.post(
-        "/api/human-pool", json={"name": "이과장", "role": "리더"}
-    )
+    resp = client.post("/api/human-pool", json={"name": "이과장", "role": "리더"})
     human_id = resp.json()["id"]
     client.post(
         f"/api/teams/{team_id}/members",
@@ -535,7 +533,5 @@ def test_reorder_team_members_endpoint_requires_admin_or_manager(client_and_conn
 def test_reorder_team_members_endpoint_404_for_missing_team(client_and_conn):
     client, _conn = client_and_conn
     _login(client, "admin1", "adminpass")
-    resp = client.patch(
-        "/api/teams/999999/members/order", json={"member_row_ids": []}
-    )
+    resp = client.patch("/api/teams/999999/members/order", json={"member_row_ids": []})
     assert resp.status_code == 404, resp.text

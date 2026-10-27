@@ -61,7 +61,9 @@ def test_summary_generated_once_window_exceeded(client_and_conn):
     # 요약으로만 나와야 한다.
     assert "메시지 3" in transcript
     assert "메시지 12" in transcript
-    assert "메시지 0\n" not in transcript and not transcript.startswith("사용자: 메시지 0")
+    assert "메시지 0\n" not in transcript and not transcript.startswith(
+        "사용자: 메시지 0"
+    )
 
     row = conn.execute(
         "SELECT context_summary, context_summary_through_id FROM conversations WHERE id = ?",
@@ -113,7 +115,9 @@ def test_summary_incrementally_updated_as_window_slides(client_and_conn):
     ) as mock_summary:
         transcript = conversations._build_transcript(conn, conv_id)
         mock_summary.assert_called_once()
-        prompt_sent = mock_summary.call_args[0][3]  # call_llm(provider, model, system, prompt)
+        prompt_sent = mock_summary.call_args[0][
+            3
+        ]  # call_llm(provider, model, system, prompt)
 
     # 기존 요약(1차)과, 새로 밀려난 메시지(3~5)만 프롬프트에 들어가야
     # 한다 — 이미 요약에 들어간 0~2 원문을 또 보내면 비용이 매번 커진다.

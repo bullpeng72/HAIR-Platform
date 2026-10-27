@@ -131,14 +131,15 @@ def update_team_defaults(
     if (
         "default_manager_agent_id" in fields
         and fields["default_manager_agent_id"] is not None
-        and fields["default_manager_agent_id"] not in active_agent_member_ids(conn, team_id)
+        and fields["default_manager_agent_id"]
+        not in active_agent_member_ids(conn, team_id)
     ):
         raise ValueError("manager_must_be_active_agent_member_of_team")
 
     set_clauses = [f"{key} = ?" for key in fields]
     values = list(fields.values()) + [team_id]
     conn.execute(
-        f"UPDATE teams SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+        f"UPDATE teams SET {', '.join(set_clauses)} WHERE id = ?",
         values,
     )
     audit.record(

@@ -57,9 +57,11 @@ def create_run(
             json.dumps(agent_ids),
             process,
             manager_agent_id,
-            json.dumps(task_descriptions, ensure_ascii=False)
-            if task_descriptions is not None
-            else None,
+            (
+                json.dumps(task_descriptions, ensure_ascii=False)
+                if task_descriptions is not None
+                else None
+            ),
         ),
     )
     run_id = cur.lastrowid
@@ -173,7 +175,7 @@ def list_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[dict]:
 
 
 def list_recent_runs(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
-    """"Crew 빌더"의 전체 "실행 이력" 탭(admin/manager 전용, Task를
+    """ "Crew 빌더"의 전체 "실행 이력" 탭(admin/manager 전용, Task를
     가로지르는 조회)이 쓴다."""
     rows = conn.execute(
         "SELECT * FROM crew_runs ORDER BY id DESC LIMIT ?", (limit,)

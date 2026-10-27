@@ -42,47 +42,158 @@ TEST_CASE_DERIVER_SOURCE = 'def tool_fn(query: str) -> str:\n    import json, re
 
 # (name, description, function_source, timeout_seconds)
 TOOL_SPECS: list[tuple[str, str, str, int]] = [
-    ("Spec EARS 린터", "Spec 텍스트가 EARS 표기(WHEN/IF/WHILE ... THE SYSTEM SHALL ...)를 따르는지, [NEEDS CLARIFICATION] 태그가 남아 있어 HITL 승인을 막는지 자동 점검한다.", SPEC_EARS_LINT_SOURCE, 10),
-    ("실패모드 기계적 도출", "Spec의 EARS 요구사항 문장을 뒤집어 실패 모드 초안(트리거+실패 시 영향 질문)을 기계적으로 도출한다 — Spec과 실패 모드 카탈로그가 같은 문법의 파생 관계라는 하니스 메서드 원칙을 그대로 구현한다.", FAILURE_MODE_DERIVER_SOURCE, 10),
-    ("골든셋 커버리지 체커", "골든셋 완료조건(기준 목록)과 실제 산출물 텍스트를 비교해 기준별 키워드 충족 여부와 전체 커버리지 비율을 자동 채점한다 — Gate A-G 배치 채점 전 1차 점검으로 쓴다.", GOLDEN_SET_COVERAGE_SOURCE, 10),
-    ("분석 프레임워크 템플릿 생성기", "3C/4P/SWOT 중 지정한 프레임워크의 표준 분석 범주와 가이드 질문을 채워야 할 템플릿 형태로 생성한다 — 분석 자체가 아니라 빠짐없이 채우도록 돕는 구조화 도구다.", FRAMEWORK_TEMPLATE_SOURCE, 10),
-    ("발표자료 아웃라인 생성기", "보고서·기획서 등 긴 글을 마크다운 헤더(또는 문단) 단위로 나눠 슬라이드별 제목+핵심 불릿 형태의 발표자료 아웃라인으로 재구성한다.", PRESENTATION_OUTLINE_SOURCE, 10),
-    ("테스트 케이스 기계적 도출", "Spec의 EARS 요구사항 문장별로 positive/negative/boundary 세 케이스 골격(Given-When-Then)을 기계적으로 도출한다 — '실패모드 기계적 도출'과 같은 파생 원칙을 테스트 케이스 설계에 적용한다.", TEST_CASE_DERIVER_SOURCE, 10),
+    (
+        "Spec EARS 린터",
+        "Spec 텍스트가 EARS 표기(WHEN/IF/WHILE ... THE SYSTEM SHALL ...)를 따르는지, [NEEDS CLARIFICATION] 태그가 남아 있어 HITL 승인을 막는지 자동 점검한다.",
+        SPEC_EARS_LINT_SOURCE,
+        10,
+    ),
+    (
+        "실패모드 기계적 도출",
+        "Spec의 EARS 요구사항 문장을 뒤집어 실패 모드 초안(트리거+실패 시 영향 질문)을 기계적으로 도출한다 — Spec과 실패 모드 카탈로그가 같은 문법의 파생 관계라는 하니스 메서드 원칙을 그대로 구현한다.",
+        FAILURE_MODE_DERIVER_SOURCE,
+        10,
+    ),
+    (
+        "골든셋 커버리지 체커",
+        "골든셋 완료조건(기준 목록)과 실제 산출물 텍스트를 비교해 기준별 키워드 충족 여부와 전체 커버리지 비율을 자동 채점한다 — Gate A-G 배치 채점 전 1차 점검으로 쓴다.",
+        GOLDEN_SET_COVERAGE_SOURCE,
+        10,
+    ),
+    (
+        "분석 프레임워크 템플릿 생성기",
+        "3C/4P/SWOT 중 지정한 프레임워크의 표준 분석 범주와 가이드 질문을 채워야 할 템플릿 형태로 생성한다 — 분석 자체가 아니라 빠짐없이 채우도록 돕는 구조화 도구다.",
+        FRAMEWORK_TEMPLATE_SOURCE,
+        10,
+    ),
+    (
+        "발표자료 아웃라인 생성기",
+        "보고서·기획서 등 긴 글을 마크다운 헤더(또는 문단) 단위로 나눠 슬라이드별 제목+핵심 불릿 형태의 발표자료 아웃라인으로 재구성한다.",
+        PRESENTATION_OUTLINE_SOURCE,
+        10,
+    ),
+    (
+        "테스트 케이스 기계적 도출",
+        "Spec의 EARS 요구사항 문장별로 positive/negative/boundary 세 케이스 골격(Given-When-Then)을 기계적으로 도출한다 — '실패모드 기계적 도출'과 같은 파생 원칙을 테스트 케이스 설계에 적용한다.",
+        TEST_CASE_DERIVER_SOURCE,
+        10,
+    ),
 ]
 
 # (skill_name, description, tool_name) — tool_name은 위 TOOL_SPECS의 name과 매칭해 default_tool_pool_ids를 채운다.
 TOOL_SKILL_SPECS: list[tuple[str, str, str]] = [
-    ("spec-ears-lint", "Spec 텍스트가 EARS 표기(WHEN/IF/WHILE ... THE SYSTEM SHALL ...)를 따르는지, [NEEDS CLARIFICATION] 태그가 남아 있어 HITL 승인을 막는지 자동 점검한다.", "Spec EARS 린터"),
-    ("failure-mode-derivation", "Spec의 EARS 요구사항 문장을 뒤집어 실패 모드 초안(트리거+실패 시 영향 질문)을 기계적으로 도출한다 — Spec과 실패 모드 카탈로그가 같은 문법의 파생 관계라는 하니스 메서드 원칙을 그대로 구현한다.", "실패모드 기계적 도출"),
-    ("golden-set-coverage-check", "골든셋 완료조건(기준 목록)과 실제 산출물 텍스트를 비교해 기준별 키워드 충족 여부와 전체 커버리지 비율을 자동 채점한다 — Gate A-G 배치 채점 전 1차 점검으로 쓴다.", "골든셋 커버리지 체커"),
-    ("framework-template-generator", "3C/4P/SWOT 중 지정한 프레임워크의 표준 분석 범주와 가이드 질문을 채워야 할 템플릿 형태로 생성한다 — 분석 자체가 아니라 빠짐없이 채우도록 돕는 구조화 도구다.", "분석 프레임워크 템플릿 생성기"),
-    ("presentation-outline-builder", "보고서·기획서 등 긴 글을 마크다운 헤더(또는 문단) 단위로 나눠 슬라이드별 제목+핵심 불릿 형태의 발표자료 아웃라인으로 재구성한다.", "발표자료 아웃라인 생성기"),
-    ("test-case-mechanical-derivation", "Spec의 EARS 요구사항 문장별로 positive/negative/boundary 세 케이스 골격(Given-When-Then)을 기계적으로 도출한다 — '실패모드 기계적 도출'과 같은 파생 원칙을 테스트 케이스 설계에 적용한다.", "테스트 케이스 기계적 도출"),
+    (
+        "spec-ears-lint",
+        "Spec 텍스트가 EARS 표기(WHEN/IF/WHILE ... THE SYSTEM SHALL ...)를 따르는지, [NEEDS CLARIFICATION] 태그가 남아 있어 HITL 승인을 막는지 자동 점검한다.",
+        "Spec EARS 린터",
+    ),
+    (
+        "failure-mode-derivation",
+        "Spec의 EARS 요구사항 문장을 뒤집어 실패 모드 초안(트리거+실패 시 영향 질문)을 기계적으로 도출한다 — Spec과 실패 모드 카탈로그가 같은 문법의 파생 관계라는 하니스 메서드 원칙을 그대로 구현한다.",
+        "실패모드 기계적 도출",
+    ),
+    (
+        "golden-set-coverage-check",
+        "골든셋 완료조건(기준 목록)과 실제 산출물 텍스트를 비교해 기준별 키워드 충족 여부와 전체 커버리지 비율을 자동 채점한다 — Gate A-G 배치 채점 전 1차 점검으로 쓴다.",
+        "골든셋 커버리지 체커",
+    ),
+    (
+        "framework-template-generator",
+        "3C/4P/SWOT 중 지정한 프레임워크의 표준 분석 범주와 가이드 질문을 채워야 할 템플릿 형태로 생성한다 — 분석 자체가 아니라 빠짐없이 채우도록 돕는 구조화 도구다.",
+        "분석 프레임워크 템플릿 생성기",
+    ),
+    (
+        "presentation-outline-builder",
+        "보고서·기획서 등 긴 글을 마크다운 헤더(또는 문단) 단위로 나눠 슬라이드별 제목+핵심 불릿 형태의 발표자료 아웃라인으로 재구성한다.",
+        "발표자료 아웃라인 생성기",
+    ),
+    (
+        "test-case-mechanical-derivation",
+        "Spec의 EARS 요구사항 문장별로 positive/negative/boundary 세 케이스 골격(Given-When-Then)을 기계적으로 도출한다 — '실패모드 기계적 도출'과 같은 파생 원칙을 테스트 케이스 설계에 적용한다.",
+        "테스트 케이스 기계적 도출",
+    ),
 ]
 
 # (skill_name, description) — augmentation_mode='none'(지식 주입, 실행 가능한 Tool 없음).
 KNOWLEDGE_SKILL_SPECS: list[tuple[str, str]] = [
-    ("adr-template", "아키텍처 결정(인터페이스 선택, 재사용 vs 신규 작성, 데이터 흐름 변경, 하위 호환 여부 등)을 내린 직후, 구현을 시작하기 전에 ADR(결정·배경·대안·결과) 형식으로 문서화한다."),
-    ("code-review-checklist", "PR을 올리기 전 또는 리뷰할 때 코딩 컨벤션·에러 처리·테스트 커버리지·가독성을 점검하는 범용 체크리스트를 적용한다."),
-    ("commit-pr-message-rules", "커밋 메시지와 PR 설명을 팀 컨벤션(무엇을/왜 바꿨는지 명확히, 요약 + 근거 구조)에 맞게 작성한다."),
-    ("docs-style-guide", "README·설계 문서·API 레퍼런스 등 프로젝트 문서를 팀의 문서화 스타일(용어 통일, 예시 포함, 간결한 구조)에 맞게 작성·검토한다."),
-    ("incident-postmortem", "작업 중 심각한 오류·회귀가 발생했을 때 원인·대응·재발 방지책을 비난 없이(blameless) 기록한다."),
-    ("human-approval-loop", "Spec·ADR·설계 문서 등 HITL(Human-in-the-loop) 승인이 필요한 산출물은 사람이 승인할 때까지 피드백을 반영해 재작성한다 — HAIR의 결재함(approvals)을 통해 상신하고, 반려되면 반려 사유를 반영한 개정판을 다시 올린다(같은 사유가 반복되면 방향 자체를 재검토한다)."),
-    ("3c-4p-swot-framework", "3C(자사·고객·경쟁사), 4P(제품·가격·유통·판촉), SWOT(강점·약점·기회·위협) 분석 프레임워크로 시장·제품·전략을 구조적으로 진단한다 — 각 범주를 빠짐없이 채우고, 추측이 아니라 조사된 근거를 바탕으로 작성한다."),
-    ("business-plan-writing-guide", "기획서는 배경(왜 필요한가)·목표(무엇을 달성하는가)·실행계획(어떻게·누가·언제)·예산·리스크와 대응방안 순으로 구성한다 — 의사결정자가 한 번에 핵심을 파악하도록 결론을 앞에 둔다. 실행 가능한 전체 소스 코드를 작성하지 않는다 — 구현은 개발 역할의 몫이고, 기획서는 요구사항·설계 방향·완료 기준(완료를 어떻게 확인할지)까지만 제시한다. 핵심 로직을 설명해야 하면 의사코드나 10줄 이내의 짧은 예시 스니펫만 쓴다."),
-    ("business-strategy-formulation", "사업 전략은 시장·경쟁 분석 → 목표 고객·포지셔닝 설정 → 차별화 전략 → 실행 로드맵 → 성과지표(KPI) 순으로 수립한다 — 분석 없이 바로 전략부터 제시하지 않는다(3C/4P/SWOT 분석 결과를 전제로 삼는다)."),
-    ("executive-report-writing-style", "C-level 보고서는 '핵심 요약(한눈에 결론)'을 맨 앞에 두고, 숫자·데이터 근거를 명시하며, 결론 → 근거 → 권고(Action) 순서로 1페이지 안에 의사결정에 필요한 정보를 압축한다 — 배경 설명을 길게 늘어놓지 않는다."),
+    (
+        "adr-template",
+        "아키텍처 결정(인터페이스 선택, 재사용 vs 신규 작성, 데이터 흐름 변경, 하위 호환 여부 등)을 내린 직후, 구현을 시작하기 전에 ADR(결정·배경·대안·결과) 형식으로 문서화한다.",
+    ),
+    (
+        "code-review-checklist",
+        "PR을 올리기 전 또는 리뷰할 때 코딩 컨벤션·에러 처리·테스트 커버리지·가독성을 점검하는 범용 체크리스트를 적용한다.",
+    ),
+    (
+        "commit-pr-message-rules",
+        "커밋 메시지와 PR 설명을 팀 컨벤션(무엇을/왜 바꿨는지 명확히, 요약 + 근거 구조)에 맞게 작성한다.",
+    ),
+    (
+        "docs-style-guide",
+        "README·설계 문서·API 레퍼런스 등 프로젝트 문서를 팀의 문서화 스타일(용어 통일, 예시 포함, 간결한 구조)에 맞게 작성·검토한다.",
+    ),
+    (
+        "incident-postmortem",
+        "작업 중 심각한 오류·회귀가 발생했을 때 원인·대응·재발 방지책을 비난 없이(blameless) 기록한다.",
+    ),
+    (
+        "human-approval-loop",
+        "Spec·ADR·설계 문서 등 HITL(Human-in-the-loop) 승인이 필요한 산출물은 사람이 승인할 때까지 피드백을 반영해 재작성한다 — HAIR의 결재함(approvals)을 통해 상신하고, 반려되면 반려 사유를 반영한 개정판을 다시 올린다(같은 사유가 반복되면 방향 자체를 재검토한다).",
+    ),
+    (
+        "3c-4p-swot-framework",
+        "3C(자사·고객·경쟁사), 4P(제품·가격·유통·판촉), SWOT(강점·약점·기회·위협) 분석 프레임워크로 시장·제품·전략을 구조적으로 진단한다 — 각 범주를 빠짐없이 채우고, 추측이 아니라 조사된 근거를 바탕으로 작성한다.",
+    ),
+    (
+        "business-plan-writing-guide",
+        "기획서는 배경(왜 필요한가)·목표(무엇을 달성하는가)·실행계획(어떻게·누가·언제)·예산·리스크와 대응방안 순으로 구성한다 — 의사결정자가 한 번에 핵심을 파악하도록 결론을 앞에 둔다. 실행 가능한 전체 소스 코드를 작성하지 않는다 — 구현은 개발 역할의 몫이고, 기획서는 요구사항·설계 방향·완료 기준(완료를 어떻게 확인할지)까지만 제시한다. 핵심 로직을 설명해야 하면 의사코드나 10줄 이내의 짧은 예시 스니펫만 쓴다.",
+    ),
+    (
+        "business-strategy-formulation",
+        "사업 전략은 시장·경쟁 분석 → 목표 고객·포지셔닝 설정 → 차별화 전략 → 실행 로드맵 → 성과지표(KPI) 순으로 수립한다 — 분석 없이 바로 전략부터 제시하지 않는다(3C/4P/SWOT 분석 결과를 전제로 삼는다).",
+    ),
+    (
+        "executive-report-writing-style",
+        "C-level 보고서는 '핵심 요약(한눈에 결론)'을 맨 앞에 두고, 숫자·데이터 근거를 명시하며, 결론 → 근거 → 권고(Action) 순서로 1페이지 안에 의사결정에 필요한 정보를 압축한다 — 배경 설명을 길게 늘어놓지 않는다.",
+    ),
     # --- 기획→개발 실행 파이프라인(PM·아키텍처·개발계획·UI·QA, 2026-10-14) ---
-    ("pm-delivery-coordination", "기획 접수 → 요구사항 확정 → 설계 승인 → 개발 착수 → QA → 인수까지 단계별 진행 상태·담당 Agent·블로커를 추적한다. 각 단계 전환 전에 산출물이 HITL 승인을 받았는지 확인하고, 막힌 단계가 있으면 원인과 다음 조치를 명시한다 — 스스로 산출물을 만들지 않고 전체 진행을 조율·보고하는 역할이다."),
-    ("application-architecture-design-guide", "애플리케이션 아키텍처는 모듈 경계(무엇을 한 모듈로 묶을지) → 모듈 간 인터페이스(어떤 데이터를 어떻게 주고받을지) → 기술 스택 선정(왜 그 기술인지 대안과 비교) 순으로 설계한다 — 요구사항/스펙에 없는 기능을 임의로 추가하지 않고, 구현 난이도가 아니라 요구사항 충족을 기준으로 모듈을 나눈다."),
-    ("data-model-design-guide", "데이터 모델은 요구사항에서 다뤄지는 엔티티와 그 속성을 먼저 나열 → 엔티티 간 관계(1:1/1:N/N:M)를 정의 → 정규화 수준을 결정 → 조회 패턴(어떤 질의가 자주 발생하는지)에 맞춰 인덱스/비정규화 여부를 검토하는 순서로 진행한다 — ERD와 함께 왜 그 구조를 택했는지 근거를 남긴다."),
-    ("module-decomposition-and-task-assignment", "아키텍처 설계 산출물을 받아 독립적으로 개발 가능한 모듈 단위로 쪼개고, 모듈 간 의존성(어떤 모듈이 먼저 끝나야 다른 모듈을 시작할 수 있는지)을 표시한 뒤, 병렬로 진행 가능한 모듈은 서로 다른 개발자 Agent에 배분한다 — 배분 결과에는 각 모듈의 담당자·선행 조건·완료 기준이 포함돼야 한다."),
-    ("frontend-ui-implementation-guide", "프론트엔드 구현은 UI 기획(화면 흐름·컴포넌트 목록)을 먼저 확인하고, 컴포넌트 단위로 상태·이벤트 흐름을 분리하며, 접근성(키보드 조작·대비)과 반응형(화면 크기 대응)을 기본으로 고려한다 — 디자인에 없는 화면/동작을 임의로 추가하지 않는다."),
-    ("ui-ux-planning-guide", "UI/UX 기획은 사용자 시나리오(누가 어떤 목적으로 어떤 순서로 쓰는지) → 화면 흐름도(어떤 화면에서 어떤 화면으로 이동하는지) → 화면별 구성 요소와 인터랙션(클릭/입력 시 어떻게 반응하는지) 순으로 정리한다 — 요구사항/스펙에 없는 화면·기능을 임의로 추가하지 않는다."),
-    ("test-plan-and-case-design-guide", "테스트 계획은 테스트 범위(무엇을 테스트하고 무엇은 제외하는지) → 테스트 전략(단위/통합/E2E 중 어디에 집중할지) → 요구사항별 테스트 케이스(정상 케이스·예외 케이스·경계값) 순으로 작성한다 — 테스트 케이스는 실행 전 단계 산출물이라, 이 역할은 케이스를 설계만 하고 직접 실행(QA 기능테스터의 역할)하지 않는다."),
-    ("quality-acceptance-criteria-guide", "프로젝트 전체 품질/인수 기준은 Gate A-G 점수·테스트 커버리지·미해결 결함 심각도를 종합해 판정한다 — 개별 모듈이 통과해도 전체 인수 기준(예: 치명적 결함 0건, 핵심 요구사항 커버리지 100%)을 못 채우면 배포 불가로 판정하고, 무엇이 부족한지 구체적으로 남긴다."),
+    (
+        "pm-delivery-coordination",
+        "기획 접수 → 요구사항 확정 → 설계 승인 → 개발 착수 → QA → 인수까지 단계별 진행 상태·담당 Agent·블로커를 추적한다. 각 단계 전환 전에 산출물이 HITL 승인을 받았는지 확인하고, 막힌 단계가 있으면 원인과 다음 조치를 명시한다 — 스스로 산출물을 만들지 않고 전체 진행을 조율·보고하는 역할이다.",
+    ),
+    (
+        "application-architecture-design-guide",
+        "애플리케이션 아키텍처는 모듈 경계(무엇을 한 모듈로 묶을지) → 모듈 간 인터페이스(어떤 데이터를 어떻게 주고받을지) → 기술 스택 선정(왜 그 기술인지 대안과 비교) 순으로 설계한다 — 요구사항/스펙에 없는 기능을 임의로 추가하지 않고, 구현 난이도가 아니라 요구사항 충족을 기준으로 모듈을 나눈다.",
+    ),
+    (
+        "data-model-design-guide",
+        "데이터 모델은 요구사항에서 다뤄지는 엔티티와 그 속성을 먼저 나열 → 엔티티 간 관계(1:1/1:N/N:M)를 정의 → 정규화 수준을 결정 → 조회 패턴(어떤 질의가 자주 발생하는지)에 맞춰 인덱스/비정규화 여부를 검토하는 순서로 진행한다 — ERD와 함께 왜 그 구조를 택했는지 근거를 남긴다.",
+    ),
+    (
+        "module-decomposition-and-task-assignment",
+        "아키텍처 설계 산출물을 받아 독립적으로 개발 가능한 모듈 단위로 쪼개고, 모듈 간 의존성(어떤 모듈이 먼저 끝나야 다른 모듈을 시작할 수 있는지)을 표시한 뒤, 병렬로 진행 가능한 모듈은 서로 다른 개발자 Agent에 배분한다 — 배분 결과에는 각 모듈의 담당자·선행 조건·완료 기준이 포함돼야 한다.",
+    ),
+    (
+        "frontend-ui-implementation-guide",
+        "프론트엔드 구현은 UI 기획(화면 흐름·컴포넌트 목록)을 먼저 확인하고, 컴포넌트 단위로 상태·이벤트 흐름을 분리하며, 접근성(키보드 조작·대비)과 반응형(화면 크기 대응)을 기본으로 고려한다 — 디자인에 없는 화면/동작을 임의로 추가하지 않는다.",
+    ),
+    (
+        "ui-ux-planning-guide",
+        "UI/UX 기획은 사용자 시나리오(누가 어떤 목적으로 어떤 순서로 쓰는지) → 화면 흐름도(어떤 화면에서 어떤 화면으로 이동하는지) → 화면별 구성 요소와 인터랙션(클릭/입력 시 어떻게 반응하는지) 순으로 정리한다 — 요구사항/스펙에 없는 화면·기능을 임의로 추가하지 않는다.",
+    ),
+    (
+        "test-plan-and-case-design-guide",
+        "테스트 계획은 테스트 범위(무엇을 테스트하고 무엇은 제외하는지) → 테스트 전략(단위/통합/E2E 중 어디에 집중할지) → 요구사항별 테스트 케이스(정상 케이스·예외 케이스·경계값) 순으로 작성한다 — 테스트 케이스는 실행 전 단계 산출물이라, 이 역할은 케이스를 설계만 하고 직접 실행(QA 기능테스터의 역할)하지 않는다.",
+    ),
+    (
+        "quality-acceptance-criteria-guide",
+        "프로젝트 전체 품질/인수 기준은 Gate A-G 점수·테스트 커버리지·미해결 결함 심각도를 종합해 판정한다 — 개별 모듈이 통과해도 전체 인수 기준(예: 치명적 결함 0건, 핵심 요구사항 커버리지 100%)을 못 채우면 배포 불가로 판정하고, 무엇이 부족한지 구체적으로 남긴다.",
+    ),
     # --- "자율 개발 크루"(10인 개발자 풀, 2026-10-14) ---
-    ("data-infra-implementation-guide", "데이터/인프라 구현은 DA가 설계한 ERD·스키마를 실제 마이그레이션/DDL로 옮기고, 배포 파이프라인(CI/CD)·환경 변수·인프라 설정을 구성한다 — 설계에 없는 테이블/컬럼을 임의로 추가하지 않고, 스키마 변경은 마이그레이션 이력으로 남긴다."),
+    (
+        "data-infra-implementation-guide",
+        "데이터/인프라 구현은 DA가 설계한 ERD·스키마를 실제 마이그레이션/DDL로 옮기고, 배포 파이프라인(CI/CD)·환경 변수·인프라 설정을 구성한다 — 설계에 없는 테이블/컬럼을 임의로 추가하지 않고, 스키마 변경은 마이그레이션 이력으로 남긴다.",
+    ),
 ]
 
 # (role_name, skill_tags, tuning_config)
@@ -95,7 +206,12 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ),
     (
         "스펙 작성자",
-        ["spec-driven-artifacts", "docs-style-guide", "spec-ears-lint", "failure-mode-derivation"],
+        [
+            "spec-driven-artifacts",
+            "docs-style-guide",
+            "spec-ears-lint",
+            "failure-mode-derivation",
+        ],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
     ),
     (
@@ -110,7 +226,12 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
         # 않았다(프론트엔드/데이터·인프라/풀스택은 전부 이름에 영역이
         # 드러남). team_members.role_label은 이미 "백엔드"였다.
         "백엔드 개발자",
-        ["tdd-ai-workflow-checklist", "commit-pr-message-rules"],
+        # "incident-postmortem" 추가(사용자 요청, 2026-10-27, "AI 에이전트,
+        # 도구/skill 각각의 품질을 검사하고 개선해줘" 감사 중 발견 — 이
+        # 스킬이 정의만 돼 있고 "자율 개발 크루" 그 어느 역할에도 연결돼
+        # 있지 않았다. 실패 재현·회귀 대응을 실측으로 이미 여러 번 겪은
+        # 팀(위 reasoning 끄기 결정 등)인데 정작 사후 기록 역량이 없었다).
+        ["tdd-ai-workflow-checklist", "commit-pr-message-rules", "incident-postmortem"],
         # 사용자 보고(2026-10-18, "@자율 개발 크루... 일부 응답이
         # 실패했습니다") 원인 분석 후 조치 — "자율 개발 크루" 12명
         # 전원이 reasoning=True라 Crew 실행 한 번에 LLM 왕복 호출이
@@ -123,7 +244,16 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ),
     (
         "코드 검증가",
-        ["harness-gate-ci", "gate-improvement-loop", "evidence-based-gate-fix", "recommend-fix-workflow", "code-review-checklist"],
+        # "incident-postmortem" 추가 — 바로 위 "백엔드 개발자" 항목의
+        # 주석 참고(2026-10-27 품질 감사).
+        [
+            "harness-gate-ci",
+            "gate-improvement-loop",
+            "evidence-based-gate-fix",
+            "recommend-fix-workflow",
+            "code-review-checklist",
+            "incident-postmortem",
+        ],
         # 사용자 보고(2026-10-18, "@자율 개발 크루" 품질 분석 중 실측) —
         # 이 역할이 파이프라인(run_crew() 경로)에서 길어진 대화/산출물
         # 맥락을 받아 표가 많은 긴 검증 보고서를 쓸 때 reasoning의 "계획
@@ -134,13 +264,25 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ),
     (
         "QA 기능테스터",
-        ["tdd-ai-workflow-checklist", "golden-set-coverage-check", "human-approval-loop"],
+        # "incident-postmortem" 추가 — "백엔드 개발자" 항목의 주석 참고
+        # (2026-10-27 품질 감사).
+        [
+            "tdd-ai-workflow-checklist",
+            "golden-set-coverage-check",
+            "human-approval-loop",
+            "incident-postmortem",
+        ],
         {"temperature": 0.3, "max_retry_limit": 3},
     ),
     # --- 경영/사업 전략 파이프라인(2026-10-14) ---
     (
         "외부 자료 조사가",
-        ["외부검색", "일반웹검색", "rag"],
+        # "외부검색"(Wikipedia)은 사용자 요청(2026-10-26, "도구/skill에서
+        # 동작하지 않는 검색은 삭제해줘")로 "실시간웹검색"(Tavily)으로
+        # 대체했다 — Wikimedia가 이 배포 환경 IP를 지속 차단 중이라
+        # 역할 자체가 무력화돼 있었다(db.py의 `_seed_default_pools()`
+        # 주석 참고).
+        ["실시간웹검색", "일반웹검색", "rag"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
     ),
     (
@@ -150,7 +292,11 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ),
     (
         "기획서 작성자",
-        ["business-plan-writing-guide", "docs-style-guide", "golden-set-coverage-check"],
+        [
+            "business-plan-writing-guide",
+            "docs-style-guide",
+            "golden-set-coverage-check",
+        ],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.4},
     ),
     (
@@ -160,7 +306,11 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ),
     (
         "C-level 보고서 작성자",
-        ["executive-report-writing-style", "docs-style-guide", "golden-set-coverage-check"],
+        [
+            "executive-report-writing-style",
+            "docs-style-guide",
+            "golden-set-coverage-check",
+        ],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2},
     ),
     (
@@ -200,7 +350,14 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ),
     (
         "프론트엔드 개발자",
-        ["frontend-ui-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
+        # "incident-postmortem" 추가 — "백엔드 개발자" 항목의 주석 참고
+        # (2026-10-27 품질 감사).
+        [
+            "frontend-ui-implementation-guide",
+            "tdd-ai-workflow-checklist",
+            "commit-pr-message-rules",
+            "incident-postmortem",
+        ],
         {"temperature": 0.2, "max_retry_limit": 3},
     ),
     # --- "자율 개발 크루" 확장(2026-10-14 도입, 2026-10-26 정리) — 사용자
@@ -222,12 +379,26 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     # 기술적으로 동일하게 동작하므로 기능 손실이 없다.
     (
         "데이터/인프라 개발자",
-        ["data-infra-implementation-guide", "tdd-ai-workflow-checklist", "commit-pr-message-rules"],
+        # "incident-postmortem" 추가 — "백엔드 개발자" 항목의 주석 참고
+        # (2026-10-27 품질 감사).
+        [
+            "data-infra-implementation-guide",
+            "tdd-ai-workflow-checklist",
+            "commit-pr-message-rules",
+            "incident-postmortem",
+        ],
         {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "풀스택 개발자",
-        ["tdd-ai-workflow-checklist", "commit-pr-message-rules", "frontend-ui-implementation-guide"],
+        # "incident-postmortem" 추가 — "백엔드 개발자" 항목의 주석 참고
+        # (2026-10-27 품질 감사).
+        [
+            "tdd-ai-workflow-checklist",
+            "commit-pr-message-rules",
+            "frontend-ui-implementation-guide",
+            "incident-postmortem",
+        ],
         {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
@@ -237,12 +408,21 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ),
     (
         "테스트 계획 수립가",
-        ["test-plan-and-case-design-guide", "test-case-mechanical-derivation", "spec-ears-lint"],
+        [
+            "test-plan-and-case-design-guide",
+            "test-case-mechanical-derivation",
+            "spec-ears-lint",
+        ],
         {"temperature": 0.3, "max_retry_limit": 3},
     ),
     (
         "품질 관리자",
-        ["quality-acceptance-criteria-guide", "harness-gate-ci", "gate-improvement-loop", "evidence-based-gate-fix"],
+        [
+            "quality-acceptance-criteria-guide",
+            "harness-gate-ci",
+            "gate-improvement-loop",
+            "evidence-based-gate-fix",
+        ],
         {"temperature": 0.2, "max_retry_limit": 3},
     ),
 ]
@@ -408,8 +588,10 @@ DEV_PIPELINE_STAGES: list[
         "요구분석/계획 확정",
         "single",
         None,
-        "요구사항을 EARS 표기(WHEN/IF/WHILE ... THE SYSTEM SHALL ...)로 정리하고, "
-        "[NEEDS CLARIFICATION]이 남아있지 않은지 스스로 점검하세요.",
+        (
+            "요구사항을 EARS 표기(WHEN/IF/WHILE ... THE SYSTEM SHALL ...)로 정리하고, "
+            "[NEEDS CLARIFICATION]이 남아있지 않은지 스스로 점검하세요."
+        ),
         True,
         False,
         [("요구사항 분석가", "")],
@@ -468,7 +650,10 @@ DEV_PIPELINE_STAGES: list[
         False,
         False,
         [
-            ("테스트 계획 수립가", "요구사항별 테스트 케이스(정상/예외/경계값)를 설계하세요."),
+            (
+                "테스트 계획 수립가",
+                "요구사항별 테스트 케이스(정상/예외/경계값)를 설계하세요.",
+            ),
             ("QA 기능테스터", "앞서 설계된 테스트 케이스로 실제 기능을 검증하세요."),
         ],
     ),
@@ -476,8 +661,10 @@ DEV_PIPELINE_STAGES: list[
         "품질 관리 최종 판정",
         "single",
         None,
-        "지금까지의 전체 산출물을 종합해 품질/인수 기준(치명적 결함 0건, 핵심 요구사항 "
-        "커버리지 등)으로 최종 판정하세요.",
+        (
+            "지금까지의 전체 산출물을 종합해 품질/인수 기준(치명적 결함 0건, 핵심 요구사항 "
+            "커버리지 등)으로 최종 판정하세요."
+        ),
         False,
         False,
         [("품질 관리자", "")],
@@ -511,7 +698,13 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
     )
     template_id = cur.lastrowid
     for seq, (
-        name, mode, lead_role_name, instructions, requires_approval, is_primary, agents,
+        name,
+        mode,
+        lead_role_name,
+        instructions,
+        requires_approval,
+        is_primary,
+        agents,
     ) in enumerate(DEV_PIPELINE_STAGES, start=1):
         cur = conn.execute(
             "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "

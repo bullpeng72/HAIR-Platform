@@ -218,11 +218,24 @@ CREATE TABLE IF NOT EXISTS skill_pool (
 -- (ollama의 기본값 "llama3.1"이 로컬에 없어 404가 난 사고가 실제
 -- 선례). skill_pool/tool_pool과 같은 패턴으로 "등록→드롭다운에서
 -- 선택" 구조를 모델명에도 적용한다.
+-- `optimization_tiers`(사용자 요청, 2026-10-26, "모델 레지스트리에
+-- llm 설정 최적화 각 tier에 적용되는 모델을 매핑하는 기능을 제공" —
+-- 1차로 premium/balanced/economy "등급" 간접 매핑을 만들었다가, 사용자가
+-- "tier 직접 매핑으로 변경"을 선택해 다시 설계) — `agent_optimizer.py`의
+-- tier(deep_reasoning/precision_fast/standard) 이름 자체에 모델을 직접
+-- 매핑한다(JSON 배열, 하나의 모델이 여러 tier에 적용될 수 있다).
+-- '[]'(기본값)면 그 모델은 어떤 tier에도 명시적으로 매핑되지 않은
+-- 상태 — `agent_optimizer.recommend_model()`이 이 매핑이 있는 모델을
+-- 패턴 추정보다 항상 먼저 후보로 올리고, 특정 tier에 매핑된 모델이
+-- 하나도 없으면 그 tier는 기존처럼 이름 패턴 추정으로 폴백한다(하위
+-- 호환). 새 모델 출시·provider 교체 시 코드를 고치지 않고 이 매핑만
+-- 바꾸면 되고, 몇 번이든 다시 바꿀 수 있다.
 CREATE TABLE IF NOT EXISTS model_registry (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL CHECK (provider IN ('anthropic', 'openai', 'ollama')),
     name TEXT NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 1,
+    optimization_tiers TEXT NOT NULL DEFAULT '[]',
     UNIQUE(provider, name)
 );
 
@@ -628,8 +641,7 @@ def _migrate_tool_pool_custom_python_kind(conn: sqlite3.Connection) -> None:
         # 다음 재시작 때 "table already exists"로 또 실패한다 —
         # 재시도가 항상 깨끗하게 시작되도록 먼저 치운다.
         conn.execute("DROP TABLE IF EXISTS tool_pool_new")
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE tool_pool_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -639,8 +651,7 @@ def _migrate_tool_pool_custom_python_kind(conn: sqlite3.Connection) -> None:
                 tool_names TEXT NOT NULL DEFAULT '[]',
                 is_active INTEGER NOT NULL DEFAULT 1
             )
-            """
-        )
+            """)
         conn.execute("INSERT INTO tool_pool_new SELECT * FROM tool_pool")
         conn.execute("DROP TABLE tool_pool")
         conn.execute("ALTER TABLE tool_pool_new RENAME TO tool_pool")
@@ -678,8 +689,7 @@ def _backfill_conversation_last_read(conn: sqlite3.Connection) -> None:
     `WHERE last_read_message_id IS NULL` 조건 덕에 매 기동 재실행해도
     안전하다(이미 값이 있는 행은 다시 안 건드림 — 한 번만 적용되는
     1회성 백필)."""
-    conn.execute(
-        """
+    conn.execute("""
         UPDATE conversation_participants
         SET last_read_message_id = (
             SELECT MAX(cm.id) FROM conversation_messages cm
@@ -695,8 +705,7 @@ def _backfill_conversation_last_read(conn: sqlite3.Connection) -> None:
                 AND cm2.author_type = 'human'
                 AND cm2.author_id = conversation_participants.participant_id
           )
-        """
-    )
+        """)
     conn.commit()
 
 
@@ -875,9 +884,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 테스트 상황 그대로 — admin이 먼저 세 번 호출하고, pm_kim이 그 뒤에
     # 로그인) 그 멘션들이 전부 "최초 폴링"에 걸려 영원히 알림이 안 뜬다.
     # 서버가 참가자별 "마지막으로 읽은 메시지"를 기억해야 진짜로 고쳐진다.
-    _ensure_column(
-        conn, "conversation_participants", "last_read_message_id", "INTEGER"
-    )
+    _ensure_column(conn, "conversation_participants", "last_read_message_id", "INTEGER")
     _backfill_conversation_last_read(conn)
     # 사용자 요청(2026-10-14, "10건 이전의 메시지는 요약 형태로 전달되도록
     # 개선해줘") — `_build_transcript()`(conversations.py)가 최근
@@ -953,8 +960,22 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 있음) 사용자가 순차 릴레이 순서를 바꿀 수단이 없었다. NULL = "아직
     # 캔버스로 순서를 정한 적 없음" → 기존처럼 `id` 순서로 폴백(하위 호환).
     _ensure_column(conn, "team_members", "sequence_order", "INTEGER")
-    _ensure_column(conn, "skill_pool", "show_in_conversation", "INTEGER NOT NULL DEFAULT 1")
-    _ensure_column(conn, "knowledge_chunks", "source_document_id", "INTEGER REFERENCES documents(id)")
+    _ensure_column(
+        conn, "skill_pool", "show_in_conversation", "INTEGER NOT NULL DEFAULT 1"
+    )
+    _ensure_column(
+        conn,
+        "knowledge_chunks",
+        "source_document_id",
+        "INTEGER REFERENCES documents(id)",
+    )
+    # 사용자 요청(2026-10-26, "모델 레지스트리에 llm 설정 최적화 각
+    # tier에 적용되는 모델을 매핑") — 기존 DB(이 컬럼 없이 만들어진)에도
+    # 추가. '[]'(기본값) = 이 tier엔 아직 명시적 매핑이 없음(패턴 추정
+    # 폴백, 기존 동작 유지).
+    _ensure_column(
+        conn, "model_registry", "optimization_tiers", "TEXT NOT NULL DEFAULT '[]'"
+    )
 
 
 def _backfill_show_in_conversation(conn: sqlite3.Connection) -> None:
@@ -1019,12 +1040,30 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
             "graphdb_query",
         ),
         (
-            "외부 자료 검색(Wikipedia)",
-            "websearch.context_for_prompt()를 감싼 네이티브 CrewAI Tool — "
-            "API 키 불필요, 무료",
-            "web_search",
+            "실시간 웹 검색(Tavily)",
+            (
+                "websearch.tavily_context_for_prompt()를 감싼 네이티브 CrewAI "
+                "Tool — API 키 필요(TAVILY_API_KEY). 'Parallel Search'와 달리 "
+                "순수 HTTP 호출이라 대화창(정적 주입)·Crew 실행 양쪽에서 "
+                "동일하게 동작한다(사용자 요청, 2026-10-26, '대화에서 외부 "
+                "검색이 가능한 방법을 제안해줘')."
+            ),
+            "tavily_search",
         ),
     ]
+    # 사용자 요청(2026-10-26, "도구/skill에서 동작하지 않는 검색은
+    # 삭제해줘(한시적인 오류인 경우 잠정 보류)") — "외부 자료 검색
+    # (Wikipedia)"를 이 시드에서 뺐다. 재확인 결과 일시적 장애가 아니라
+    # Wikimedia가 이 배포 환경의 IP를 robot policy 위반으로 지속
+    # 차단 중이었다(세션 내내 여러 차례 재시도해도 동일 403, 참고:
+    # `websearch.py` 모듈 docstring). 구현 코드(`websearch.search()`/
+    # `context_for_prompt()`/`as_crewai_tool()`)는 지우지 않고 그대로
+    # 남겨뒀다 — 다른 네트워크 환경에 배포하면 다시 쓸 수 있다. 되살리려면
+    # 이 리스트에 항목을 다시 추가하고 `pool_registry.NATIVE_TOOL_
+    # FACTORIES`에 `"web_search": websearch.as_crewai_tool`을 다시 붙이면
+    # 된다. "일반웹검색"(Parallel Search, MCP)은 Crew 실행에서 정상
+    # 동작하는 걸 이미 확인했으므로(대화창 전용 제약은 설계상 한계지
+    # 오류가 아님) 그대로 둔다.
     tool_ids: dict[str, int] = {}
     for name, description, native_id in native_tools:
         conn.execute(
@@ -1040,7 +1079,11 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
     skills = [
         ("rag", "VectorDB 기반 지식검색 역량", "vectordb_search"),
         ("graphdb", "GraphDB 기반 관계분석 역량", "graphdb_query"),
-        ("외부검색", "외부 자료(Wikipedia) 검색 역량", "web_search"),
+        (
+            "실시간웹검색",
+            "실시간 일반 웹 검색 역량(Tavily, API 키 필요) — 대화창에서도 동작",
+            "tavily_search",
+        ),
     ]
     for name, description, native_id in skills:
         conn.execute(
@@ -1291,7 +1334,10 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
                 "주입만 가능해 이 도구를 못 쓴다."
             ),
             json.dumps(
-                {"url": "https://search.parallel.ai/mcp", "transport": "streamable-http"}
+                {
+                    "url": "https://search.parallel.ai/mcp",
+                    "transport": "streamable-http",
+                }
             ),
         ),
     )

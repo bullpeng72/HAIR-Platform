@@ -101,7 +101,9 @@ def test_pool_search_and_match_surface_agent_name(client_and_conn):
 
     # "인력 검색" — 이름이 역할명과 별도로 노출된다.
     resp = client.get("/api/pool/search")
-    item = next(i for i in resp.json()["items"] if i["id"] == agent_id and i["type"] == "agent")
+    item = next(
+        i for i in resp.json()["items"] if i["id"] == agent_id and i["type"] == "agent"
+    )
     assert item["name"] == "에이다"
     assert item["role"] == "백엔드 개발자"
 
@@ -133,7 +135,9 @@ def test_assignment_and_org_chart_prefer_agent_name_over_role_name(client_and_co
 
     resp = client.get("/api/org-chart")
     reports = [r for bucket in resp.json() for r in bucket["reports"]]
-    report = next(r for r in reports if r["task_id"] == task_id and r["resource_type"] == "agent")
+    report = next(
+        r for r in reports if r["task_id"] == task_id and r["resource_type"] == "agent"
+    )
     # 조직도는 "Agent#N (이름)" 형식으로 감싸서 보여준다(app.py
     # get_org_chart) — 역할명 대신 지정한 이름이 그 안에 들어간다.
     assert report["resource_name"] == f"Agent#{agent_id} (검증이)"

@@ -141,9 +141,9 @@ def test_gc66_generate_with_use_llm_but_no_provider_fails_clearly(
     # 2026-10-14 "기본 배포에 Agent를 포함해줘"로 `agent_pool`이 더는
     # 빈 상태로 시작하지 않는다 — "0건"이 아니라 "이 실패한 생성 시도로
     # 늘지 않았는지"를 기준으로 삼는다.
-    baseline_count = conn.execute(
-        "SELECT COUNT(*) AS c FROM agent_pool"
-    ).fetchone()["c"]
+    baseline_count = conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()[
+        "c"
+    ]
     brief_id, task_id = _make_brief_with_task(client, "PM")
 
     resp = client.post(

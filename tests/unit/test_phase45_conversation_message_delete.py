@@ -33,7 +33,7 @@ def _insert_agent_message(conn, conversation_id, content="에이전트 응답"):
 
 
 def test_gc_author_can_delete_own_message(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
     msg_id = client.post(
@@ -57,7 +57,10 @@ def test_gc_non_author_non_creator_cannot_delete_others_human_message(client_and
     ).json()["id"]
     client.post(
         f"/api/conversations/{conv_id}/participants",
-        json={"participant_type": "human", "participant_id": _user_id(conn, "manager1")},
+        json={
+            "participant_type": "human",
+            "participant_id": _user_id(conn, "manager1"),
+        },
     )
 
     _login(client, "manager1", "managerpass")
@@ -74,7 +77,10 @@ def test_gc_creator_can_delete_others_human_message(client_and_conn):
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
     client.post(
         f"/api/conversations/{conv_id}/participants",
-        json={"participant_type": "human", "participant_id": _user_id(conn, "manager1")},
+        json={
+            "participant_type": "human",
+            "participant_id": _user_id(conn, "manager1"),
+        },
     )
 
     _login(client, "manager1", "managerpass")
@@ -110,7 +116,10 @@ def test_gc_non_creator_participant_cannot_delete_agent_message(client_and_conn)
     msg_id = _insert_agent_message(conn, conv_id)
     client.post(
         f"/api/conversations/{conv_id}/participants",
-        json={"participant_type": "human", "participant_id": _user_id(conn, "manager1")},
+        json={
+            "participant_type": "human",
+            "participant_id": _user_id(conn, "manager1"),
+        },
     )
 
     _login(client, "manager1", "managerpass")  # 참가자지만 생성자가 아님
@@ -119,7 +128,7 @@ def test_gc_non_creator_participant_cannot_delete_agent_message(client_and_conn)
 
 
 def test_gc_non_participant_cannot_delete_message(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
     msg_id = client.post(
@@ -132,7 +141,7 @@ def test_gc_non_participant_cannot_delete_message(client_and_conn):
 
 
 def test_gc_delete_nonexistent_message_returns_404(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
 

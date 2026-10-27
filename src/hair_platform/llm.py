@@ -90,7 +90,9 @@ _CLOUD_LLM_TIMEOUT_SECONDS = 900.0
 def _call_anthropic(model: str, system: str, prompt: str) -> str:
     import anthropic  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
-    client = anthropic.Anthropic(timeout=_CLOUD_LLM_TIMEOUT_SECONDS)  # ANTHROPIC_API_KEY 환경변수를 사용한다.
+    client = anthropic.Anthropic(
+        timeout=_CLOUD_LLM_TIMEOUT_SECONDS
+    )  # ANTHROPIC_API_KEY 환경변수를 사용한다.
     resp = client.messages.create(
         model=model,
         max_tokens=1024,
@@ -103,7 +105,9 @@ def _call_anthropic(model: str, system: str, prompt: str) -> str:
 def _call_openai(model: str, system: str, prompt: str) -> str:
     import openai  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
-    client = openai.OpenAI(timeout=_CLOUD_LLM_TIMEOUT_SECONDS)  # OPENAI_API_KEY 환경변수를 사용한다.
+    client = openai.OpenAI(
+        timeout=_CLOUD_LLM_TIMEOUT_SECONDS
+    )  # OPENAI_API_KEY 환경변수를 사용한다.
     resp = client.chat.completions.create(
         model=model,
         messages=[

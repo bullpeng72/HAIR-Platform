@@ -345,12 +345,14 @@ def delete_chunk(conn: sqlite3.Connection, actor_id: int, chunk_id: int) -> None
     if row is None:
         raise ValueError("chunk_not_found")
     conn.execute("DELETE FROM knowledge_chunks WHERE id = ?", (chunk_id,))
-    audit.record(conn, actor_id, "knowledge_chunk_deleted", "knowledge_chunks", chunk_id)
+    audit.record(
+        conn, actor_id, "knowledge_chunk_deleted", "knowledge_chunks", chunk_id
+    )
     conn.commit()
 
 
 def stats(conn: sqlite3.Connection) -> dict:
-    """"지식 베이스" 탭의 VectorDB 통계 줄 — 전부 가벼운 COUNT/SUM이라
+    """ "지식 베이스" 탭의 VectorDB 통계 줄 — 전부 가벼운 COUNT/SUM이라
     매번 새로 계산해도 된다(캐시 불필요)."""
     totals = conn.execute(
         "SELECT COUNT(*) AS total_chunks, COALESCE(SUM(LENGTH(text)), 0) AS total_characters "

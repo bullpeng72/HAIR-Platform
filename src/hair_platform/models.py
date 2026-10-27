@@ -184,7 +184,7 @@ class AssignmentRequest(BaseModel):
 
 
 class DelegateAgentRequest(BaseModel):
-    """"위임"(결재 없는 경량 연결, `AssignmentRequest`의 "배정"과
+    """ "위임"(결재 없는 경량 연결, `AssignmentRequest`의 "배정"과
     대칭). Agent 전용이라 `resource_type` 선택지가 없다."""
 
     agent_id: int
@@ -618,11 +618,11 @@ class ToolPoolCreate(BaseModel):
     """사용자 요청, 2026-09-27, "tool_pool·skill_pool 테이블도
     실제로 구현해줘" — 실제 도구(MCP 서버 또는 native `@tool`) 하나를
     이름으로 등록해 여러 Agent가 재사용한다. `kind="native"`면 `config`에
-    `{"native_id": "vectordb_search"|"graphdb_query"|"web_search"}`를
+    `{"native_id": "vectordb_search"|"graphdb_query"|"tavily_search"}`를
     넣는다(지원하는 native 도구 전체 목록은 `pool_registry.
-    NATIVE_TOOL_FACTORIES` 참고 — `web_search`는 사용자 요청(2026-09-29,
-    "외부 자료 검색... 도구화") 추가, `websearch.py`의 Wikipedia 검색을
-    감싼다, API 키 불필요). `kind="mcp_stdio"|"mcp_remote"`면 `config`에 `AgentModelConfig.
+    NATIVE_TOOL_FACTORIES` 참고 — `tavily_search`는 사용자 요청
+    (2026-10-26, "대화에서 외부 검색이 가능한 방법을 제안해줘") 추가,
+    `websearch.py`의 Tavily 실시간 검색을 감싼다, API 키 필요). `kind="mcp_stdio"|"mcp_remote"`면 `config`에 `AgentModelConfig.
     mcp_servers`와 같은 형태(command/args/env 또는 url/transport)를
     넣는다. `kind="custom_python"`(2026-10-13, "@데코레이터 툴을 추가
     생성할 수 있는 기능" 추가)이면 `config`에
@@ -713,6 +713,21 @@ class ModelRegistryCreate(BaseModel):
 
 class ModelActiveUpdate(BaseModel):
     is_active: bool
+
+
+class ModelOptimizationTiersUpdate(BaseModel):
+    """사용자 요청(2026-10-26, "모델 레지스트리에 llm 설정 최적화 각
+    tier에 적용되는 모델을 매핑하는 기능을 제공... 일단 설정된 후
+    변경할 수 있는 기능이 제공되지 않아. 모델 선택후 재설정도 가능
+    하도록 개선") — 이 모델을 `agent_optimizer.py`의 어떤 tier
+    (deep_reasoning/precision_fast/standard)에 직접 매핑할지 admin이
+    지정한다(여러 tier에 동시 매핑 가능). `[]`로 보내면 매핑을 지워
+    다시 이름 패턴 추정으로 되돌린다(초기화) — 몇 번이든 재설정 가능,
+    한 번 정하면 못 바꾸는 제약 없음."""
+
+    optimization_tiers: list[
+        Literal["deep_reasoning", "precision_fast", "standard"]
+    ] = []
 
 
 class EmbeddingConfigUpdate(BaseModel):

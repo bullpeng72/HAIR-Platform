@@ -106,7 +106,7 @@ def _make_task_with_member1_participant(client, conn, task_name="백엔드 개�
 
 
 def test_gc_create_standalone_conversation_auto_adds_creator(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     resp = client.post("/api/conversations", json={"title": "잡담방"})
     assert resp.status_code == 201, resp.text
@@ -121,7 +121,7 @@ def test_gc_create_standalone_conversation_auto_adds_creator(client_and_conn):
 
 
 def test_gc_user_can_have_multiple_conversations(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     client.post("/api/conversations", json={"title": "방1"})
     client.post("/api/conversations", json={"title": "방2"})
@@ -131,7 +131,7 @@ def test_gc_user_can_have_multiple_conversations(client_and_conn):
 
 
 def test_gc_non_participant_cannot_view_or_message(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "비공개"}).json()["id"]
 
@@ -139,12 +139,14 @@ def test_gc_non_participant_cannot_view_or_message(client_and_conn):
     _login(client, "outsider1", "outsiderpass")
     resp = client.get(f"/api/conversations/{conv_id}")
     assert resp.status_code == 403, resp.text
-    resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "몰래"})
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages", json={"content": "몰래"}
+    )
     assert resp.status_code == 403, resp.text
 
 
 def test_gc_linked_conversation_requires_task_participation(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     task_id = _make_task(client)
     _create_outsider(client)
     _login(client, "outsider1", "outsiderpass")
@@ -158,12 +160,14 @@ def test_gc_linked_conversation_requires_task_participation(client_and_conn):
 
 
 def test_gc_plain_message_triggers_default_ai_when_auto_reply_on(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "AI방"}).json()["id"]
 
     with patch("hair_platform.llm.call_llm", return_value="안녕하세요!") as mock_call:
-        resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "안녕"})
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "안녕"}
+        )
         assert resp.status_code == 201, resp.text
         assert len(resp.json()["triggered_jobs"]) == 1
         assert resp.json()["triggered_jobs"][0]["trigger_type"] == "auto_reply"
@@ -177,7 +181,7 @@ def test_gc_plain_message_triggers_default_ai_when_auto_reply_on(client_and_conn
 
 
 def test_gc_auto_reply_off_means_plain_message_gets_no_response(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "조용한방"}).json()["id"]
     resp = client.patch(
@@ -187,14 +191,16 @@ def test_gc_auto_reply_off_means_plain_message_gets_no_response(client_and_conn)
     assert resp.json()["ai_auto_reply"] == 0
 
     with patch("hair_platform.llm.call_llm") as mock_call:
-        resp = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "사람끼리"})
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "사람끼리"}
+        )
         assert resp.status_code == 201, resp.text
         assert resp.json()["triggered_jobs"] == []
         mock_call.assert_not_called()
 
 
 def test_gc_model_settings_are_used_for_default_ai(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "모델방"}).json()["id"]
     resp = client.patch(
@@ -206,7 +212,10 @@ def test_gc_model_settings_are_used_for_default_ai(client_and_conn):
 
     with patch("hair_platform.llm.call_llm", return_value="응답") as mock_call:
         client.post(f"/api/conversations/{conv_id}/messages", json={"content": "안녕"})
-        called_provider, called_model = mock_call.call_args[0][0], mock_call.call_args[0][1]
+        called_provider, called_model = (
+            mock_call.call_args[0][0],
+            mock_call.call_args[0][1],
+        )
         assert called_provider == "ollama"
         assert called_model == "qwen3-coder:latest"
 
@@ -226,9 +235,12 @@ def test_gc_agent_mention_suppresses_default_ai(client_and_conn):
     )
     assert resp.status_code == 201, resp.text
 
-    with patch(
-        "hair_platform.agent_runtime.execute_agent", return_value="에이전트 답변"
-    ) as mock_exec, patch("hair_platform.llm.call_llm") as mock_default:
+    with (
+        patch(
+            "hair_platform.agent_runtime.execute_agent", return_value="에이전트 답변"
+        ) as mock_exec,
+        patch("hair_platform.llm.call_llm") as mock_default,
+    ):
         resp = client.post(
             f"/api/conversations/{conv_id}/messages",
             json={"content": "@테스트 Agent 이거 봐줘"},
@@ -331,7 +343,8 @@ def test_gc_skill_selected_with_agent_mention_does_not_also_trigger_default_ai(
 
     with (
         patch(
-            "hair_platform.agent_runtime.execute_agent", return_value="기획서 작성자 응답"
+            "hair_platform.agent_runtime.execute_agent",
+            return_value="기획서 작성자 응답",
         ),
         patch("hair_platform.llm.call_llm") as mock_default,
     ):
@@ -354,7 +367,9 @@ def test_gc_mentioning_human_participant_suppresses_default_ai(client_and_conn):
     대상에서 빼서 `has_mentions=False`로 잘못 판정됐었다."""
     client, conn = client_and_conn
     _login(client, "member1", "memberpass")
-    conv_id = client.post("/api/conversations", json={"title": "사람호출방"}).json()["id"]
+    conv_id = client.post("/api/conversations", json={"title": "사람호출방"}).json()[
+        "id"
+    ]
     manager_id = conn.execute(
         "SELECT id FROM users WHERE username = 'manager1'"
     ).fetchone()["id"]
@@ -405,9 +420,10 @@ def test_gc_mentioning_uninvited_agent_name_does_not_trigger(client_and_conn):
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
 
-    with patch("hair_platform.agent_runtime.execute_agent") as mock_exec, patch(
-        "hair_platform.llm.call_llm", return_value="기본 응답"
-    ) as mock_default:
+    with (
+        patch("hair_platform.agent_runtime.execute_agent") as mock_exec,
+        patch("hair_platform.llm.call_llm", return_value="기본 응답") as mock_default,
+    ):
         resp = client.post(
             f"/api/conversations/{conv_id}/messages",
             json={"content": "@초대 안 된 Agent 도와줘"},
@@ -480,7 +496,8 @@ def test_gc_team_mention_posts_one_message_per_worker_agent(client_and_conn):
         "hair_platform.crew_runtime.run_crew", return_value=crew_result
     ) as mock_crew:
         resp = client.post(
-            f"/api/conversations/{conv_id}/messages", json={"content": "@협업팀 검토해줘"}
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@협업팀 검토해줘"},
         )
         assert resp.status_code == 201, resp.text
         mock_crew.assert_called_once()
@@ -619,7 +636,9 @@ def test_gc_team_mention_persists_gate_scores_and_delegation_count_and_warns_aga
     conn.commit()
 
     _login(client, "member1", "memberpass")
-    conv_id = client.post("/api/conversations", json={"title": "Gate 테스트방"}).json()["id"]
+    conv_id = client.post("/api/conversations", json={"title": "Gate 테스트방"}).json()[
+        "id"
+    ]
     client.post(
         f"/api/conversations/{conv_id}/participants",
         json={"participant_type": "team", "participant_id": team_id},
@@ -631,10 +650,18 @@ def test_gc_team_mention_persists_gate_scores_and_delegation_count_and_warns_aga
         "B": {"not_measured": True},
     }
     crew_result = {
-        "agents": [{"agent_id": manager_id, "role_name": "매니저", "output": "통합 결과물"}],
+        "agents": [
+            {"agent_id": manager_id, "role_name": "매니저", "output": "통합 결과물"}
+        ],
         "token_usage": {},
         "gate_scores": bad_gate_scores,
-        "delegations": [{"from_agent_role": "매니저", "to_agent_role": "워커", "tool": "Delegate work to coworker"}],
+        "delegations": [
+            {
+                "from_agent_role": "매니저",
+                "to_agent_role": "워커",
+                "tool": "Delegate work to coworker",
+            }
+        ],
     }
     with patch(
         "hair_platform.crew_runtime.run_crew", return_value=crew_result
@@ -679,7 +706,9 @@ def test_strip_large_code_fences_replaces_long_blocks_only():
 
     short_code = "\n".join(f"line{i}" for i in range(5))
     short_content = f"```js\n{short_code}\n```"
-    assert conversations._strip_large_code_fences(short_content) == short_content  # 15줄 이하는 그대로
+    assert (
+        conversations._strip_large_code_fences(short_content) == short_content
+    )  # 15줄 이하는 그대로
 
 
 def test_business_plan_writing_guide_forbids_full_source_code():
@@ -737,9 +766,7 @@ def test_gc_team_mention_translates_json_decode_error_for_user(client_and_conn):
     )
 
     broken_json_error = _json.JSONDecodeError("Expecting value", "", 0)
-    with patch(
-        "hair_platform.crew_runtime.run_crew", side_effect=broken_json_error
-    ):
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=broken_json_error):
         resp = client.post(
             f"/api/conversations/{conv_id}/messages",
             json={"content": "@실패팀 테트리스 게임을 작성해줘"},
@@ -773,9 +800,7 @@ def test_gc_skill_param_grounds_response_regardless_of_auto_reply(client_and_con
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
     client.patch(f"/api/conversations/{conv_id}/ai-auto-reply", json={"enabled": False})
 
-    with patch(
-        "hair_platform.llm.call_llm", return_value="RAG 기반 답변"
-    ) as mock_call:
+    with patch("hair_platform.llm.call_llm", return_value="RAG 기반 답변") as mock_call:
         resp = client.post(
             f"/api/conversations/{conv_id}/messages",
             json={"content": "질문있어요", "skill": "RAG"},
@@ -791,7 +816,7 @@ def test_gc_skill_param_grounds_response_regardless_of_auto_reply(client_and_con
 
 
 def test_gc_unknown_skill_rejected(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
     resp = client.post(
@@ -805,19 +830,23 @@ def test_gc_native_skill_actually_searches_in_default_ai_reply(client_and_conn):
     """사용자 보고(2026-10-22, "일반웹검색 스킬 점검해줘") 재발 방지 —
     대화창 기본 AI 응답은 과거 skill_pool.description 텍스트만 주입하고
     실제 조회는 전혀 하지 않아, "검색하겠습니다"라고 의도만 서술하는
-    것처럼 보였다. "외부검색"(kind='native', 기본 시드)을 고르면 실제로
-    `websearch.search()`가 호출되고 그 결과가 system prompt에 들어가야
-    한다."""
-    client, conn = client_and_conn
+    것처럼 보였다. "실시간웹검색"(kind='native', Tavily, 기본 시드)을
+    고르면 실제로 `websearch.tavily_context_for_prompt()`가 호출되고 그
+    결과가 system prompt에 들어가야 한다.
+
+    원래는 "외부검색"(Wikipedia)으로 이 동작을 검증했으나, 사용자 요청
+    (2026-10-26, "도구/skill에서 동작하지 않는 검색은 삭제해줘")로 그
+    스킬 자체가 시드에서 빠져(지속적인 Wikimedia IP 차단) "실시간웹검색"
+    (Tavily)로 바꿨다 — 검증하는 메커니즘(정적 주입이 실제로 호출되는지)
+    은 동일하다."""
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
 
     with (
         patch(
-            "hair_platform.websearch.search",
-            return_value=[
-                {"title": "원격근무", "snippet": "원격근무 설명", "url": "https://x"}
-            ],
+            "hair_platform.websearch.tavily_context_for_prompt",
+            return_value="실시간 웹 검색 결과(Tavily):\n- 원격근무: 원격근무 설명 (https://x)",
         ) as search_mock,
         patch(
             "hair_platform.llm.call_llm", return_value="원격근무 설명을 참고한 답변"
@@ -825,7 +854,7 @@ def test_gc_native_skill_actually_searches_in_default_ai_reply(client_and_conn):
     ):
         resp = client.post(
             f"/api/conversations/{conv_id}/messages",
-            json={"content": "원격근무 정책이 뭐야?", "skill": "외부검색"},
+            json={"content": "원격근무 정책이 뭐야?", "skill": "실시간웹검색"},
         )
         assert resp.status_code == 201, resp.text
         search_mock.assert_called_once()
@@ -837,18 +866,16 @@ def test_gc_native_skill_actually_searches_in_default_ai_reply(client_and_conn):
 
 
 def test_gc_mcp_remote_skill_warns_instead_of_faking_search(client_and_conn):
-    """"일반웹검색"(kind='mcp_remote', Parallel Search)은 CrewAI Agent
+    """ "일반웹검색"(kind='mcp_remote', Parallel Search)은 CrewAI Agent
     루프가 있는 경로에서만 실제 호출이 가능하다 — 대화창 기본 AI는
     실시간 조회를 할 수 없으므로, 아무 검색도 안 됐다는 걸 사용자에게
     명시적으로 알려야 한다(모델이 "검색하겠습니다"라고 의도만 서술한
     채 끝나는 것처럼 보이던 버그 대신)."""
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
 
-    with patch(
-        "hair_platform.llm.call_llm", return_value="검색하겠습니다"
-    ):
+    with patch("hair_platform.llm.call_llm", return_value="검색하겠습니다"):
         resp = client.post(
             f"/api/conversations/{conv_id}/messages",
             json={"content": "최신 동향 찾아줘", "skill": "일반웹검색"},
@@ -867,7 +894,7 @@ def test_gc_mentionable_search_is_organization_wide(client_and_conn):
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
     _make_agent(conn, "검색용 Agent")
-    cur = conn.execute("INSERT INTO teams (name) VALUES ('검색용 팀')")
+    conn.execute("INSERT INTO teams (name) VALUES ('검색용 팀')")
     conn.commit()
 
     _login(client, "member1", "memberpass")
@@ -879,7 +906,7 @@ def test_gc_mentionable_search_is_organization_wide(client_and_conn):
 
 
 def test_gc_any_participant_can_invite_more(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
     outsider_id = _create_outsider(client)
@@ -897,10 +924,10 @@ def test_gc_any_participant_can_invite_more(client_and_conn):
 
 
 def test_gc_non_participant_cannot_invite(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
-    outsider_id = _create_outsider(client, "outsider1")
+    _create_outsider(client, "outsider1")
     another_id = _create_outsider(client, "outsider2")
 
     _login(client, "outsider1", "outsiderpass")
@@ -924,8 +951,12 @@ def test_gc_linked_conversation_uses_task_skills_for_default_ai(client_and_conn)
     assert resp.status_code == 201, resp.text
     conv_id = resp.json()["id"]
 
-    with patch("hair_platform.llm.call_llm", return_value="분석 결과입니다") as mock_call:
-        client.post(f"/api/conversations/{conv_id}/messages", json={"content": "시작해줘"})
+    with patch(
+        "hair_platform.llm.call_llm", return_value="분석 결과입니다"
+    ) as mock_call:
+        client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "시작해줘"}
+        )
         system_prompt = mock_call.call_args[0][2]
         assert "데이터 분석" in system_prompt
 
@@ -934,15 +965,19 @@ def test_gc_linked_conversation_uses_task_skills_for_default_ai(client_and_conn)
 
 
 def test_gc_default_ai_sees_recent_conversation_history(client_and_conn):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
 
     with patch("hair_platform.llm.call_llm", return_value="첫 응답"):
-        client.post(f"/api/conversations/{conv_id}/messages", json={"content": "첫 질문"})
+        client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "첫 질문"}
+        )
 
     with patch("hair_platform.llm.call_llm", return_value="두번째 응답") as mock_call:
-        client.post(f"/api/conversations/{conv_id}/messages", json={"content": "두번째 질문"})
+        client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "두번째 질문"}
+        )
         prompt = mock_call.call_args[0][3]
         assert "첫 질문" in prompt
         assert "첫 응답" in prompt

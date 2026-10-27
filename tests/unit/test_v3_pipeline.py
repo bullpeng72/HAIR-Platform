@@ -129,9 +129,7 @@ def test_gc22_onboard_then_deprecate_agent_controls_visibility(client_and_conn):
 
     def _agent_ids_in_search():
         resp = client.get("/api/pool/search", params={"role": "QA"})
-        return {
-            item["id"] for item in resp.json()["items"] if item["type"] == "agent"
-        }
+        return {item["id"] for item in resp.json()["items"] if item["type"] == "agent"}
 
     # 아직 pending_onboarding 상태라 Pool 검색에는 노출되지 않는다
     assert agent_id not in _agent_ids_in_search()

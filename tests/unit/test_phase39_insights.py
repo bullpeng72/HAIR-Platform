@@ -93,7 +93,9 @@ def test_agent_with_one_recent_pass_not_flagged(client_and_conn):
     conn.commit()
     _brief_id, task_id = _make_brief_and_task(client, "백엔드 개발자")
     _insert_agent_evaluation(conn, agent_id, task_id, passed=False)
-    _insert_agent_evaluation(conn, agent_id, task_id, passed=True)  # 최근 것 하나는 통과
+    _insert_agent_evaluation(
+        conn, agent_id, task_id, passed=True
+    )  # 최근 것 하나는 통과
     _insert_agent_evaluation(conn, agent_id, task_id, passed=False)
 
     flagged = dashboard.agents_with_repeated_gate_failures(conn)

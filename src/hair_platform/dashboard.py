@@ -98,8 +98,7 @@ def workload(conn: sqlite3.Connection) -> list[dict]:
     = 'in_progress'`) Task 수. 새 집계 테이블 없이 confirmed 배정 +
     상태만으로 계산한다(이 파일 서두의 "이미 있는 데이터를 모아
     보여줄 뿐" 원칙 그대로)."""
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT a.resource_type, a.resource_id,
                COALESCE(hp.name, ap.name, ap.role_name) AS name,
                COUNT(*) AS in_progress_count
@@ -111,8 +110,7 @@ def workload(conn: sqlite3.Connection) -> list[dict]:
           AND a.resource_type IN ('human', 'agent')
         GROUP BY a.resource_type, a.resource_id
         ORDER BY in_progress_count DESC
-        """
-    ).fetchall()
+        """).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -126,25 +124,21 @@ def bottlenecks(conn: sqlite3.Connection) -> list[dict]:
     안 끝난 선행 작업에 막혀 있는 task, (2) 결과물이 2회 이상 반려된
     task. `reason`이 둘 다 해당하면 `"blocked+rejected_twice"`로
     합쳐 하나의 행으로 낸다(같은 task가 목록에 중복으로 안 뜨게)."""
-    blocked = conn.execute(
-        """
+    blocked = conn.execute("""
         SELECT DISTINCT t.id, t.role_name, t.status, t.priority
         FROM tasks t
         JOIN task_dependencies td ON td.task_id = t.id
         JOIN tasks dep ON dep.id = td.depends_on_task_id
         WHERE t.status != 'done' AND dep.status != 'done'
-        """
-    ).fetchall()
-    rejected = conn.execute(
-        """
+        """).fetchall()
+    rejected = conn.execute("""
         SELECT t.id, t.role_name, t.status, t.priority, COUNT(*) AS rejected_count
         FROM tasks t
         JOIN deliverables d ON d.task_id = t.id
         WHERE d.status = 'rejected'
         GROUP BY t.id
         HAVING COUNT(*) >= 2
-        """
-    ).fetchall()
+        """).fetchall()
     result: dict[int, dict] = {}
     for row in blocked:
         entry = dict(row)

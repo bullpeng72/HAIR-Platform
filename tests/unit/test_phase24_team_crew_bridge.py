@@ -357,7 +357,10 @@ def test_adhoc_crew_execution_lets_each_agent_have_a_different_task_description(
             f"/api/tasks/{task_id}/execute-adhoc-crew",
             json={
                 "agent_ids": [agent1, agent2],
-                "task_descriptions": ["카피를 작성하세요", "디자인 가이드를 작성하세요"],
+                "task_descriptions": [
+                    "카피를 작성하세요",
+                    "디자인 가이드를 작성하세요",
+                ],
             },
         )
     assert resp.status_code == 202, resp.text
@@ -449,7 +452,10 @@ def test_adhoc_crew_run_is_recorded_in_crew_history_with_progress(client_and_con
             f"/api/tasks/{task_id}/execute-adhoc-crew",
             json={
                 "agent_ids": [agent1, agent2],
-                "task_descriptions": ["카피를 작성하세요", "디자인 가이드를 작성하세요"],
+                "task_descriptions": [
+                    "카피를 작성하세요",
+                    "디자인 가이드를 작성하세요",
+                ],
             },
         )
     assert resp.status_code == 202, resp.text
@@ -674,7 +680,11 @@ def test_gc250_run_crew_for_team_auto_detects_manager_when_hierarchical_and_unse
     team_id = resp.json()["id"]
     resp = client.post(
         f"/api/teams/{team_id}/members",
-        json={"member_type": "agent", "member_id": manager_agent, "role_label": "매니저"},
+        json={
+            "member_type": "agent",
+            "member_id": manager_agent,
+            "role_label": "매니저",
+        },
     )
     assert resp.status_code == 201, resp.text
     resp = client.post(
@@ -689,17 +699,30 @@ def test_gc250_run_crew_for_team_auto_detects_manager_when_hierarchical_and_unse
     )
     approval_id = resp.json()["approval_id"]
     _login(client, "admin1", "adminpass")
-    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()[
+        "id"
+    ]
     resp = client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
     assert resp.json()["assignment"]["status"] == "confirmed", resp.text
 
     captured = {}
 
-    def _capture_run_crew(conn, agent_ids, task_descriptions, actor_id, process="sequential",
-                           provider=None, model=None, manager_agent_id=None,
-                           on_task_complete=None, memory=True, planning=False,
-                           manager_provider=None, manager_model=None,
-                           parallel_agent_ids=None):
+    def _capture_run_crew(
+        conn,
+        agent_ids,
+        task_descriptions,
+        actor_id,
+        process="sequential",
+        provider=None,
+        model=None,
+        manager_agent_id=None,
+        on_task_complete=None,
+        memory=True,
+        planning=False,
+        manager_provider=None,
+        manager_model=None,
+        parallel_agent_ids=None,
+    ):
         captured["process"] = process
         captured["manager_agent_id"] = manager_agent_id
         return _crew_output("최종", ["x"] * len(agent_ids))
@@ -727,7 +750,11 @@ def test_gc250_run_crew_for_team_auto_detects_manager_when_hierarchical_and_unse
     captured.clear()
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_capture_run_crew):
         crew_runtime.run_crew_for_team(
-            conn, team_id, task_id, admin_id, process="hierarchical",
+            conn,
+            team_id,
+            task_id,
+            admin_id,
+            process="hierarchical",
             manager_agent_id=worker_agent,
         )
     assert captured["manager_agent_id"] == worker_agent
@@ -750,13 +777,18 @@ def test_update_team_defaults_requires_admin_or_manager_and_validates(client_and
     assert resp.status_code == 201, resp.text
 
     _login(client, "member1", "memberpass")
-    resp = client.patch(f"/api/teams/{team_id}", json={"default_process": "hierarchical"})
+    resp = client.patch(
+        f"/api/teams/{team_id}", json={"default_process": "hierarchical"}
+    )
     assert resp.status_code == 403
 
     _login(client, "manager1", "managerpass")
     resp = client.patch(
         f"/api/teams/{team_id}",
-        json={"default_process": "hierarchical", "default_manager_agent_id": manager_agent},
+        json={
+            "default_process": "hierarchical",
+            "default_manager_agent_id": manager_agent,
+        },
     )
     assert resp.status_code == 200, resp.text
     assert resp.json() == {
@@ -811,7 +843,11 @@ def test_manager_agent_id_for_team_prefers_explicit_default_over_role_label_heur
     # 또 다른 Agent 둘 다 팀에 넣는다.
     resp = client.post(
         f"/api/teams/{team_id}/members",
-        json={"member_type": "agent", "member_id": labeled_manager, "role_label": "매니저"},
+        json={
+            "member_type": "agent",
+            "member_id": labeled_manager,
+            "role_label": "매니저",
+        },
     )
     assert resp.status_code == 201, resp.text
     resp = client.post(
@@ -856,16 +892,31 @@ def test_execute_team_crew_endpoint_falls_back_to_team_default_process_and_manag
     _login(client, "manager1", "managerpass")
     resp = client.patch(
         f"/api/teams/{team_id}",
-        json={"default_process": "hierarchical", "default_manager_agent_id": manager_agent},
+        json={
+            "default_process": "hierarchical",
+            "default_manager_agent_id": manager_agent,
+        },
     )
     assert resp.status_code == 200, resp.text
 
     captured = {}
 
-    def _capture_run_team_crew_job(conn, job_by_agent_id, task_id, team_id, actor_id,
-                                    process, provider, model, manager_agent_id,
-                                    content_type="text", memory=True, planning=False,
-                                    manager_provider=None, manager_model=None):
+    def _capture_run_team_crew_job(
+        conn,
+        job_by_agent_id,
+        task_id,
+        team_id,
+        actor_id,
+        process,
+        provider,
+        model,
+        manager_agent_id,
+        content_type="text",
+        memory=True,
+        planning=False,
+        manager_provider=None,
+        manager_model=None,
+    ):
         captured["process"] = process
         captured["manager_agent_id"] = manager_agent_id
         # 실제 run_team_crew_job()을 안 태우므로, 그게 하던 "job을 종결
@@ -915,7 +966,9 @@ def test_run_crew_memory_and_planning_toggle_pass_through_to_crew(client_and_con
     (memory=True, planning=False)과 같은지도 같이 확인한다(하위 호환)."""
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
-    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()[
+        "id"
+    ]
     from hair_platform import crew_runtime
 
     agent1 = _make_active_agent(conn, "작가")
@@ -929,20 +982,29 @@ def test_run_crew_memory_and_planning_toggle_pass_through_to_crew(client_and_con
 
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         crew_runtime.run_crew(
-            conn, [agent1, agent2], ["글을 쓰세요", "교정하세요"], admin_id,
-            memory=False, planning=True,
+            conn,
+            [agent1, agent2],
+            ["글을 쓰세요", "교정하세요"],
+            admin_id,
+            memory=False,
+            planning=True,
         )
     assert captured == {"memory": False, "planning": True}
 
     captured.clear()
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         crew_runtime.run_crew(
-            conn, [agent1, agent2], ["글을 쓰세요", "교정하세요"], admin_id,
+            conn,
+            [agent1, agent2],
+            ["글을 쓰세요", "교정하세요"],
+            admin_id,
         )
     assert captured == {"memory": True, "planning": False}
 
 
-def test_run_crew_manager_llm_uses_separate_manager_provider_when_auto_manager(client_and_conn):
+def test_run_crew_manager_llm_uses_separate_manager_provider_when_auto_manager(
+    client_and_conn,
+):
     """매니저를 자동 배정(`manager_agent_id=None`)한 hierarchical 실행에서
     `manager_provider`/`manager_model`을 지정하면, 워커 전체가 쓰는 LLM과는
     분리된 매니저 전용 LLM이 구성되는지 확인한다 — Agent 전체를
@@ -951,7 +1013,9 @@ def test_run_crew_manager_llm_uses_separate_manager_provider_when_auto_manager(c
     레벨 고급 옵션")."""
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
-    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()[
+        "id"
+    ]
     from hair_platform import crew_runtime
 
     agent1 = _make_active_agent(conn, "작가")
@@ -959,7 +1023,9 @@ def test_run_crew_manager_llm_uses_separate_manager_provider_when_auto_manager(c
     captured = {}
 
     def _kickoff_capture(self, *args, **kwargs):
-        captured["manager_llm_model"] = self.manager_llm.model if self.manager_llm else None
+        captured["manager_llm_model"] = (
+            self.manager_llm.model if self.manager_llm else None
+        )
         captured["worker_llm_model"] = self.agents[0].llm.model
         return _crew_output("최종", ["x", "y"])
 
@@ -969,9 +1035,15 @@ def test_run_crew_manager_llm_uses_separate_manager_provider_when_auto_manager(c
     # anthropic은 이 테스트 환경에 키가 없어 LLM 생성 자체가 실패한다.
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         crew_runtime.run_crew(
-            conn, [agent1, agent2], ["글을 쓰세요", "교정하세요"], admin_id,
-            process="hierarchical", provider="openai", model="gpt-4o-mini",
-            manager_provider="ollama", manager_model="llama3.1",
+            conn,
+            [agent1, agent2],
+            ["글을 쓰세요", "교정하세요"],
+            admin_id,
+            process="hierarchical",
+            provider="openai",
+            model="gpt-4o-mini",
+            manager_provider="ollama",
+            manager_model="llama3.1",
         )
     # openai는 crewai가 "네이티브 provider"로 다뤄 `self.model`에서
     # provider 접두어를 벗겨내고(`"gpt-4o-mini"`), ollama는 네이티브가
@@ -990,7 +1062,9 @@ def test_run_crew_manager_llm_falls_back_to_worker_llm_when_manager_provider_not
     유일한 동작이었다)."""
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
-    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()[
+        "id"
+    ]
     from hair_platform import crew_runtime
 
     agent1 = _make_active_agent(conn, "작가")
@@ -998,19 +1072,30 @@ def test_run_crew_manager_llm_falls_back_to_worker_llm_when_manager_provider_not
     captured = {}
 
     def _kickoff_capture(self, *args, **kwargs):
-        captured["manager_llm_model"] = self.manager_llm.model if self.manager_llm else None
+        captured["manager_llm_model"] = (
+            self.manager_llm.model if self.manager_llm else None
+        )
         captured["worker_llm_model"] = self.agents[0].llm.model
         return _crew_output("최종", ["x", "y"])
 
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         crew_runtime.run_crew(
-            conn, [agent1, agent2], ["글을 쓰세요", "교정하세요"], admin_id,
-            process="hierarchical", provider="openai", model="gpt-4o-mini",
+            conn,
+            [agent1, agent2],
+            ["글을 쓰세요", "교정하세요"],
+            admin_id,
+            process="hierarchical",
+            provider="openai",
+            model="gpt-4o-mini",
         )
-    assert captured["manager_llm_model"] == captured["worker_llm_model"] == "gpt-4o-mini"
+    assert (
+        captured["manager_llm_model"] == captured["worker_llm_model"] == "gpt-4o-mini"
+    )
 
 
-def test_execute_team_crew_rejects_member_setting_planning_or_manager_llm(client_and_conn):
+def test_execute_team_crew_rejects_member_setting_planning_or_manager_llm(
+    client_and_conn,
+):
     """`planning`/`manager_provider`/`manager_model`은 provider/model과
     같은 이유(비용에 직접 영향)로 팀원은 설정할 수 없다(기존 provider/
     model 제한을 그대로 확장). `memory`는 비용을 늘리는 방향이 아니라
@@ -1042,7 +1127,9 @@ def test_execute_team_crew_rejects_member_setting_planning_or_manager_llm(client
     assert resp.status_code == 403, resp.text
 
 
-def test_execute_adhoc_crew_rejects_member_setting_planning_or_manager_llm(client_and_conn):
+def test_execute_adhoc_crew_rejects_member_setting_planning_or_manager_llm(
+    client_and_conn,
+):
     """같은 제한을 "업무에 바로 실행"(즉석 Crew) 경로에도 똑같이
     확인한다 — 두 엔드포인트가 같은 게이팅 로직을 각자 복제해 두고
     있어 하나만 고치고 잊어버릴 위험이 있다."""
@@ -1080,7 +1167,9 @@ def test_run_crew_parallel_agent_ids_marks_async_execution_and_skips_context(
     지정 안 한 Agent는 기존처럼 그대로 체이닝된다."""
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
-    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()[
+        "id"
+    ]
     from hair_platform import crew_runtime
 
     agent1 = _make_active_agent(conn, "백엔드 개발자")
@@ -1095,8 +1184,12 @@ def test_run_crew_parallel_agent_ids_marks_async_execution_and_skips_context(
 
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         crew_runtime.run_crew(
-            conn, [agent1, agent2, agent3], ["a", "b", "c"], admin_id,
-            process="sequential", parallel_agent_ids=[agent1, agent2],
+            conn,
+            [agent1, agent2, agent3],
+            ["a", "b", "c"],
+            admin_id,
+            process="sequential",
+            parallel_agent_ids=[agent1, agent2],
         )
     assert captured["async_flags"] == [True, True, False]
     assert captured["contexts"][0] is None  # 병렬 — 애초에 i=0이라 체이닝 대상 없음
@@ -1110,15 +1203,21 @@ def test_run_crew_parallel_agent_ids_marks_async_execution_and_skips_context(
 def test_run_crew_parallel_agent_ids_rejected_when_not_sequential(client_and_conn):
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
-    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()[
+        "id"
+    ]
     from hair_platform import crew_runtime
 
     agent1 = _make_active_agent(conn, "백엔드 개발자")
     agent2 = _make_active_agent(conn, "프론트엔드 개발자")
     with pytest.raises(ValueError, match="sequential"):
         crew_runtime.run_crew(
-            conn, [agent1, agent2], ["a", "b"], admin_id,
-            process="hierarchical", parallel_agent_ids=[agent1],
+            conn,
+            [agent1, agent2],
+            ["a", "b"],
+            admin_id,
+            process="hierarchical",
+            parallel_agent_ids=[agent1],
         )
 
 
@@ -1226,7 +1325,9 @@ def test_adhoc_crew_run_partial_failure_persists_completed_agent_with_not_measur
     def _kickoff_fail_midway(self, *args, **kwargs):
         from crewai.tasks.task_output import TaskOutput
 
-        self.task_callback(TaskOutput(description="task-0", agent="agent", raw="카피 결과"))
+        self.task_callback(
+            TaskOutput(description="task-0", agent="agent", raw="카피 결과")
+        )
         raise RuntimeError("모의 위임 형식 오류")
 
     with patch("crewai.Crew.kickoff", new=_kickoff_fail_midway):
@@ -1234,7 +1335,10 @@ def test_adhoc_crew_run_partial_failure_persists_completed_agent_with_not_measur
             f"/api/tasks/{task_id}/execute-adhoc-crew",
             json={
                 "agent_ids": [agent1, agent2],
-                "task_descriptions": ["카피를 작성하세요", "디자인 가이드를 작성하세요"],
+                "task_descriptions": [
+                    "카피를 작성하세요",
+                    "디자인 가이드를 작성하세요",
+                ],
             },
         )
     assert resp.status_code == 202, resp.text
@@ -1273,7 +1377,9 @@ def test_start_crew_run_retry_builds_adhoc_execution_for_remaining_agents_only(
     붙는지 확인한다."""
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
-    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()[
+        "id"
+    ]
     task_id = _make_task(client, "재시도 테스트 업무")
     agent1 = _make_active_agent(conn, "카피 초안")
     agent2 = _make_active_agent(conn, "디자인 가이드")
@@ -1281,7 +1387,9 @@ def test_start_crew_run_retry_builds_adhoc_execution_for_remaining_agents_only(
     def _kickoff_fail_midway(self, *args, **kwargs):
         from crewai.tasks.task_output import TaskOutput
 
-        self.task_callback(TaskOutput(description="task-0", agent="agent", raw="카피 결과 전문"))
+        self.task_callback(
+            TaskOutput(description="task-0", agent="agent", raw="카피 결과 전문")
+        )
         raise RuntimeError("모의 실패")
 
     with patch("crewai.Crew.kickoff", new=_kickoff_fail_midway):
@@ -1289,11 +1397,15 @@ def test_start_crew_run_retry_builds_adhoc_execution_for_remaining_agents_only(
             f"/api/tasks/{task_id}/execute-adhoc-crew",
             json={
                 "agent_ids": [agent1, agent2],
-                "task_descriptions": ["카피를 작성하세요", "디자인 가이드를 작성하세요"],
+                "task_descriptions": [
+                    "카피를 작성하세요",
+                    "디자인 가이드를 작성하세요",
+                ],
             },
         )
     run = conn.execute(
-        "SELECT id FROM crew_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1", (task_id,)
+        "SELECT id FROM crew_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+        (task_id,),
     ).fetchone()
 
     from hair_platform import deliverables as deliverables_mod
@@ -1309,7 +1421,9 @@ def test_start_crew_run_retry_builds_adhoc_execution_for_remaining_agents_only(
 def test_start_crew_run_retry_rejects_non_failed_or_fully_completed(client_and_conn):
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
-    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"]
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()[
+        "id"
+    ]
     from hair_platform import deliverables as deliverables_mod
 
     with pytest.raises(ValueError, match="run_not_found"):
@@ -1329,16 +1443,15 @@ def test_retry_crew_run_endpoint_400_when_run_not_failed(client_and_conn):
     task_id = _make_task(client, "성공 실행 업무")
     agent1 = _make_active_agent(conn, "카피 초안")
 
-    with patch(
-        "crewai.Crew.kickoff", return_value=_crew_output("최종", ["결과물"])
-    ):
+    with patch("crewai.Crew.kickoff", return_value=_crew_output("최종", ["결과물"])):
         resp = client.post(
             f"/api/tasks/{task_id}/execute-adhoc-crew",
             json={"agent_ids": [agent1], "task_descriptions": ["카피를 작성하세요"]},
         )
     assert resp.status_code == 202, resp.text
     run = conn.execute(
-        "SELECT id FROM crew_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1", (task_id,)
+        "SELECT id FROM crew_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+        (task_id,),
     ).fetchone()
     resp = client.post(f"/api/crew-runs/{run['id']}/retry-remaining", json={})
     assert resp.status_code == 400, resp.text

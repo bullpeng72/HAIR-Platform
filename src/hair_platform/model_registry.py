@@ -21,12 +21,22 @@ ollama 모델 및 openai, anthropic 모델 등록하는 메뉴를 두고 등록�
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 
 from hair_platform import audit
 
 PROVIDERS = ("anthropic", "openai", "ollama")
+
+# 사용자 요청(2026-10-26, "모델 레지스트리에 llm 설정 최적화 각 tier에
+# 적용되는 모델을 매핑하는 기능을 제공... 향후 새로운 모델 출시되거나
+# 모델 프로바이더 변경시에도 각 Tier별 모델 맵핑 변경하여 관리") —
+# `agent_optimizer.py`의 역할 분류 tier 3종과 반드시 같은 문자열이어야
+# 한다(`agent_optimizer.TIER_DEEP_REASONING` 등). agent_optimizer가
+# model_registry를 import하므로(역방향 import는 순환 참조가 되어 불가),
+# 여기선 독립적으로 같은 문자열 리터럴을 든다.
+OPTIMIZATION_TIERS = ("deep_reasoning", "precision_fast", "standard")
 
 # openai.models.list()가 돌려주는 것 중 채팅에 못 쓰는 모델(음성/이미지/
 # 임베딩/검열)을 걸러내는 키워드 — 정확한 allow-list 대신 덜 공격적인
@@ -83,9 +93,48 @@ def list_models(conn: sqlite3.Connection, provider: str | None = None) -> list[d
             "provider": r["provider"],
             "name": r["name"],
             "is_active": bool(r["is_active"]),
+            "optimization_tiers": json.loads(r["optimization_tiers"] or "[]"),
         }
         for r in rows
     ]
+
+
+def set_optimization_tiers(
+    conn: sqlite3.Connection,
+    actor_id: int,
+    model_id: int,
+    optimization_tiers: list[str],
+) -> None:
+    """이 모델이 "LLM 설정 최적화"의 어떤 tier(deep_reasoning/
+    precision_fast/standard)에 직접 적용되는지 admin이 지정·변경·
+    초기화(`[]`)한다 — 지정하면 `agent_optimizer.recommend_model()`이
+    그 tier를 추천할 때 이름 패턴 추정보다 이 모델을 항상 먼저 후보로
+    올린다. 새 모델 출시·provider 교체 때 코드를 고치지 않고 이 매핑만
+    바꾸면 되고, 몇 번이든 다시 바꿀 수 있다(한 번 정하면 못 바꾸는
+    제약 없음)."""
+    invalid = sorted(set(optimization_tiers) - set(OPTIMIZATION_TIERS))
+    if invalid:
+        raise ValueError(f"invalid_optimization_tier:{','.join(invalid)}")
+    row = conn.execute(
+        "SELECT * FROM model_registry WHERE id = ?", (model_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("model_not_found")
+    normalized = sorted(set(optimization_tiers))
+    conn.execute(
+        "UPDATE model_registry SET optimization_tiers = ? WHERE id = ?",
+        (json.dumps(normalized, ensure_ascii=False), model_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "model_registry_optimization_tiers_changed",
+        "model_registry",
+        model_id,
+        before={"optimization_tiers": json.loads(row["optimization_tiers"] or "[]")},
+        after={"optimization_tiers": normalized},
+    )
+    conn.commit()
 
 
 def set_model_active(

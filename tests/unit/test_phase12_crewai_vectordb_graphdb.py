@@ -19,7 +19,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hair_platform import agent_runtime, crew_runtime, documents, graphquery, vectorstore
+from hair_platform import (
+    agent_runtime,
+    crew_runtime,
+    documents,
+    graphquery,
+    vectorstore,
+)
 
 
 def _login(client, username, password):
@@ -952,7 +958,9 @@ def test_gc87_truncate_for_embedding_uses_shorter_limit_for_mxbai():
     limit = vectorstore._MAX_EMBED_CHARS_BY_MODEL["mxbai-embed-large:latest"]
     assert limit < vectorstore._MAX_EMBED_CHARS_BY_MODEL["text-embedding-3-small"]
     long_text = "가" * (limit + 100)
-    truncated = vectorstore._truncate_for_embedding(long_text, "mxbai-embed-large:latest")
+    truncated = vectorstore._truncate_for_embedding(
+        long_text, "mxbai-embed-large:latest"
+    )
     assert len(truncated) == limit
 
 
@@ -1145,30 +1153,29 @@ def test_gc92_execute_agent_does_not_augment_normal_role(client_and_conn):
     assert llm_mock.call_args[0][3] == "API 만들어줘"  # 증강 없이 그대로
 
 
-def test_gc195_execute_agent_augments_prompt_for_websearch_role(client_and_conn):
+def test_gc195_execute_agent_augments_prompt_for_realtime_search_role(client_and_conn):
     """사용자 요청(2026-09-29, "도구/스킬 Pool에 외부 자료 검색이 가능한
-    API를... 추가해줘") — "외부검색" skill_tags를 가진 Agent는
+    API를... 추가해줘") — "실시간웹검색" skill_tags를 가진 Agent는
     vectordb·graphdb와 같은 방식으로 실행 전에
-    `websearch.search()` 결과를 프롬프트에 덧붙여야 한다. (원래
-    "websearch" 별칭으로도 됐으나 자동완성 중복 리포트로 2026-10-06에
-    "외부검색"으로 통합됨.)"""
+    `websearch.tavily_context_for_prompt()` 결과를 프롬프트에 덧붙여야
+    한다. (원래 "외부검색"/Wikipedia로 검증했으나, 사용자 요청
+    2026-10-26 "도구/skill에서 동작하지 않는 검색은 삭제해줘"로 지속
+    차단된 그 스킬이 빠지면서 "실시간웹검색"/Tavily로 대체됨.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부지식 Agent', '[\"외부검색\"]', 'active')"
+        "('외부지식 Agent', '[\"실시간웹검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
 
     with (
         patch(
-            "hair_platform.websearch.search",
-            return_value=[
-                {"title": "원격근무", "snippet": "원격근무 설명", "url": "https://x"}
-            ],
+            "hair_platform.websearch.tavily_context_for_prompt",
+            return_value="실시간 웹 검색 결과(Tavily):\n- 원격근무: 원격근무 설명 (https://x)",
         ) as search_mock,
         patch(
             "hair_platform.llm.call_llm", return_value="외부 자료 기반 답변"
@@ -1192,19 +1199,21 @@ def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
     외부 검색 기능이 있는지 확인해줘") — `retrieve_context()`가 예전엔
     `if vectordb_search: ...return` → `if graphdb_query: ...return` →
     `if web_search: ...return` 순서의 if-체인이라, native 스킬을 2개
-    이상 가진 Agent는 먼저 매칭되는 하나(rag)만 쓰고 나머지(외부검색)는
-    vectordb 히트 여부와 무관하게 전혀 조회하지 않았다. 실제로
-    "외부 자료 조사가" Agent(skill_tags: 외부검색+일반웹검색+rag)가 이
-    버그로 Wikipedia 검색이 한 번도 안 불렸다 — rag+외부검색을 같이
-    가진 Agent가 이제 vectordb 히트 여부와 무관하게 Wikipedia도 함께
-    조회하는지 확인한다."""
+    이상 가진 Agent는 먼저 매칭되는 하나(rag)만 쓰고 나머지(당시
+    외부검색/Wikipedia)는 vectordb 히트 여부와 무관하게 전혀 조회하지
+    않았다. "외부검색"은 이후(2026-10-26, "도구/skill에서 동작하지 않는
+    검색은 삭제해줘") 지속적인 Wikimedia IP 차단으로 "실시간웹검색"
+    (Tavily)으로 대체됐지만, 이 테스트가 검증하는 "if-체인이 아니라
+    매칭되는 native 스킬을 전부 조회하는지"라는 메커니즘 자체는 그대로
+    유효하다 — rag+실시간웹검색을 같이 가진 Agent가 vectordb 히트
+    여부와 무관하게 실시간 웹 검색도 함께 조회하는지 확인한다."""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부 자료 조사가', '[\"외부검색\", \"rag\"]', 'active')"
+        "('외부 자료 조사가', '[\"실시간웹검색\", \"rag\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1215,10 +1224,8 @@ def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
                 "hair_platform.vectorstore.search", return_value=vectordb_hits
             ) as vs_mock,
             patch(
-                "hair_platform.websearch.search",
-                return_value=[
-                    {"title": "원격근무", "snippet": "원격근무 설명", "url": "https://x"}
-                ],
+                "hair_platform.websearch.tavily_context_for_prompt",
+                return_value="실시간 웹 검색 결과(Tavily):\n- 원격근무: 원격근무 설명 (https://x)",
             ) as search_mock,
             patch("hair_platform.llm.call_llm", return_value="답변") as llm_mock,
         ):
@@ -1227,7 +1234,7 @@ def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
             )
 
         assert vs_mock.called  # vectordb(rag)도 여전히 조회된다
-        search_mock.assert_called_once()  # web_search(외부검색)도 같이 조회된다
+        search_mock.assert_called_once()  # tavily_search(실시간웹검색)도 같이 조회된다
         augmented_prompt = llm_mock.call_args[0][3]
         assert "원격근무 설명" in augmented_prompt
 
@@ -1237,7 +1244,7 @@ def test_gc_retrieve_context_survives_vectordb_embedding_failure(client_and_conn
     대화창 `@멘션`에서 "Error code: 401 - ... Missing credentials"로
     전체 실행이 죽음) — `vectorstore.search()`(임베딩 API 호출, OpenAI
     키 누락·quota·일시 장애로 실패할 수 있음)가 예외를 올려도 Agent의
-    나머지 응답(여기선 web_search 결과)까지 전부 날아가면 안 된다 —
+    나머지 응답(여기선 실시간웹검색 결과)까지 전부 날아가면 안 된다 —
     websearch.py가 이미 지키는 "검색 실패가 전체 실행을 막으면 안
     된다" 원칙을 vectordb에도 적용한다."""
     _client, conn = client_and_conn
@@ -1246,7 +1253,7 @@ def test_gc_retrieve_context_survives_vectordb_embedding_failure(client_and_conn
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부 자료 조사가', '[\"외부검색\", \"rag\"]', 'active')"
+        "('외부 자료 조사가', '[\"실시간웹검색\", \"rag\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1260,10 +1267,8 @@ def test_gc_retrieve_context_survives_vectordb_embedding_failure(client_and_conn
             ),
         ),
         patch(
-            "hair_platform.websearch.search",
-            return_value=[
-                {"title": "원격근무", "snippet": "원격근무 설명", "url": "https://x"}
-            ],
+            "hair_platform.websearch.tavily_context_for_prompt",
+            return_value="실시간 웹 검색 결과(Tavily):\n- 원격근무: 원격근무 설명 (https://x)",
         ),
         patch("hair_platform.llm.call_llm", return_value="답변") as llm_mock,
     ):
@@ -1273,7 +1278,42 @@ def test_gc_retrieve_context_survives_vectordb_embedding_failure(client_and_conn
 
     assert output == "답변"  # 전체 실행이 죽지 않고 끝까지 완료된다
     augmented_prompt = llm_mock.call_args[0][3]
-    assert "원격근무 설명" in augmented_prompt  # web_search 결과는 그대로 살아있다
+    assert "원격근무 설명" in augmented_prompt  # 실시간웹검색 결과는 그대로 살아있다
+
+
+def test_gc_retrieve_context_includes_tavily_realtime_search_in_conversation_path(
+    client_and_conn,
+):
+    """사용자 요청(2026-10-26, "대화에서 외부 검색이 가능한 방법을
+    제안해줘") — "일반웹검색"(Parallel MCP)은 대화창(도구 호출 루프
+    없는 단일 실행 경로)에서 구조적으로 호출이 안 됐다. "실시간웹검색"
+    (Tavily, 네이티브 함수)은 같은 경로에서도 정적 주입으로 동작해야
+    한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('외부 자료 조사가', '[\"실시간웹검색\"]', 'active')"
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    with (
+        patch(
+            "hair_platform.websearch.tavily_context_for_prompt",
+            return_value="실시간 웹 검색 결과(Tavily):\n- T3Q: 데이터 분석 기업 (https://t3q.example)",
+        ) as tavily_mock,
+        patch("hair_platform.llm.call_llm", return_value="답변") as llm_mock,
+    ):
+        agent_runtime.execute_agent(
+            conn, agent_id, admin_id, "T3Q 한국 기업 실시간 검색", provider="openai"
+        )
+
+    tavily_mock.assert_called_once_with("T3Q 한국 기업 실시간 검색")
+    augmented_prompt = llm_mock.call_args[0][3]
+    assert "T3Q: 데이터 분석 기업" in augmented_prompt
 
 
 # ---------- index-knowledge ----------
@@ -1325,7 +1365,9 @@ def test_gc94_index_knowledge_fails_clearly_with_no_text(client_and_conn):
 
 
 def _admin_id(conn):
-    return conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()["id"]
+    return conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()[
+        "id"
+    ]
 
 
 def _fake_embed(text, provider=None, model=None):
@@ -1365,9 +1407,12 @@ def test_gc96_delete_chunk_removes_row_and_rejects_missing(client_and_conn):
     chunk_id = conn.execute("SELECT id FROM knowledge_chunks").fetchone()["id"]
 
     vectorstore.delete_chunk(conn, admin_id, chunk_id)
-    assert conn.execute(
-        "SELECT 1 FROM knowledge_chunks WHERE id = ?", (chunk_id,)
-    ).fetchone() is None
+    assert (
+        conn.execute(
+            "SELECT 1 FROM knowledge_chunks WHERE id = ?", (chunk_id,)
+        ).fetchone()
+        is None
+    )
 
     with pytest.raises(ValueError, match="chunk_not_found"):
         vectorstore.delete_chunk(conn, admin_id, chunk_id)
@@ -1399,7 +1444,7 @@ def test_gc97_vectorstore_stats_counts_by_model_and_source(client_and_conn):
 def test_gc98_graphquery_stats_counts_relationships_without_performance_columns(
     client_and_conn,
 ):
-    client, conn = client_and_conn
+    _client, conn = client_and_conn
     manager_id = conn.execute(
         "SELECT id FROM users WHERE username = 'manager1'"
     ).fetchone()["id"]
@@ -1435,7 +1480,7 @@ def test_gc98_graphquery_stats_counts_relationships_without_performance_columns(
 
 def test_gc99_knowledge_base_endpoints_require_admin_or_manager(client_and_conn):
     client, conn = client_and_conn
-    admin_id = _admin_id(conn)
+    _admin_id(conn)
     with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
         vectorstore.index_text(conn, None, "조각")
     chunk_id = conn.execute("SELECT id FROM knowledge_chunks").fetchone()["id"]
@@ -1463,7 +1508,7 @@ def test_gc99_knowledge_base_endpoints_require_admin_or_manager(client_and_conn)
 def test_gc100_manual_text_endpoint_requires_admin_or_manager_and_rejects_empty(
     client_and_conn,
 ):
-    client, conn = client_and_conn
+    client, _conn = client_and_conn
     _login(client, "member1", "memberpass")
     with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
         resp = client.post("/api/documents/text", json={"text": "내용"})

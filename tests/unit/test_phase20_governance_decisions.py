@@ -370,7 +370,7 @@ def test_gc206_tool_mode_skill_still_unaugmented_in_run_crew(client_and_conn):
 def test_gc207_always_mode_also_augments_single_shot_execute_agent(client_and_conn):
     """단일 실행 경로(`execute_agent()`)는 도구 호출 루프가 없어 `'tool'`
     이든 `'always'`든 정적 주입이 유일한 선택지다 — 새로 만든 `'always'`
-    스킬도(기본 시드된 rag/graphdb/외부검색 태그가 전혀 아니어도)
+    스킬도(기본 시드된 rag/graphdb/실시간웹검색 태그가 전혀 아니어도)
     실제로 주입되는지 확인해, 하드코딩된 태그 집합이 아니라 skill_pool
     데이터로 판별한다는 것을 증명한다."""
     from hair_platform import agent_runtime
@@ -429,7 +429,7 @@ def test_gc_embed_text_defaults_to_ollama_without_openai_api_key(monkeypatch):
     fake_resp.raise_for_status.return_value = None
 
     with patch("httpx.post", return_value=fake_resp) as post_mock:
-        provider, model, embedding = vectorstore.embed_text("텍스트")
+        provider, model, _embedding = vectorstore.embed_text("텍스트")
 
     assert provider == "ollama"
     assert model == "mxbai-embed-large:latest"
@@ -449,7 +449,7 @@ def test_gc_embed_text_defaults_to_openai_when_api_key_present(monkeypatch):
     fake_client.embeddings.create.return_value = resp
 
     with patch("openai.OpenAI", return_value=fake_client):
-        provider, model, embedding = vectorstore.embed_text("텍스트")
+        provider, model, _embedding = vectorstore.embed_text("텍스트")
 
     assert provider == "openai"
     assert model == "text-embedding-3-small"

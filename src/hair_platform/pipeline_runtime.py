@@ -77,7 +77,11 @@ def create_pipeline_template(
     template_id = cur.lastrowid
     assert template_id is not None
     audit.record(
-        conn, actor_id, "pipeline_template_created", "pipeline_template", template_id,
+        conn,
+        actor_id,
+        "pipeline_template_created",
+        "pipeline_template",
+        template_id,
         after={"name": name, "domain": domain},
     )
     conn.commit()
@@ -169,14 +173,20 @@ def set_pipeline_template_active(
         (1 if is_active else 0, template_id),
     )
     audit.record(
-        conn, actor_id, "pipeline_template_active_changed", "pipeline_template",
-        template_id, before={"is_active": bool(row["is_active"])},
+        conn,
+        actor_id,
+        "pipeline_template_active_changed",
+        "pipeline_template",
+        template_id,
+        before={"is_active": bool(row["is_active"])},
         after={"is_active": is_active},
     )
     conn.commit()
 
 
-def delete_pipeline_template(conn: sqlite3.Connection, actor_id: int, template_id: int) -> None:
+def delete_pipeline_template(
+    conn: sqlite3.Connection, actor_id: int, template_id: int
+) -> None:
     """`teams.delete_team()`과 같은 수동 FK-safe 연쇄 삭제 패턴 — `PRAGMA
     foreign_keys=ON`이 전역으로 걸려 있어(`db.get_connection()`) 자식
     행이 남아있으면 그냥 DELETE가 IntegrityError로 막힌다. 실행 이력
@@ -209,7 +219,11 @@ def delete_pipeline_template(conn: sqlite3.Connection, actor_id: int, template_i
     )
     conn.execute("DELETE FROM pipeline_templates WHERE id = ?", (template_id,))
     audit.record(
-        conn, actor_id, "pipeline_template_deleted", "pipeline_template", template_id,
+        conn,
+        actor_id,
+        "pipeline_template_deleted",
+        "pipeline_template",
+        template_id,
         before={"name": row["name"]},
     )
     conn.commit()
@@ -261,13 +275,11 @@ def add_stage(
     if template is None:
         raise ValueError("pipeline_template_not_found")
 
-    next_seq = (
-        conn.execute(
-            "SELECT COALESCE(MAX(seq_order), 0) + 1 AS next_seq FROM pipeline_stages "
-            "WHERE pipeline_template_id = ?",
-            (template_id,),
-        ).fetchone()["next_seq"]
-    )
+    next_seq = conn.execute(
+        "SELECT COALESCE(MAX(seq_order), 0) + 1 AS next_seq FROM pipeline_stages "
+        "WHERE pipeline_template_id = ?",
+        (template_id,),
+    ).fetchone()["next_seq"]
     cur = conn.execute(
         "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
         "lead_role_name, instructions, gate_ids, min_gate_pass_ratio, max_retry, "
@@ -297,14 +309,20 @@ def add_stage(
             (stage_id, role_name, seq, agent_instructions),
         )
     audit.record(
-        conn, actor_id, "pipeline_stage_added", "pipeline_stage", stage_id,
+        conn,
+        actor_id,
+        "pipeline_stage_added",
+        "pipeline_stage",
+        stage_id,
         after={"template_id": template_id, "name": name, "mode": mode},
     )
     conn.commit()
     return stage_id
 
 
-def update_stage(conn: sqlite3.Connection, actor_id: int, stage_id: int, **fields) -> None:
+def update_stage(
+    conn: sqlite3.Connection, actor_id: int, stage_id: int, **fields
+) -> None:
     """허용 필드만 갱신한다 — `agents`/`mode` 변경은 구조가 바뀌므로
     지원하지 않는다(단계를 지우고 새로 만드는 쪽이 안전하다 — 실행
     이력이 `stage_id`를 FK로 참조하는데 구성을 바꿔버리면 과거 이력의
@@ -340,11 +358,15 @@ def update_stage(conn: sqlite3.Connection, actor_id: int, stage_id: int, **field
         values.append(value)
     values.append(stage_id)
     conn.execute(
-        f"UPDATE pipeline_stages SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+        f"UPDATE pipeline_stages SET {', '.join(set_clauses)} WHERE id = ?",
         values,
     )
     audit.record(
-        conn, actor_id, "pipeline_stage_updated", "pipeline_stage", stage_id,
+        conn,
+        actor_id,
+        "pipeline_stage_updated",
+        "pipeline_stage",
+        stage_id,
         after=fields,
     )
     conn.commit()
@@ -364,7 +386,11 @@ def delete_stage(conn: sqlite3.Connection, actor_id: int, stage_id: int) -> None
     conn.execute("DELETE FROM pipeline_stage_agents WHERE stage_id = ?", (stage_id,))
     conn.execute("DELETE FROM pipeline_stages WHERE id = ?", (stage_id,))
     audit.record(
-        conn, actor_id, "pipeline_stage_deleted", "pipeline_stage", stage_id,
+        conn,
+        actor_id,
+        "pipeline_stage_deleted",
+        "pipeline_stage",
+        stage_id,
         before={"name": row["name"]},
     )
     conn.commit()
@@ -384,7 +410,7 @@ def reorder_stage(
     comparator = "<" if direction == "up" else ">"
     order_by = "DESC" if direction == "up" else "ASC"
     neighbor = conn.execute(
-        f"SELECT * FROM pipeline_stages WHERE pipeline_template_id = ? "  # noqa: S608
+        f"SELECT * FROM pipeline_stages WHERE pipeline_template_id = ? "
         f"AND seq_order {comparator} ? ORDER BY seq_order {order_by} LIMIT 1",
         (row["pipeline_template_id"], row["seq_order"]),
     ).fetchone()
@@ -395,9 +421,7 @@ def reorder_stage(
     # 맞바꾸면 첫 UPDATE가 상대방이 아직 갖고 있는 값과 충돌해
     # IntegrityError가 난다 — 음수 임시값(절대 실제 seq_order로 쓰이지
     # 않음, `next_seq`는 항상 MAX+1)을 거쳐 3단계로 교체한다.
-    conn.execute(
-        "UPDATE pipeline_stages SET seq_order = -1 WHERE id = ?", (row["id"],)
-    )
+    conn.execute("UPDATE pipeline_stages SET seq_order = -1 WHERE id = ?", (row["id"],))
     conn.execute(
         "UPDATE pipeline_stages SET seq_order = ? WHERE id = ?",
         (row["seq_order"], neighbor["id"]),
@@ -407,8 +431,13 @@ def reorder_stage(
         (neighbor["seq_order"], row["id"]),
     )
     audit.record(
-        conn, actor_id, "pipeline_stage_reordered", "pipeline_stage", stage_id,
-        before={"seq_order": row["seq_order"]}, after={"seq_order": neighbor["seq_order"]},
+        conn,
+        actor_id,
+        "pipeline_stage_reordered",
+        "pipeline_stage",
+        stage_id,
+        before={"seq_order": row["seq_order"]},
+        after={"seq_order": neighbor["seq_order"]},
     )
     conn.commit()
 
@@ -450,7 +479,11 @@ def start_pipeline_run(
     run_id = cur.lastrowid
     assert run_id is not None
     audit.record(
-        conn, actor_id, "pipeline_run_started", "pipeline_run", run_id,
+        conn,
+        actor_id,
+        "pipeline_run_started",
+        "pipeline_run",
+        run_id,
         after={"template_id": template_id, "task_id": task_id},
     )
     conn.commit()
@@ -502,7 +535,9 @@ def _resolve_role_agent_id(conn: sqlite3.Connection, role_name: str) -> int:
     return row["id"]
 
 
-def run_pipeline_stage_job(conn: sqlite3.Connection, run_id: int, actor_id: int) -> None:
+def run_pipeline_stage_job(
+    conn: sqlite3.Connection, run_id: int, actor_id: int
+) -> None:
     """`start_pipeline_run()`/`resolve_stage_decision()`이 BackgroundTasks로
     예약한다 — 현재 단계 1개만 실행하고 끝낸다(통과하면 즉시 다음 단계를
     재귀적으로 실행, 승인 대기/에스컬레이션이면 멈춘다). 백그라운드
@@ -535,7 +570,11 @@ def run_pipeline_stage_job(conn: sqlite3.Connection, run_id: int, actor_id: int)
             (run_id,),
         )
         audit.record(
-            conn, actor_id, "pipeline_run_failed", "pipeline_run", run_id,
+            conn,
+            actor_id,
+            "pipeline_run_failed",
+            "pipeline_run",
+            run_id,
             after={"error": str(exc)},
         )
         conn.commit()
@@ -546,13 +585,11 @@ def _execute_stage_attempt(
 ) -> None:
     run_id = run["id"]
     stage_id = stage["id"]
-    attempt = (
-        conn.execute(
-            "SELECT COALESCE(MAX(attempt), 0) + 1 AS next_attempt FROM pipeline_run_stages "
-            "WHERE pipeline_run_id = ? AND stage_id = ?",
-            (run_id, stage_id),
-        ).fetchone()["next_attempt"]
-    )
+    attempt = conn.execute(
+        "SELECT COALESCE(MAX(attempt), 0) + 1 AS next_attempt FROM pipeline_run_stages "
+        "WHERE pipeline_run_id = ? AND stage_id = ?",
+        (run_id, stage_id),
+    ).fetchone()["next_attempt"]
 
     stage_agents = conn.execute(
         "SELECT * FROM pipeline_stage_agents WHERE stage_id = ? ORDER BY seq_order, id",
@@ -565,7 +602,11 @@ def _execute_stage_attempt(
         "AND status IN ('passed', 'approved') ORDER BY id DESC LIMIT 1",
         (run_id,),
     ).fetchone()
-    base_input = prior["output"] if prior is not None else _stage_initial_input(conn, run["task_id"])
+    base_input = (
+        prior["output"]
+        if prior is not None
+        else _stage_initial_input(conn, run["task_id"])
+    )
 
     retry_feedback = ""
     if attempt > 1:
@@ -582,13 +623,19 @@ def _execute_stage_attempt(
             )
 
     stage_instructions = stage["instructions"] + retry_feedback
-    combined_base = f"{base_input}\n\n{stage_instructions}" if stage_instructions else base_input
+    combined_base = (
+        f"{base_input}\n\n{stage_instructions}" if stage_instructions else base_input
+    )
 
     if stage["mode"] == "parallel_delegated":
         lead_agent_id = _resolve_role_agent_id(conn, stage["lead_role_name"])
-        coworker_rows = [a for a in stage_agents if a["role_name"] != stage["lead_role_name"]]
+        coworker_rows = [
+            a for a in stage_agents if a["role_name"] != stage["lead_role_name"]
+        ]
         coworker_guides = "\n".join(
-            f"- {a['role_name']}: {a['instructions']}" for a in coworker_rows if a["instructions"]
+            f"- {a['role_name']}: {a['instructions']}"
+            for a in coworker_rows
+            if a["instructions"]
         )
         lead_description = combined_base
         if coworker_guides:
@@ -602,7 +649,12 @@ def _execute_stage_attempt(
     elif stage["mode"] == "sequential_relay":
         run_agent_ids = agent_ids
         task_descriptions = [
-            combined_base + (f"\n\n[이 단계에서 당신의 구체적 역할] {a['instructions']}" if a["instructions"] else "")
+            combined_base
+            + (
+                f"\n\n[이 단계에서 당신의 구체적 역할] {a['instructions']}"
+                if a["instructions"]
+                else ""
+            )
             for a in stage_agents
         ]
         process = "sequential"
@@ -633,8 +685,12 @@ def _execute_stage_attempt(
     ratio = _gate_pass_ratio(gate_scores)
     passed = ratio >= stage["min_gate_pass_ratio"]
 
-    stage_output = result["agents"][-1]["output"] if result["agents"] else result["final_output"]
-    author_agent_id = result["agents"][-1]["agent_id"] if result["agents"] else run_agent_ids[-1]
+    stage_output = (
+        result["agents"][-1]["output"] if result["agents"] else result["final_output"]
+    )
+    author_agent_id = (
+        result["agents"][-1]["agent_id"] if result["agents"] else run_agent_ids[-1]
+    )
 
     cur = conn.execute(
         "INSERT INTO pipeline_run_stages (pipeline_run_id, stage_id, attempt, status, "
@@ -665,9 +721,15 @@ def _execute_stage_attempt(
             "UPDATE pipeline_runs SET status = 'paused_for_approval' WHERE id = ?",
             (run_id,),
         )
-        approvals.create_approval_chain(conn, actor_id, "pipeline_run_stage", run_stage_id)
+        approvals.create_approval_chain(
+            conn, actor_id, "pipeline_run_stage", run_stage_id
+        )
         audit.record(
-            conn, actor_id, "pipeline_stage_escalated", "pipeline_run_stage", run_stage_id,
+            conn,
+            actor_id,
+            "pipeline_stage_escalated",
+            "pipeline_run_stage",
+            run_stage_id,
             after={"attempt": attempt, "gate_scores": gate_scores},
         )
         conn.commit()
@@ -677,7 +739,9 @@ def _execute_stage_attempt(
     # 워크스페이스 경로에 연결). 승인이 필요 없는 단계는 Gate 통과 자체가
     # 승인이라는 뜻이므로 'approved'로 바로 올린다(이게 "최소 HITL"의
     # 핵심 — 결재함을 거치지 않고 즉시 다음 단계로 전진한다).
-    deliverable_status = "pending_review" if stage["requires_human_approval"] else "approved"
+    deliverable_status = (
+        "pending_review" if stage["requires_human_approval"] else "approved"
+    )
     cur = conn.execute(
         "INSERT INTO deliverables (task_id, author_type, author_id, content, "
         "content_type, status) VALUES (?, 'agent', ?, ?, 'text', ?)",
@@ -697,10 +761,16 @@ def _execute_stage_attempt(
             "UPDATE pipeline_runs SET status = 'paused_for_approval' WHERE id = ?",
             (run_id,),
         )
-        approvals.create_approval_chain(conn, actor_id, "pipeline_run_stage", run_stage_id)
+        approvals.create_approval_chain(
+            conn, actor_id, "pipeline_run_stage", run_stage_id
+        )
         audit.record(
-            conn, actor_id, "pipeline_stage_awaiting_approval", "pipeline_run_stage",
-            run_stage_id, after={"deliverable_id": deliverable_id},
+            conn,
+            actor_id,
+            "pipeline_stage_awaiting_approval",
+            "pipeline_run_stage",
+            run_stage_id,
+            after={"deliverable_id": deliverable_id},
         )
         conn.commit()
         return
@@ -724,7 +794,9 @@ def _execute_stage_attempt(
         (next_seq, run_id),
     )
     conn.commit()
-    next_run = conn.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+    next_run = conn.execute(
+        "SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)
+    ).fetchone()
     next_stage = conn.execute(
         "SELECT * FROM pipeline_stages WHERE pipeline_template_id = ? AND seq_order = ?",
         (run["pipeline_template_id"], next_seq),
@@ -797,8 +869,12 @@ def resolve_stage_decision(
                 (next_seq, run_id),
             )
         audit.record(
-            conn, actor_id, "pipeline_stage_approved", "pipeline_run_stage",
-            pipeline_run_stage_id, after={"reason": reason},
+            conn,
+            actor_id,
+            "pipeline_stage_approved",
+            "pipeline_run_stage",
+            pipeline_run_stage_id,
+            after={"reason": reason},
         )
     else:
         # 반려 = "다시 해와"(기존 human-approval-loop 스킬 안내와 일치) —
@@ -823,8 +899,12 @@ def resolve_stage_decision(
                 (run_id,),
             )
         audit.record(
-            conn, actor_id, "pipeline_stage_rejected", "pipeline_run_stage",
-            pipeline_run_stage_id, after={"reason": reason},
+            conn,
+            actor_id,
+            "pipeline_stage_rejected",
+            "pipeline_run_stage",
+            pipeline_run_stage_id,
+            after={"reason": reason},
         )
     conn.commit()
     return run_id
@@ -865,10 +945,14 @@ def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[
                         "stage_seq_order": sr["stage_seq_order"],
                         "attempt": sr["attempt"],
                         "status": sr["status"],
-                        "gate_scores": json.loads(sr["gate_scores"]) if sr["gate_scores"] else None,
+                        "gate_scores": (
+                            json.loads(sr["gate_scores"]) if sr["gate_scores"] else None
+                        ),
                         "tcr": sr["tcr"],
                         "deliverable_id": sr["deliverable_id"],
-                        "is_primary_deliverable": bool(sr["stage_is_primary_deliverable"]),
+                        "is_primary_deliverable": bool(
+                            sr["stage_is_primary_deliverable"]
+                        ),
                     }
                     for sr in stage_results
                 ],

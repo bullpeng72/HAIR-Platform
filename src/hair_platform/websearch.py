@@ -39,6 +39,7 @@ Agent가 빈손으로 답을 지어내면서도 겉으로는 정상 동작처럼
 
 from __future__ import annotations
 
+import os
 import re
 import time
 
@@ -49,7 +50,9 @@ _TIMEOUT_SECONDS = 10.0
 # Wikipedia가 403("Please set a user-agent and respect our robot
 # policy")으로 거부한다. 정책이 요구하는 형식(앱 이름/버전 + 연락 수단
 # 또는 프로젝트 URL)을 따른다: https://w.wiki/4wJS 참고.
-_USER_AGENT = "HAIR-Platform/1.0 (internal collaboration-platform demo project; no public URL)"
+_USER_AGENT = (
+    "HAIR-Platform/1.0 (internal collaboration-platform demo project; no public URL)"
+)
 # 실측으로 발견(2026-10-26) — 짧은 간격으로 연속 호출하면 Wikimedia
 # 안티봇이 IP 단위로 403을 내리기 시작한다(User-Agent·언어와 무관하게
 # ko/en 둘 다 차단되는 것까지 확인). 분당 몇백 건을 보내는 게 아니라
@@ -167,7 +170,7 @@ def context_for_prompt(query: str, top_k: int = 3, lang: str = DEFAULT_LANG) -> 
         hits = search(query, top_k=top_k, lang=lang, _raise_on_error=True)
     except WebSearchError as exc:
         return (
-            f"(외부 자료 검색 실패 — {exc}. 이건 \"관련 자료가 없다\"는 뜻이 "
+            f'(외부 자료 검색 실패 — {exc}. 이건 "관련 자료가 없다"는 뜻이 '
             "아니라 검색 자체가 되지 않았다는 뜻입니다 — 이 사실을 사용자에게 "
             "명시적으로 알리고, 검색 결과를 추측하거나 지어내지 마세요.)"
         )
@@ -200,3 +203,100 @@ def as_crewai_tool(conn=None, top_k: int = 3):
         return context_for_prompt(query, top_k=top_k)
 
     return search_external_sources
+
+
+# ---------- Tavily 실시간 웹 검색(사용자 요청, 2026-10-26, "대화에서
+# 외부 검색이 가능한 방법을 제안해줘") ----------
+# "일반 웹 검색(Parallel Search)"은 `kind='mcp_remote'`라 CrewAI Agent
+# 루프(진짜 Crew 실행)가 있어야만 접속된다 — `pool_registry.
+# resolve_static_augmentation_targets()`가 `kind='native'`만 정적 주입
+# 대상으로 보기 때문에, 대화창(`agent_runtime.retrieve_context()`, 도구
+# 호출 루프 없음)에서는 그 스킬을 골라도 조용히 아무 일도 안 일어난다
+# (실측 재현: "일반웹검색" 선택 후 "T3Q" 검색 요청 → 검색 자체가 전혀
+# 안 됨). Wikipedia(`websearch.as_crewai_tool`)는 네이티브라 대화창에서도
+# 되지만 ①이 서버 IP가 Wikipedia에 403 차단돼 있고(위 모듈 docstring
+# 참고) ②애초에 백과사전이라 "최근 설립된 한국 기업" 같은 실시간 정보엔
+# 안 맞는다. Tavily(LLM 검색 특화 API, 사용자가 키 직접 발급)를 **순수
+# HTTP 호출 네이티브 함수**로 감싸면 Wikipedia/VectorDB/GraphDB와 똑같이
+# 대화창 정적 주입·Crew 실행 양쪽에서 하나의 구현으로 동일하게 동작한다.
+
+TAVILY_ENDPOINT = "https://api.tavily.com/search"
+_TAVILY_TIMEOUT_SECONDS = 10.0
+
+
+def _tavily_search_raw(query: str, top_k: int) -> dict:
+    """실제 Tavily API 호출 지점 — `_search_raw()`(Wikipedia)와 같은
+    "실패를 숨기지 않는다" 원칙. API 키가 아예 없으면 네트워크 호출
+    전에 바로 실패시켜 설정 실수를 명확히 드러낸다."""
+    import httpx  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
+
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        raise WebSearchError(
+            "TAVILY_API_KEY가 설정되지 않았습니다 — .env에 추가하고 서버를 "
+            "재기동하세요"
+        )
+
+    try:
+        resp = httpx.post(
+            TAVILY_ENDPOINT,
+            json={
+                "api_key": api_key,
+                "query": query,
+                "max_results": top_k,
+                "include_answer": True,
+            },
+            timeout=_TAVILY_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise WebSearchError(
+            f"Tavily API가 {exc.response.status_code} 오류를 반환했습니다"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise WebSearchError(f"Tavily API 접속에 실패했습니다: {exc}") from exc
+    except ValueError as exc:
+        raise WebSearchError(f"Tavily API 응답을 해석할 수 없습니다: {exc}") from exc
+
+
+def tavily_context_for_prompt(query: str, top_k: int = 3) -> str:
+    """LLM 프롬프트에 덧붙일 실시간 웹 검색 결과 텍스트 — Wikipedia
+    `context_for_prompt()`와 같은 "실패≠0건" 구분 원칙을 따른다(검색
+    자체가 막힌 것과 "결과가 없다"를 LLM이 혼동해 답을 지어내지 않게)."""
+    try:
+        data = _tavily_search_raw(query, top_k)
+    except WebSearchError as exc:
+        return (
+            f'(실시간 웹 검색 실패 — {exc}. 이건 "관련 자료가 없다"는 뜻이 '
+            "아니라 검색 자체가 되지 않았다는 뜻입니다 — 이 사실을 사용자에게 "
+            "명시적으로 알리고, 검색 결과를 추측하거나 지어내지 마세요.)"
+        )
+    results = data.get("results") or []
+    if not results:
+        return "관련된 실시간 웹 자료를 찾지 못했습니다."
+    lines = [
+        f"- {r.get('title', '')}: {r.get('content', '')} ({r.get('url', '')})"
+        for r in results[:top_k]
+    ]
+    text = "실시간 웹 검색 결과(Tavily):\n" + "\n".join(lines)
+    answer = data.get("answer")
+    if answer:
+        text = f"요약: {answer}\n\n{text}"
+    return text
+
+
+def as_tavily_crewai_tool(conn=None, top_k: int = 3):
+    """실시간 웹 검색을 실제 CrewAI Tool로 감싼다(`as_crewai_tool()`과
+    같은 패턴 — ASCII 함수명 제약도 동일하게 적용된다). `crewai`는
+    지연 import한다."""
+    from crewai.tools import tool  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
+
+    @tool("realtime_web_search")
+    def search_realtime_web(query: str) -> str:
+        """최신 뉴스·실시간 정보처럼 Wikipedia에 없는 최신/일반 웹
+        정보가 필요할 때 검색한다. 내부 정보나 백과사전 지식으로
+        충분하면 호출하지 마라."""
+        return tavily_context_for_prompt(query, top_k=top_k)
+
+    return search_realtime_web

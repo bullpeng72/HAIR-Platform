@@ -135,7 +135,9 @@ def test_gc_hierarchical_crew_excludes_manager_from_worker_agents_and_allows_del
     outputs = {a["agent_id"]: a["output"] for a in result["agents"]}
     assert outputs[manager_id] == "자율 개발 크루 실행 완료"
     for worker_id in worker_ids:
-        assert worker_id not in outputs  # 워커별 개별 산출물이 아니라 매니저 통합본 하나
+        assert (
+            worker_id not in outputs
+        )  # 워커별 개별 산출물이 아니라 매니저 통합본 하나
 
 
 def test_gc_autonomous_dev_crew_team_is_visible_and_has_six_members():
@@ -145,9 +147,7 @@ def test_gc_autonomous_dev_crew_team_is_visible_and_has_six_members():
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
 
-    team = conn.execute(
-        "SELECT id FROM teams WHERE name = '자율 개발 크루'"
-    ).fetchone()
+    team = conn.execute("SELECT id FROM teams WHERE name = '자율 개발 크루'").fetchone()
     assert team is not None
 
     member_roles = {

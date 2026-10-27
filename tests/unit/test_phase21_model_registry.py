@@ -137,9 +137,7 @@ def test_gc_model_registry_names_endpoint_open_to_all_roles_no_sensitive_fields(
     inactive_id = client.post(
         "/api/model-registry", json={"provider": "openai", "name": "비활성모델"}
     ).json()["id"]
-    client.patch(
-        f"/api/model-registry/{inactive_id}/active", json={"is_active": False}
-    )
+    client.patch(f"/api/model-registry/{inactive_id}/active", json={"is_active": False})
 
     for username, password in [
         ("member1", "memberpass"),
@@ -173,6 +171,137 @@ def test_gc224_fetch_candidates_success_does_not_persist_anything(client_and_con
     }
     m.assert_called_once_with("ollama")
     assert client.get("/api/model-registry").json() == []  # 저장 안 됐다
+
+
+# ---------- 사용자 요청(2026-10-26, "모델 레지스트리에 llm 설정
+# 최적화 각 tier에 적용되는 모델을 매핑하는 기능을 제공... 일단 설정된
+# 후 변경할 수 있는 기능이 제공되지 않아. 모델 선택후 재설정도
+# 가능하도록 개선") — optimization_tiers 지정·변경·초기화(재설정)
+# CRUD(1차로 premium/balanced/economy 간접 등급을 만들었다가, 사용자가
+# "tier 직접 매핑으로 변경"을 선택해 다시 설계했다). ----------
+
+
+def test_set_optimization_tiers_persists_and_is_returned_by_list_models():
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    from hair_platform import db
+
+    db.init_schema(conn)
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'a', 'x', 'admin')"
+    )
+    conn.commit()
+    model_id = model_registry.create_model(conn, 1, "ollama", "custom-model:latest")
+
+    # 등록 직후엔 아직 매핑 없음([]) — 패턴 추정으로 폴백한다.
+    row = next(m for m in model_registry.list_models(conn) if m["id"] == model_id)
+    assert row["optimization_tiers"] == []
+
+    model_registry.set_optimization_tiers(conn, 1, model_id, ["deep_reasoning"])
+    row = next(m for m in model_registry.list_models(conn) if m["id"] == model_id)
+    assert row["optimization_tiers"] == ["deep_reasoning"]
+
+    # 재설정(여러 tier 동시 매핑) — "일단 설정된 후 변경할 수 있는
+    # 기능이 제공되지 않아"에 대응: 몇 번이든 다시 바꿀 수 있어야 한다.
+    model_registry.set_optimization_tiers(
+        conn, 1, model_id, ["precision_fast", "standard"]
+    )
+    row = next(m for m in model_registry.list_models(conn) if m["id"] == model_id)
+    assert row["optimization_tiers"] == ["precision_fast", "standard"]
+
+    # 초기화([]) — 패턴 추정으로 되돌린다.
+    model_registry.set_optimization_tiers(conn, 1, model_id, [])
+    row = next(m for m in model_registry.list_models(conn) if m["id"] == model_id)
+    assert row["optimization_tiers"] == []
+
+
+def test_set_optimization_tiers_rejects_invalid_value_and_missing_model():
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    from hair_platform import db
+
+    db.init_schema(conn)
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'a', 'x', 'admin')"
+    )
+    conn.commit()
+    model_id = model_registry.create_model(conn, 1, "ollama", "custom-model:latest")
+
+    with pytest.raises(ValueError):
+        model_registry.set_optimization_tiers(conn, 1, model_id, ["엄청좋음"])
+    with pytest.raises(ValueError):
+        model_registry.set_optimization_tiers(conn, 1, 999999, ["standard"])
+
+
+def test_optimization_tiers_endpoint_rbac_and_round_trip(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    model_id = client.post(
+        "/api/model-registry",
+        json={"provider": "ollama", "name": "custom-model:latest"},
+    ).json()["id"]
+
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/optimization-tiers",
+        json={"optimization_tiers": ["deep_reasoning", "standard"]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "id": model_id,
+        "optimization_tiers": ["deep_reasoning", "standard"],
+    }
+    row = next(
+        r for r in client.get("/api/model-registry").json() if r["id"] == model_id
+    )
+    assert set(row["optimization_tiers"]) == {"deep_reasoning", "standard"}
+
+    # 재설정 — 같은 엔드포인트로 다른 값, 그리고 []로 초기화.
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/optimization-tiers",
+        json={"optimization_tiers": ["precision_fast"]},
+    )
+    assert resp.status_code == 200
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/optimization-tiers",
+        json={"optimization_tiers": []},
+    )
+    assert resp.status_code == 200
+    row = next(
+        r for r in client.get("/api/model-registry").json() if r["id"] == model_id
+    )
+    assert row["optimization_tiers"] == []
+
+    # 잘못된 값은 422(pydantic Literal 검증).
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/optimization-tiers",
+        json={"optimization_tiers": ["엄청좋음"]},
+    )
+    assert resp.status_code == 422
+
+    resp = client.patch(
+        "/api/model-registry/999999/optimization-tiers",
+        json={"optimization_tiers": ["standard"]},
+    )
+    assert resp.status_code == 404
+
+    # manager도 가능(active 토글과 같은 등급), member/viewer는 403.
+    _login(client, "manager1", "managerpass")
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/optimization-tiers",
+        json={"optimization_tiers": ["standard"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    _login(client, "member1", "memberpass")
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/optimization-tiers",
+        json={"optimization_tiers": ["standard"]},
+    )
+    assert resp.status_code == 403
 
 
 def test_gc225_fetch_candidates_wraps_provider_errors_as_400(client_and_conn):

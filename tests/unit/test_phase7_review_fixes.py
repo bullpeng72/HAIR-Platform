@@ -144,9 +144,7 @@ def test_gc181_human_pool_manager_id_can_be_set(client_and_conn):
         "SELECT id FROM users WHERE username = 'manager1'"
     ).fetchone()["id"]
 
-    resp = client.patch(
-        f"/api/human-pool/{human_id}", json={"manager_id": manager1_id}
-    )
+    resp = client.patch(f"/api/human-pool/{human_id}", json={"manager_id": manager1_id})
     assert resp.status_code == 200, resp.text
     row = conn.execute("SELECT * FROM human_pool WHERE id = ?", (human_id,)).fetchone()
     assert row["manager_id"] == manager1_id
