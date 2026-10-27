@@ -39,6 +39,11 @@ def report(conn: sqlite3.Connection) -> dict:
             {
                 "type": "human",
                 "id": row["id"],
+                # 사용자 요청(2026-10-27, "비용의 ID도 agent code로
+                # 변경") — human 쪽은 agent의 code에 대응하는 값이
+                # employee_id(사번)다. 미입력이면 화면에서 "#id"로
+                # 폴백한다(다른 사람 관련 화면과 같은 패턴).
+                "code": row["employee_id"],
                 "name": row["name"],
                 "role": row["role"],
                 "cost_estimate": row["cost_estimate"],
@@ -56,6 +61,7 @@ def report(conn: sqlite3.Connection) -> dict:
             {
                 "type": "agent",
                 "id": row["id"],
+                "code": row["code"],
                 # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
                 # 전엔 Agent는 이름 개념 자체가 없어 항상 None이었다.
                 "name": row["name"],

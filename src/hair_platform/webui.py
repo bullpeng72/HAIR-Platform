@@ -207,11 +207,29 @@ INDEX_HTML = """<!DOCTYPE html>
   .dashboard-grid .stat-row { display: flex; justify-content: space-between; padding: 0.15rem 0; border-bottom: 1px solid #eee; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #eee; vertical-align: top; }
-  th { background: #f0f1f4; }
+  th { background: #f0f1f4; position: relative; }
+  /* 사용자 요청(2026-10-27, "테이블 컬럼 폭을 마우스로 조정 가능하게
+     개선해줘") — 각 th 오른쪽 가장자리의 얇은 드래그 핸들. 드래그를
+     시작하는 순간에만(JS 쪽) 그 테이블을 table-layout: fixed로 바꾸고
+     현재 폭을 그대로 고정값으로 얼린다 — 평소엔 내용 기준 가변폭
+     (`table-layout: auto`, 바로 위 요청)을 유지하다가, 사용자가 실제로
+     조정한 열만 그 순간부터 고정폭이 된다. */
+  .col-resizer { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; user-select: none; touch-action: none; z-index: 1; }
+  .col-resizer:hover, .col-resizer.resizing { background: rgba(20, 33, 61, 0.25); }
   /* 사용자 요청(2026-10-14, "각 메뉴의 목록 기능에 필터/소트 기능을
      추가해줘") — table() 헬퍼(앱 전체 23곳 목록 화면이 공유)에 붙는
      검색창/정렬 가능 헤더 스타일. */
   .table-wrap .table-filter { width: 100%; max-width: 320px; margin-bottom: 0.5rem; box-sizing: border-box; }
+  /* 사용자 요청(2026-10-27, "컬럼폭 조정시에도 전체 폭이 영역(예: 목록
+     박스)을 넘지 않도록") — 진짜 원인은 열 폭 계산이 아니라 여기였다:
+     `.table-wrap`에 overflow 처리가 없어서, 테이블의 최소 내용 폭(버튼
+     여러 개가 늘어선 "동작" 열 등, table-layout: auto에서 줄어들 수
+     없는 콘텐츠)이 카드 폭보다 크면 테이블이 `.card` 밖으로 그냥
+     흘러넘쳤다(열 간 폭을 서로 맞바꾸는 드래그 로직만으로는 애초에
+     넘치는 초기 상태 자체는 못 막는다). `.table-wrap`을 가로 스크롤
+     컨테이너로 만들면 테이블이 아무리 넓어도 이 박스 밖으로는 못
+     나간다 — 넘치는 만큼은 스크롤로 본다. */
+  .table-wrap { max-width: 100%; overflow-x: auto; }
   /* 사용자 보고(2026-10-14, 스크린샷 — "생성방식 ▲LM"처럼 헤더 글자가
      옆 칸과 겹쳐 깨져 보임) — 실측으로 확인한 원인: 전역 `table {
      table-layout: fixed }` + `td, th { overflow-wrap: break-word }`가
@@ -243,9 +261,21 @@ INDEX_HTML = """<!DOCTYPE html>
   .skill-picker-chips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
   .skill-chip { display: inline-flex; align-items: center; gap: 0.25rem; background: #eef1f6; border-radius: 12px; padding: 0.1rem 0.3rem 0.1rem 0.6rem; font-size: 0.8rem; }
   .skill-chip button { border: none; background: none; cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0 0.2rem; color: #666; }
-  table { table-layout: fixed; }
+  /* 사용자 요청(2026-10-27, "컬럼 폭이 고정되어 있어. 가변으로
+     개선해줘") — `table-layout: fixed`는 모든 열이 내용과 무관하게
+     균등폭을 먼저 가져가, 짧은 열("코드"·"모드" 등)이 긴 열("설명"·
+     "기본 도구")만큼 넓게 고정되고 반대로 긴 내용은 눌려 줄바꿈이
+     심해지는 원인이었다. `auto`로 바꾸면 각 열이 실제 내용 폭에 맞춰
+     커지되, 아래 col-actions/col-skills/col-detail의 width는 여전히
+     "최소 이만큼은 확보"하는 힌트로 작동해(auto 레이아웃에서 width는
+     강제값이 아니라 최소폭 계산에 반영되는 제안값) 버튼/select가 옆
+     칸으로 흘러넘치던 문제(2026-10-14/27 기록)는 그대로 방지된다. */
+  table { table-layout: auto; }
   td, th { overflow-wrap: break-word; }
   td.col-actions, th.col-actions { width: 260px; }
+  /* select/input+button 한 쌍만 있는 좁은 동작 열("상사 지정" 등) —
+     col-actions(여러 버튼이 쌓이는 "동작" 열)보다 좁아도 된다. */
+  td.col-actions-compact, th.col-actions-compact { width: 170px; }
   td.col-skills, th.col-skills { width: 180px; }
   td.col-detail, th.col-detail { width: 240px; }
   td.col-detail details > div { margin-top: 0.3rem; }
@@ -258,7 +288,12 @@ INDEX_HTML = """<!DOCTYPE html>
   .actions > button { width: auto; }
   .actions > select, .actions > input { width: auto; min-width: 7rem; box-sizing: border-box; }
   .actions details { width: 100%; }
-  .actions .pair { display: flex; gap: 0.2rem; align-items: center; }
+  /* 사용자 요청(2026-10-27, "테이블 컬럼 조정시 좌우 스크롤 생기지
+     않도록") — 칸이 좁아 select/input+button이 한 줄에 다 안 들어가면
+     (예: col-actions-compact), 옆 칸을 침범하는 대신 버튼이 다음
+     줄로 자연스럽게 내려가게 한다. 공간이 충분한 곳(기존 col-actions
+     등)에는 아무 영향 없음 — 꽉 찰 때만 줄바꿈. */
+  .actions .pair { display: flex; flex-wrap: wrap; gap: 0.2rem; align-items: center; }
   .actions .pair input, .actions .pair select { width: auto; min-width: 6rem; flex: initial; }
   .actions .pair button { width: auto; flex-shrink: 0; }
   #login-view { display: flex; align-items: center; justify-content: center; height: 100vh; }
@@ -684,6 +719,10 @@ function renderContent(raw, contentType) {
 // 워크스페이스/Crew 실행 결과/대화 등) 매번 버튼을 다시 연결할 필요가
 // 없다.
 document.addEventListener("click", (ev) => {
+  // 컬럼 폭 조정 핸들은 정렬 가능한 th 안에 들어있어, 드래그가 끝난 뒤
+  // 발생하는 네이티브 click이 그대로 버블되면 정렬(data-sort-col)까지
+  // 같이 트리거된다 — 여기서 먼저 걸러낸다.
+  if (ev.target.closest(".col-resizer")) return;
   const copyBtn = ev.target.closest("[data-copy-artifact]");
   if (copyBtn) {
     const raw = document.getElementById(copyBtn.dataset.copyArtifact + "-raw");
@@ -1025,7 +1064,16 @@ function headerColClass(h) {
   // 사용자 보고(2026-10-27, 스크린샷 — "LLM 설정 최적화" 일괄 화면의
   // "추천 Provider/Model" 열(모델 선택 <select>)이 "tuning 변경 필드"
   // 열과 겹쳐 보임) — 바로 위 두 사례와 원인이 같다.
-  if (h === "동작" || h === "상사 지정" || h === "비밀번호 재설정" || h === "계정 상태 변경" || h === "추천 Provider/Model") return "col-actions";
+  if (h === "동작" || h === "추천 Provider/Model") return "col-actions";
+  // 사용자 보고(2026-10-27, 스크린샷 — "사용자 목록"에서 컬럼들이 너무
+  // 넓어 테이블에 좌우 스크롤이 생김) — "상사 지정"/"비밀번호 재설정"/
+  // "계정 상태 변경" 세 열은 바로 위 "동작"(col-actions, 260px)과 같은
+  // 폭을 썼었는데, 각 칸엔 select/input+button 한 쌍만 있어(여러 버튼이
+  // 쌓이는 "동작" 열과 다름) 그렇게 넓을 필요가 없었다 — table-layout:
+  // auto로 바뀐 지금은(2026-10-27, 앞선 요청) 겹침 방지용 최소폭만
+  // 있으면 되므로 더 좁은 전용 클래스로 줄인다(col-actions 자체는
+  // "동작" 열에 그대로 둔다 — 그쪽은 버튼이 여러 개라 여전히 넓어야 함).
+  if (h === "상사 지정" || h === "비밀번호 재설정" || h === "계정 상태 변경" || h === "사번 변경") return "col-actions-compact";
   // 사용자 보고(2026-10-14, 스크린샷 — "스킬" 열이 단어 하나씩
   // 줄바꿈될 만큼 좁게 눌려 있음) — table-layout:fixed에서 폭을
   // 안 정해주면 ID/상태처럼 짧은 열과 똑같이 나눠 가져가 버린다.
@@ -1062,9 +1110,17 @@ function table(headers, rows) {
     const cls = headerColClass(h);
     const sortable = hasRows && h !== "동작";
     const thClass = [cls, sortable ? "sortable-col" : ""].filter(Boolean).join(" ");
+    // 사용자 요청(2026-10-27, "컬럼폭 조정시에도 전체 폭이 영역을
+    // 넘지 않도록") — 핸들은 "열의 오른쪽 끝"이 아니라 "열 i와 열
+    // i+1 사이의 경계"다. 드래그하면 그 경계 양옆 두 열만 폭을
+    // 맞바꾸므로(한쪽이 늘면 옆이 그만큼 줄어듦) 테이블 전체 폭은
+    // 절대 안 바뀐다 — 그래서 마지막 열에는 핸들을 안 둔다(그 오른쪽엔
+    // 맞바꿀 열이 없다).
+    const isLast = i === headers.length - 1;
     html += "<th" + (thClass ? ' class="' + thClass + '"' : "") +
       (sortable ? ' data-sort-col="' + i + '" title="클릭해 정렬"' : "") +
-      ">" + esc(h) + (sortable ? ' <span class="sort-indicator"></span>' : "") + "</th>";
+      ">" + esc(h) + (sortable ? ' <span class="sort-indicator"></span>' : "") +
+      (isLast ? "" : '<span class="col-resizer" title="드래그해 폭 조정"></span>') + "</th>";
   });
   html += "</tr></thead><tbody>";
   if (!hasRows) {
@@ -1133,6 +1189,74 @@ function _sortTableByColumn(th) {
   });
   rows.forEach(tr => tbody.appendChild(tr));
 }
+
+// 사용자 요청(2026-10-27, "테이블 컬럼 폭을 마우스로 조정 가능하게
+// 개선해줘") — table() 헬퍼가 공유되는 23곳 전부, 위 정렬/필터처럼
+// 전역 위임 하나로 처리한다(호출부마다 배선 불필요). 드래그를 시작하는
+// 순간 그 테이블의 모든 열 폭을 "지금 렌더된 그대로" px로 얼리고
+// table-layout을 fixed로 바꾼다 — 그래야 한 열만 끌 때 다른 열들이
+// auto 레이아웃 재계산으로 같이 흔들리지 않는다(평소엔 내용 기준
+// 가변폭을 유지하다가, 실제로 조정한 테이블만 그 순간부터 고정폭).
+// 핸들은 "열 i / 열 i+1 사이 경계"라, 드래그는 그 둘의 폭만 맞바꾼다
+// (한쪽 + delta, 다른쪽 - delta).
+//
+// 사용자 보고(2026-10-27, "컬럼폭 조정시에도 전체 폭이 넘지 않도록" →
+// "핸들을 드래그하는 순간 바로 스크롤" → "비용 메뉴는 기본으로도
+// 스크롤, 다른 메뉴는 여전히" → "아직도 발생") — 이 테이블/컬럼 폭을
+// .table-wrap보다 좁게 강제로 욱여넣으려는 시도(열 폭 비례 축소,
+// table{max-width:100%} 등)를 몇 차례 더 해봤지만 전부 효과가 없어
+// 전부 되돌렸다. 원인은 CSS의 근본 규칙이다 — 셀 안에 줄어들 수 없는
+// 내용(`<input style="width:120px">`처럼 폭이 고정된 폼 컨트롤, 버튼
+// 여러 개)이 있으면 그 "최소 콘텐츠 폭(min-content)"이 `max-width`나
+// JS로 지정한 어떤 값보다도 우선한다 — 브라우저는 max-width가 더
+// 좁아도 min-content 밑으로는 못 줄인다(table-layout 값과도 무관).
+// 즉 "버튼/입력창이 있는 열이 여럿인 테이블은 어느 시점부터는 좌우
+// 스크롤이 생기는 게 CSS 스펙상 정상 동작"이고, `.table-wrap`의
+// `overflow-x: auto`(아래 CSS)가 바로 그 표준 해법이다 — 페이지
+// 밖으로 터지지 않고 테이블 박스 안에서만 스크롤된다. 그래서 이
+// 리사이즈 로직은 "드래그로 폭을 조정하는 기능" 하나만 하고, "스크롤
+// 자체를 없애겠다"는 시도는 더 안 한다(이미 있는 폭을 얼릴 뿐 축소는
+// 안 함) — 정말 스크롤을 줄이려면 그 테이블의 셀 내용 자체(버튼 개수,
+// 입력창 폭)를 줄이는 수밖에 없다(예: 이미 compact 처리한 "상사
+// 지정"류 열처럼, 테이블별로 따로 손봐야 함).
+let _colResizeState = null;
+document.addEventListener("mousedown", (ev) => {
+  const handle = ev.target.closest(".col-resizer");
+  if (!handle) return;
+  const th = handle.closest("th");
+  const next = th && th.nextElementSibling;
+  const tbl = th && th.closest("table");
+  if (!th || !next || !tbl) return;
+  ev.preventDefault();
+  tbl.querySelectorAll(":scope > thead > tr > th").forEach(h => {
+    h.style.width = h.offsetWidth + "px";
+  });
+  tbl.style.tableLayout = "fixed";
+  handle.classList.add("resizing");
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  _colResizeState = {
+    th, next, startX: ev.clientX,
+    startWidth: th.offsetWidth, startNextWidth: next.offsetWidth,
+    handle,
+  };
+});
+document.addEventListener("mousemove", (ev) => {
+  if (!_colResizeState) return;
+  const { th, next, startX, startWidth, startNextWidth } = _colResizeState;
+  const minDelta = 40 - startWidth;
+  const maxDelta = startNextWidth - 40;
+  const delta = Math.min(maxDelta, Math.max(minDelta, ev.clientX - startX));
+  th.style.width = (startWidth + delta) + "px";
+  next.style.width = (startNextWidth - delta) + "px";
+});
+document.addEventListener("mouseup", () => {
+  if (!_colResizeState) return;
+  _colResizeState.handle.classList.remove("resizing");
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+  _colResizeState = null;
+});
 
 document.addEventListener("input", (ev) => {
   const filterInput = ev.target.closest("[data-table-filter]");
@@ -3690,7 +3814,60 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
     .map(p => ({ name: p.display_name, type: p.participant_type, id: p.participant_id }));
   if (!localCandidates.length && !opts.search) return;
 
-  const MENTION_TYPE_BADGE = { agent: "(AI)", team: "(팀)" };
+  // 사용자 요청(2026-10-28, "대화에서 @로 호출시 너무 많은 멤버가
+  // 노출되고있어 사람/AI/팀 카테고리 구분을 추가, ... 호출자를 각각
+  // 구분하는 등 개선") — (1) 섹션 구분: 결과를 사람/AI/팀 3개 묶음으로
+  // 나눠 묶음별 머리글 + 개수를 보여주고, 한 묶음이 너무 길면
+  // MAX_PER_CATEGORY개까지만 보여주고 나머지는 "+N개 더"로 접는다.
+  // (2) 타이핑 접두사로 범위 좁히기: "@AI 번역"처럼 "사람"/"AI"/"팀"으로
+  // 시작하면 그 종류만 검색한다 — 백엔드는 그대로 두고(이미 사람/AI/팀을
+  // 구분해 돌려주고 있다) 프런트에서만 그 접두사를 떼어 필터링한다.
+  const CATEGORY_LABEL = { human: "사람", agent: "AI", team: "팀" };
+  const CATEGORY_ORDER = ["human", "agent", "team"];
+  const CATEGORY_PREFIXES = [
+    { prefix: "사람", type: "human" },
+    { prefix: "AI", type: "agent" },
+    { prefix: "팀", type: "team" },
+  ];
+  const MAX_PER_CATEGORY = 5;
+
+  function parseCategoryFilter(raw) {
+    // "게임 AI팀"처럼 이름 자체에 "AI"가 들어간 후보를 찾으려고 "@AI"만
+    // 친 상태(아직 뒤에 공백 없음)는 카테고리 필터가 아니라 여전히
+    // 자유 텍스트 검색이어야 한다(기존 동작 유지) — 접두사 뒤에 공백이
+    // 와서 "다음 단어를 입력하기 시작했다"가 확실해졌을 때만 켠다.
+    const lower = raw.toLowerCase();
+    for (const { prefix, type } of CATEGORY_PREFIXES) {
+      const p = prefix.toLowerCase();
+      if (lower.startsWith(p + " ")) {
+        return { type, rest: raw.slice(prefix.length).replace(/^\\s+/, "") };
+      }
+    }
+    return { type: null, rest: raw };
+  }
+
+  function renderCategoryGroup(items, isRemote) {
+    let html = "";
+    for (const type of CATEGORY_ORDER) {
+      const group = items.filter(it => it.type === type);
+      if (!group.length) continue;
+      html += '<li class="muted" style="padding:0.2rem 0.5rem;font-size:0.75rem">' +
+        CATEGORY_LABEL[type] + ' (' + group.length + ')</li>';
+      html += group.slice(0, MAX_PER_CATEGORY).map(c => {
+        const inviteAttrs = isRemote
+          ? ' data-mention-invite-type="' + c.type + '" data-mention-invite-id="' + c.id + '"'
+          : "";
+        return '<li data-mention-name="' + escAttr(c.name) + '"' + inviteAttrs + '>' + esc(c.name) +
+          (isRemote ? ' <span class="muted">· 초대 필요</span>' : "") + '</li>';
+      }).join("");
+      if (group.length > MAX_PER_CATEGORY) {
+        html += '<li class="muted" style="padding:0.15rem 0.5rem;font-size:0.72rem">+' +
+          (group.length - MAX_PER_CATEGORY) + '개 더 — 계속 입력해 좁혀보세요</li>';
+      }
+    }
+    return html;
+  }
+
   let searchToken = 0;
   let searchDebounce = null;
 
@@ -3740,24 +3917,19 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
     inputEl, dropdownEl, "li[data-mention-name]", selectCandidate
   );
 
-  function renderGroups(localMatches, remoteItems) {
+  function renderGroups(localMatches, remoteItems, showHint) {
     if (!localMatches.length && !remoteItems.length) {
       dropdownEl.style.display = "none";
       dropdownEl.innerHTML = "";
       return;
     }
-    let html = localMatches.map(c =>
-      '<li data-mention-name="' + escAttr(c.name) + '">' + esc(c.name) +
-      (MENTION_TYPE_BADGE[c.type] ? ' <span class="muted">' + MENTION_TYPE_BADGE[c.type] + '</span>' : '') +
-      '</li>'
-    ).join("");
+    let html = showHint
+      ? '<li class="muted" style="padding:0.2rem 0.5rem;font-size:0.72rem">Tip: "AI "/"사람 "/"팀 "으로 시작하면 그 종류만 볼 수 있어요</li>'
+      : "";
+    html += renderCategoryGroup(localMatches, false);
     if (remoteItems.length) {
       html += '<li class="muted" style="padding:0.25rem 0.5rem">초대 후 멘션</li>' +
-        remoteItems.map(c =>
-          '<li data-mention-name="' + escAttr(c.name) + '" data-mention-invite-type="' + c.type +
-          '" data-mention-invite-id="' + c.id + '">' + esc(c.name) +
-          ' <span class="muted">' + (MENTION_TYPE_BADGE[c.type] || '(사람)') + ' · 초대 필요</span></li>'
-        ).join("");
+        renderCategoryGroup(remoteItems, true);
     }
     dropdownEl.innerHTML = html;
     dropdownEl.style.display = "block";
@@ -3771,32 +3943,37 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
     // 끝까지 타이핑하면 중간 공백에서 드롭다운이 영구히 닫혀버렸다.
     // 공백 여부로 판단하지 않고, 후보 이름에 그 쿼리가 부분 문자열로
     // 남아있는 동안만 계속 열어둔다.
-    const localMatches = localCandidates.filter(c => c.name.includes(query));
-    if (!opts.search) { renderGroups(localMatches, []); return; }
+    const { type: categoryType, rest } = parseCategoryFilter(query);
+    const showHint = !categoryType && query.length === 0;
+    const localMatches = localCandidates
+      .filter(c => !categoryType || c.type === categoryType)
+      .filter(c => c.name.includes(rest));
+    if (!opts.search) { renderGroups(localMatches, [], showHint); return; }
     // 로컬 매치는 즉시 보여주고(깜빡임 방지), 조직 전체 검색만 디바운스
     // 한다 — 매치가 하나도 없는 상태에서 디바운스 중 잠깐 닫았다 여는
     // 깜빡임을 피하려고, 로컬 매치가 없을 땐 응답이 올 때까지 아무
     // 것도 안 바꾼다(기존 상태 유지).
-    if (localMatches.length) renderGroups(localMatches, []);
+    if (localMatches.length) renderGroups(localMatches, [], showHint);
     clearTimeout(searchDebounce);
     const myToken = ++searchToken;
     searchDebounce = setTimeout(async () => {
       let remote;
       try {
-        remote = await opts.search(query);
+        remote = await opts.search(rest);
       } catch (e) {
         return;
       }
       if (myToken !== searchToken) return; // 늦게 도착한 응답은 버린다
       const localKeys = new Set(localCandidates.map(c => c.type + ":" + c.id));
-      const remoteItems = [
+      let remoteItems = [
         ...remote.humans.map(h => ({ type: "human", id: h.id, name: h.username })),
         ...remote.agents.map(a => ({ type: "agent", id: a.id, name: a.role_name })),
         ...remote.teams.map(t => ({ type: "team", id: t.id, name: t.name })),
       ]
         .filter(it => !localKeys.has(it.type + ":" + it.id))
         .filter(it => !(it.type === "human" && it.id === ME.id));
-      renderGroups(localMatches, remoteItems);
+      if (categoryType) remoteItems = remoteItems.filter(it => it.type === categoryType);
+      renderGroups(localMatches, remoteItems, showHint);
     }, 200);
   }
 
@@ -4270,10 +4447,13 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
   // 넣음) 이 매칭 결과 테이블만 빠져 있었다 — `ResourceCandidate.name`을
   // 추가해(`models.py`/`pool.py`) 똑같이 보여준다. Agent는 역할명이
   // 곧 식별자라 "-"로 둔다.
+  // 사용자 요청(2026-10-27, "다룬 테이블도 ID 표기되는 것이 남아
+  // 있는지 확인") — ResourceCandidate.code(human=employee_id,
+  // agent=code)로 교체.
   box.innerHTML = table(
-    ["순위", "타입", "ID", "이름", "역할", "가용", "비용", "점수", "점수 상세", "계정", "동작"],
+    ["순위", "타입", "코드", "이름", "역할", "가용", "비용", "점수", "점수 상세", "계정", "동작"],
     result.top.map((sc, i) => [
-      i + 1, esc(label(sc.candidate.type)), sc.candidate.id, esc(sc.candidate.name || sc.candidate.role), esc(sc.candidate.role),
+      i + 1, esc(label(sc.candidate.type)), esc(sc.candidate.code || ("#" + sc.candidate.id)), esc(sc.candidate.name || sc.candidate.role), esc(sc.candidate.role),
       sc.candidate.is_available ? "가능" : "불가",
       sc.candidate.cost,
       sc.score.toFixed(3) + (sc.exact_match ? " (완전일치)" : ""),
@@ -4406,6 +4586,15 @@ async function renderJobs(content) {
     ? briefs.map(b => '<option value="' + b.id + '">' + esc(briefLabel(b)) + '</option>').join("")
     : '<option value="">(등록된 업무 요청이 없습니다)</option>';
   const modelsByProvider = await fetchModelsByProvider();
+  // 사용자 보고(2026-10-27, "Agent 직접 생성 스킬이 도구/스킬 Pool의
+  // 스킬인지 확인" → "skill pool에 등록된 스킬명을 보여주고 선택할 수
+  // 있도록 개선") — `skillPickerHtml()`의 입력창이 `list="skill-
+  // datalist"`를 참조하는데, 이 화면(renderJobs)은 지금까지 그
+  // `<datalist id="skill-datalist">` 자체를 한 번도 안 만들어 넣었다
+  // (renderBriefs/renderHumanPool은 만든다) — 그래서 "Agent 직접
+  // 생성"의 스킬 입력창은 타이핑해도 자동완성이 전혀 안 뜨는, 그냥
+  // 빈 자유 입력창이었다. 다른 두 화면과 같은 패턴으로 끼워 넣는다.
+  const skillDatalist = await skillDatalistHtml();
 
   content.innerHTML =
     '<section class="card"><h2>AI 에이전트 생성</h2>' +
@@ -4440,7 +4629,7 @@ async function renderJobs(content) {
     '</ul>' +
     '<form id="direct-agent-form">' +
     '<label>역할명(필수)<br><input id="direct-agent-role-name" required style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
-    '<label style="display:block;margin-top:0.5rem">스킬<br>' + skillPickerHtml("direct-agent-skills-picker", "direct-agent-skills") + '</label>' +
+    '<label style="display:block;margin-top:0.5rem">스킬<br>' + skillPickerHtml("direct-agent-skills-picker", "direct-agent-skills") + skillDatalist + '</label>' +
     '<label style="display:block;margin-top:0.5rem">Goal(목표)<br><textarea id="direct-agent-goal" rows="2" style="width:100%;box-sizing:border-box;margin-top:0.2rem" placeholder="비워두면 역할명·스킬 기반으로 자동 생성"></textarea></label>' +
     '<label style="display:block;margin-top:0.5rem">Backstory(배경)<br><textarea id="direct-agent-backstory" rows="2" style="width:100%;box-sizing:border-box;margin-top:0.2rem" placeholder="비워두면 역할명·스킬 기반으로 자동 생성"></textarea></label>' +
     '<label style="display:block;margin-top:0.5rem">Expected Output(기대 산출물)<br><textarea id="direct-agent-expected" rows="2" style="width:100%;box-sizing:border-box;margin-top:0.2rem" placeholder="비워두면 플랫폼 공통 기본 문구 사용"></textarea></label>' +
@@ -4542,7 +4731,7 @@ function renderJobResult(result) {
   if (reusedCount > 0) {
     const refs = reusedItems
       .filter(it => it.agent_pool_id != null)
-      .map(it => "#" + it.agent_pool_id + "(" + esc(it.agent_pool_role_name) + ")")
+      .map(it => esc(it.agent_pool_code || ("#" + it.agent_pool_id)) + "(" + esc(it.agent_pool_role_name) + ")")
       .join(", ");
     banner =
       '<div class="msg warn"><b>새 에이전트가 생성되지 않았습니다.</b> ' +
@@ -4579,7 +4768,7 @@ function renderJobResult(result) {
       bundleCheckbox(it),
       it.id, it.task_id,
       esc(label(it.status)) + (it.reused ? ' <span class="badge-reused">재사용</span>' : ""),
-      it.agent_pool_id != null ? "#" + it.agent_pool_id + " " + esc(it.agent_pool_role_name) : '<span class="muted">-</span>',
+      it.agent_pool_id != null ? esc(it.agent_pool_code || ("#" + it.agent_pool_id)) + " " + esc(it.agent_pool_role_name) : '<span class="muted">-</span>',
       esc(it.error || ""), it.retry_count,
       it.status === "failed" ? '<button class="small" data-retry-job="' + result.job_id + '" data-retry-item="' + it.id + '">재시도</button>' : "",
     ])) +
@@ -4649,9 +4838,14 @@ async function renderHumanPool(content) {
     skillPickerHtml("hp-skills-picker", "hp-skills") +
     skillDatalist +
     '<input id="hp-cost" type="number" step="0.01" placeholder="비용" value="0">' +
+    // 사용자 요청(2026-10-27, "사람의 경우 ID는 향후 사번 적용 예정으로
+    // 8자리~12자리 입력 및 표시 가능해야 함") — 아직 전사 사번 체계가
+    // 없는 사람이 많아 선택 입력(비워도 등록 가능).
+    '<input id="hp-employee-id" placeholder="사번(선택, 숫자 8~12자리)" pattern="\\d{8,12}" title="숫자 8~12자리" style="width:160px">' +
     '<button class="primary" type="submit">등록</button></form>' +
     '<ul class="muted help-list">' +
     '<li><b>계정 선택</b>은 "사용자 관리"에서 먼저 만든 로그인 계정 중 아직 다른 사람 인력에 연결 안 된 것만 보여줍니다 — 계정 없이 등록하면 그 사람은 로그인할 수 없어 매칭·배정이 돼도 실제로 업무를 볼 수 없으니, 계정을 먼저 "사용자 관리"에서 만드세요.</li>' +
+    '<li><b>사번</b>은 선택 입력입니다 — 비워두면 목록에 "#id"로 표시되고, 나중에 목록의 "사번 저장"으로 언제든 채울 수 있습니다(숫자 8~12자리만 허용, 중복 불가).</li>' +
     '<li>스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거) — 목록에 없는 이름도 자유롭게 추가할 수 있습니다.</li>' +
     '<li><b>비용</b>은 인력 매칭 점수의 25%(또는 성과점수가 없으면 40%)를 차지합니다 — 낮을수록 유리합니다.</li>' +
     '<li>아직 성과 데이터가 없으니 초기엔 "가능" 상태여야 매칭 후보로 잡히고(가용성이 매칭 점수의 40~60%), 스킬은 할 일의 필요 스킬과 겹칠수록 유리합니다.</li>' +
@@ -4663,19 +4857,25 @@ async function renderHumanPool(content) {
     '<li><b>삭제</b>(관리자 전용)는 오프보딩과 별개로 레코드 자체를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 삭제가 막힙니다.</li>' +
     '<li><b>계정 연결</b>은 이 사람을 로그인 계정과 이어줍니다 — 연결해야만 그 사람이 "내 업무" 탭에서 자기 업무를 볼 수 있습니다(연결 안 하면 구조적으로 절대 안 보입니다). 드롭다운엔 아직 다른 사람 인력에 연결 안 된 계정만 뜹니다.</li>' +
     '</ul>' +
-    table(["ID", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "연결된 계정", "동작"], people.map(p => {
+    // 사용자 요청(2026-10-27, "사람의 경우 ID는 향후 사번 적용 예정으로
+    // 8자리~12자리 입력 및 표시 가능해야 함") — "ID" 열을 사번으로
+    // 바꾸고(미입력이면 Agent/Tool/Skill과 같은 "#id" 폴백), 기존
+    // 레코드에도 "사번 저장" 인라인 입력을 둔다(점수입력과 같은 패턴).
+    table(["사번", "이름", "역할", "스킬", "가용성", "비용", "동의", "성과점수", "연결된 계정", "동작"], people.map(p => {
       const middleActions = p.availability === "offboarded" ? "" :
         '<button class="small" data-toggle-consent="' + p.id + '" data-consent="' + (p.performance_consent ? "0" : "1") + '">' +
           (p.performance_consent ? "동의 철회" : "동의") + "</button>" +
         '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="score-' + p.id + '">' +
         '<button class="small" data-set-score="' + p.id + '">점수입력</button></span>' +
+        '<span class="pair"><input placeholder="사번(숫자 8~12자리)" pattern="\\d{8,12}" title="숫자 8~12자리" id="empid-' + p.id + '" value="' + escAttr(p.employee_id || "") + '" style="width:150px">' +
+        '<button class="small" data-set-employee-id="' + p.id + '">사번 저장</button></span>' +
         '<span class="pair"><select id="linkuser-' + p.id + '">' + linkableOptionsHtml(p.user_id) + '</select>' +
         '<button class="small" data-link-user="' + p.id + '">계정 연결</button></span>' +
         '<button class="small danger" data-offboard="' + p.id + '">오프보딩</button>';
       const deleteAction = isAdmin ? '<button class="small danger" data-delete-human="' + p.id + '">삭제</button>' : "";
       const linkedAccount = p.user_id === null ? "-" :
         (usersById[p.user_id] ? esc(usersById[p.user_id].username) : "#" + p.user_id);
-      return [p.id, esc(p.name), esc(p.role), esc(p.skill_tags.join(", ")), esc(label(p.availability)), p.cost_estimate,
+      return [esc(p.employee_id || ("#" + p.id)), esc(p.name), esc(p.role), esc(p.skill_tags.join(", ")), esc(label(p.availability)), p.cost_estimate,
         p.performance_consent ? "동의함" : "미동의",
         p.performance_score === null ? "-" : p.performance_score,
         linkedAccount,
@@ -4696,14 +4896,15 @@ async function renderHumanPool(content) {
       showMsg("global-msg", '계정을 선택하세요 — 없으면 "사용자 관리"에서 먼저 만드세요.', "error");
       return;
     }
+    const employeeIdValue = document.getElementById("hp-employee-id").value.trim();
     try {
-      await api("POST", "/api/human-pool", {
+      await api("POST", "/api/human-pool", Object.assign({
         name: document.getElementById("hp-name").value,
         role: document.getElementById("hp-role").value,
         skill_tags: document.getElementById("hp-skills").value.split(",").map(s => s.trim()).filter(Boolean),
         cost_estimate: Number(document.getElementById("hp-cost").value) || 0,
         user_id: Number(userIdValue),
-      });
+      }, employeeIdValue ? { employee_id: employeeIdValue } : {}));
       showMsg("global-msg", "등록했습니다.", "ok");
       refresh();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
@@ -4722,6 +4923,18 @@ async function renderHumanPool(content) {
       try {
         await api("POST", "/api/human-pool/" + btn.dataset.setScore + "/performance", { score: Number(input.value) });
         showMsg("global-msg", "점수를 입력했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-set-employee-id]").forEach(btn => {
+    btn.onclick = async () => {
+      const input = document.getElementById("empid-" + btn.dataset.setEmployeeId);
+      const value = input.value.trim();
+      if (!value) { showMsg("global-msg", "사번을 입력하세요.", "error"); return; }
+      try {
+        await api("PATCH", "/api/human-pool/" + btn.dataset.setEmployeeId, { employee_id: value });
+        showMsg("global-msg", "사번을 저장했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
@@ -4923,7 +5136,10 @@ async function renderAgentPool(content) {
     // 뺀다(실행에 어떤 모델이 쓰이는지는 "실행 후에만 쌓이는 정보"가
     // 아니라 실행 전에도 미리 확인해야 하는 설정이라 상세 패널에 묻혀
     // 있으면 안 됨 — "대화창 사용 모델 표시" 개선과 같은 취지).
-    table(["ID", "이름", "역할", "스킬", "상태", "생성방식", "LLM", "상세정보", "동작"], agents.map(a => {
+    // 사용자 요청(2026-10-27, "노출되지 않도록 개선") — 정수 PK는
+    // 화면에서 숨기고 코드만 보여준다(수정/삭제 등 동작은 a.id를 그대로
+    // 쓰므로 기능은 안 바뀜).
+    table(["코드", "이름", "역할", "스킬", "상태", "생성방식", "LLM", "상세정보", "동작"], agents.map(a => {
       // 사용자 보고(2026-10-14, 스크린샷 — "동작" 칸 하나에 10개 넘는
       // 버튼/입력이 전부 세로로 풀폭 스택돼 행 하나가 화면을 가득
       // 채움) — 자주 쓰는 상태변경/실행 버튼만 바로 보이게 남기고,
@@ -5029,7 +5245,7 @@ async function renderAgentPool(content) {
         '<div>최근 산출물:' + (a.last_output ? "" : " " + output) + '</div>' +
         (a.last_output ? output : "") +
         '</div></details>';
-      return [a.id, a.name ? esc(a.name) : '<span class="muted">(미지정)</span>', esc(a.role_name), esc(a.skill_tags.join(", ")),
+      return [esc(a.code || "-"), a.name ? esc(a.name) : '<span class="muted">(미지정)</span>', esc(a.role_name), esc(a.skill_tags.join(", ")),
         esc(label(a.status)), esc(label(a.framework)), llmInfo, detail, '<div class="actions">' + actions + "</div>"];
     })) + '<div id="execute-result"></div></section>';
 
@@ -5307,6 +5523,21 @@ async function renderPoolRegistry(content) {
     api("GET", "/api/skill-pool"),
   ]);
   const isAdmin = ME.role === "admin";
+  // 사용자 요청(2026-10-27, "기본 도구 ID의 경우도 코드로 선택 가능하도록
+  // 수정 필요(ID 노출 안됨)") — 테이블 표시·폼 선택 모두 정수 id 대신
+  // tool_pool.code를 쓴다. id는 체크박스 value(실제 API 페이로드)로만
+  // 남고 화면에는 안 보인다.
+  const toolCodeById = {};
+  tools.forEach(t => { toolCodeById[t.id] = t.code || ("#" + t.id); });
+  // 사용자 요청(2026-10-27, "신규 도구, 스킬 생성의 경우 AI 에이전트
+  // 생성 화면처럼 박스를 분리해줘") — 지금까지는 목록 카드 맨 아래에
+  // 생성 폼을 그대로 이어붙였다. "AI 에이전트 생성" 화면(renderJobs)이
+  // "AI 에이전트 생성"/"Agent 직접 생성"을 각각 독립된 카드로 분리한
+  // 것과 같은 원칙으로, 목록 카드와 생성 카드를 분리하고(Tool Pool
+  // 목록 / 신규 도구 생성 / Skill Pool 목록 / 신규 스킬 생성 — 총 4개
+  // 카드) 생성 폼도 그 화면의 "Agent 직접 생성"과 같은 "세로로 쌓인
+  // 넓은 입력칸" 구조로 맞춘다(기존 한 줄 inline 입력은 필드 수가
+  // 늘면서 이미 비좁았다).
   content.innerHTML =
     '<section class="card"><h2>Tool Pool — 재사용 가능한 도구</h2>' +
     '<ul class="muted help-list">' +
@@ -5321,24 +5552,37 @@ async function renderPoolRegistry(content) {
     '<li>"활성" 표시를 꺼두면(비활성) 스킬이 매칭돼도 더 이상 자동으로 붙지 않습니다(등록은 유지).</li>' +
     '<li><b>삭제</b>(관리자 전용)는 이 도구를 참조하던 Agent 개별 연결도 함께 지웁니다.</li>' +
     '</ul>' +
-    table(["ID", "이름", "종류", "설명", "활성", "동작"], tools.map(t => [
-      t.id, esc(t.name), esc(t.kind), esc(t.description), t.is_active ? "활성" : "비활성",
+    table(["코드", "이름", "종류", "설명", "활성", "동작"], tools.map(t => [
+      esc(t.code || "-"), esc(t.name), esc(t.kind), esc(t.description), t.is_active ? "활성" : "비활성",
       (isAdmin || !["mcp_stdio", "mcp_remote", "custom_python"].includes(t.kind))
         ? '<div class="actions"><button class="small" data-edit-tool="' + t.id + '">수정</button>' +
           (isAdmin ? '<button class="small danger" data-delete-tool="' + t.id + '">삭제</button>' : "") +
           "</div>"
         : "",
     ])) +
-    '<form class="inline" id="tool-form" style="flex-wrap:wrap">' +
-    '<input id="tp-name" placeholder="이름" required>' +
-    '<select id="tp-kind"><option value="native">native</option><option value="mcp_remote">mcp_remote</option><option value="mcp_stdio">mcp_stdio</option><option value="custom_python">custom_python</option></select>' +
-    '<input id="tp-description" placeholder="설명" style="flex:1;min-width:160px">' +
-    '<input id="tp-config" placeholder="config JSON, 예: {&#39;native_id&#39;:&#39;vectordb_search&#39;}" style="flex:1;min-width:220px">' +
-    '<div id="tp-custom-python-fields" style="display:none;width:100%">' +
-    '<textarea id="tp-custom-source" placeholder="def tool_fn(query: str) -> str:&#10;    return &#34;...&#34;" rows="18" style="width:100%;box-sizing:border-box;font-family:monospace;resize:vertical;min-height:320px"></textarea>' +
-    '<label>타임아웃(초) <input type="number" id="tp-custom-timeout" value="10" min="1" max="60" style="width:4rem"></label>' +
+    "</section>" +
+    '<section class="card"><h2>신규 도구 생성</h2>' +
+    // 사용자 보고(2026-10-27, 스크린샷 — 입력창·선택 옵션이 한쪽에
+    // 치우치고 박스 전체 폭을 못 씀) — 원인은 `display:flex;flex-
+    // direction:column`에 `max-width:560px`를 준 것: 플렉스 column의
+    // 기본 align-items:stretch는 <input>/<select>처럼 교체 요소(고유
+    // 크기가 있는 폼 컨트롤)에는 안 먹혀 좁은 기본 폭 그대로 남는다.
+    // "Agent 직접 생성" 카드(`direct-agent-form`)가 쓰는 pattern —
+    // 그냥 block 폼 + 각 필드에 `width:100%`를 직접 주는 방식 — 으로
+    // 맞춘다.
+    '<form id="tool-form">' +
+    '<label style="display:block">이름<br><input id="tp-name" required style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
+    '<label style="display:block;margin-top:0.5rem">종류<br><select id="tp-kind" style="width:100%;box-sizing:border-box;margin-top:0.2rem">' +
+    '<option value="native">native</option><option value="mcp_remote">mcp_remote</option>' +
+    '<option value="mcp_stdio">mcp_stdio</option><option value="custom_python">custom_python</option>' +
+    '</select></label>' +
+    '<label style="display:block;margin-top:0.5rem">설명<br><textarea id="tp-description" rows="2" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem"></textarea></label>' +
+    '<label id="tp-config-wrap" style="display:block;margin-top:0.5rem">config JSON<br><input id="tp-config" placeholder="예: {&#39;native_id&#39;:&#39;vectordb_search&#39;}" style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
+    '<div id="tp-custom-python-fields" style="display:none">' +
+    '<label style="display:block;margin-top:0.5rem">Python 함수<br><textarea id="tp-custom-source" placeholder="def tool_fn(query: str) -> str:&#10;    return &#34;...&#34;" rows="18" style="width:100%;box-sizing:border-box;font-family:monospace;resize:vertical;min-height:320px;margin-top:0.2rem"></textarea></label>' +
+    '<label style="display:block;margin-top:0.5rem">타임아웃(초) <input type="number" id="tp-custom-timeout" value="10" min="1" max="60" style="width:4rem"></label>' +
     '</div>' +
-    '<button class="primary" type="submit">도구 등록</button></form>' +
+    '<button class="primary" type="submit" style="margin-top:0.6rem">도구 등록</button></form>' +
     "</section>" +
     '<section class="card"><h2>Skill Pool — skill_tags 정식 등록</h2>' +
     '<ul class="muted help-list">' +
@@ -5348,29 +5592,41 @@ async function renderPoolRegistry(content) {
     '<li><b>대화창 표시</b>를 꺼두면 대화창의 스킬 선택 드롭다운에는 안 보이지만(선택해서 고를 수 없음), Agent의 skill_tags로는 그대로 쓸 수 있습니다 — mcp_remote/mcp_stdio/custom_python 도구가 붙은 스킬은 대화창 기본 AI(단발 호출, 실행 루프 없음)에서는 실제로 호출이 안 돼 기본값이 꺼짐으로 돼 있습니다(실제 CrewAI Agent 실행에서는 똑같이 동작합니다).</li>' +
     '<li><b>삭제</b>(관리자 전용)는 이 스킬 레코드만 지웁니다 — 같은 이름의 skill_tags를 가진 Agent/사람은 그대로 남고, 다음 실행부터 자동 도구 연결만 안 됩니다.</li>' +
     '</ul>' +
-    table(["ID", "이름", "설명", "기본 도구 ID", "모드", "대화창 표시", "동작"], skills.map(s => [
-      s.id, esc(s.name), esc(s.description), esc(s.default_tool_pool_ids.join(", ") || "-"), esc(s.augmentation_mode),
+    table(["코드", "이름", "설명", "기본 도구", "모드", "대화창 표시", "동작"], skills.map(s => [
+      esc(s.code || "-"), esc(s.name), esc(s.description),
+      esc(s.default_tool_pool_ids.map(id => toolCodeById[id] || ("#" + id)).join(", ") || "-"),
+      esc(s.augmentation_mode),
       s.show_in_conversation ? "표시" : "숨김",
       '<div class="actions"><button class="small" data-edit-skill="' + s.id + '">수정</button>' +
         (isAdmin ? '<button class="small danger" data-delete-skill="' + s.id + '">삭제</button>' : "") +
         "</div>",
     ])) +
-    '<form class="inline" id="skill-form">' +
-    '<input id="sp-name" placeholder="스킬명(skill_tags와 일치)" required>' +
-    '<input id="sp-description" placeholder="설명" style="flex:1;min-width:160px">' +
-    '<input id="sp-tool-ids" placeholder="기본 도구 ID(콤마)" style="width:140px">' +
-    '<select id="sp-mode"><option value="tool">tool(자동 호출)</option><option value="always">always</option><option value="none">none</option></select>' +
-    '<label><input type="checkbox" id="sp-show-in-conv" checked> 대화창에 표시</label>' +
-    '<button class="primary" type="submit">스킬 등록</button></form>' +
+    "</section>" +
+    '<section class="card"><h2>신규 스킬 생성</h2>' +
+    '<form id="skill-form">' +
+    '<label style="display:block">스킬명(skill_tags와 일치)<br><input id="sp-name" required style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
+    '<label style="display:block;margin-top:0.5rem">설명<br><textarea id="sp-description" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem"></textarea></label>' +
+    '<label style="display:block;margin-top:0.5rem">모드<br>' +
+    '<select id="sp-mode" style="margin-top:0.2rem"><option value="tool">tool(자동 호출)</option><option value="always">always</option><option value="none">none</option></select>' +
+    '</label>' +
+    '<div id="sp-tool-picker" style="margin-top:0.5rem">' +
+    '<div class="muted" style="margin-bottom:0.2rem">기본 도구(코드로 선택, 복수 가능 — 모드가 tool/always일 때만)</div>' +
+    tools.map(t =>
+      '<label style="margin-right:0.8rem;display:inline-block"><input type="checkbox" class="sp-tool-chk" value="' + t.id + '"> ' + esc(t.code || ("#" + t.id)) + '</label>'
+    ).join("") +
+    '</div>' +
+    '<label style="display:block;margin-top:0.5rem"><input type="checkbox" id="sp-show-in-conv" checked> 대화창에 표시</label>' +
+    '<button class="primary" type="submit" style="margin-top:0.6rem">스킬 등록</button></form>' +
     "</section>";
 
   const tpKindSelect = document.getElementById("tp-kind");
   const tpConfigInput = document.getElementById("tp-config");
+  const tpConfigWrap = document.getElementById("tp-config-wrap");
   const tpCustomFields = document.getElementById("tp-custom-python-fields");
   const syncToolKindFields = () => {
     const isCustom = tpKindSelect.value === "custom_python";
     tpCustomFields.style.display = isCustom ? "block" : "none";
-    tpConfigInput.style.display = isCustom ? "none" : "";
+    tpConfigWrap.style.display = isCustom ? "none" : "";
   };
   tpKindSelect.addEventListener("change", syncToolKindFields);
   syncToolKindFields();
@@ -5406,18 +5662,29 @@ async function renderPoolRegistry(content) {
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
+  const spModeSelect = document.getElementById("sp-mode");
+  const spToolPicker = document.getElementById("sp-tool-picker");
+  const syncSkillToolPicker = () => {
+    const enabled = spModeSelect.value === "tool" || spModeSelect.value === "always";
+    spToolPicker.style.opacity = enabled ? "1" : "0.45";
+    spToolPicker.querySelectorAll(".sp-tool-chk").forEach(chk => {
+      chk.disabled = !enabled;
+      if (!enabled) chk.checked = false;
+    });
+  };
+  spModeSelect.addEventListener("change", syncSkillToolPicker);
+  syncSkillToolPicker();
+
   document.getElementById("skill-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const idsRaw = document.getElementById("sp-tool-ids").value.trim();
-    const default_tool_pool_ids = idsRaw
-      ? idsRaw.split(",").map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0)
-      : [];
+    const default_tool_pool_ids = Array.from(spToolPicker.querySelectorAll(".sp-tool-chk:checked"))
+      .map(chk => Number(chk.value));
     try {
       await api("POST", "/api/skill-pool", {
         name: document.getElementById("sp-name").value,
         description: document.getElementById("sp-description").value,
         default_tool_pool_ids,
-        augmentation_mode: document.getElementById("sp-mode").value,
+        augmentation_mode: spModeSelect.value,
         show_in_conversation: document.getElementById("sp-show-in-conv").checked,
       });
       showMsg("global-msg", "스킬을 등록했습니다.", "ok");
@@ -5497,19 +5764,27 @@ async function renderPoolRegistry(content) {
     btn.onclick = () => {
       const s = skills.find(x => x.id === Number(btn.dataset.editSkill));
       if (openSkillEditRow) { openSkillEditRow.remove(); openSkillEditRow = null; }
+      // 사용자 요청(2026-10-27, "skill 생성시 ID에 tool/always/none이
+      // 포함됨, 수정에서 모드 변경이 ID가 바뀌는 게 아니라면 막아야 함
+      // + 기본 도구 ID도 코드로 선택(ID 노출 안됨), 기존 모드가 tool/
+      // always인 경우에만 활성화") — 모드는 name/kind와 같이 읽기전용
+      // 텍스트로만 보여주고(서버도 더는 받지 않는다, pool_registry.
+      // update_skill() 참고) 아예 PATCH에 안 보낸다. 도구는 체크박스로
+      // 코드만 보여주고(값은 id), 기존 모드가 tool/always일 때만 활성화.
+      const modeAllowsTools = s.augmentation_mode === "tool" || s.augmentation_mode === "always";
+      const checkedToolIds = new Set(s.default_tool_pool_ids);
       const formHtml =
         '<h4 style="margin-top:0">스킬 #' + s.id + ' 수정</h4>' +
         '<p><b>' + esc(s.name) + '</b> <span class="muted">— 이름은 변경 불가(Agent의 skill_tags와 정확히 일치해야 매칭되므로, 바꾸면 그 연결이 끊어집니다).</span></p>' +
+        '<p class="muted">모드: <b>' + esc(s.augmentation_mode) + '</b>(수정 불가 — 코드(' + esc(s.code || "-") + ')에 모드가 세그먼트로 박혀 있어, 모드를 바꾸려면 삭제 후 새로 등록해야 합니다).</p>' +
         '<label style="display:block;margin-top:0.4rem">설명<br>' +
-        '<input id="spe-description" value="' + escAttr(s.description) + '" style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
-        '<label style="display:block;margin-top:0.6rem">기본 도구 ID(콤마로 구분)<br>' +
-        '<input id="spe-tool-ids" value="' + escAttr(s.default_tool_pool_ids.join(", ")) + '" style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
-        '<label style="display:block;margin-top:0.6rem">모드<br>' +
-        '<select id="spe-mode" style="margin-top:0.2rem">' +
-        ["tool", "always", "none"].map(m =>
-          '<option value="' + m + '"' + (m === s.augmentation_mode ? " selected" : "") + '>' + m + "</option>"
+        '<textarea id="spe-description" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem">' + esc(s.description) + '</textarea></label>' +
+        '<div style="margin-top:0.6rem' + (modeAllowsTools ? "" : ";opacity:0.45") + '">기본 도구(코드로 선택, 복수 가능' + (modeAllowsTools ? "" : " — 이 스킬은 모드가 none이라 비활성") + ')<br>' +
+        tools.map(t =>
+          '<label style="margin-right:0.8rem;display:inline-block"><input type="checkbox" class="spe-tool-chk" value="' + t.id + '"' +
+          (checkedToolIds.has(t.id) ? " checked" : "") + (modeAllowsTools ? "" : " disabled") + '> ' + esc(t.code || ("#" + t.id)) + '</label>'
         ).join("") +
-        "</select></label>" +
+        '</div>' +
         '<label style="display:block;margin-top:0.6rem"><input type="checkbox" id="spe-show-in-conv"' + (s.show_in_conversation ? " checked" : "") + '> 대화창에 표시</label>' +
         '<div class="actions" style="margin-top:0.6rem"><button class="primary" type="submit">저장</button>' +
         '<button class="small" type="button" id="skill-edit-cancel">취소</button></div>';
@@ -5523,15 +5798,12 @@ async function renderPoolRegistry(content) {
       tr.querySelector("#skill-edit-cancel").onclick = () => { tr.remove(); openSkillEditRow = null; };
       tr.querySelector("#skill-edit-form").addEventListener("submit", async (ev) => {
         ev.preventDefault();
-        const idsRaw = tr.querySelector("#spe-tool-ids").value.trim();
-        const default_tool_pool_ids = idsRaw
-          ? idsRaw.split(",").map(x => Number(x.trim())).filter(n => Number.isInteger(n) && n > 0)
-          : [];
+        const default_tool_pool_ids = Array.from(tr.querySelectorAll(".spe-tool-chk:checked"))
+          .map(chk => Number(chk.value));
         try {
           await api("PATCH", "/api/skill-pool/" + s.id, {
             description: tr.querySelector("#spe-description").value,
             default_tool_pool_ids,
-            augmentation_mode: tr.querySelector("#spe-mode").value,
             show_in_conversation: tr.querySelector("#spe-show-in-conv").checked,
           });
           showMsg("global-msg", "스킬을 수정했습니다.", "ok");
@@ -6841,8 +7113,12 @@ function crewAdvancedOptionsPayload(prefix, isSupervisor) {
 }
 
 function crewAgentOptionsHtml(active) {
+  // 사용자 요청(2026-10-27, "Crew 빌더 - 즉석 테스트... ID 대신 agent
+  // code가, 추가로 에이전트명 표시되도록") — 드롭다운 라벨의 "#id"도
+  // 같은 화면에서 노출되는 정수 PK라 코드로 바꾼다(value는 그대로 id —
+  // 제출 payload는 안 바뀜).
   return active.map(a =>
-    '<option value="' + a.id + '">#' + a.id + " " + agentDisplayLabel(a) +
+    '<option value="' + a.id + '">' + esc(a.code || ("#" + a.id)) + " " + agentDisplayLabel(a) +
     (a.skill_tags.length ? " (" + esc(a.skill_tags.join(", ")) + ")" : "") + "</option>"
   ).join("");
 }
@@ -6857,7 +7133,7 @@ function crewAgentOptionsHtml(active) {
 // `wireCrewProcessToggle()`이 비활성화한다(아래 참고).
 function crewRowHtml(active, presetAgentId, presetTaskDesc) {
   const agentOptions = active.map(a =>
-    '<option value="' + a.id + '"' + (presetAgentId === a.id ? " selected" : "") + '>#' + a.id + " " +
+    '<option value="' + a.id + '"' + (presetAgentId === a.id ? " selected" : "") + '>' + esc(a.code || ("#" + a.id)) + " " +
     agentDisplayLabel(a) + (a.skill_tags.length ? " (" + esc(a.skill_tags.join(", ")) + ")" : "") + "</option>"
   ).join("");
   return '<div class="inline crew-row" style="margin-bottom:0.3rem">' +
@@ -6915,8 +7191,17 @@ async function renderCrew(content) {
     '<li>온보딩(active) 안 된 Agent는 드롭다운에 안 뜨고 지정할 수도 없습니다.</li>' +
     '<li>실제 LLM API를 호출하므로 비용이 발생합니다(참여 Agent 수만큼 커질 수 있음).</li>' +
     '</ul>' +
+    // 사용자 요청(2026-10-27, "Crew 빌더 - 즉석 테스트에서 테이블에 ID
+    // 표시됨, ID 대신 agent code가, 추가로 에이전트명 표시되도록") —
+    // "AI 에이전트 관리" 테이블과 같은 표기(코드+이름)로 맞춘다. 정수
+    // id는 드롭다운(`crewAgentOptionsHtml`)에서 여전히 내부적으로
+    // 쓰이므로 기능은 안 바뀐다.
     (active.length
-      ? table(["ID", "역할", "스킬"], active.map(a => [a.id, esc(a.role_name), esc(a.skill_tags.join(", "))]))
+      ? table(["코드", "이름", "역할", "스킬"], active.map(a => [
+          esc(a.code || "-"),
+          a.name ? esc(a.name) : '<span class="muted">(미지정)</span>',
+          esc(a.role_name), esc(a.skill_tags.join(", ")),
+        ]))
       : '<p class="muted">온보딩된(활성) 에이전트가 없습니다 — 먼저 "AI 에이전트 생성"·"AI 에이전트 관리" 탭에서 준비하세요.</p>') +
     '<form id="crew-form">' +
     '<div id="crew-rows">' + (active.length ? crewRowHtml(active) : "") + "</div>" +
@@ -7273,8 +7558,10 @@ function renderCrewResult(result) {
     ? '<p class="muted">Gate 측정 없음</p>'
     : '<p>' + measured.filter(g => g.passed).length + "/" + measured.length + " 통과" +
       (result.tcr === null ? "" : " · TCR " + result.tcr.toFixed(0) + "%") + '</p>';
-  html += "<h3>Agent별 산출물</h3>" + table(["Agent ID", "역할", "산출물"], result.agents.map(a => [
-    a.agent_id, agentDisplayLabel(a),
+  // 사용자 요청(2026-10-27, "다른 UI에도 ID가 남아 있는지 확인해줘") —
+  // agent_pool은 이미 code가 있으니 raw agent_id 대신 쓴다.
+  html += "<h3>Agent별 산출물</h3>" + table(["Agent 코드", "역할", "산출물"], result.agents.map(a => [
+    esc(a.code || ("#" + a.agent_id)), agentDisplayLabel(a),
     a.output === null ? "(없음 — 매니저는 조율만 하고 직접 산출물을 내지 않습니다)"
       : esc(a.output).slice(0, 200) + (a.output.length > 200 ? "…" : ""),
   ]));
@@ -7320,8 +7607,8 @@ async function renderSearch(content) {
       offset,
     }));
     document.getElementById("search-result").innerHTML = table(
-      ["타입", "ID", "이름", "역할", "가용", "비용", "스킬", "성과점수"],
-      body.items.map(c => [esc(label(c.type)), c.id, esc(c.name || c.role), esc(c.role), c.is_available ? "가능" : "불가", c.cost, esc(c.skill_tags.join(", ")), c.performance_score === null ? "-" : c.performance_score])
+      ["타입", "코드", "이름", "역할", "가용", "비용", "스킬", "성과점수"],
+      body.items.map(c => [esc(label(c.type)), esc(c.code || ("#" + c.id)), esc(c.name || c.role), esc(c.role), c.is_available ? "가능" : "불가", c.cost, esc(c.skill_tags.join(", ")), c.performance_score === null ? "-" : c.performance_score])
     );
     const shown = body.items.length ? offset + 1 : 0;
     document.getElementById("search-page-info").textContent =
@@ -7435,8 +7722,8 @@ async function renderPerformance(content) {
     '<li>이 화면의 점수는 둘 다 관리자가 직접 입력한 수동값입니다 — Agent의 실제 Gate A-G 자동 채점 결과는 이 화면이 아니라 "AI 에이전트 관리" 탭의 "자동평가(Gate/TCR)" 열에서 따로 봅니다(둘을 아직 한 화면에 병기하진 않습니다).</li>' +
     '<li>"확정 배정 수"만 실제 데이터(confirmed 배정 건수)입니다.</li>' +
     '</ul>' +
-    table(["타입", "ID", "이름", "역할", "동의", "성과점수", "확정 배정 수"], rows.map(r => [
-      esc(label(r.type)), r.id, esc(r.name || r.role), esc(r.role),
+    table(["타입", "코드", "이름", "역할", "동의", "성과점수", "확정 배정 수"], rows.map(r => [
+      esc(label(r.type)), esc(r.code || ("#" + r.id)), esc(r.name || r.role), esc(r.role),
       r.performance_consent === null ? "-" : (r.performance_consent ? "동의함" : "미동의"),
       r.performance_score === null ? "-" : r.performance_score,
       r.confirmed_assignments,
@@ -7569,8 +7856,10 @@ async function renderDashboard(content) {
     return '<div class="stat-row"><span>' + g + '</span><span>' + (v === null ? "-" : v.toFixed(2)) + '</span></div>';
   }).join("");
 
+  // 사용자 요청(2026-10-27, "다룬 테이블도 ID 표기되는 것이 남아
+  // 있는지 확인") — agent_pool/human_pool 변경 이력이라 code로 교체.
   const trendRows = d.cost_trend.map(t => [
-    esc(t.created_at), esc(label(t.subject_type)), t.subject_id, t.cost_estimate,
+    esc(t.created_at), esc(label(t.subject_type)), esc(t.subject_code || ("#" + t.subject_id)), t.cost_estimate,
   ]);
 
   // 2026-10-08, Phase 4 — "팀 부하" 바
@@ -7595,7 +7884,7 @@ async function renderDashboard(content) {
   // 점수 기반 자동 경고") — 최근 Gate 평가가 연속으로 실패한 Agent를
   // "AI 에이전트 관리" 탭을 일일이 열어보지 않아도 여기서 바로 본다.
   const agentBottleneckRows = (d.agent_bottlenecks || []).map(a =>
-    '<li>#' + a.agent_id + " " + esc(a.role_name) + " — 최근 " + a.recent_evaluation_count +
+    '<li>' + esc(a.agent_code || ("#" + a.agent_id)) + " " + esc(a.role_name) + " — 최근 " + a.recent_evaluation_count +
     '건 연속 Gate 실패</li>'
   ).join("") || '<p class="muted">최근 연속 Gate 실패가 있는 Agent가 없습니다.</p>';
 
@@ -7642,8 +7931,10 @@ async function renderCost(content) {
     '<li>실제로 LLM API에 청구된 금액이 아닙니다(simple_llm/crewai 생성이나 Crew 실행·에이전트 실행 때 실제로 나간 API 비용은 이 리포트에 잡히지 않습니다).</li>' +
     '<li>즉 "일 시켰을 때 실제 API 비용"이 아니라 "이 인력을 계속 쓰면 예상되는 인건비/도입비" 관점의 숫자입니다.</li>' +
     '</ul>' +
-    table(["타입", "ID", "이름", "역할", "단가", "확정 배정 수", "합계"], report.resources.map(r => [
-      esc(label(r.type)), r.id, esc(r.name || r.role), esc(r.role), r.cost_estimate, r.confirmed_assignments, r.total_cost,
+    // 사용자 요청(2026-10-27, "비용의 ID도 agent code로 변경") — agent는
+    // code, human은 employee_id(둘 다 없으면 "#id" 폴백).
+    table(["타입", "코드", "이름", "역할", "단가", "확정 배정 수", "합계"], report.resources.map(r => [
+      esc(label(r.type)), esc(r.code || ("#" + r.id)), esc(r.name || r.role), esc(r.role), r.cost_estimate, r.confirmed_assignments, r.total_cost,
     ])) + "</section>";
 }
 
@@ -7737,8 +8028,12 @@ async function renderAudit(content) {
     }));
     document.getElementById("audit-result").innerHTML =
       "<p class=\\"muted\\">전체 " + body.total + "건 중 " + body.items.length + "건 표시</p>" +
-      table(["시각", "처리자 ID", "동작", "대상 종류", "대상 ID"], body.items.map(a => [
-        esc(a.created_at), a.actor_id, esc(a.action), esc(label(a.subject_type)), a.subject_id === null ? "-" : a.subject_id,
+      // 사용자 요청(2026-10-27, "처리자 ID는 아이디로 대상 ID는 agent
+      // code로 변경") — 처리자는 username, 대상은 agent_pool인 경우만
+      // code(그 외 종류는 code 개념이 없어 id 그대로).
+      table(["시각", "처리자", "동작", "대상 종류", "대상 ID"], body.items.map(a => [
+        esc(a.created_at), esc(a.actor_username || ("#" + a.actor_id)), esc(a.action), esc(label(a.subject_type)),
+        a.subject_id === null ? "-" : esc(a.subject_code || a.subject_id),
       ]));
   };
   document.getElementById("audit-form").addEventListener("submit", (ev) => { ev.preventDefault(); load(); });
@@ -7764,6 +8059,9 @@ async function renderAdmin(content) {
     '<input id="u-password" type="password" placeholder="비밀번호" required>' +
     '<select id="u-role"><option value="admin">관리자</option><option value="manager">매니저</option>' +
     '<option value="member" selected>팀원</option><option value="viewer">뷰어</option></select>' +
+    // 사용자 요청(2026-10-27, "사용자 등록에 사번 입력 및 표시되도록
+    // UI개선") — human_pool과 같은 선택 입력(숫자 8~12자리).
+    '<input id="u-employee-id" placeholder="사번(선택, 숫자 8~12자리)" pattern="\\d{8,12}" title="숫자 8~12자리" style="width:160px">' +
     '<button class="primary" type="submit">생성</button></form>' +
     "</section>" +
     '<section class="card"><h2>사용자 목록</h2>' +
@@ -7781,17 +8079,27 @@ async function renderAdmin(content) {
     '<li>상사를 지정하면 그 사람이 배정을 요청할 때 결재가 상사 체인을 따라 다단계로 자동 라우팅됩니다("결재" 탭 참고).</li>' +
     '<li>본인을 직접 상사로 지정하는 것만 막혀 있고, A→B→A 같은 두 단계 이상의 순환은 막지 않습니다.</li>' +
     '</ul>' +
-    table(["ID", "아이디", "권한", "계정 상태", "상사", "상사 지정", "비밀번호 재설정", "계정 상태 변경"], users.map(u => {
+    // 사용자 요청(2026-10-27, "사용자 등록에 사번 입력 및 표시되도록
+    // UI개선") — "ID" 열을 사번으로 바꾸고(미입력이면 "#id" 폴백,
+    // human_pool과 같은 패턴), 기존 계정에도 "사번 저장" 인라인 입력을
+    // 둔다(col-actions-compact라 폭 고정 문제 없음).
+    table(["사번", "아이디", "권한", "계정 상태", "상사", "상사 지정", "비밀번호 재설정", "사번 변경", "계정 상태 변경"], users.map(u => {
       const isSelf = u.id === ME.id;
+      // 사용자 보고(2026-10-27, 스크린샷 — "상사" 열이 username이 아니라
+      // 정수 manager_id를 그대로 보여줌) — 같은 화면에 이미 전체
+      // users 배열이 있으니 그 자리에서 이름을 찾는다.
+      const managerUser = u.manager_id === null ? null : users.find(m => m.id === u.manager_id);
       return [
-        u.id, esc(u.username), esc(u.role),
+        esc(u.employee_id || ("#" + u.id)), esc(u.username), esc(u.role),
         u.is_active ? '<span class="gate-badge gate-ok">활성</span>' : '<span class="gate-badge gate-warn">비활성</span>',
-        u.manager_id === null ? "-" : u.manager_id,
-        '<div class="actions"><span class="pair"><select id="mgr-' + u.id + '"><option value="">(없음)</option>' +
+        u.manager_id === null ? "-" : esc(managerUser ? managerUser.username : "#" + u.manager_id),
+        '<div class="actions"><span class="pair"><select id="mgr-' + u.id + '" style="width:110px"><option value="">(없음)</option>' +
           users.filter(m => m.id !== u.id).map(m => '<option value="' + m.id + '"' + (m.id === u.manager_id ? " selected" : "") + ">" + esc(m.username) + "</option>").join("") +
         '</select><button class="small" data-set-manager="' + u.id + '">저장</button></span></div>',
         '<div class="actions"><span class="pair"><input type="password" id="pw-' + u.id + '" placeholder="새 비밀번호" style="width:120px">' +
           '<button class="small" data-reset-password="' + u.id + '">초기화</button></span></div>',
+        '<div class="actions"><span class="pair"><input id="uempid-' + u.id + '" placeholder="사번(숫자 8~12자리)" pattern="\\d{8,12}" title="숫자 8~12자리" value="' + escAttr(u.employee_id || "") + '" style="width:120px">' +
+          '<button class="small" data-set-user-employee-id="' + u.id + '">저장</button></span></div>',
         isSelf
           ? '<span class="muted">본인 계정</span>'
           : (u.is_active
@@ -7802,12 +8110,13 @@ async function renderAdmin(content) {
 
   document.getElementById("user-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    const employeeIdValue = document.getElementById("u-employee-id").value.trim();
     try {
-      await api("POST", "/api/users", {
+      await api("POST", "/api/users", Object.assign({
         username: document.getElementById("u-username").value,
         password: document.getElementById("u-password").value,
         role: document.getElementById("u-role").value,
-      });
+      }, employeeIdValue ? { employee_id: employeeIdValue } : {}));
       showMsg("global-msg", "생성했습니다.", "ok");
       refresh();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
@@ -7835,6 +8144,20 @@ async function renderAdmin(content) {
           password: newPassword,
         });
         showMsg("global-msg", "비밀번호를 초기화했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-set-user-employee-id]").forEach(btn => {
+    btn.onclick = async () => {
+      const input = document.getElementById("uempid-" + btn.dataset.setUserEmployeeId);
+      const value = input.value.trim();
+      if (!value) { showMsg("global-msg", "사번을 입력하세요.", "error"); return; }
+      try {
+        await api("PATCH", "/api/users/" + btn.dataset.setUserEmployeeId + "/employee-id", {
+          employee_id: value,
+        });
+        showMsg("global-msg", "사번을 저장했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };

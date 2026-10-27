@@ -28,7 +28,7 @@ import json
 import sqlite3
 from contextlib import ExitStack
 
-from hair_platform import audit, graphquery, sandbox, vectorstore, websearch
+from hair_platform import audit, graphquery, id_scheme, sandbox, vectorstore, websearch
 
 NATIVE_TOOL_FACTORIES = {
     "vectordb_search": vectorstore.as_crewai_tool,
@@ -166,6 +166,12 @@ def create_tool(
     )
     tool_id = cur.lastrowid
     assert tool_id is not None
+    # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
+    # (종류 구분 가능) 초기화하여 정리") — 레퍼런스 시드 쪽은
+    # `id_scheme.backfill_missing_codes()`가 다음 기동 때 채우지만,
+    # admin이 지금 막 만든 건 API 응답에 바로 코드가 보여야 하므로
+    # 여기서 즉시 배정한다.
+    id_scheme.assign_code(conn, "tool_pool", tool_id, id_scheme.TOOL_KIND_SEGMENT[kind])
     audit.record(
         conn,
         actor_id,
@@ -181,6 +187,7 @@ def create_tool(
 def _tool_row_to_dict(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
+        "code": row["code"],
         "name": row["name"],
         "description": row["description"],
         "kind": row["kind"],
@@ -321,6 +328,9 @@ def create_skill(
     )
     skill_id = cur.lastrowid
     assert skill_id is not None
+    id_scheme.assign_code(
+        conn, "skill_pool", skill_id, id_scheme.SKILL_MODE_SEGMENT[augmentation_mode]
+    )
     audit.record(
         conn,
         actor_id,
@@ -338,6 +348,7 @@ def list_skills(conn: sqlite3.Connection) -> list[dict]:
     return [
         {
             "id": r["id"],
+            "code": r["code"],
             "name": r["name"],
             "description": r["description"],
             "default_tool_pool_ids": json.loads(r["default_tool_pool_ids"]),
@@ -355,11 +366,19 @@ def update_skill(
     — `create_skill()`과 같은 검증(augmentation_mode 허용값)을 다시
     돌린다. `name`은 바꿀 수 없다(`update_tool()` 참고 — Agent의
     `skill_tags`가 이 이름 문자열과 정확히 일치해야 매칭되므로, 바꾸면
-    그 연결이 조용히 끊어진다)."""
+    그 연결이 조용히 끊어진다).
+
+    사용자 요청(2026-10-27, "skill 생성시 ID에 tool/always/none이
+    포함됨, 수정에서 모드 변경이 ID가 바뀌는 게 아니라면 수정시 모드
+    변경을 막아야 함") — `augmentation_mode`도 `name`/`kind`와 같은
+    이유로 더는 수정 대상이 아니다: `id_scheme.assign_code()`가 생성
+    시점에 모드를 코드에 세그먼트로 박아 넣는데(`SKL-TOOL-001` 등),
+    수정은 그 코드를 다시 배정하지 않으므로 모드만 바꾸면 코드와 실제
+    모드가 어긋난다. 모드를 바꾸려면 삭제 후 새로 등록해야 한다(새
+    코드가 새 모드로 배정됨)."""
     allowed = {
         "description",
         "default_tool_pool_ids",
-        "augmentation_mode",
         "show_in_conversation",
     }
     unknown = set(fields) - allowed
@@ -370,12 +389,6 @@ def update_skill(
         raise ValueError("skill_not_found")
     if not fields:
         return
-    if "augmentation_mode" in fields and fields["augmentation_mode"] not in (
-        "tool",
-        "always",
-        "none",
-    ):
-        raise ValueError(f"unsupported_augmentation_mode:{fields['augmentation_mode']}")
     set_clauses = []
     values: list[object] = []
     for key, value in fields.items():

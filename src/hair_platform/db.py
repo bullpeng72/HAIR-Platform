@@ -22,7 +22,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from hair_platform import reference_pipeline_seeds
+from hair_platform import id_scheme, reference_pipeline_seeds
 
 
 def get_connection(path: str | Path) -> sqlite3.Connection:
@@ -43,8 +43,16 @@ CREATE TABLE IF NOT EXISTS users (
     manager_id INTEGER REFERENCES users(id)
 );
 
+-- `employee_id`(사용자 요청, 2026-10-27, "다른 UI에도 ID가 남아 있는지
+-- 확인해줘" — "사람의 경우 ID는 향후 사번 적용 예정으로 8자리~12자리
+-- 입력 및 표시 가능해야 함") — agent_pool/tool_pool/skill_pool의
+-- `code`와 달리 "종류"를 구분하는 자동 배정 코드가 아니라, 관리자가
+-- 실제 조직 사번을 직접 입력하는 필드라 이름과 생성 방식이 다르다
+-- (id_scheme.py와 무관 — NULL 허용, 입력 전까지는 화면에서 "#id"로
+-- 폴백). 숫자 8~12자리 검증은 models.py(HumanPoolCreate/Update)에서.
 CREATE TABLE IF NOT EXISTS human_pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT,
     name TEXT NOT NULL,
     role TEXT NOT NULL,
     skill_tags TEXT NOT NULL DEFAULT '[]',
@@ -138,8 +146,14 @@ CREATE TABLE IF NOT EXISTS job_items (
     retry_count INTEGER NOT NULL DEFAULT 0
 );
 
+-- `code`(사용자 요청, 2026-10-27, "에이전트, 도구/skill ID 체계를
+-- 수립하고(종류 구분 가능) 초기화하여 정리") — `id`(정수 PK)는 FK·URL
+-- 경로가 그대로 쓰므로 안 바꾸고, 사람이 보고 종류를 바로 구분할 수
+-- 있는 표시용 코드만 따로 둔다(예: "AGT-REF-001"). `id_scheme.py`
+-- 참고 — tool_pool/skill_pool도 같은 패턴.
 CREATE TABLE IF NOT EXISTS agent_pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT,
     role_name TEXT NOT NULL,
     skill_tags TEXT NOT NULL DEFAULT '[]',
     cost_estimate REAL NOT NULL DEFAULT 0.0,
@@ -193,6 +207,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
 
 CREATE TABLE IF NOT EXISTS tool_pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT,
     name TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL CHECK (kind IN ('mcp_stdio', 'mcp_remote', 'native', 'custom_python')),
@@ -203,6 +218,7 @@ CREATE TABLE IF NOT EXISTS tool_pool (
 
 CREATE TABLE IF NOT EXISTS skill_pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT,
     name TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL DEFAULT '',
     default_tool_pool_ids TEXT NOT NULL DEFAULT '[]',
@@ -210,6 +226,11 @@ CREATE TABLE IF NOT EXISTS skill_pool (
         CHECK (augmentation_mode IN ('tool', 'always', 'none')),
     show_in_conversation INTEGER NOT NULL DEFAULT 1
 );
+
+-- `code` 컬럼의 UNIQUE 인덱스는 여기(정적 SCHEMA)가 아니라
+-- `_migrate_schema()`에서 만든다 — 기존 DB는 `executescript(SCHEMA)`
+-- 시점엔 아직 `code` 컬럼이 없어(`_ensure_column()`으로 나중에 추가)
+-- 여기 두면 "no such column: code"로 바로 깨진다(실측 확인).
 
 -- 사용자 요청(2026-10-06, "운영 관리에 사용 가능한 ollama 모델 및
 -- openai, anthropic 모델 등록하는 메뉴를 두고 등록된 모델을 불러오는
@@ -976,6 +997,36 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(
         conn, "model_registry", "optimization_tiers", "TEXT NOT NULL DEFAULT '[]'"
     )
+    # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
+    # (종류 구분 가능) 초기화하여 정리") — 기존 DB에도 `code` 컬럼을
+    # 추가한다. UNIQUE 인덱스는 컬럼이 확실히 생긴 뒤인 여기서만
+    # 만든다(정적 SCHEMA에 두면 아직 컬럼 없는 기존 DB에서 깨짐 —
+    # 위 실측 기록 참고). 실제 코드 배정(`id_scheme.backfill_missing_
+    # codes()`)은 `init_schema()`가 시드까지 다 끝낸 뒤 호출한다.
+    for table in ("agent_pool", "tool_pool", "skill_pool"):
+        _ensure_column(conn, table, "code", "TEXT")
+        conn.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_code ON {table}(code)"
+        )
+    # 사용자 요청(2026-10-27, "사람의 경우 ID는 향후 사번 적용 예정으로
+    # 8자리~12자리 입력 및 표시 가능해야 함") — 기존 DB에도 컬럼을
+    # 추가한다(위 code 컬럼들과 같은 이유로 정적 SCHEMA에 안 두고
+    # 여기서만 인덱스를 만든다).
+    _ensure_column(conn, "human_pool", "employee_id", "TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_human_pool_employee_id "
+        "ON human_pool(employee_id)"
+    )
+    # 사용자 요청(2026-10-27, "사용자 등록에 사번 입력 및 표시되도록
+    # UI개선") — human_pool과 별개로 로그인 계정(`users`)에도 같은
+    # 체계로 둔다(두 테이블 간 값을 서로 강제 일치시키진 않는다 — 계정
+    # 없는 human_pool 레코드도 있고, 그 반대로 human_pool에 아직 안
+    # 올라온 계정도 있어 1:1이 보장되지 않는다).
+    _ensure_column(conn, "users", "employee_id", "TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_employee_id "
+        "ON users(employee_id)"
+    )
 
 
 def _backfill_show_in_conversation(conn: sqlite3.Connection) -> None:
@@ -1077,20 +1128,35 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
         tool_ids[native_id] = row["id"]
 
     skills = [
-        ("rag", "VectorDB 기반 지식검색 역량", "vectordb_search"),
-        ("graphdb", "GraphDB 기반 관계분석 역량", "graphdb_query"),
+        ("rag", "VectorDB 기반 지식검색 역량", "vectordb_search", "tool"),
+        ("graphdb", "GraphDB 기반 관계분석 역량", "graphdb_query", "tool"),
         (
             "실시간웹검색",
             "실시간 일반 웹 검색 역량(Tavily, API 키 필요) — 대화창에서도 동작",
             "tavily_search",
+            "tool",
+        ),
+        (
+            "최신정보필수확인",
+            (
+                "최신 외부 정보 누락이 치명적인 역할(시황/뉴스/규정 변경 "
+                "모니터링 등)용 — Agent가 검색할지 말지 스스로 판단하게 "
+                "두지 않고, 매 실행마다 Tavily 검색 결과를 Task description에 "
+                "강제로 끼워 넣는다. 'tool' 모드(실시간웹검색)는 Agent가 "
+                "호출 여부를 스스로 정하지만, 'always'는 판단을 거치지 않고 "
+                "항상 주입한다는 점이 다르다(`skill_pool.augmentation_mode` "
+                "'always' 값의 실제 사용례, 사용자 요청 2026-10-27)."
+            ),
+            "tavily_search",
+            "always",
         ),
     ]
-    for name, description, native_id in skills:
+    for name, description, native_id, augmentation_mode in skills:
         conn.execute(
             "INSERT OR IGNORE INTO skill_pool "
             "(name, description, default_tool_pool_ids, augmentation_mode) "
-            "VALUES (?, ?, ?, 'tool')",
-            (name, description, json.dumps([tool_ids[native_id]])),
+            "VALUES (?, ?, ?, ?)",
+            (name, description, json.dumps([tool_ids[native_id]]), augmentation_mode),
         )
 
     # 사용자 요청(2026-09-28, "도구/스킬 Pool에 기본 노출해줘") — HAIR-Platform이
@@ -1384,4 +1450,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
     reference_pipeline_seeds.seed(conn)
     if is_new_show_in_conversation_column:
         _backfill_show_in_conversation(conn)
+    # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
+    # (종류 구분 가능) 초기화하여 정리") — 시드가 전부 끝난 뒤에만
+    # 돌려야 한다(위 show_in_conversation 백필과 같은 이유 — 레퍼런스
+    # Agent/Tool/Skill 자체가 아직 안 생긴 시점엔 코드를 배정할 대상이
+    # 없다). 이미 code가 있는 행은 건드리지 않아 매 기동마다 불러도
+    # 안전하다.
+    id_scheme.backfill_missing_codes(conn)
     conn.commit()

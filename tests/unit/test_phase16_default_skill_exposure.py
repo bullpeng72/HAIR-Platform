@@ -71,12 +71,15 @@ def test_gc125_init_schema_seeds_agent_eval_procedural_skills():
     skill_names = {s["name"] for s in skills}
     assert _EXPECTED_AGENT_EVAL_SKILL_NAMES <= skill_names
     assert (
-        len(skills) == 4 + len(_EXPECTED_AGENT_EVAL_SKILL_NAMES) + 25
+        len(skills) == 5 + len(_EXPECTED_AGENT_EVAL_SKILL_NAMES) + 25
     )  # rag/graphdb 2(원래 vectordb/rag/graphdb/관계질의 4였으나 2026-10-06
     # 자동완성 중복 통합으로 2로 줄어듦) + 일반웹검색 1 + 실시간웹검색 1
     # (Tavily, 2026-10-26 "대화에서 외부 검색이 가능한 방법을 제안해줘"로
     # 추가 — 같은 날 지속 차단된 외부검색(Wikipedia) 1개를 "도구/skill
     # 에서 동작하지 않는 검색은 삭제해줘"로 빼서 개수는 그대로 4)
+    # + 2026-10-27("always 모드를 실제로 쓰는 skill 하나 만들어줘")로
+    # 추가된 최신정보필수확인(Tavily 재사용, augmentation_mode='always')
+    # 1개 = 5
     # + 절차 18
     # + 2026-10-14 "기본 배포에 Skill을 포함해줘"로 추가된 레퍼런스
     # 파이프라인 Skill 15개(Tool 5개를 감싼 'tool' 모드 5 + 지식 주입용

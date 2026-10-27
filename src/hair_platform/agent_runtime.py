@@ -31,7 +31,15 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from hair_platform import audit, graphquery, llm, pool_registry, vectorstore, websearch
+from hair_platform import (
+    audit,
+    graphquery,
+    id_scheme,
+    llm,
+    pool_registry,
+    vectorstore,
+    websearch,
+)
 
 VECTORDB_SKILL_TAGS = {"rag"}
 GRAPHDB_SKILL_TAGS = {"graphdb"}
@@ -450,6 +458,10 @@ def create_agent_directly(
     )
     agent_id = cur.lastrowid
     assert agent_id is not None
+    # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
+    # (종류 구분 가능) 초기화하여 정리") — 레퍼런스 22종이 아닌 신규
+    # 생성 Agent는 전부 CUSTOM.
+    id_scheme.assign_code(conn, "agent_pool", agent_id, id_scheme.AGENT_CUSTOM_SEGMENT)
     audit.record(
         conn,
         actor_id,

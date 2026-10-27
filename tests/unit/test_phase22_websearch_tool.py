@@ -234,6 +234,40 @@ def test_gc198_tavily_context_for_prompt_distinguishes_search_failure_from_empty
     assert "검색 실패" not in text
 
 
+def test_gc200_tavily_search_truncates_overlong_query(monkeypatch):
+    """사용자 보고(2026-10-28, "대화에서 스킬 실시간웹검색 정상 동작하나
+    외부 자료 조사의 경우... tavily api 400 오류 발생, 에이전트
+    호출시에도 정상 동작하도록 개선") — Crew/Agent 실행 경로는 LLM이
+    스스로 query를 지어내 Tavily의 400자 제한을 넘기기 쉽다(대화창은
+    사용자가 직접 짧게 타이핑). 보내기 전에 400자로 잘라야 한다."""
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    long_query = "가" * 500
+    with patch("httpx.post", return_value=_mock_response({"results": []})) as post_mock:
+        websearch.tavily_context_for_prompt(long_query)
+    sent_query = post_mock.call_args.kwargs["json"]["query"]
+    assert len(sent_query) == 400
+    assert sent_query == long_query[:400]
+
+
+def test_gc201_tavily_search_surfaces_response_body_on_http_error(monkeypatch):
+    """지금까지는 상태 코드만 보여줘 400이 왜 났는지(예: query too
+    long, invalid API key 등) 알 방법이 없었다 — Tavily가 돌려주는 실제
+    오류 본문을 메시지에 그대로 포함해야 한다."""
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    import httpx
+
+    resp = MagicMock()
+    resp.status_code = 400
+    resp.text = '{"error": "query is too long"}'
+    resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "error", request=MagicMock(), response=resp
+    )
+    with patch("httpx.post", return_value=resp):
+        text = websearch.tavily_context_for_prompt("질문")
+    assert "400" in text
+    assert "query is too long" in text
+
+
 def test_gc199_as_tavily_crewai_tool_has_ascii_name_and_wraps_context_for_prompt():
     """`as_crewai_tool()`(Wikipedia)과 같은 ASCII 함수명 제약 — 한글만
     있는 이름은 CrewAI의 `sanitize_tool_name()`이 빈 문자열로 만들어

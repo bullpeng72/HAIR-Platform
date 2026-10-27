@@ -59,10 +59,12 @@ def create_user(
     password: str,
     role: Role,
     manager_id: int | None = None,
+    employee_id: str | None = None,
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO users (username, password_hash, role, manager_id) VALUES (?, ?, ?, ?)",
-        (username, hash_password(password), role.value, manager_id),
+        "INSERT INTO users (username, password_hash, role, manager_id, employee_id) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (username, hash_password(password), role.value, manager_id, employee_id),
     )
     conn.commit()
     assert cur.lastrowid is not None

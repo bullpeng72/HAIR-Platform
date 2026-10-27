@@ -318,8 +318,13 @@ def invite_participant(
         if found is None:
             raise ValueError("team_not_found")
     else:
+        # 사용자 보고(2026-10-28, "대화 호출시에... 비활성화 된 사람...
+        # 목록이 노출되는 오류") — search_mentionable()은 이제
+        # is_active=1만 보여주지만, 그 검색을 거치지 않고 참가자 ID를
+        # 직접 지정해 초대하는 경로(API 직접 호출 등)까지 막아야 같은
+        # 구멍이 다시 안 생긴다.
         found = conn.execute(
-            "SELECT id FROM users WHERE id = ?", (participant_id,)
+            "SELECT id FROM users WHERE id = ? AND is_active = 1", (participant_id,)
         ).fetchone()
         if found is None:
             raise ValueError("user_not_found")
@@ -418,7 +423,8 @@ def search_mentionable(conn: sqlite3.Connection, query: str, actor_id: int) -> d
                AND cp.invited_by = ?) AS last_invited
         FROM users u
         LEFT JOIN human_pool hp ON hp.user_id = u.id
-        WHERE u.username LIKE ? OR hp.role LIKE ? OR hp.skill_tags LIKE ?
+        WHERE u.is_active = 1
+          AND (u.username LIKE ? OR hp.role LIKE ? OR hp.skill_tags LIKE ?)
         ORDER BY last_invited IS NULL, last_invited DESC, u.username
         LIMIT 20
         """,

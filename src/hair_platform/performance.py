@@ -66,6 +66,9 @@ def full_review(conn: sqlite3.Connection) -> list[dict]:
             {
                 "type": "human",
                 "id": row["id"],
+                # 사용자 요청(2026-10-27, "다룬 테이블도 ID 표기되는 것이
+                # 남아 있는지 확인") — human은 employee_id, agent는 code.
+                "code": row["employee_id"],
                 "name": row["name"],
                 "role": row["role"],
                 "performance_score": (
@@ -82,6 +85,7 @@ def full_review(conn: sqlite3.Connection) -> list[dict]:
             {
                 "type": "agent",
                 "id": row["id"],
+                "code": row["code"],
                 # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
                 # 전엔 Agent는 이름 개념 자체가 없어 항상 None이었다.
                 "name": row["name"],

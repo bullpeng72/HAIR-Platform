@@ -20,7 +20,7 @@ import json
 import sqlite3
 from collections.abc import Callable
 
-from hair_platform import audit, llm
+from hair_platform import audit, id_scheme, llm
 from hair_platform.sandbox import run_smoke_test_in_sandbox
 
 GeneratorFn = Callable[[sqlite3.Connection, str, list[str]], dict]
@@ -137,6 +137,14 @@ def _run_item(
                 generated.get("generated_output"),
                 generated.get("framework", "stub"),
             ),
+        )
+        # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
+        # (종류 구분 가능) 초기화하여 정리") — 레퍼런스 22종이 아닌
+        # 신규 생성 Agent는 전부 CUSTOM.
+        new_agent_id = cur.lastrowid
+        assert new_agent_id is not None
+        id_scheme.assign_code(
+            conn, "agent_pool", new_agent_id, id_scheme.AGENT_CUSTOM_SEGMENT
         )
         audit.record(
             conn,
@@ -282,13 +290,15 @@ def _serialize_rows(
         # 직접 찾아 응답에 실어, 몇 번 항목을 보면 되는지 항상 명시한다
         # — 실패한 항목은 애초에 agent_pool 행이 없어 자연히 None.
         agent_pool_id = None
+        agent_pool_code = None
         agent_pool_role_name = None
         agent_row = conn.execute(
-            "SELECT id, role_name FROM agent_pool WHERE source_job_item_id = ?",
+            "SELECT id, code, role_name FROM agent_pool WHERE source_job_item_id = ?",
             (row["id"],),
         ).fetchone()
         if agent_row is not None:
             agent_pool_id = agent_row["id"]
+            agent_pool_code = agent_row["code"]
             agent_pool_role_name = agent_row["role_name"]
         items.append(
             {
@@ -303,6 +313,11 @@ def _serialize_rows(
                 # 명시적으로 보여줘야 "생성했는데 안 보인다"는 오해를 피한다.
                 "reused": reused,
                 "agent_pool_id": agent_pool_id,
+                # 사용자 요청(2026-10-27, "다른 UI에도 ID가 남아 있는지
+                # 확인해줘") — 이 응답의 agent_pool_id는 화면에 그대로
+                # 노출되고 있었다(webui.py) — agent_pool은 이미 `code`가
+                # 있으니 그걸 같이 실어 화면에서 PK 대신 쓸 수 있게 한다.
+                "agent_pool_code": agent_pool_code,
                 "agent_pool_role_name": agent_pool_role_name,
             }
         )

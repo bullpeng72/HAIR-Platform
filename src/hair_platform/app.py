@@ -143,6 +143,7 @@ from hair_platform.models import (
     ToolPoolCreate,
     ToolPoolUpdate,
     UserCreate,
+    UserEmployeeIdUpdate,
     UserPasswordReset,
     UserStatusUpdate,
 )
@@ -244,8 +245,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 payload.password,
                 Role(payload.role),
                 payload.manager_id,
+                payload.employee_id,
             )
         except sqlite3.IntegrityError as exc:
+            # 사용자 요청(2026-10-27, "사용자 등록에 사번 입력 및
+            # 표시되도록") — username UNIQUE 외에 employee_id UNIQUE도
+            # 이제 이 INSERT에서 걸릴 수 있어, 실제로 어떤 제약이
+            # 깨졌는지 구분해 메시지를 보여준다.
+            if "employee_id" in str(exc):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"이미 등록된 사번입니다: {payload.employee_id}",
+                ) from exc
             raise HTTPException(
                 status_code=409, detail="이미 존재하는 username입니다"
             ) from exc
@@ -299,6 +310,35 @@ def create_app(db_path: str | None = None) -> FastAPI:
         )
         conn.commit()
         return {"id": user_id, "manager_id": payload.manager_id}
+
+    @app.patch("/api/users/{user_id}/employee-id")
+    def set_user_employee_id(
+        user_id: int,
+        payload: UserEmployeeIdUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """사용자 요청(2026-10-27, "사용자 등록에 사번 입력 및
+        표시되도록 UI개선") — 등록 시점에 비워뒀거나 잘못 입력한 사번을
+        나중에 바로잡는 전용 엔드포인트(ADMIN 전용, `.../manager`·
+        `.../password`와 같은 "필드 하나당 PATCH 하나" 관례)."""
+        target = conn.execute(
+            "SELECT id FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+        try:
+            conn.execute(
+                "UPDATE users SET employee_id = ? WHERE id = ?",
+                (payload.employee_id, user_id),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"이미 등록된 사번입니다: {payload.employee_id}",
+            ) from exc
+        audit.record(conn, user["id"], "user_employee_id_updated", "user", user_id)
+        conn.commit()
+        return {"id": user_id, "employee_id": payload.employee_id}
 
     @app.patch("/api/users/{user_id}/password")
     def reset_user_password(
@@ -364,7 +404,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         """코드 재점검(2026-09-26)에서 발견한 누락 보완 — PATCH .../manager를
         쓰려면 상사로 지정할 user_id를 조회할 방법이 있어야 하는데 없었다."""
         rows = conn.execute(
-            "SELECT id, username, role, manager_id, is_active FROM users ORDER BY id"
+            "SELECT id, username, role, manager_id, is_active, employee_id "
+            "FROM users ORDER BY id"
         ).fetchall()
         return [{**dict(row), "is_active": bool(row["is_active"])} for row in rows]
 
@@ -459,20 +500,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     detail="이미 다른 사람 인력(id="
                     f"{already_linked['id']})에 연결된 계정입니다",
                 )
-        cur = conn.execute(
-            "INSERT INTO human_pool "
-            "(name, role, skill_tags, availability, cost_estimate, manager_id, user_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                payload.name,
-                payload.role,
-                json.dumps(payload.skill_tags, ensure_ascii=False),
-                payload.availability,
-                payload.cost_estimate,
-                payload.manager_id,
-                payload.user_id,
-            ),
-        )
+        try:
+            cur = conn.execute(
+                "INSERT INTO human_pool "
+                "(name, role, skill_tags, availability, cost_estimate, manager_id, "
+                "user_id, employee_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    payload.name,
+                    payload.role,
+                    json.dumps(payload.skill_tags, ensure_ascii=False),
+                    payload.availability,
+                    payload.cost_estimate,
+                    payload.manager_id,
+                    payload.user_id,
+                    payload.employee_id,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"이미 등록된 사번입니다: {payload.employee_id}",
+            ) from exc
         conn.commit()
         return {"id": cur.lastrowid, "name": payload.name}
 
@@ -487,6 +535,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return [
             {
                 "id": row["id"],
+                # 사용자 요청(2026-10-27, "사람의 경우 ID는 향후 사번
+                # 적용 예정으로 8자리~12자리 입력 및 표시 가능해야 함")
+                "employee_id": row["employee_id"],
                 "name": row["name"],
                 "role": row["role"],
                 "skill_tags": json.loads(row["skill_tags"]),
@@ -566,14 +617,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
             if manager is None:
                 raise HTTPException(status_code=404, detail="매니저를 찾을 수 없습니다")
             updates["manager_id"] = payload.manager_id
+        if payload.employee_id is not None:
+            updates["employee_id"] = payload.employee_id
         if not updates:
             raise HTTPException(status_code=400, detail="수정할 필드가 없습니다")
 
         set_clause = ", ".join(f"{key} = ?" for key in updates)
-        conn.execute(
-            f"UPDATE human_pool SET {set_clause} WHERE id = ?",
-            (*updates.values(), human_id),
-        )
+        try:
+            conn.execute(
+                f"UPDATE human_pool SET {set_clause} WHERE id = ?",
+                (*updates.values(), human_id),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"이미 등록된 사번입니다: {payload.employee_id}",
+            ) from exc
         audit.record(
             conn,
             user["id"],
@@ -2446,6 +2505,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return [
             {
                 "id": row["id"],
+                # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를
+                # 수립하고(종류 구분 가능) 초기화하여 정리") — "AGT-REF-
+                # 001"(레퍼런스 22종)/"AGT-CUSTOM-001"(관리자 생성) 형식
+                # 표시용 코드(`id_scheme.py`). id는 FK·URL 경로가 그대로
+                # 쓰므로 안 바뀐다.
+                "code": row["code"],
                 "role_name": row["role_name"],
                 # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
                 # 선택 입력이라 비어 있을 수 있다(비어 있으면 화면이
@@ -3662,8 +3727,26 @@ def create_app(db_path: str | None = None) -> FastAPI:
         params.extend([limit, offset])
         rows = conn.execute(query, params).fetchall()
         total = conn.execute("SELECT COUNT(*) AS c FROM audit_log").fetchone()["c"]
+        # 사용자 요청(2026-10-27, "활동 기록의 경우 처리자 ID, 대상 ID
+        # 표기됨 처리자 ID는 아이디로 대상 ID는 agent code로 변경") —
+        # 조회 전용·admin/manager만 보는 최대 200행 페이지라 행마다
+        # 조회 한두 번 더 하는 비용은 감수한다(핫 패스 아님).
+        items = []
+        for row in rows:
+            item = dict(row)
+            actor = conn.execute(
+                "SELECT username FROM users WHERE id = ?", (row["actor_id"],)
+            ).fetchone()
+            item["actor_username"] = actor["username"] if actor else None
+            item["subject_code"] = None
+            if row["subject_type"] == "agent_pool" and row["subject_id"] is not None:
+                agent = conn.execute(
+                    "SELECT code FROM agent_pool WHERE id = ?", (row["subject_id"],)
+                ).fetchone()
+                item["subject_code"] = agent["code"] if agent else None
+            items.append(item)
         return {
-            "items": [dict(row) for row in rows],
+            "items": items,
             "total": total,
             "limit": limit,
             "offset": offset,

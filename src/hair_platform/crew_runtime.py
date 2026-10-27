@@ -847,6 +847,11 @@ def run_crew(
         per_agent.append(
             {
                 "agent_id": manager_row["id"],
+                # 사용자 요청(2026-10-27, "다른 UI에도 ID가 남아 있는지
+                # 확인해줘") — "Agent별 산출물" 표가 이 agent_id를 그대로
+                # 노출하고 있었다. agent_pool은 이미 code가 있으니 같이
+                # 실어 화면에서 PK 대신 쓸 수 있게 한다.
+                "code": manager_row["code"],
                 "role_name": manager_row["role_name"],
                 "name": manager_row["name"],
                 "output": final_output_text,
@@ -875,6 +880,7 @@ def run_crew(
             per_agent.append(
                 {
                     "agent_id": row["id"],
+                    "code": row["code"],
                     "role_name": row["role_name"],
                     # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
                     # CrewAI에 실제로 넘기는 `role=`(위 Agent() 생성부)은

@@ -14,7 +14,7 @@ Task 종속 대화 흡수 + Brief 승격 공존), 단계형 개발 파이프라�
 (Gate A-G 기준 자동 재시도/에스컬레이션, BMAD-METHOD식 계획 승인
 1회 + 최소 HITL), Agent별 LLM 모델/설정 최적화 추천(admin), **통합
 CLI**(`hair serve`/`bootstrap-admin`/`reset-data`/`eval`)까지 전부 구현돼 실제로
-쓸 수 있다. `pytest` 597건 통과, API 엔드포인트 157개. 개념·아키텍처
+쓸 수 있다. `pytest` 610건 통과, API 엔드포인트 157개. 개념·아키텍처
 전체 설명은
 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은 `git log`
 (커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를 참고.
@@ -84,7 +84,22 @@ CLI**(`hair serve`/`bootstrap-admin`/`reset-data`/`eval`)까지 전부 구현돼
 - **Tool Pool·Skill Pool**(`pool_registry.py`) — "스킬 → 자동 도구 연결"
   매핑을 코드 하드코딩 대신 데이터로 관리. 하니스 방법론 절차 스킬
   18개를 기본 노출(17개는 HITL 절차라 `augmentation_mode='none'`, 1개는
-  실제 MCP 도구로 승격)
+  실제 MCP 도구로 승격). `augmentation_mode`는 `'tool'`(Agent가 호출
+  여부를 스스로 판단)과 `'always'`(판단 없이 Task description에 강제
+  주입)로 나뉜다 — `'최신정보필수확인'`(Tavily 재사용)이 `'always'`를
+  실제로 쓰는 첫 스킬
+- **Agent/Tool/Skill 표시용 ID 체계**(`id_scheme.py`) — 정수 PK는 FK·
+  URL 경로가 그대로 쓰므로 안 바꾸고, 종류를 바로 구분할 수 있는 코드를
+  `code` 컬럼에 별도로 둔다(`AGT-REF-001`/`AGT-CUSTOM-001`, `TUL-NATIVE-
+  001`, `SKL-TOOL-001` 등 — Agent는 레퍼런스 22종 vs 커스텀, Tool/Skill은
+  각각 `kind`/`augmentation_mode` 그대로). 레퍼런스 데이터는 기동 시
+  자동 배정(기존 DB도 마이그레이션), 신규 생성은 그 자리에서 즉시 배정,
+  `id_scheme.reset_and_reassign_codes()`로 전체 초기화 후 재배정도
+  가능(배정이 `id` 오름차순 결정적이라 중간 삭제가 없으면 결과는 같음).
+  Web UI 관리자 테이블(AI 에이전트·Tool Pool·Skill Pool)에서는 정수
+  `id` 열을 빼고 "코드"만 보여준다(사용자 요청, 2026-10-27, "노출되지
+  않도록 개선") — API 응답과 수정/삭제 버튼 등 내부 로직은 `id`를 그대로
+  쓰므로 기능은 안 바뀐다
 - **모델 레지스트리**(`model_registry.py`) — provider별 실제 사용 가능한
   모델을 등록·활성/비활성 관리 + 모델별로 "LLM 설정 최적화"의 tier
   (심층추론/정밀·신속/표준)를 직접 매핑(모델 하나가 여러 tier 가능,
@@ -125,7 +140,7 @@ pip install -e ".[dev,all]"
 # 발견 — `test_documents.py`만 `pytest.importorskip()`로 이 문제를
 # 스스로 막고 있었다). `all`(= crewai+mcp+llm+documents 묶음, pyproject.toml
 # 참고)까지 같이 설치해야 아래 골든셋이 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 597건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 610건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -269,11 +284,12 @@ src/hair_platform/
   pipeline_runtime.py # 단계형 개발 파이프라인 엔진(단독/순차 릴레이/병행 위임 단계, Gate A-G 기준 자동 재시도·에스컬레이션)
   reference_pipeline_seeds.py # 레퍼런스 Agent 22종 + Skill/Tool Pool + 소프트웨어 개발 파이프라인 기본 시드
   agent_optimizer.py # Agent별 LLM provider/model/tuning_config 최적화 추천(규칙 기반 + 선택적 LLM 보정, admin)
+  id_scheme.py       # Agent/Tool/Skill 표시용 코드 체계(`AGT-REF-001` 등, 종류 구분용) — 정수 PK는 그대로, `code`만 별도 배정
 docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 597건 통과
+tests/unit/                            # 골든셋 610건 통과
 ```
 
 ## 로드맵

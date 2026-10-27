@@ -143,12 +143,16 @@ def test_update_tool_rejects_kind_change_and_revalidates_config(client_and_conn)
     assert "tool_pool_updated" in actions
 
 
-def test_update_skill_revalidates_augmentation_mode(client_and_conn):
+def test_update_skill_rejects_description_and_tool_id_changes_but_not_mode(
+    client_and_conn,
+):
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
     ).fetchone()["id"]
-    skill_id = pool_registry.create_skill(conn, admin_id, "임시스킬", "설명 v1")
+    skill_id = pool_registry.create_skill(
+        conn, admin_id, "임시스킬", "설명 v1", augmentation_mode="tool"
+    )
 
     pool_registry.update_skill(
         conn,
@@ -156,17 +160,18 @@ def test_update_skill_revalidates_augmentation_mode(client_and_conn):
         skill_id,
         description="설명 v2",
         default_tool_pool_ids=[1, 2],
-        augmentation_mode="always",
     )
     skills = {s["id"]: s for s in pool_registry.list_skills(conn)}
     assert skills[skill_id]["description"] == "설명 v2"
     assert skills[skill_id]["default_tool_pool_ids"] == [1, 2]
-    assert skills[skill_id]["augmentation_mode"] == "always"
+    assert skills[skill_id]["augmentation_mode"] == "tool"  # 변경 안 됨
 
-    with pytest.raises(ValueError, match="unsupported_augmentation_mode"):
-        pool_registry.update_skill(
-            conn, admin_id, skill_id, augmentation_mode="not_a_mode"
-        )
+    # 사용자 요청(2026-10-27, "수정에서 모드 변경이 ID가 바뀌는 게
+    # 아니라면 막아야 함") — 생성 시점에 코드(`code`)가 모드를 세그먼트로
+    # 담으므로, 수정으로 모드만 바꾸면 코드와 어긋난다. 그래서 수정은
+    # augmentation_mode를 아예 받지 않는다(name/kind와 같은 취급).
+    with pytest.raises(ValueError, match="unsupported_fields"):
+        pool_registry.update_skill(conn, admin_id, skill_id, augmentation_mode="always")
     with pytest.raises(ValueError, match="unsupported_fields"):
         pool_registry.update_skill(conn, admin_id, skill_id, name="다른 이름")
     with pytest.raises(ValueError, match="skill_not_found"):
@@ -524,7 +529,7 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 47
+        len(resp.json()) == 48
     )  # 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 일반웹검색 1 +
     # 실시간웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복
     # 통합으로 제거됨. 2026-10-26 "대화에서 외부 검색이 가능한 방법을
@@ -543,6 +548,9 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     # = 37 + 9 = 46).
     # + 2026-10-14("자율 개발 크루" 10인 개발자 풀)로 추가된 Skill 1개
     # (data-infra-implementation-guide = 46 + 1 = 47).
+    # + 2026-10-27("always 모드를 실제로 쓰는 skill 하나 만들어줘")로
+    # 추가된 "최신정보필수확인"(augmentation_mode='always', Tavily 재사용
+    # = 47 + 1 = 48).
 
     resp = client.post(
         "/api/skill-pool",

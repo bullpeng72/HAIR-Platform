@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from hair_platform import audit
+from hair_platform import audit, id_scheme
 
 
 def _confirmed_assignment_exists(
@@ -344,6 +344,7 @@ def seed_demo_data(conn: sqlite3.Connection, actor_id: int) -> dict:
     )
     agent_id = cur.lastrowid
     assert agent_id is not None
+    id_scheme.assign_code(conn, "agent_pool", agent_id, id_scheme.AGENT_CUSTOM_SEGMENT)
 
     audit.record(
         conn,
@@ -366,7 +367,7 @@ def seed_demo_data(conn: sqlite3.Connection, actor_id: int) -> dict:
 # 정보는 포함하고, 나머지 다른 정보들은 초기화 상태로 배포되도록") —
 # `db.init_schema()`가 매 기동 때 `_seed_default_pools()` +
 # `reference_pipeline_seeds.seed()`로 이미 채워 넣는 Agent(22종)/Tool
-# Pool(11개)/Skill Pool(47개)/팀("자율 개발 크루")/파이프라인 템플릿
+# Pool(11개)/Skill Pool(48개)/팀("자율 개발 크루")/파이프라인 템플릿
 # ("소프트웨어 개발 파이프라인")은 그 두 함수가 `INSERT OR IGNORE`(또는
 # 존재 확인 후 INSERT)로 매번 알아서 채우므로, 이 함수는 그 테이블들에
 # **전혀 손대지 않는다**(관리자가 나중에 추가한 커스텀 Agent/Tool/Skill/

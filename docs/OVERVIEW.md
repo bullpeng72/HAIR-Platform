@@ -131,7 +131,7 @@ RBAC 4종 역할(`admin`/`manager`/`member`/`viewer`)에 따라 보이는 탭·
   2026-10-26 기준 이 배포 환경의 IP가 Wikimedia에 지속 차단돼 있어
   기본 시드에서 뺐다(코드는 `websearch.py`에 남아 있어 다른 환경에선
   복원 가능). 하니스
-  방법론 절차 Skill 18개를 포함해 Skill Pool 47개·Tool Pool 11개가
+  방법론 절차 Skill 18개를 포함해 Skill Pool 48개·Tool Pool 11개가
   기본 등록돼 있다. 대화창·AI 에이전트 관리·지식 자료실에서 로컬
   파일(.md/.pdf/.html)을 업로드하거나 텍스트를 직접 입력하면
   VectorDB에 바로 색인되고(`documents.py`), Admin "지식 베이스" 탭에서

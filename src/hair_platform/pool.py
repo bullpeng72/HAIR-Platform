@@ -61,6 +61,7 @@ def human_pool_candidates(
                 ),
                 user_id=row["user_id"],
                 name=row["name"],
+                code=row["employee_id"],
             )
         )
     return candidates
@@ -103,6 +104,7 @@ def agent_pool_candidates(
                 # 지정 안 했으면 None(화면에서 role로 폴백, 데이터는
                 # 솔직하게 비워둔다).
                 name=row["name"],
+                code=row["code"],
             )
         )
     return candidates

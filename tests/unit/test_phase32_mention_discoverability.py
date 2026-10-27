@@ -127,3 +127,45 @@ def test_gc_mentionable_search_ranking_is_per_actor(client_and_conn):
     # manager1은 아무도 초대한 적이 없으므로 알파벳순(A가 먼저)으로
     # 나온다 — member1 전용 정렬이 전역에 새지 않았음을 확인.
     assert names.index("정렬-A-agent") < names.index("정렬-Z-agent")
+
+
+def test_gc_mentionable_search_excludes_inactive_users(client_and_conn):
+    """사용자 보고(2026-10-28, "대화 호출시에 사용자 관리에서 비활성화
+    된 사람... 목록이 노출되는 오류") — agents/teams는 이미
+    status='active'/is_active=1만 걸렀는데 humans만 그 필터가 빠져
+    있었다(실측 확인). 비활성화 즉시 검색 결과에서도 사라져야 한다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    target_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'viewer1'"
+    ).fetchone()["id"]
+
+    resp = client.get("/api/conversations/mentionable", params={"q": "viewer1"})
+    assert resp.status_code == 200, resp.text
+    assert "viewer1" in [h["username"] for h in resp.json()["humans"]]
+
+    resp = client.patch(f"/api/users/{target_id}/status", json={"is_active": False})
+    assert resp.status_code == 200, resp.text
+
+    resp = client.get("/api/conversations/mentionable", params={"q": "viewer1"})
+    assert resp.status_code == 200, resp.text
+    assert "viewer1" not in [h["username"] for h in resp.json()["humans"]]
+
+
+def test_gc_invite_participant_rejects_inactive_user_directly(client_and_conn):
+    """검색에서만 숨기고 초대 API 자체가 비활성 사용자 id를 그대로
+    받아주면, 검색을 거치지 않는 직접 호출(또는 과거 UI 캐시)로 같은
+    구멍이 재발한다 — invite_participant()도 막아야 한다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    target_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'viewer1'"
+    ).fetchone()["id"]
+    client.patch(f"/api/users/{target_id}/status", json={"is_active": False})
+
+    conv_id = client.post("/api/conversations", json={"title": "방2"}).json()["id"]
+    resp = client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "human", "participant_id": target_id},
+    )
+    assert resp.status_code == 404, resp.text

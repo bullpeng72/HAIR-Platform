@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+# 사용자 요청(2026-10-27, "사람의 경우 ID는 향후 사번 적용 예정으로
+# 8자리~12자리 입력 및 표시 가능해야 함") — HumanPoolCreate/Update
+# 둘 다 쓰는 검증. 아직 전사 사번 체계가 없는 사람도 많아(비워두면
+# 통과) 선택 필드고, 값을 주면 형식만 확인한다(실제 사번 발급 여부는
+# 이 플랫폼이 알 수 없음).
+_EMPLOYEE_ID_PATTERN = re.compile(r"^\d{8,12}$")
+
+
+def _validate_employee_id(value: str | None) -> str | None:
+    if value is not None and not _EMPLOYEE_ID_PATTERN.fullmatch(value):
+        raise ValueError("employee_id는 숫자 8~12자리여야 합니다")
+    return value
+
 
 LlmProvider = Literal["anthropic", "openai", "ollama"]
 # 사용자 요청(2026-10-07, "HAIR 협업 결과물이 코드, 마크다운, PPT, HTML
@@ -33,6 +48,12 @@ class UserCreate(BaseModel):
     password: str
     role: Literal["admin", "manager", "member", "viewer"]
     manager_id: int | None = None
+    # 사용자 요청(2026-10-27, "사용자 등록에 사번 입력 및 표시되도록
+    # UI개선") — human_pool과 같은 선택 필드(아직 사번 체계가 없는
+    # 사람도 많음).
+    employee_id: str | None = None
+
+    _check_employee_id = field_validator("employee_id")(_validate_employee_id)
 
 
 class ManagerUpdate(BaseModel):
@@ -48,6 +69,17 @@ class UserPasswordReset(BaseModel):
     사용자에게 별도 채널로 전달하는 방식(ADMIN 전용)."""
 
     password: str
+
+
+class UserEmployeeIdUpdate(BaseModel):
+    """사용자 요청(2026-10-27, "사용자 등록에 사번 입력 및 표시되도록
+    UI개선") — 등록 시점에 비워뒀거나 나중에 바로잡아야 할 때 쓰는
+    전용 엔드포인트(`.../manager`, `.../password`, `.../status`와 같은
+    "필드 하나당 PATCH 하나" 관례)."""
+
+    employee_id: str
+
+    _check_employee_id = field_validator("employee_id")(_validate_employee_id)
 
 
 class UserStatusUpdate(BaseModel):
@@ -83,6 +115,9 @@ class HumanPoolCreate(BaseModel):
     cost_estimate: float = 0.0
     manager_id: int | None = None
     user_id: int | None = None
+    employee_id: str | None = None
+
+    _check_employee_id = field_validator("employee_id")(_validate_employee_id)
 
 
 class HumanPoolUpdate(BaseModel):
@@ -111,6 +146,9 @@ class HumanPoolUpdate(BaseModel):
     cost_estimate: float | None = None
     user_id: int | None = None
     manager_id: int | None = None
+    employee_id: str | None = None
+
+    _check_employee_id = field_validator("employee_id")(_validate_employee_id)
 
 
 class ApprovalDecision(BaseModel):
@@ -165,6 +203,10 @@ class ResourceCandidate(BaseModel):
     performance_score: float | None = None
     user_id: int | None = None
     name: str | None = None
+    # 사용자 요청(2026-10-27, "다룬 테이블도 ID 표기되는 것이 남아
+    # 있는지 확인") — human은 human_pool.employee_id, agent는
+    # agent_pool.code(화면에서 미입력이면 "#id"로 폴백).
+    code: str | None = None
 
 
 class AssignmentRequest(BaseModel):

@@ -224,6 +224,17 @@ TAVILY_ENDPOINT = "https://api.tavily.com/search"
 _TAVILY_TIMEOUT_SECONDS = 10.0
 
 
+#  사용자 요청(2026-10-28, "대화에서 스킬 실시간웹검색 정상 동작하나
+# 외부 자료 조사의 경우... tavily api 400 오류 발생, 에이전트 호출시에도
+# 정상 동작하도록 개선") — 대화창(정적 주입)은 사용자가 직접 타이핑한
+# 짧은 메시지를 그대로 query로 쓰지만, Crew/Agent 실행 경로는 LLM이
+# CrewAI Tool 인자로 스스로 query를 지어내므로("KT·KT DS·KT Cloud의 AI
+# MSP 관점 조사"처럼 복합 리서치 주제) 400자를 훌쩍 넘기는 긴 문장을
+# 그대로 보내는 경우가 흔하다 — Tavily API 문서상 query는 400자
+# 제한이다. 그동안은 이 제한을 안 지켜 넘기면 그대로 400이 났다.
+_TAVILY_QUERY_MAX_CHARS = 400
+
+
 def _tavily_search_raw(query: str, top_k: int) -> dict:
     """실제 Tavily API 호출 지점 — `_search_raw()`(Wikipedia)와 같은
     "실패를 숨기지 않는다" 원칙. API 키가 아예 없으면 네트워크 호출
@@ -236,6 +247,8 @@ def _tavily_search_raw(query: str, top_k: int) -> dict:
             "TAVILY_API_KEY가 설정되지 않았습니다 — .env에 추가하고 서버를 "
             "재기동하세요"
         )
+
+    query = query.strip()[:_TAVILY_QUERY_MAX_CHARS]
 
     try:
         resp = httpx.post(
@@ -251,8 +264,15 @@ def _tavily_search_raw(query: str, top_k: int) -> dict:
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPStatusError as exc:
+        # 사용자 요청(2026-10-28, 위와 동일) — 지금까지는 상태 코드만
+        # 보여줘 "400이 왜 났는지"를 알 방법이 없었다. Tavily가 돌려주는
+        # 실제 오류 본문(예: "invalid API key", "query too long" 등)을
+        # 그대로 보여줘 다음에 같은 문제가 나도 원인을 바로 알 수 있게
+        # 한다(너무 길면 로그/화면을 어지럽히니 500자로 자른다).
+        body_text = exc.response.text.strip()[:500]
+        detail = f" — {body_text}" if body_text else ""
         raise WebSearchError(
-            f"Tavily API가 {exc.response.status_code} 오류를 반환했습니다"
+            f"Tavily API가 {exc.response.status_code} 오류를 반환했습니다{detail}"
         ) from exc
     except httpx.HTTPError as exc:
         raise WebSearchError(f"Tavily API 접속에 실패했습니다: {exc}") from exc

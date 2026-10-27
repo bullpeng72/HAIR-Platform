@@ -79,11 +79,27 @@ def cost_trend(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
         after = json.loads(row["after_value"]) if row["after_value"] else {}
         if "cost_estimate" not in after:
             continue
+        # 사용자 요청(2026-10-27, "다룬 테이블도 ID 표기되는 것이 남아
+        # 있는지 확인") — subject_type이 agent_pool/human_pool일 때만
+        # 코드 조회(그 외 타입은 code 개념이 없어 None).
+        code = None
+        if row["subject_type"] == "agent_pool":
+            agent = conn.execute(
+                "SELECT code FROM agent_pool WHERE id = ?", (row["subject_id"],)
+            ).fetchone()
+            code = agent["code"] if agent else None
+        elif row["subject_type"] == "human_pool":
+            human = conn.execute(
+                "SELECT employee_id FROM human_pool WHERE id = ?",
+                (row["subject_id"],),
+            ).fetchone()
+            code = human["employee_id"] if human else None
         trend.append(
             {
                 "created_at": row["created_at"],
                 "subject_type": row["subject_type"],
                 "subject_id": row["subject_id"],
+                "subject_code": code,
                 "cost_estimate": after["cost_estimate"],
             }
         )
@@ -179,7 +195,7 @@ def agents_with_repeated_gate_failures(
     실패 1~2건으로 단정하지 않는다). 측정 자체가 없는(not_measured)
     Gate는 "실패"로 안 친다 — `passed`가 명시적으로 `False`일 때만."""
     agent_rows = conn.execute(
-        "SELECT id, role_name, name FROM agent_pool WHERE status = 'active'"
+        "SELECT id, code, role_name, name FROM agent_pool WHERE status = 'active'"
     ).fetchall()
     result = []
     for agent in agent_rows:
@@ -198,6 +214,10 @@ def agents_with_repeated_gate_failures(
             result.append(
                 {
                     "agent_id": agent["id"],
+                    # 사용자 요청(2026-10-27, "다룬 테이블도 ID 표기되는
+                    # 것이 남아 있는지 확인") — 대시보드가 "#agent_id"로
+                    # 보여주던 걸 code로 교체.
+                    "agent_code": agent["code"],
                     "role_name": agent["name"] or agent["role_name"],
                     "recent_evaluation_count": threshold,
                 }
