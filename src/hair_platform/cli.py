@@ -29,6 +29,7 @@ _EPILOG_TOP = """\
   hair serve --port 9000 --reload         개발 중 코드 변경 자동 반영
   hair serve --no-browser                 브라우저 자동 열기 끄기(서버만 실행)
   hair bootstrap-admin -u admin -p ***    최초 관리자 계정 생성(최초 1회만)
+  hair reset-data                         운영 데이터 전부 초기화(Agent/Tool/Skill/팀/파이프라인은 유지)
   hair eval                               Gate A/B/D/E/G 측정 1회 실행
 
 서브커맨드별 자세한 옵션: hair <subcommand> --help
@@ -45,6 +46,7 @@ HAIR-Platform 통합 CLI — 사람과 AI Agent를 하나의 조직도에서 관
 명령어:
   serve             Web UI + API 서버 실행
   bootstrap-admin   최초 ADMIN 계정 생성(콜드스타트 전용)
+  reset-data        운영 데이터 초기화(Agent/Tool/Skill/팀/파이프라인은 유지)
   eval              Gate A/B/D/E/G 측정 1회 실행
 
 자세한 도움말:       hair --help
@@ -134,6 +136,33 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_boot.set_defaults(func=_cmd_bootstrap_admin)
 
+    p_reset = sub.add_parser(
+        "reset-data",
+        help="운영 데이터 전부 초기화(Agent/Tool/Skill/팀/파이프라인 템플릿은 유지)",
+        description=(
+            "사용자 계정·업무 요청/할 일/배정/결재/결과물·대화·업로드 문서·\n"
+            "Crew/파이프라인 실행 이력·모델 레지스트리·활동 기록(audit_log)을\n"
+            "전부 지운다. Agent(22종)/Tool·Skill Pool/팀/파이프라인 템플릿은\n"
+            "손대지 않는다 — hair.db 재기동 시 항상 자동으로 다시 채워지는\n"
+            "레퍼런스 데이터이기 때문이다. 되돌릴 수 없다."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "예시:\n"
+            "  hair reset-data\n"
+            "  hair reset-data --db-path hair.db --yes   확인 프롬프트 생략\n\n"
+            "보통 바로 이어서 다시 콜드스타트:\n"
+            "  hair bootstrap-admin -u admin -p '...'\n"
+        ),
+    )
+    p_reset.add_argument(
+        "-d", "--db-path", default="hair.db", help="SQLite DB 파일 경로(기본: hair.db)"
+    )
+    p_reset.add_argument(
+        "--yes", action="store_true", help="확인 프롬프트 없이 바로 실행"
+    )
+    p_reset.set_defaults(func=_cmd_reset_data)
+
     p_eval = sub.add_parser(
         "eval",
         help="Gate A/B/D/E/G 측정 1회 실행(results/에 저장, 비용 없음)",
@@ -192,6 +221,35 @@ def _cmd_bootstrap_admin(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     print(f"ADMIN 계정 생성 완료: id={user_id}, username={args.username}")
+    return 0
+
+
+def _cmd_reset_data(args: argparse.Namespace) -> int:
+    from hair_platform import data_admin, db
+
+    if not args.yes:
+        answer = input(
+            f"'{args.db_path}'의 운영 데이터(사용자·업무·대화·실행 이력 등)를 "
+            "전부 지웁니다 — 되돌릴 수 없습니다.\n"
+            "Agent/Tool/Skill/팀/파이프라인 템플릿은 그대로 유지됩니다. "
+            "계속할까요? [y/N] "
+        )
+        if answer.strip().lower() != "y":
+            print("취소했습니다.")
+            return 1
+
+    conn = db.get_connection(args.db_path)
+    db.init_schema(conn)  # 기존 DB를 재사용할 때 스키마/레퍼런스 시드를 먼저 맞춘다.
+    counts = data_admin.reset_to_factory_state(conn)
+    conn.close()
+
+    total = sum(counts.values())
+    print(
+        f"초기화 완료 — {total}건 삭제. Agent/Tool/Skill/팀/파이프라인 템플릿은 그대로입니다."
+    )
+    print(
+        f"다음 단계(필요하면): hair bootstrap-admin -u <계정명> -p <비밀번호> --db-path {args.db_path}"
+    )
     return 0
 
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from hair_platform import data_admin, pool_registry
+from hair_platform import data_admin, model_registry, pool_registry
 
 
 def _login(client, username, password):
@@ -521,3 +521,153 @@ def test_gc153_delete_task_cascades_deliverables_after_assignment_superseded(
         ).fetchone()["c"]
         == 0
     )
+
+
+# ---------- 사용자 요청(2026-10-27, "pip 설치나 패키지 배포시 에이전트와
+# 도구/스킬 정보는 포함하고, 나머지 다른 정보들은 초기화 상태로 배포되도록")
+# — reset_to_factory_state(). ----------
+
+_REFERENCE_TABLES = (
+    "agent_pool",
+    "tool_pool",
+    "skill_pool",
+    "teams",
+    "team_members",
+    "pipeline_templates",
+    "pipeline_stages",
+    "pipeline_stage_agents",
+)
+_WIPED_TABLES = (
+    "users",
+    "briefs",
+    "tasks",
+    "assignments",
+    "approvals",
+    "audit_log",
+    "model_registry",
+    "human_pool",
+)
+
+
+def _table_counts(conn, tables):
+    return {
+        t: conn.execute(f"SELECT COUNT(*) AS c FROM {t}").fetchone()["c"]
+        for t in tables
+    }
+
+
+def test_reset_to_factory_state_keeps_reference_tables_untouched(client_and_conn):
+    _client, conn = client_and_conn
+    before = _table_counts(conn, _REFERENCE_TABLES)
+    assert all(
+        before[t] > 0 for t in _REFERENCE_TABLES
+    )  # 전부 미리 시드돼 있어야 의미 있는 테스트
+
+    data_admin.reset_to_factory_state(conn)
+
+    after = _table_counts(conn, _REFERENCE_TABLES)
+    assert after == before
+
+
+def test_reset_to_factory_state_wipes_operational_tables(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    _brief_id, task_id, human_id = _make_task_with_candidate(client)
+    _confirm_assignment(client, task_id, "human", human_id)
+    model_registry.create_model(
+        conn,
+        conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()["id"],
+        "openai",
+        "gpt-4o-mini",
+    )
+    before = _table_counts(conn, _WIPED_TABLES)
+    assert all(
+        before[t] > 0 for t in _WIPED_TABLES
+    )  # 전부 실제로 데이터가 쌓여 있었는지 먼저 확인
+
+    counts = data_admin.reset_to_factory_state(conn)
+
+    after = _table_counts(conn, _WIPED_TABLES)
+    assert all(v == 0 for v in after.values())
+    assert all(counts[t] == before[t] for t in _WIPED_TABLES)
+
+
+def test_reset_to_factory_state_resets_agent_pool_volatile_columns_but_keeps_row(
+    client_and_conn,
+):
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent_id = conn.execute(
+        "SELECT id FROM agent_pool WHERE role_name = '백엔드 개발자'"
+    ).fetchone()["id"]
+    conn.execute(
+        "UPDATE agent_pool SET llm_provider='openai', llm_model='gpt-4o-mini', "
+        "cost_estimate=12.5, performance_score=0.9, last_output='이전 산출물', "
+        "status='deprecated' WHERE id = ?",
+        (agent_id,),
+    )
+    conn.commit()
+
+    data_admin.reset_to_factory_state(conn)
+
+    row = conn.execute("SELECT * FROM agent_pool WHERE id = ?", (agent_id,)).fetchone()
+    assert row is not None  # Agent 행 자체는 지워지지 않는다
+    assert row["role_name"] == "백엔드 개발자"
+    assert row["llm_provider"] is None
+    assert row["llm_model"] is None
+    assert row["last_output"] is None
+    assert row["cost_estimate"] == 0.0
+    assert row["performance_score"] is None
+    assert row["status"] == "active"
+
+
+def test_reset_to_factory_state_is_idempotent_and_restores_fk_enforcement(
+    client_and_conn,
+):
+    _client, conn = client_and_conn
+    data_admin.reset_to_factory_state(conn)
+    counts_second = data_admin.reset_to_factory_state(
+        conn
+    )  # 두 번째 호출도 에러 없이 끝나야 함
+    assert all(v == 0 for v in counts_second.values())
+
+    # `PRAGMA foreign_keys=OFF`로 감쌌다가 반드시 다시 켜야 한다 — 꺼진 채로
+    # 남으면 그 뒤 모든 작업에서 FK 위반이 조용히 허용돼 버린다(실측 검증).
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_reset_to_factory_state_audit_log_no_delete_trigger_still_active_afterward(
+    client_and_conn,
+):
+    _client, conn = client_and_conn
+    data_admin.reset_to_factory_state(conn)
+
+    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()
+    assert admin_id is None  # users도 초기화됐으니 재부트스트랩 전엔 없다
+
+    from hair_platform import audit
+
+    new_user_id = conn.execute(
+        "INSERT INTO users (username, password_hash, role) VALUES ('x','x','admin')"
+    ).lastrowid
+    conn.commit()
+    audit.record(conn, new_user_id, "probe", "users", new_user_id)
+    conn.commit()
+    import sqlite3
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM audit_log")
+
+
+def test_reset_to_factory_state_then_bootstrap_admin_works(client_and_conn):
+    """리셋 직후 바로 `hair bootstrap-admin`을 다시 돌릴 수 있어야
+    한다(CLI 안내 문구가 약속하는 실제 흐름)."""
+    _client, conn = client_and_conn
+    data_admin.reset_to_factory_state(conn)
+
+    from hair_platform.auth import Role, create_user
+
+    new_admin_id = create_user(conn, "fresh-admin", "freshpass", Role.ADMIN)
+    assert new_admin_id is not None
+    assert conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 22

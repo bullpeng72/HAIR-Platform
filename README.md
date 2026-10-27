@@ -13,8 +13,8 @@ AgentForge 실습서 저장소의 자매 프로젝트로, AgentForge가 검증�
 Task 종속 대화 흡수 + Brief 승격 공존), 단계형 개발 파이프라인 엔진
 (Gate A-G 기준 자동 재시도/에스컬레이션, BMAD-METHOD식 계획 승인
 1회 + 최소 HITL), Agent별 LLM 모델/설정 최적화 추천(admin), **통합
-CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
-쓸 수 있다. `pytest` 586건 통과, API 엔드포인트 157개. 개념·아키텍처
+CLI**(`hair serve`/`bootstrap-admin`/`reset-data`/`eval`)까지 전부 구현돼 실제로
+쓸 수 있다. `pytest` 597건 통과, API 엔드포인트 157개. 개념·아키텍처
 전체 설명은
 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은 `git log`
 (커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를 참고.
@@ -70,11 +70,15 @@ CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
   호출(Wikipedia 검색은 이 배포 환경 IP가 지속 차단돼 있어 기본
   시드에서 뺐다 — `websearch.py`에 코드는 남아 있음)
 - MCP(stdio/remote) 외부 도구를 Agent별로 연결 가능
-- 대화창·AI 에이전트 관리·지식 자료실 세 곳에서 로컬 파일(.md/.pdf/
-  .html) 업로드 또는 텍스트 직접 입력으로 VectorDB에 즉시 색인
-  (`documents.py`) — 색인되면 `rag` 스킬을 가진 모든 Agent가 대화창
-  단발 호출·CrewAI 실행 양쪽에서 똑같이 찾아냄. Admin "지식 베이스"
-  탭에서 색인된 조각 조회/삭제+통계, GraphDB 관계 조회+통계까지 관리
+- 로컬 파일(.md/.markdown/.txt/.html/.htm/.pdf) 업로드가 세 곳에
+  있고 성격이 다르다(`documents.py`) — **대화창**과 **협업
+  워크스페이스**(업무 실행 버튼 옆 "📎 참고자료")는 그 대화/그 1회
+  실행에만 텍스트로 주입하고 어디에도 저장하지 않는 **휘발성**
+  첨부, admin/manager 전용 **"지식 베이스"** 탭만 텍스트 직접 입력
+  포함해 VectorDB에 **영구 색인**한다 — 색인되면 `rag` 스킬을 가진
+  모든 Agent가 대화창 단발 호출·CrewAI 실행 양쪽에서 똑같이 찾아냄.
+  "지식 베이스" 탭에서 색인된 조각 조회/삭제+통계, GraphDB 관계
+  조회+통계까지 관리
 
 ### Tool/Skill/Model 등록 — "등록 → 재사용" 패턴
 - **Tool Pool·Skill Pool**(`pool_registry.py`) — "스킬 → 자동 도구 연결"
@@ -82,7 +86,10 @@ CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
   18개를 기본 노출(17개는 HITL 절차라 `augmentation_mode='none'`, 1개는
   실제 MCP 도구로 승격)
 - **모델 레지스트리**(`model_registry.py`) — provider별 실제 사용 가능한
-  모델을 등록·활성/비활성 관리
+  모델을 등록·활성/비활성 관리 + 모델별로 "LLM 설정 최적화"의 tier
+  (심층추론/정밀·신속/표준)를 직접 매핑(모델 하나가 여러 tier 가능,
+  매핑 없으면 이름 패턴 추정으로 폴백) — 새 모델 출시·provider 교체
+  시 코드 수정 없이 여기서만 바꾸면 됨
 - **팀**(`teams.py`) — 사람/Agent 그룹을 등록해 여러 업무에 재사용(위
   "핵심 기능" 참고) — 같은 패턴의 네 번째 적용
 
@@ -94,6 +101,10 @@ CLI**(`hair serve`/`bootstrap-admin`/`eval`)까지 전부 구현돼 실제로
 - 데이터 삭제/초기화(도구·스킬·사람·Agent·brief/task, confirmed 배정이
   있는 대상은 보호) + 보관기간 정책(`retention.py`, assignment_history
   1년 — audit_log는 append-only 트리거를 이 모듈만 통제된 방식으로 해제)
+- `hair reset-data` — 운영 데이터(사용자·업무·대화·실행 이력·모델
+  레지스트리·활동 기록 등) 전체를 공장 초기화. Agent(22종)/Tool·Skill
+  Pool/팀/파이프라인 템플릿은 건드리지 않는다(`data_admin.py`) —
+  pip 배포 전 깨끗한 상태로 준비할 때 사용
 - Web UI 26개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
   분리(원래 "내 업무"/"공용 조회"/"운영 관리" 3구역이었으나 이후
   2구역으로 재편)
@@ -114,7 +125,7 @@ pip install -e ".[dev,all]"
 # 발견 — `test_documents.py`만 `pytest.importorskip()`로 이 문제를
 # 스스로 막고 있었다). `all`(= crewai+mcp+llm+documents 묶음, pyproject.toml
 # 참고)까지 같이 설치해야 아래 골든셋이 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 586건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 597건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -129,6 +140,16 @@ hair --help
 
 ```bash
 hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.db
+```
+
+운영 중 쌓인 데이터만 초기화하고(사용자·업무·대화·실행 이력·모델
+레지스트리·활동 기록 등) Agent(22종)/Tool·Skill Pool/팀/파이프라인
+템플릿은 그대로 둘 때(예: 배포 전 깨끗한 상태로 준비):
+
+```bash
+hair reset-data                              # 확인 프롬프트 뜸(되돌릴 수 없음)
+hair reset-data --yes                        # 확인 없이 바로 실행
+# 보통 바로 이어서: hair bootstrap-admin -u admin -p '...'
 ```
 
 실제 CrewAI 연동을 쓰려면(무거운 의존성 — opt-in):
@@ -173,8 +194,9 @@ export ANTHROPIC_API_KEY=...               # 또는 OPENAI_API_KEY
 # 목록은 "모델 레지스트리" 탭에 등록해두면 전 화면에서 드롭다운으로 공유된다.
 ```
 
-대화창·AI 에이전트 관리·지식 자료실에서 `.pdf`/`.html` 파일을 업로드해
-VectorDB에 색인하려면(`.md`/`.txt`는 추가 설치 없이 바로 동작):
+대화창·협업 워크스페이스(업무 실행)·지식 베이스 세 곳 중 어디서든
+`.pdf`/`.html` 파일을 업로드하려면(`.md`/`.txt`는 추가 설치 없이 바로
+동작 — 셋 다 같은 `documents.extract_text()`를 공유한다):
 
 ```bash
 pip install -e ".[documents]"              # pypdf·beautifulsoup4 설치
@@ -227,7 +249,7 @@ src/hair_platform/
   eval_wiring.py      # Gate A/B/D/E/G 평가 배선 수동 실행 probe(agent-evaluator SDK, python -m으로 직접 실행)
   agent_evaluation.py # Gate A-G 평가를 Agent 실행 경로에 상시 연결(agent_evaluations 테이블)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
-  cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/eval
+  cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/reset-data/eval
   webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 26개 탭)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
   model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용") + 모델별 LLM 설정 최적화 tier(deep_reasoning/precision_fast/standard) 직접 매핑
@@ -239,7 +261,7 @@ src/hair_platform/
   websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(Crew 전용). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)
   documents.py       # 외부 자료(.md/.pdf/.html) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
   pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화, CrewAI Tool 조립
-  data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호)
+  data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호) + 운영 데이터 공장 초기화(Agent/Tool/Skill/팀/파이프라인은 유지, `hair reset-data`)
   deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)
   inbox.py           # 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고)
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이)
@@ -251,7 +273,7 @@ docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 586건 통과
+tests/unit/                            # 골든셋 597건 통과
 ```
 
 ## 로드맵
@@ -267,9 +289,11 @@ tests/unit/                            # 골든셋 586건 통과
 
 ### v0.1.0 (2026-10-26) — 외부 자료 업로드(RAG) + Admin 지식 베이스 관리 + 응답 형식 일관성
 
-- ✨ 대화창·AI 에이전트 관리·지식 자료실에서 로컬 파일(.md/.pdf/.html)
-  업로드 또는 텍스트 직접 입력으로 VectorDB 자동 색인(`documents.py`
-  신설) — 청크 분할 없이 통째로 넣던 기존 색인 경로의 "긴 문서는
+- ✨ 대화창·협업 워크스페이스(업무 실행)·지식 베이스에서 로컬 파일
+  (.md/.pdf/.html) 업로드 지원(`documents.py` 신설) — 지식 베이스만
+  텍스트 직접 입력 포함 VectorDB에 영구 색인하고, 대화창·협업
+  워크스페이스는 그 1회만 쓰는 휘발성 첨부다. 청크 분할 없이 통째로
+  넣던 기존 색인 경로의 "긴 문서는
   대부분 잘려나가는" 문제도 같이 수정
 - ✨ Admin "지식 베이스" 탭 신설 — 색인된 조각(Chunk) 조회/삭제+통계,
   GraphDB 관계 조회+통계(GraphDB는 별도 저장소가 없어 조회·통계만)

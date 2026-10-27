@@ -35,6 +35,7 @@ def test_gc_help_lists_all_subcommands(capsys):
     out = capsys.readouterr().out
     assert "serve" in out
     assert "bootstrap-admin" in out
+    assert "reset-data" in out
     assert "eval" in out
 
 
@@ -51,6 +52,7 @@ def test_gc_no_subcommand_prints_brief_help_and_exits_zero(capsys):
     out = capsys.readouterr().out
     assert "serve" in out
     assert "bootstrap-admin" in out
+    assert "reset-data" in out
     assert "eval" in out
     assert "--help" in out
 
@@ -72,7 +74,9 @@ def test_gc_version_flag_exits_cleanly_with_version_string(capsys):
     assert out.strip().startswith("hair ")
 
 
-@pytest.mark.parametrize("subcommand", ["serve", "bootstrap-admin", "eval"])
+@pytest.mark.parametrize(
+    "subcommand", ["serve", "bootstrap-admin", "reset-data", "eval"]
+)
 def test_gc_subcommand_help_exits_cleanly_with_output(subcommand, capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main([subcommand, "--help"])
@@ -103,6 +107,76 @@ def test_gc_bootstrap_admin_subcommand_creates_first_user_then_refuses(
 def test_gc_bootstrap_admin_db_path_defaults_to_hair_db():
     args = cli._build_parser().parse_args(["bootstrap-admin", "-u", "a", "-p", "b"])
     assert args.db_path == "hair.db"
+
+
+# ---------- `hair reset-data`(사용자 요청, 2026-10-27, "pip 설치나 패키지
+# 배포시 에이전트와 도구/스킬 정보는 포함하고, 나머지 다른 정보들은
+# 초기화 상태로 배포되도록") ----------
+
+
+def test_gc_reset_data_db_path_defaults_to_hair_db():
+    args = cli._build_parser().parse_args(["reset-data"])
+    assert args.db_path == "hair.db"
+    assert args.yes is False
+
+
+def test_gc_reset_data_yes_flag_skips_confirmation_prompt(
+    tmp_path, capsys, monkeypatch
+):
+    db_path = str(tmp_path / "hair.db")
+
+    def _fail_if_called(_prompt):
+        raise AssertionError("확인 프롬프트가 뜨면 안 된다(--yes)")
+
+    monkeypatch.setattr("builtins.input", _fail_if_called)
+    code = cli.main(["reset-data", "-d", db_path, "--yes"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "초기화 완료" in out
+
+
+def test_gc_reset_data_without_yes_cancels_on_non_y_answer(
+    tmp_path, capsys, monkeypatch
+):
+    db_path = str(tmp_path / "hair.db")
+    # 먼저 한 번 띄워 DB 파일 자체는 만들어 둔다(초기화 대상이 있어야
+    # "취소"가 의미 있는 시나리오가 된다).
+    cli.main(["bootstrap-admin", "-u", "admin", "-p", "pw", "-d", db_path])
+    capsys.readouterr()
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    code = cli.main(["reset-data", "-d", db_path])
+    assert code == 1
+    assert "취소했습니다" in capsys.readouterr().out
+
+    # 취소했으니 방금 만든 admin 계정이 그대로 남아 있어야 한다.
+    from hair_platform import db as db_module
+
+    conn = db_module.get_connection(db_path)
+    assert conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"] == 1
+    conn.close()
+
+
+def test_gc_reset_data_then_bootstrap_admin_end_to_end(tmp_path, capsys, monkeypatch):
+    """CLI epilog이 안내하는 실제 흐름(리셋 → 재부트스트랩)을 그대로
+    실행해본다."""
+    db_path = str(tmp_path / "hair.db")
+    cli.main(["bootstrap-admin", "-u", "admin", "-p", "pw", "-d", db_path])
+    capsys.readouterr()
+
+    code = cli.main(["reset-data", "-d", db_path, "--yes"])
+    assert code == 0
+
+    code = cli.main(["bootstrap-admin", "-u", "admin2", "-p", "pw2", "-d", db_path])
+    assert code == 0
+    assert "생성 완료" in capsys.readouterr().out
+
+    from hair_platform import db as db_module
+
+    conn = db_module.get_connection(db_path)
+    assert conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 22
+    conn.close()
 
 
 def test_gc_serve_db_path_defaults_to_hair_db():

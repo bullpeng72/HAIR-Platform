@@ -110,8 +110,10 @@ RBAC 4종 역할(`admin`/`manager`/`member`/`viewer`)에 따라 보이는 탭·
 ### CLI
 
 `hair` 하나의 진입점 — `hair serve`(서버 실행), `hair bootstrap-admin`
-(콜드스타트 최초 관리자 계정), `hair eval`(Gate A/B/D/E/G 수동 측정).
-`hair --version`, `hair <subcommand> --help`로 자세한 옵션을 확인한다.
+(콜드스타트 최초 관리자 계정), `hair reset-data`(운영 데이터 공장
+초기화 — Agent/Tool/Skill/팀/파이프라인 템플릿은 유지), `hair eval`
+(Gate A/B/D/E/G 수동 측정). `hair --version`, `hair <subcommand>
+--help`로 자세한 옵션을 확인한다.
 
 ## 4. 주요 기능(현재 상태 기준)
 

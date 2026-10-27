@@ -22,6 +22,14 @@ append-only 원칙에 따라 `db.py`의 DB 트리거가 UPDATE/DELETE 자체를 
 3. **감사로그에는 남긴다** — 실제 행은 지워도(append-only 원칙과 별개로)
    무엇을 지웠는지는 `audit_log`에 기록한다(삭제 자체가 되돌릴 수 없는
    행위이므로, 최소한 "언제 누가 무엇을 지웠는지"는 남아야 한다).
+
+`reset_to_factory_state()`(사용자 요청, 2026-10-27, "pip 설치나 패키지
+배포시 에이전트와 도구/스킬 정보는 포함하고, 나머지 다른 정보들은
+초기화 상태로 배포되도록")만 예외적으로 **감사로그까지 지운다** — 위
+3번 원칙과 달리, 이 함수는 "지운 사실을 남길 대상"인 사용자 계정 자체를
+포함해 전부 지우는 전면 초기화라 `retention.purge_expired()`와 같은
+방식(트리거를 잠깐 내렸다가 반드시 다시 세움)으로 그 한 함수 안에서만
+통제된 채로 예외를 둔다 — 다른 삭제 함수들은 여전히 감사로그를 못 지운다.
 """
 
 from __future__ import annotations
@@ -352,3 +360,84 @@ def seed_demo_data(conn: sqlite3.Connection, actor_id: int) -> dict:
         "human_id": human_id,
         "agent_id": agent_id,
     }
+
+
+# 사용자 요청(2026-10-27, "pip 설치나 패키지 배포시 에이전트와 도구/스킬
+# 정보는 포함하고, 나머지 다른 정보들은 초기화 상태로 배포되도록") —
+# `db.init_schema()`가 매 기동 때 `_seed_default_pools()` +
+# `reference_pipeline_seeds.seed()`로 이미 채워 넣는 Agent(22종)/Tool
+# Pool(11개)/Skill Pool(47개)/팀("자율 개발 크루")/파이프라인 템플릿
+# ("소프트웨어 개발 파이프라인")은 그 두 함수가 `INSERT OR IGNORE`(또는
+# 존재 확인 후 INSERT)로 매번 알아서 채우므로, 이 함수는 그 테이블들에
+# **전혀 손대지 않는다**(관리자가 나중에 추가한 커스텀 Agent/Tool/Skill/
+# 팀도 마찬가지로 그대로 둔다 — "정확히 레퍼런스 세트만 남긴다"가
+# 아니라 "운영 중 쌓인 데이터만 지운다"는 보수적인 범위를 택했다).
+#
+# 자식→부모 순서로 나열했지만 `PRAGMA foreign_keys=OFF`로 감싸 엄밀한
+# 순서를 강제하지 않는다(`db.py`의 `_migrate_tool_pool_custom_python_
+# kind()`와 같은 선례 — 대량 작업에서 FK를 한 번만 잠깐 끄는 쪽이 수십
+# 개 테이블의 삭제 순서를 일일이 맞추는 것보다 훨씬 덜 깨지기 쉽다).
+_FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
+    "knowledge_chunks",
+    "agent_evaluations",
+    "deliverable_comments",
+    "pipeline_run_stages",
+    "pipeline_runs",
+    "crew_runs",
+    "agent_execution_jobs",
+    "job_items",
+    "jobs",
+    "deliverables",
+    "conversation_jobs",
+    "conversation_messages",
+    "conversation_participants",
+    "conversations",
+    "documents",
+    "task_dependencies",
+    "task_participants",
+    "assignment_history",
+    "assignments",
+    "approvals",
+    "tasks",
+    "briefs",
+    "human_pool",
+    "agent_tool_links",
+    "model_registry",
+    "embedding_config",
+    "audit_log",
+    "users",
+)
+
+
+def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
+    """ "공장 초기화" — 운영 중 쌓인 데이터를 전부 지우고, Agent/Tool/
+    Skill/팀/파이프라인 템플릿은 그대로 둔다(위 모듈 독스트링 참고).
+    Agent 자체는 남기되 실행하면서 쌓인 휘발성 필드(비용·성과점수·
+    provider/model·마지막 산출물)는 초기값으로 되돌린다 — `source_
+    job_item_id`는 `job_items`를 지우므로 먼저 NULL로 비운다(이 파일
+    서두 "설계 원칙 1"과 같은 이유).
+
+    되돌릴 수 없다 — 호출자(CLI)가 확인을 받은 뒤에만 불러야 한다.
+    반환값은 테이블별 삭제 건수(로그/확인용)."""
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("DROP TRIGGER IF EXISTS audit_log_no_delete")
+    counts: dict[str, int] = {}
+    try:
+        conn.execute(
+            "UPDATE agent_pool SET source_job_item_id = NULL, "
+            "llm_provider = NULL, llm_model = NULL, last_output = NULL, "
+            "cost_estimate = 0.0, performance_score = NULL, status = 'active'"
+        )
+        for table in _FACTORY_RESET_WIPE_TABLES:
+            counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
+        conn.commit()
+    finally:
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS audit_log_no_delete "
+            "BEFORE DELETE ON audit_log BEGIN "
+            "SELECT RAISE(ABORT, 'audit_log is append-only'); END"
+        )
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.commit()
+    return counts
