@@ -183,6 +183,13 @@ def index_knowledge(
     return chunk_id
 
 
+# 사용자 보고(2026-10-28)로 추가 — `llm.py`의 클라우드 기본 타임아웃(900초)
+# 보다 넉넉하게, `tuning_config.reasoning=True`인(agent_optimizer.py의
+# deep_reasoning tier) Agent의 단발 실행에만 적용한다. `execute_agent()`
+# 아래 참고.
+_DEEP_REASONING_LLM_TIMEOUT_SECONDS = 1800.0
+
+
 def execute_agent(
     conn: sqlite3.Connection,
     agent_id: int,
@@ -251,7 +258,26 @@ def execute_agent(
         retrieval_sink["augmented_prompt"] = augmented_prompt
         retrieval_sink["llm_provider"] = resolved_provider
         retrieval_sink["llm_model"] = resolved_model
-    output = llm.call_llm(resolved_provider, resolved_model, system, augmented_prompt)
+    # 사용자 보고(2026-10-28, "프레젠테이션 자료 작성자" 실패 — "AI 모델의
+    # 응답 생성이 시간 제한(15분)을 넘겨 중단됐습니다") — `llm.py`의
+    # `_CLOUD_LLM_TIMEOUT_SECONDS`(900초)는 tier와 무관하게 모든 Agent에
+    # 똑같이 적용돼, `reasoning=True`로 튜닝된(agent_optimizer.py의
+    # deep_reasoning tier) Agent — 긴 보고서/발표자료처럼 본래 느린
+    # 작업을 하는 Agent — 도 "표준" Agent와 같은 15분 한도에 걸렸다.
+    # tuning_config에 저장된 reasoning 플래그만 보고 이 호출에만 더 넉넉한
+    # 한도를 준다(크루 실행 경로의 `max_execution_time`과는 별개 — 그쪽은
+    # `crew_runtime.py`가 이미 따로 처리).
+    tuning = json.loads(agent["tuning_config"] or "{}")
+    timeout_seconds = (
+        _DEEP_REASONING_LLM_TIMEOUT_SECONDS if tuning.get("reasoning") is True else None
+    )
+    output = llm.call_llm(
+        resolved_provider,
+        resolved_model,
+        system,
+        augmented_prompt,
+        timeout_seconds=timeout_seconds,
+    )
 
     conn.execute(
         "UPDATE agent_pool SET last_output = ?, llm_provider = ?, llm_model = ? WHERE id = ?",

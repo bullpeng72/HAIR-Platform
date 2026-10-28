@@ -64,14 +64,26 @@ def _auto_detect() -> str:
     )
 
 
-def call_llm(provider: str, model: str, system: str, prompt: str) -> str:
-    """실제 API 호출 지점 — 여기서만 비용/로컬 연산이 발생한다."""
+def call_llm(
+    provider: str,
+    model: str,
+    system: str,
+    prompt: str,
+    *,
+    timeout_seconds: float | None = None,
+) -> str:
+    """실제 API 호출 지점 — 여기서만 비용/로컬 연산이 발생한다.
+
+    `timeout_seconds`를 생략하면(기존 모든 호출부가 그렇다) provider별
+    기본값(클라우드 900초/Ollama 600초)이 그대로 적용된다 — 하위 호환.
+    `agent_runtime.execute_agent()`가 deep_reasoning tier Agent에는 더 긴
+    값을 넘겨 쓴다(아래 `_call_anthropic`/`_call_openai` 참고)."""
     if provider == "anthropic":
-        return _call_anthropic(model, system, prompt)
+        return _call_anthropic(model, system, prompt, timeout_seconds)
     if provider == "openai":
-        return _call_openai(model, system, prompt)
+        return _call_openai(model, system, prompt, timeout_seconds)
     if provider == "ollama":
-        return _call_ollama(model, system, prompt)
+        return _call_ollama(model, system, prompt, timeout_seconds)
     raise ValueError(f"지원하지 않는 provider입니다: {provider!r}")
 
 
@@ -87,11 +99,13 @@ def call_llm(provider: str, model: str, system: str, prompt: str) -> str:
 _CLOUD_LLM_TIMEOUT_SECONDS = 900.0
 
 
-def _call_anthropic(model: str, system: str, prompt: str) -> str:
+def _call_anthropic(
+    model: str, system: str, prompt: str, timeout_seconds: float | None = None
+) -> str:
     import anthropic  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
     client = anthropic.Anthropic(
-        timeout=_CLOUD_LLM_TIMEOUT_SECONDS
+        timeout=timeout_seconds or _CLOUD_LLM_TIMEOUT_SECONDS
     )  # ANTHROPIC_API_KEY 환경변수를 사용한다.
     resp = client.messages.create(
         model=model,
@@ -102,11 +116,13 @@ def _call_anthropic(model: str, system: str, prompt: str) -> str:
     return "".join(block.text for block in resp.content if block.type == "text")
 
 
-def _call_openai(model: str, system: str, prompt: str) -> str:
+def _call_openai(
+    model: str, system: str, prompt: str, timeout_seconds: float | None = None
+) -> str:
     import openai  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
     client = openai.OpenAI(
-        timeout=_CLOUD_LLM_TIMEOUT_SECONDS
+        timeout=timeout_seconds or _CLOUD_LLM_TIMEOUT_SECONDS
     )  # OPENAI_API_KEY 환경변수를 사용한다.
     resp = client.chat.completions.create(
         model=model,
@@ -118,7 +134,9 @@ def _call_openai(model: str, system: str, prompt: str) -> str:
     return resp.choices[0].message.content or ""
 
 
-def _call_ollama(model: str, system: str, prompt: str) -> str:
+def _call_ollama(
+    model: str, system: str, prompt: str, timeout_seconds: float | None = None
+) -> str:
     import httpx  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -148,7 +166,7 @@ def _call_ollama(model: str, system: str, prompt: str) -> str:
         # 프런트엔드 `pollConversationJob()`의 폴링 포기 시한도 700초로
         # 같이 올렸다(아래 timeout보다 여유 있게 길게 유지 — 백엔드가
         # 결론을 내기 전에 프런트가 먼저 포기하지 않도록).
-        timeout=600,
+        timeout=timeout_seconds or 600,
     )
     resp.raise_for_status()
     return resp.json()["message"]["content"]

@@ -196,6 +196,43 @@ def test_gc67_execute_agent_updates_last_output_and_requires_active(client_and_c
     assert "agent_executed" in actions
 
 
+def test_gc69_execute_agent_gives_deep_reasoning_agents_longer_llm_timeout(
+    client_and_conn,
+):
+    """사용자 보고(2026-10-28, "프레젠테이션 자료 작성자" — "AI 모델의
+    응답 생성이 시간 제한(15분)을 넘겨 중단됐습니다") — `llm.call_llm()`
+    은 모든 Agent에 똑같이 15분(900초) 한도를 썼다. `tuning_config.
+    reasoning=True`(agent_optimizer.py의 deep_reasoning tier)인 Agent의
+    단발 실행(`execute_agent()`, 대화 `@멘션`이 쓰는 경로)에는 30분
+    (1800초)을 넘겨야 한다 — `reasoning`이 없거나 False인 평범한 Agent는
+    기존 그대로(호출부에 timeout_seconds를 안 넘김, 즉 None)여야 한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status, tuning_config) "
+        "VALUES (?, ?, 'active', ?)",
+        ("프레젠테이션 자료 작성자", "[]", '{"reasoning": true}'),
+    )
+    deep_agent_id = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, ?, 'active')",
+        ("백엔드 개발자", "[]"),
+    )
+    plain_agent_id = cur.lastrowid
+    conn.commit()
+
+    with patch("hair_platform.llm.call_llm", return_value="결과") as m:
+        agent_runtime.execute_agent(conn, deep_agent_id, admin_id, "발표자료 만들어줘")
+    assert m.call_args.kwargs["timeout_seconds"] == 1800.0
+
+    with patch("hair_platform.llm.call_llm", return_value="결과") as m:
+        agent_runtime.execute_agent(conn, plain_agent_id, admin_id, "API 스펙 초안")
+    assert m.call_args.kwargs["timeout_seconds"] is None
+
+
 def test_gc68_execute_endpoint_rbac_and_status_codes(client_and_conn):
     client, conn = client_and_conn
     cur = conn.execute(

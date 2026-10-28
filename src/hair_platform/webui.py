@@ -1775,7 +1775,13 @@ async function pollConversationJob(conversationId, jobId, intervalMs, timeoutMs)
   // (`conversation_jobs.status='running'`, 실측 12분 넘게도 진행 중)
   // 프런트가 700초 만에 먼저 포기해 "실패"로 잘못 보였다 — 백엔드는
   // 멈추지 않았으므로 폴링 포기 시한을 30분으로 넉넉히 늘린다.
-  const deadline = Date.now() + (timeoutMs || 1800000); // Team 멘션(CrewAI, 로컬 모델 위임 체인)은 수십 분 걸릴 수 있음
+  // 사용자 보고(2026-10-28, "프레젠테이션 자료 작성자" 응답 생성 15분
+  // 초과 실패) 대응으로 백엔드가 deep_reasoning tier Agent에는 30분
+  // (1800초)까지 기다리도록 늘렸다 — 이 폴링 포기 시한이 그와 똑같으면
+  // 백엔드가 막 완료되는 순간 프런트가 먼저 포기할 수 있으므로, 항상
+  // 백엔드 최댓값보다 여유 있게 길게 유지하는 기존 원칙대로 40분으로
+  // 같이 올린다.
+  const deadline = Date.now() + (timeoutMs || 2400000); // Team 멘션(CrewAI, 로컬 모델 위임 체인)은 수십 분 걸릴 수 있음
   while (Date.now() < deadline) {
     const jobs = await api("GET", "/api/conversations/" + conversationId + "/jobs");
     const job = jobs.find(j => j.id === jobId);
@@ -5445,6 +5451,7 @@ async function renderAgentOptimization(content) {
     // 막지 않는다.
     '<li>"변경 필요"가 아니어도(이미 추천과 같거나 한 번 적용한 Agent) 체크하고 "추천 Provider/Model"의 셀렉트에서 다른 등록 모델을 골라 다시 적용할 수 있습니다.</li>' +
     "</ul>" +
+    '<button id="select-changed-optimize" class="small">변경 필요만 선택</button> ' +
     '<button id="apply-selected-optimize" class="small">선택 적용</button> ' +
     '<span class="muted">변경 필요 ' + changedCount + "/" + recs.length + "건</span>" +
     table(["적용", "역할", "분류", "현재 Provider/Model", "추천 Provider/Model", "tuning 변경 필드", "근거"], recs.map(r => {
@@ -5466,7 +5473,7 @@ async function renderAgentOptimization(content) {
         : esc(r.recommended.provider || "(기본값)") + " / " + esc(r.recommended.model || "(기본값)");
       return [
         '<input type="checkbox" class="optimize-apply-check" data-agent-id="' + r.agent_id +
-          '" data-payload="' + escAttr(JSON.stringify({
+          '" data-changed="' + (r.changed ? "1" : "0") + '" data-payload="' + escAttr(JSON.stringify({
             provider: r.recommended.provider,
             model: r.recommended.model,
             tuning_config: r.recommended.tuning_config,
@@ -5480,6 +5487,12 @@ async function renderAgentOptimization(content) {
       ];
     })) +
     "</section>";
+
+  document.getElementById("select-changed-optimize").onclick = () => {
+    Array.from(content.querySelectorAll(".optimize-apply-check")).forEach(chk => {
+      chk.checked = chk.dataset.changed === "1";
+    });
+  };
 
   document.getElementById("apply-selected-optimize").onclick = async () => {
     const checks = Array.from(content.querySelectorAll(".optimize-apply-check:checked"));
