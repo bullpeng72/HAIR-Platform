@@ -117,12 +117,14 @@ def describe_subject(
             SELECT a.task_id, a.resource_type, a.resource_id, t.role_name,
                    hp.name AS human_name,
                    COALESCE(ap.name, ap.role_name) AS agent_role_name,
-                   tm.name AS team_name
+                   tm.name AS team_name,
+                   pt.name AS pipeline_name
             FROM assignments a
             JOIN tasks t ON t.id = a.task_id
             LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
             LEFT JOIN agent_pool ap ON ap.id = a.resource_id AND a.resource_type = 'agent'
             LEFT JOIN teams tm ON tm.id = a.resource_id AND a.resource_type = 'team'
+            LEFT JOIN pipeline_templates pt ON pt.id = a.resource_id AND a.resource_type = 'pipeline'
             WHERE a.id = ?
             """,
             (subject_id,),
@@ -133,6 +135,7 @@ def describe_subject(
             "human": row["human_name"],
             "agent": row["agent_role_name"],
             "team": row["team_name"],
+            "pipeline": row["pipeline_name"],
         }
         return {
             "task_id": row["task_id"],
@@ -141,10 +144,16 @@ def describe_subject(
             "resource_name": resource_names.get(row["resource_type"]),
         }
     if subject_type == "deliverable":
+        # `content`/`content_type`(2026-10-28, 사용자 보고 "결재에서
+        # 승인을 요청하고 있으나, 해당 컨텐츠를 검토할 수 있는 UI가
+        # 없어") — 지금까지 결재자는 "누가 어느 업무에 낸 산출물인지"
+        # 만 알고, 실제 내용은 다른 탭(Task 협업 워크스페이스)을 또
+        # 열어야만 볼 수 있었다. 결재함 화면이 바로 보여줄 수 있게
+        # 내용 자체도 같이 내려준다.
         row = conn.execute(
             """
-            SELECT d.task_id, d.author_type, d.author_id, t.role_name,
-                   u.username AS human_username,
+            SELECT d.task_id, d.author_type, d.author_id, d.content, d.content_type,
+                   t.role_name, u.username AS human_username,
                    COALESCE(ap.name, ap.role_name) AS agent_role_name
             FROM deliverables d
             JOIN tasks t ON t.id = d.task_id
@@ -165,15 +174,27 @@ def describe_subject(
             "task_role_name": row["role_name"],
             "resource_type": row["author_type"],
             "resource_name": resource_names.get(row["author_type"]),
+            "content": row["content"],
+            "content_type": row["content_type"],
         }
     if subject_type == "pipeline_run_stage":
         # 사용자 요청(2026-10-18, "최소 HITL/HOTL" 파이프라인) — 결재함에
         # "어느 할 일의 몇 번째 단계(파이프라인 이름)"가 떠야 결재자가
         # 무엇을 보는지 알 수 있다(assignment/deliverable과 같은 원칙).
+        #
+        # `content`(2026-10-28, 사용자 보고 "결재에서 승인을 요청하고
+        # 있으나, 해당 컨텐츠를 검토할 수 있는 UI가 없어") — 이
+        # 단계의 실제 산출물은 `pipeline_run_stages.output`에 그대로
+        # 있는데 결재함은 그걸 전혀 안 보여줬다. `content_type`은
+        # 고정 "markdown"(파이프라인 엔진이 만드는 산출물은 LLM이
+        # 쓴 마크다운 텍스트이기 때문 — `_execute_stage_attempt()`가
+        # `deliverables.content_type`에 쓰는 'text'보다 실제 내용에
+        # 더 맞게 렌더링된다).
         row = conn.execute(
             """
             SELECT pr.task_id, t.role_name, pt.name AS pipeline_name,
-                   ps.name AS stage_name, ps.seq_order AS stage_seq_order
+                   ps.name AS stage_name, ps.seq_order AS stage_seq_order,
+                   prs.output
             FROM pipeline_run_stages prs
             JOIN pipeline_runs pr ON pr.id = prs.pipeline_run_id
             JOIN pipeline_templates pt ON pt.id = pr.pipeline_template_id
@@ -191,6 +212,8 @@ def describe_subject(
             "resource_type": "pipeline_run_stage",
             "resource_name": f"{row['pipeline_name']} — {row['stage_seq_order']}단계 "
             f"({row['stage_name']})",
+            "content": row["output"],
+            "content_type": "markdown",
         }
     return empty
 

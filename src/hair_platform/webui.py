@@ -1034,7 +1034,7 @@ async function withBusy(btn, busyLabel, fn) {
 }
 
 const LABELS = {
-  human: "사람", agent: "AI 에이전트", team: "팀",
+  human: "사람", agent: "AI 에이전트", team: "팀", pipeline: "파이프라인",
   brief: "업무 요청", assignment: "배정", deliverable: "결과물", human_pool: "사람 인력", agent_pool: "AI 에이전트",
   agent_execution_jobs: "AI 실행 작업",
   job: "생성 작업", job_item: "생성 항목", approval: "결재", user: "사용자",
@@ -1914,7 +1914,7 @@ async function renderConversations(content) {
     '<section class="card"><h2>대화</h2>' +
     '<ul class="muted help-list">' +
     '<li>로그인하면 바로 쓸 수 있는 대화 공간입니다 — 사람·Agent·Agent 그룹(Team)을 불러 대화하듯 업무를 처리하세요.</li>' +
-    '<li>대화가 무거워지면 "정식 업무 요청으로 전환" 버튼으로 기존 업무 요청(Brief) 흐름에 올릴 수 있습니다 — 가벼운 대화와 정식 절차가 공존합니다.</li>' +
+    '<li>대화와 업무 요청(Brief)은 서로 독립적인 두 처리 방식입니다 — 대화 내용을 업무 요청으로 쓰고 싶다면 업무 요청 작성란에 직접 옮겨 적으세요.</li>' +
     '</ul>' +
     '<form class="inline" id="new-conversation-form">' +
     '<input id="new-conversation-title" placeholder="새 대화 제목(선택)" style="flex:1">' +
@@ -2267,7 +2267,6 @@ async function renderConversationDetail(conversationId, containerId) {
     // 문제가 있었다(실사용 확인).
     '<button class="small" id="conv-save-model-btn">모델 설정 저장</button>' +
     '<label><input type="checkbox" id="conv-auto-reply"' + (conv.ai_auto_reply ? " checked" : "") + '> AI 자동응답</label>' +
-    '<button class="small" id="conv-promote-btn">정식 업무 요청으로 전환</button>' +
     '</div>' +
     '<p class="muted">AI 자동응답이 켜져 있으면 멘션 없는 메시지에도 매번 LLM 호출이 발생합니다(비용 발생). provider/model을 고른 뒤 "모델 설정 저장"을 눌러야 반영됩니다.</p>' +
     // 사용자 요청(2026-10-14, "대화창에 사용중인 모델이 명시되도록 UI를
@@ -2393,33 +2392,6 @@ async function renderConversationDetail(conversationId, containerId) {
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
-  document.getElementById("conv-promote-btn").addEventListener("click", async () => {
-    // 사용자 보고(2026-10-08, "'정식 업무 요청으로 전환'시 모든 대화
-    // 내용이 업무 요청 목록 '내용'으로 전달되고 있어, 이 방식을
-    // 개선해줘") — 원래는 대화 전체를 raw_text로 그대로 넘겨 Brief를
-    // **자동 생성**했다. 사람이 걸러낼 기회 없이 잡담·중복·주제 이탈
-    // 메시지까지 그대로 정식 업무 요청의 "내용"이 돼버리는 게 문제였다.
-    // "이걸 결과물로 제출"(Phase 3)과 같은 원칙으로 바꾼다 — 자동
-    // 생성 대신 기존 "업무 요청" 폼의 textarea에 미리 채워만 주고,
-    // 사람이 다듬은 뒤 그 폼의 기존 "제출" 버튼을 직접 눌러야 실제
-    // Brief가 된다(새 제출 경로를 만들지 않는다).
-    if (!messages.length) {
-      showMsg("global-msg", "전환할 메시지가 없습니다.", "error");
-      return;
-    }
-    const transcript = messages.map(m =>
-      (m.author_type === "agent" ? "AI" : "사용자") + ": " + m.content
-    ).join("\\n");
-    await selectTab("briefs");
-    const textarea = document.getElementById("brief-text");
-    if (textarea) {
-      textarea.value = transcript;
-      textarea.scrollIntoView({ behavior: "smooth", block: "center" });
-      textarea.focus();
-    }
-    showMsg("global-msg", "대화 내용을 업무 요청 작성란에 채웠습니다 — 내용을 다듬은 뒤 \\"제출\\"을 눌러주세요.", "ok");
-  });
-
   // 2026-10-14 — 참가자 검색-초대 전용 입력창을 제거했다(아래 메시지창의
   // "@" 자동완성이 완전히 같은 검색·초대를 포함한다, `setupMentionAutocomplete`
   // 호출부와 `_inviteAndTrackParticipant()` 참고).
@@ -2514,12 +2486,19 @@ async function _inviteAndTrackParticipant(conversationId, participants, item) {
       participant_id: item.id,
     });
   } catch (e) {
-    // 드롭다운이 갱신되기 전 같은 대상을 두 번 고르는 등 드문 경합은
-    // "이미 초대됨"으로 조용히 넘기고 멘션은 그대로 진행한다.
+    // 드롭다운이 갱신되기 전 같은 대상을 두 번 고르거나, 이번 세션에서
+    // 이미 초대한 대상을 다시 멘션하는 등 드문 경합은 "이미 초대됨"으로
+    // 조용히 넘기고 멘션만 그대로 진행한다 — 단, 이미 참가자이므로
+    // 아래 participants.push/li 추가는 하지 않고 바로 끝낸다(사용자
+    // 보고 2026-10-28, "참가자가 두 번 표기됨" — 예전엔 이 catch 분기도
+    // 그대로 아래로 흘러 push/appendChild해 참가자 목록에 같은 이름이
+    // 중복 표시됐다. 실제로는 서버에 중복 행이 생기지 않는다 — 이
+    // 화면의 로컬 state/DOM만 중복이었다).
     if (!String(e.message || "").includes("이미 초대")) {
       showMsg("global-msg", e.message, "error");
       throw e;
     }
+    return;
   }
   participants.push({
     participant_type: item.type,
@@ -3814,11 +3793,25 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
   // 후보 목록에 본인이 그대로 떠서 고를 수 있었다. 이미 초대된 참가자
   // (로컬 후보)와 아직 초대 안 된 조직 전체 검색 결과(원격 후보) 둘
   // 다에서 "나 자신"(사람 타입 + 내 user id)을 제외한다.
-  const localCandidates = participants
-    .filter(p => p.display_name)
-    .filter(p => !(p.participant_type === "human" && p.participant_id === ME.id))
-    .map(p => ({ name: p.display_name, type: p.participant_type, id: p.participant_id }));
-  if (!localCandidates.length && !opts.search) return;
+  // 사용자 보고(2026-10-28, "대화에서 한번만 호출하고 대화에 참여했는데
+  // 참가자에 두번 표기되고 있어") 근본원인 — `participants` 배열은
+  // `_inviteAndTrackParticipant()`가 초대 성공 시 바로 push해 최신
+  // 상태를 유지하는데, 이 함수는 그 배열을 한 번만 `.filter().map()`
+  // 해서 `localCandidates`라는 별도 배열을 만들어 썼다 — 즉 설정 시점
+  // 스냅샷이라 이후 초대된 참가자가 여기 반영되지 않았다. 그 결과
+  // 같은 대화에서 같은 Agent를 두 번째로 멘션하면(이미 초대된 상태인데도)
+  // 로컬 후보로 안 잡혀 "초대 필요"(원격) 쪽으로 다시 분류되고,
+  // 서버는 중복 초대를 거절하지만(참가자 테이블엔 중복 안 생김) 이
+  // 화면은 그 멘션을 "새 초대"로 착각해 참가자 목록에 같은 이름을
+  // 한 번 더 그려 넣었다. `participants` 배열에서 매번 다시 계산해
+  // 최신 상태를 반영한다.
+  function getLocalCandidates() {
+    return participants
+      .filter(p => p.display_name)
+      .filter(p => !(p.participant_type === "human" && p.participant_id === ME.id))
+      .map(p => ({ name: p.display_name, type: p.participant_type, id: p.participant_id }));
+  }
+  if (!getLocalCandidates().length && !opts.search) return;
 
   // 사용자 요청(2026-10-28, "대화에서 @로 호출시 너무 많은 멤버가
   // 노출되고있어 사람/AI/팀 카테고리 구분을 추가, ... 호출자를 각각
@@ -3951,6 +3944,7 @@ function setupMentionAutocomplete(inputEl, dropdownEl, participants, opts) {
     // 남아있는 동안만 계속 열어둔다.
     const { type: categoryType, rest } = parseCategoryFilter(query);
     const showHint = !categoryType && query.length === 0;
+    const localCandidates = getLocalCandidates();
     const localMatches = localCandidates
       .filter(c => !categoryType || c.type === categoryType)
       .filter(c => c.name.includes(rest));
@@ -4275,6 +4269,7 @@ async function renderTaskDetailPanel(task) {
   // 후보 매칭("인력 매칭/배정"과 공유)에 더해, 등록된 팀 전체를 한 할
   // 일에 배정 요청하는 선택지를 추가한다("팀 관리" 탭에서 미리 구성).
   let teamOptionsHtml = "";
+  let pipelineOptionsHtml = "";
   if (isSupervisor) {
     const teams = await api("GET", "/api/teams").catch(() => []);
     const activeTeams = teams.filter(t => t.is_active);
@@ -4284,6 +4279,18 @@ async function renderTaskDetailPanel(task) {
         activeTeams.map(t => '<option value="' + t.id + '">' + esc(t.name) + '</option>').join("") +
         '</select><button class="small" type="submit">이 팀에 배정 요청</button></form>'
       : '<p class="muted">등록된 활성 팀이 없습니다 — "팀 관리" 탭에서 먼저 만드세요.</p>';
+    // 사용자 요청(2026-10-29, "파이프라인을 assignments.resource_type에
+    // 추가") — 팀 배정과 같은 패턴으로, 파이프라인도 사람/Agent/Team처럼
+    // 결재를 거쳐 배정할 수 있다. 승인되면 그 즉시 실행이 시작된다
+    // (`app.py`의 `decide_approval()` 참고).
+    const pipelineTemplates = await api("GET", "/api/pipeline-templates").catch(() => []);
+    const activePipelines = pipelineTemplates.filter(p => p.is_active);
+    pipelineOptionsHtml = activePipelines.length
+      ? '<form class="inline" id="task-detail-pipeline-assign-form">' +
+        '<select id="task-detail-pipeline-select" required>' +
+        activePipelines.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join("") +
+        '</select><button class="small" type="submit">이 파이프라인에 배정 요청</button></form>'
+      : '<p class="muted">등록된 활성 파이프라인이 없습니다 — "파이프라인" 탭에서 먼저 만드세요.</p>';
   }
 
   // 실사용 리뷰로 발견한 갭(2026-10-07) — "다중 confirmed 허용" 이후
@@ -4294,7 +4301,8 @@ async function renderTaskDetailPanel(task) {
   // 바꿔 이게 보충 동작임을 분명히 한다.
   const matchAndTeamHtml = isSupervisor
     ? '<button class="small" id="task-detail-match-btn">후보 매칭하기</button><div id="task-detail-match"></div>' +
-      '<details><summary>팀에 배정 요청</summary>' + teamOptionsHtml + '</details>'
+      '<details><summary>팀에 배정 요청</summary>' + teamOptionsHtml + '</details>' +
+      '<details><summary>파이프라인에 배정 요청</summary>' + pipelineOptionsHtml + '</details>'
     : "";
   container.innerHTML =
     '<section class="card"><h4>할 일 #' + task.id + " — " + esc(task.role_name) + " 상세</h4>" +
@@ -4350,6 +4358,20 @@ async function renderTaskDetailPanel(task) {
             resource_type: "team", resource_id: teamId,
           });
           showMsg("global-msg", "팀 배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.", "ok");
+          renderTaskDetailPanel(task);
+        } catch (e) { showMsg("global-msg", e.message, "error"); }
+      });
+    }
+    const pipelineAssignForm = document.getElementById("task-detail-pipeline-assign-form");
+    if (pipelineAssignForm) {
+      pipelineAssignForm.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const pipelineId = Number(document.getElementById("task-detail-pipeline-select").value);
+        try {
+          await api("POST", "/api/tasks/" + task.id + "/assignments", {
+            resource_type: "pipeline", resource_id: pipelineId,
+          });
+          showMsg("global-msg", "파이프라인 배정 요청을 보냈습니다 — \\"결재\\" 탭에서 승인하면 바로 실행이 시작됩니다.", "ok");
           renderTaskDetailPanel(task);
         } catch (e) { showMsg("global-msg", e.message, "error"); }
       });
@@ -4511,14 +4533,16 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
 async function renderApprovals(content) {
   const isDecider = ["admin", "manager"].includes(ME.role);
   let html = "";
+  let inbox = [];
   if (isDecider) {
     html += '<ul class="muted help-list">' +
       '<li>배정 요청은 요청자의 상사 체인(조직도 "상사" 지정)을 따라 자동으로 단계가 만들어집니다 — 1단계가 처리돼야 2단계가 열립니다(다단계 결재).</li>' +
       '<li>상사가 지정 안 돼 있으면(예: 관리자 본인 요청) 특정 승인자 없이 1단계만 만들어져 admin/manager 누구나 처리할 수 있습니다.</li>' +
       '<li>본인이 요청한 건은 본인이 승인할 수 없습니다(자기 승인 방지) — "내 승인 대기함"에는 애초에 안 뜹니다.</li>' +
       '</ul>';
-    const inbox = await api("GET", qs("/api/approvals", { scope: "inbox" }));
-    html += '<section class="card"><h2>내 승인 대기함</h2>' + approvalTable(inbox, true) + "</section>";
+    inbox = await api("GET", qs("/api/approvals", { scope: "inbox" }));
+    html += '<section class="card"><h2>내 승인 대기함</h2>' + approvalTable(inbox, true) +
+      '<div id="approval-content-detail" style="margin-top:0.75rem"></div></section>';
   }
   const mine = await api("GET", qs("/api/approvals", { scope: "mine" }));
   html += '<section class="card"><h2>내가 요청한 건</h2>' +
@@ -4526,7 +4550,9 @@ async function renderApprovals(content) {
     '<li><b>승인</b>하면 배정 상태가 confirmed(확정)로 바뀌어 조직도·비용·성과 리뷰에 실제로 반영됩니다.</li>' +
     '<li><b>반려</b>하면 그 배정 요청은 거기서 끝나고(재사용 불가), 다시 배정하려면 "인력 매칭/배정"에서 새로 요청해야 합니다.</li>' +
     '</ul>' +
-    approvalTable(mine, false) + "</section>";
+    approvalTable(mine, false) +
+    (isDecider ? "" : '<div id="approval-content-detail" style="margin-top:0.75rem"></div>') +
+    "</section>";
   content.innerHTML = html;
   content.querySelectorAll("[data-decide]").forEach(btn => {
     btn.onclick = async () => {
@@ -4542,6 +4568,25 @@ async function renderApprovals(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  // "내용 보기" — 결재 대기함과 "내가 요청한 건" 둘 다 같은 id
+  // 네임스페이스(approvals.id)를 쓰므로 합친 조회맵 하나로 충분하다.
+  const contentById = {};
+  [...inbox, ...mine].forEach(a => { contentById[a.id] = a; });
+  const detailPanel = content.querySelector("#approval-content-detail");
+  content.querySelectorAll("[data-approval-content-toggle]").forEach(btn => {
+    btn.onclick = () => {
+      const a = contentById[Number(btn.dataset.approvalContentToggle)];
+      if (!a || !detailPanel) return;
+      detailPanel.innerHTML =
+        '<div class="card" style="background:var(--bg-alt,#f7f7f7)">' +
+        '<div class="actions" style="justify-content:space-between"><b>#' + a.id + " " +
+        esc(a.resource_name || label(a.subject_type)) + '</b>' +
+        '<button type="button" class="small" data-approval-content-close>닫기</button></div>' +
+        renderContent(a.content, a.content_type || "text") + "</div>";
+      detailPanel.querySelector("[data-approval-content-close]").onclick = () => { detailPanel.innerHTML = ""; };
+      detailPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+  });
 }
 
 // 사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나 에이전트명이
@@ -4551,8 +4596,16 @@ async function renderApprovals(content) {
 // 이제 `task_id`/`task_role_name`/`resource_type`/`resource_name`을
 // 같이 내려주므로(`approvals.describe_subject()`) 그걸 보여준다 —
 // 대상이 지워졌으면(task_id가 null) 원래 종류+ID로 안전하게 되돌아간다.
+// 사용자 보고(2026-10-28, "결재에서 승인을 요청하고 있으나, 해당
+// 컨텐츠를 검토할 수 있는 UI가 없어") — 지금까지 이 표는 "무엇을
+// 승인하는지"(업무/대상/단계)만 보여주고, 실제로 검토해야 할 내용
+// (deliverable/pipeline_run_stage의 산출물 텍스트)은 전혀 안
+// 보여줬다 — 결재자가 다른 탭을 또 열어 역추적해야 했다(그마저도
+// pipeline_run_stage는 볼 수 있는 다른 화면 자체가 없었다). "내용"
+// 열을 추가해 `a.content`가 있으면 보기 버튼을, 없으면(assignment
+// 등 애초에 리뷰할 본문이 없는 유형) "-"를 보여준다.
 function approvalTable(rows, withActions) {
-  const headers = ["ID", "업무", "대상", "단계", "상태"];
+  const headers = ["ID", "업무", "대상", "단계", "상태", "내용"];
   if (withActions) headers.push("동작");
   return table(headers, rows.map(a => {
     const taskCell = a.task_id != null
@@ -4561,7 +4614,10 @@ function approvalTable(rows, withActions) {
     const resourceCell = a.resource_name
       ? esc(label(a.subject_type)) + ": " + esc(label(a.resource_type)) + " " + esc(a.resource_name)
       : esc(label(a.subject_type));
-    const row = [a.id, taskCell, resourceCell, a.step, esc(label(a.status))];
+    const contentCell = a.content
+      ? '<button type="button" class="small" data-approval-content-toggle="' + a.id + '">내용 보기</button>'
+      : '<span class="muted">-</span>';
+    const row = [a.id, taskCell, resourceCell, a.step, esc(label(a.status)), contentCell];
     if (withActions) {
       row.push(a.status === "pending"
         ? '<div class="actions">' +
@@ -5856,10 +5912,11 @@ async function renderPoolRegistry(content) {
    패널에서 한다(팀 정의와 배정은 관심사가 다르다 — teams.py 참고). */
 
 async function renderTeams(content) {
-  const [teams, people, agents] = await Promise.all([
+  const [teams, people, agents, pipelineTemplates] = await Promise.all([
     api("GET", "/api/teams"),
     api("GET", "/api/human-pool"),
     api("GET", "/api/agent-pool"),
+    api("GET", "/api/pipeline-templates").catch(() => []),
   ]);
   const isAdmin = ME.role === "admin";
   const memberOptionsHtml =
@@ -5904,6 +5961,12 @@ async function renderTeams(content) {
       activeAgentMembers.map(a => '<option value="' + a.id + '"' +
         (t.default_manager_agent_id === a.id ? " selected" : "") + '>' + agentDisplayLabel(a) + " (#" + a.id + ")</option>").join("") +
       '</select></label>' +
+      '<label>연결 파이프라인 ' +
+      '<select data-default-pipeline>' +
+      '<option value="">(미지정 — @멘션 시 단발 실행)</option>' +
+      pipelineTemplates.map(p => '<option value="' + p.id + '"' +
+        (t.pipeline_template_id === p.id ? " selected" : "") + '>' + esc(p.name) + '</option>').join("") +
+      '</select></label>' +
       '<button class="small" type="submit">기본값 저장</button></form>';
   };
 
@@ -5936,9 +5999,28 @@ async function renderTeams(content) {
         '<p class="muted" style="margin:0.3rem 0 0">노드를 좌우로 드래그하면 순차 릴레이 순서가 바뀝니다(hierarchical에서는 순서가 의미 없어 드래그가 반영되지 않습니다). 노드의 "매니저로 지정" 버튼으로 매니저를 바꿀 수 있습니다. Ctrl+스크롤(모바일은 두 손가락)로도 확대/축소할 수 있습니다.</p>' +
         '</div>'
       : '<p class="muted">온보딩(active)된 Agent 멤버가 있어야 워크플로우를 미리 볼 수 있습니다.</p>';
+    // 사용자 요청(2026-10-29, "Team 온보딩 라이프사이클") — 상태 배지는
+    // agent_pool에서 쓰던 라벨을 그대로 재사용한다(LABELS에 이미 있음).
+    const statusBadgeClass = t.status === "active" ? "" : " gate-badge gate-warn";
+    const linkedTaskHtml = (t.task_id || t.brief_id)
+      ? '<p class="muted">연결된 업무: ' +
+        (t.task_id ? "Task #" + t.task_id : "") +
+        (t.task_id && t.brief_id ? ", " : "") +
+        (t.brief_id ? "Brief #" + t.brief_id : "") +
+        (t.completed_at ? " (미션 완료: " + esc(t.completed_at) + ")" : "") +
+        '</p>'
+      : "";
+    const lifecycleButtonsHtml =
+      (t.status === "pending_onboarding"
+        ? '<button class="small" data-onboard-team="' + t.id + '">온보딩 시작</button>'
+        : "") +
+      (t.status === "active" && (t.task_id || t.brief_id)
+        ? '<button class="small" data-complete-mission="' + t.id + '">미션 완료</button>'
+        : "");
     return '<section class="card" data-team-card="' + t.id + '">' +
-      '<h3>#' + t.id + " " + esc(t.name) + (t.is_active ? "" : ' <span class="gate-badge gate-warn">비활성</span>') + '</h3>' +
+      '<h3>#' + t.id + " " + esc(t.name) + ' <span class="gate-badge' + statusBadgeClass + '">' + esc(label(t.status)) + '</span></h3>' +
       (t.description ? '<p class="muted">' + esc(t.description) + '</p>' : "") +
+      linkedTaskHtml +
       humanStripHtml +
       canvasHtml +
       table(["타입", "멤버", "역할 라벨", "동작"], t.members.map(m => [
@@ -5951,6 +6033,7 @@ async function renderTeams(content) {
       '<button class="small" type="submit">멤버 추가</button></form>' +
       teamDefaultsFormHtml(t) +
       '<div class="actions" style="margin-top:0.5rem">' +
+      lifecycleButtonsHtml +
       '<button class="small" data-toggle-active="' + t.id + '" data-next-active="' + (t.is_active ? "0" : "1") + '">' +
       (t.is_active ? "비활성화" : "활성화") + '</button>' +
       (isAdmin ? '<button class="small danger" data-delete-team="' + t.id + '">팀 삭제</button>' : "") +
@@ -5966,20 +6049,27 @@ async function renderTeams(content) {
     '<li>그 워크스페이스의 "팀 Agent 실행" 버튼으로 이 팀의 온보딩된 Agent 멤버 전원을 실제 CrewAI Crew로 함께 실행할 수 있습니다(결과는 Agent별 결과물+결재 체인으로 그대로 쌓입니다).</li>' +
     '<li><b>기본 process/매니저</b>를 저장해두면 "팀 Agent 실행"에서 매번 새로 고르지 않아도 이 값이 기본으로 쓰입니다(그 자리에서 여전히 바꿀 수 있습니다) — 매니저는 hierarchical일 때만 쓰이고, 후보는 이 팀의 온보딩된 Agent 멤버로 제한됩니다.</li>' +
     '<li>Agent를 이 탭에서 바로 만들려면 "AI 에이전트 생성"에서 여러 할 일을 한 번에 골라 생성한 뒤 그 결과 화면의 "팀으로 묶기"를 쓰는 게 더 빠릅니다.</li>' +
+    '<li>Task ID/Brief ID를 지정해 만들면 "TF팀"(그 업무에 종속된 팀)이 됩니다 — 생성 즉시 "온보딩 대기" 상태로 시작해, "온보딩 시작"을 눌러야 @멘션/배정 후보에 노출됩니다. 비워두면 기존처럼 바로 쓸 수 있는 범용 팀이 됩니다.</li>' +
     '</ul>' +
     '<form class="inline" id="team-create-form">' +
     '<input id="team-name" placeholder="팀 이름" required>' +
     '<input id="team-description" placeholder="설명(선택)" style="flex:1;min-width:160px">' +
+    '<input id="team-task-id" type="number" min="1" step="1" placeholder="Task ID(선택 — TF팀)" style="width:170px">' +
+    '<input id="team-brief-id" type="number" min="1" step="1" placeholder="Brief ID(선택 — TF팀)" style="width:170px">' +
     '<button class="primary" type="submit">팀 등록</button></form>' +
     "</section>" +
     (teams.length ? teams.map(teamCardHtml).join("") : '<p class="muted">등록된 팀이 없습니다.</p>');
 
   document.getElementById("team-create-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    const taskIdVal = document.getElementById("team-task-id").value;
+    const briefIdVal = document.getElementById("team-brief-id").value;
     try {
       await api("POST", "/api/teams", {
         name: document.getElementById("team-name").value,
         description: document.getElementById("team-description").value,
+        task_id: taskIdVal ? Number(taskIdVal) : null,
+        brief_id: briefIdVal ? Number(briefIdVal) : null,
       });
       showMsg("global-msg", "팀을 등록했습니다.", "ok");
       refresh();
@@ -6010,10 +6100,12 @@ async function renderTeams(content) {
       const teamId = form.dataset.teamDefaultsForm;
       const processVal = form.querySelector("[data-default-process]").value;
       const managerVal = form.querySelector("[data-default-manager]").value;
+      const pipelineVal = form.querySelector("[data-default-pipeline]").value;
       try {
         await api("PATCH", "/api/teams/" + teamId, {
           default_process: processVal || null,
           default_manager_agent_id: managerVal ? Number(managerVal) : null,
+          pipeline_template_id: pipelineVal ? Number(pipelineVal) : null,
         });
         showMsg("global-msg", "팀 기본값을 저장했습니다.", "ok");
         refresh();
@@ -6039,6 +6131,27 @@ async function renderTeams(content) {
           is_active: btn.dataset.nextActive === "1",
         });
         showMsg("global-msg", "변경했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  content.querySelectorAll("[data-onboard-team]").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        await api("POST", "/api/teams/" + btn.dataset.onboardTeam + "/onboard");
+        showMsg("global-msg", "온보딩 완료 — 이제 @멘션/배정 후보에 노출됩니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  content.querySelectorAll("[data-complete-mission]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!window.confirm("이 팀의 미션을 완료로 표시합니다 — 이후 @멘션/배정 후보에서 제외됩니다. 계속할까요?")) return;
+      try {
+        await api("POST", "/api/teams/" + btn.dataset.completeMission + "/complete-mission");
+        showMsg("global-msg", "미션 완료로 표시했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
@@ -7648,7 +7761,7 @@ async function renderSearch(content) {
 
 /* ---------- 조직도 ---------- */
 
-const ORG_CHART_COLOR = { human: "#4a90d9", agent: "#8e5fd9", team: "#3fa34d" };
+const ORG_CHART_COLOR = { human: "#4a90d9", agent: "#8e5fd9", team: "#3fa34d", pipeline: "#d9824a" };
 
 // 사용자 요청(2026-10-13) — 조직도를 "매니저별 테이블 나열"에서 실제
 // 트리 다이어그램으로 바꾼다. org-chart API는 매니저 1명 + 그 매니저에게
@@ -7707,7 +7820,8 @@ async function renderOrgChart(content) {
     html += '<p class="muted">' +
       '<span style="color:' + ORG_CHART_COLOR.human + '">■</span> 사람 &nbsp;' +
       '<span style="color:' + ORG_CHART_COLOR.agent + '">■</span> AI 에이전트 &nbsp;' +
-      '<span style="color:' + ORG_CHART_COLOR.team + '">■</span> 팀' +
+      '<span style="color:' + ORG_CHART_COLOR.team + '">■</span> 팀 &nbsp;' +
+      '<span style="color:' + ORG_CHART_COLOR.pipeline + '">■</span> 파이프라인' +
       ' — 카드에 마우스를 올리면 배정 ID·할 일 ID가 보입니다.</p>';
   }
   for (const bucket of chart) {
@@ -8275,7 +8389,7 @@ const MANUAL_MARKDOWN = [
 '',
 '**6단계 — (선택) 정식 절차로 넘기기**',
 '',
-'대화가 무거워지거나 결재·Gate 채점이 필요해지면 대화 상단의 **"정식 업무 요청으로 전환"** 버튼으로 기존 업무 요청(Brief) 흐름(3절)에 올릴 수 있습니다 — 처음부터 다시 설명할 필요 없이 대화 맥락이 그대로 이어집니다.',
+'대화와 업무 요청(Brief)은 서로 독립적인 두 처리 방식입니다(철학 재정립, 2026-10-29) — 결재·Gate 채점이 필요해지면 대화 내용을 복사해 업무 요청 작성란(3절)에 직접 옮겨 적으세요.',
 '',
 '> 실수하기 쉬운 점: Agent/Team을 멘션했는데 반응이 없다면, 그 대상이 아직 **이 대화의 참가자가 아닐 가능성**이 가장 큽니다 — 자동완성 목록에서 골라 초대부터 된 상태인지 확인하세요(9절 "자주 겪는 문제" 참고).',
 '',
@@ -8349,7 +8463,7 @@ const MANUAL_MARKDOWN = [
 '4. 이 팀은 두 군데서 실행할 수 있습니다:',
 '   - 대화에서 **`@팀이름`** 멘션(2절) — 매니저가 있으면 위임형, 없으면 전원 실행 후 각자 결과를 메시지로 올립니다.',
 '   - 업무(Task)에 팀을 배정한 뒤 협업 워크스페이스의 **"팀 Agent 실행"** 버튼 — 결과가 Agent별 결과물+결재 체인으로 그 업무에 그대로 쌓입니다.',
-'5. 기본 제공 예시: **"자율 개발 크루"** 팀(매니저 1명 "개발 계획 수립가" + 개발자 10명 + UI 기획자, 총 12명)이 이미 등록돼 있어 바로 써볼 수 있습니다.',
+'5. 기본 제공 예시: **"자율 개발 크루"** 팀(요구사항 분석가·AA·DA·개발 계획 수립가(매니저)·개발자 4명·UI 기획자·코드 검증가·테스트 계획 수립가·QA 기능테스터·품질 관리자, 총 13명)이 이미 등록돼 있어 바로 써볼 수 있습니다. 이 팀은 "소프트웨어 개발 파이프라인"(6절)에 연결돼 있어, `@자율 개발 크루` 멘션이 단발 실행이 아니라 그 파이프라인(요구분석부터 품질 관리까지 7단계, 코드 검증·QA·품질 관리 단계는 Gate 기준 자동 재시도/승인 대기)을 그대로 탑니다 — 각 팀원의 역할 라벨에 몇 단계를 맡는지 표시돼 있습니다. 연결 안 된 다른 팀은 기존처럼 한 번에 실행됩니다.',
 '',
 '### 방법 B — Crew 빌더(즉석 1회성, 재사용 등록 없이)',
 '',
@@ -8396,7 +8510,7 @@ const MANUAL_MARKDOWN = [
 '|---|---|---|',
 '| 단독(single) | Agent 1명이 혼자 처리 | 요구사항 분석가 1명 |',
 '| 순차 릴레이(sequential_relay) | N명이 순서대로 앞 사람 결과를 이어받음 | AA → DA |',
-'| 병행 위임(parallel_delegated) | 리드 1명이 코워커들에게 실제로 과업을 쪼개 위임 | 개발 계획 수립가 → 개발자 10명 |',
+'| 병행 위임(parallel_delegated) | 리드 1명이 코워커들에게 실제로 과업을 쪼개 위임 | 개발 계획 수립가 → 개발자 4명 |',
 '',
 '단계마다 **Gate A-G 통과 기준·최대 재시도 횟수·"사람 승인 필요" 여부**를 정합니다.',
 '승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어가고(최소 HITL), 기준 미달이면 "어떤 Gate가 왜 부족한지" 피드백을 반영해 자동 재시도합니다.',
@@ -8411,13 +8525,14 @@ const MANUAL_MARKDOWN = [
 '| 1 | 요구분석/계획 확정 | 단독 | 요구사항 분석가 | **필요**(여기서만 사람이 1회 개입) |',
 '| 2 | 설계 | 순차 릴레이 | AA → DA | 불필요 |',
 '| 3 | 개발 계획 수립 | 단독 | 개발 계획 수립가 | 불필요 |',
-'| 4 | 구현 | 병행 위임 | 개발 계획 수립가(리드) → 개발자 10명+UI 기획자 | 불필요 |',
+'| 4 | 구현 | 병행 위임 | 개발 계획 수립가(리드) → 개발자 4명+UI 기획자 | 불필요 |',
 '| 5 | 코드 검증 | 단독 | 코드 검증가 | 불필요 |',
 '| 6 | QA 기능테스트 | 순차 릴레이 | 테스트 계획 수립가 → QA 기능테스터 | 불필요 |',
 '| 7 | 품질 관리 최종 판정 | 단독 | 품질 관리자 | 불필요(반복 실패 시에만 자동 에스컬레이션) |',
 '',
-'실행은 **업무(Task)의 협업 워크스페이스**에서 이 템플릿을 고르고 "파이프라인 실행(비용 발생)"을 누르면 시작됩니다(3절 4단계).',
-'진행 상황은 같은 화면에서 단계별 배지(대기/진행중/통과/재시도N/승인대기/반려)로 실시간 확인합니다.',
+'5·6·7단계(코드 검증/QA 기능테스트/품질 관리 최종 판정)는 Gate 통과 기준(min_gate_pass_ratio)이 0.5로 설정돼 있어 — 측정된 Gate 절반 이상을 통과해야 다음 단계로 넘어가고, 미달이면 사유를 반영해 자동 재시도(최대 재시도 소진 시 사람 승인으로 에스컬레이션)합니다. 나머지 단계는 0(Gate는 측정·기록만, 자동 통과)입니다.',
+'실행은 **업무(Task)의 협업 워크스페이스**에서 이 템플릿을 고르고 "파이프라인 실행(비용 발생)"을 누르면 시작되거나, 이 파이프라인에 연결된 팀(4절 참고 — 기본 제공 "자율 개발 크루")을 대화에서 `@팀이름`으로 멘션해도 똑같이 시작됩니다(3절 4단계).',
+'진행 상황은 같은 화면에서 단계별 배지(대기/진행중/통과/재시도N/승인대기/반려)로 실시간 확인합니다 — 대화에서 시작한 경우 같은 정보가 진행 메시지로 대화에도 올라옵니다.',
 '',
 '### 새 파이프라인 만들기(admin/manager 전용, "파이프라인 관리" 탭)',
 '',

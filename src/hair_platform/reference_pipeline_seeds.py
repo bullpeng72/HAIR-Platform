@@ -443,21 +443,45 @@ DEV_CREW_TEAM_NAME = "자율 개발 크루"
 # `AGENT_SPECS`의 같은 날짜 주석 참고)에서 아무 기능적 차이가 없었다 —
 # 영역별 1명(백엔드/프론트엔드/데이터·인프라/풀스택)으로 줄인다.
 DEV_CREW_TEAM_DESCRIPTION = (
-    "기획서 → 요구사항/스펙/설계 산출물을 받아 모듈을 쪼개고 4명의 개발자"
-    "(+UI 기획자)에게 자율적으로 위임해 개발을 완료하는 크루. 실행 시 "
-    "Crew 실행(또는 팀 배정 후 'Crew 실행') 화면에서 process=hierarchical, "
-    "매니저=이 팀의 '개발 계획 수립가'로 지정하면 매니저는 조율·위임만 "
-    "하고 나머지 5명이 실제로 모듈을 구현한다(allow_delegation이 전원 "
-    "기본 적용돼 서로 위임·질의도 가능 — 매니저가 같은 코워커에게 "
-    "하위 과업을 여러 번 나눠 위임할 수도 있다)."
+    "요구분석 → 설계 → 개발 계획 수립 → 구현 → 코드 검증 → QA 기능테스트 → "
+    '품질 관리 최종 판정까지, "소프트웨어 개발 파이프라인"(`teams.'
+    "pipeline_template_id`로 연결)이 Gate 기준 자동 재시도·승인 "
+    "에스컬레이션까지 갖춰 실제 품질을 보장하며 수행하는 크루(사용자 "
+    '요청, 2026-10-28, "파이프라인의 에이전트 구성과 흐름을 참조해 '
+    "구성과 업무 흐름을 실제 개발 품질을 보장하며 수행될 수 있도록 "
+    '재구성"). 대화에서 `@자율 개발 크루`로 멘션하면 이 파이프라인이 '
+    "그대로 실행된다(`conversations.run_team_mention_job()` 참고) — "
+    "아래 멤버 구성은 그 7단계 전체에 참여하는 13개 역할이다. "
+    "Crew 빌더/팀 Agent 실행 화면에서 수동으로 hierarchical Crew를 "
+    "돌리는 기존 방식도 하위 호환으로 계속 쓸 수 있다(그땐 13명 전원이 "
+    "한 번에 참여하는 단일 Crew가 된다 — 단계별 Gate 검증은 파이프라인 "
+    "경로에만 있다)."
 )
+# 사용자 요청(2026-10-28, "파이프라인의 에이전트 구성과 흐름을 참조해
+# 팀 관리의 '#3 자율 개발 크루'의 구성과 업무 흐름을... 재구성") —
+# 기존엔 "구현" 단계 6명(매니저 1 + 개발자 4 + UI 기획자)만 팀원으로
+# 등록돼 있어, "팀 관리" 화면을 봐도 이 팀이 요구분석·설계·검증·QA·
+# 품질 관리까지 포함한 전체 파이프라인을 수행한다는 사실이 전혀
+# 안 보였다. `DEV_PIPELINE_STAGES`가 참조하는 13개 역할 전부를
+# 등록하고, role_label에 어느 단계인지 명시해 "팀 관리" 화면만 봐도
+# 전체 업무 흐름이 보이게 한다(순서는 파이프라인 단계 순서와 동일).
 DEV_CREW_TEAM_MEMBER_SPECS: list[tuple[str, str]] = [
-    ("개발 계획 수립가", "매니저(hierarchical 실행 시 지정)"),
-    ("백엔드 개발자", "백엔드"),
-    ("프론트엔드 개발자", "프론트엔드"),
-    ("데이터/인프라 개발자", "데이터/인프라"),
-    ("풀스택 개발자", "풀스택(유동 배치)"),
-    ("UI 기획자", "UI/UX"),
+    ("요구사항 분석가", "1단계: 요구분석/계획 확정(사람 승인 1회)"),
+    ("AA", "2단계: 설계(아키텍처)"),
+    ("DA", "2단계: 설계(데이터 모델)"),
+    (
+        "개발 계획 수립가",
+        "3단계: 개발 계획 수립 / 4단계: 매니저(hierarchical 위임 리드)",
+    ),
+    ("백엔드 개발자", "4단계: 구현(백엔드)"),
+    ("프론트엔드 개발자", "4단계: 구현(프론트엔드)"),
+    ("데이터/인프라 개발자", "4단계: 구현(데이터/인프라)"),
+    ("풀스택 개발자", "4단계: 구현(풀스택, 유동 배치)"),
+    ("UI 기획자", "4단계: 구현(UI/UX)"),
+    ("코드 검증가", "5단계: 코드 검증(Gate 0.5)"),
+    ("테스트 계획 수립가", "6단계: QA 기능테스트(테스트 설계)"),
+    ("QA 기능테스터", "6단계: QA 기능테스트(실행, Gate 0.5)"),
+    ("품질 관리자", "7단계: 품질 관리 최종 판정(Gate 0.5)"),
 ]
 
 
@@ -528,8 +552,12 @@ def seed(conn: sqlite3.Connection) -> None:
         "SELECT id FROM teams WHERE name = ?", (DEV_CREW_TEAM_NAME,)
     ).fetchone()
     if team_row is None:
+        # `status`도 명시한다(2026-10-29) — 안 그러면 `teams.status` 컬럼의
+        # 기본값(`'pending_onboarding'`, TF팀용)과 여기 `is_active=1`이
+        # 서로 어긋난다. 이건 재사용 가능한 범용 팀이라 바로 `active`.
         cur = conn.execute(
-            "INSERT INTO teams (name, description, is_active) VALUES (?, ?, 1)",
+            "INSERT INTO teams (name, description, is_active, status) "
+            "VALUES (?, ?, 1, 'active')",
             (DEV_CREW_TEAM_NAME, DEV_CREW_TEAM_DESCRIPTION),
         )
         team_id = cur.lastrowid
@@ -561,11 +589,20 @@ def seed(conn: sqlite3.Connection) -> None:
 # 반영해 1단계만 `requires_human_approval=1`이다. "자율 개발 크루" 팀은
 # 그대로 두고(하위 호환, 수동 Crew 실행용) 이 파이프라인이 정식 개발
 # 진행 경로로 추가된다 — 새 Agent는 전혀 만들지 않고 기존 22개 역할 중
-# 10개를 그대로 재사용한다.
+# 13개를 그대로 재사용한다(2026-10-28 현행화 — "구현" 단계가 2026-10-26
+# "자율 개발 크루" 12명→6명 정리에 맞춰 개발자 4명+UI기획자로 줄어든
+# 뒤의 실제 참조 역할 수. `db.py`의 `_sync_dev_pipeline_implementation_
+# stage_agents()`가 이미 한 번 심어진 DB도 같이 맞춘다).
+# `db.py`의 `_DEV_PIPELINE_GATED_STAGE_NAMES`와 같은 값을 유지해야
+# 한다(신규 DB는 여기서, 기존 DB는 그쪽 마이그레이션에서 적용 —
+# `db.py`가 이 모듈을 import하므로 반대 방향 import는 순환 참조라
+# 상수를 공유하지 못하고 중복 정의한다).
+_DEV_PIPELINE_GATED_STAGE_NAMES = ("코드 검증", "QA 기능테스트", "품질 관리 최종 판정")
+
 DEV_PIPELINE_NAME = "소프트웨어 개발 파이프라인"
 DEV_PIPELINE_DESCRIPTION = (
     "기획서 → 요구분석(계획 확정, 사람 승인 1회) → 설계(AA→DA) → 개발 계획 수립 → "
-    "구현(매니저가 10명+UI기획자에게 실제 위임) → 코드 검증 → QA 기능테스트 → "
+    "구현(매니저가 개발자 4명+UI기획자에게 실제 위임) → 코드 검증 → QA 기능테스트 → "
     "품질 관리 최종 판정까지, Gate A-G 기준으로 자동 반복하며 진행하는 정식 "
     "개발 파이프라인(BMAD-METHOD 대응 — 계획 확정 시점에만 사람이 개입한다)."
 )
@@ -678,7 +715,7 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
     하나도 없는 빈 DB에서도 호출되므로 `audit.record()`(actor_id FK 필요)
     없이 직접 INSERT한다.
 
-    **`min_gate_pass_ratio`를 전부 0.0(기본값, 미지정)으로 둔 이유** —
+    **`min_gate_pass_ratio`를 대부분 0.0(기본값, 미지정)으로 둔 이유** —
     실측(2026-10-18, 실제 "자율 개발 크루" 실행)으로 확인한 바 Gate C/D/G는
     이 플랫폼의 단순한 휴리스틱 채점 특성상 구조적으로 자주 fail하거나
     not_measured로 나온다(`agent_evaluation.py` docstring의 기존 한계
@@ -686,7 +723,14 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
     매 단계가 에스컬레이션돼 "최소 HITL"의 의도와 반대로 동작한다 —
     Gate 측정·기록 자체는 전 단계에서 그대로 하되(감사·가시성 목적),
     실제로 진행을 막을지는 관리자가 빌더 UI에서 단계별로 직접 올리도록
-    남겨둔다."""
+    남겨둔다.
+
+    **예외 — "코드 검증"/"QA 기능테스트"/"품질 관리 최종 판정"은
+    0.5**(사용자 요청, 2026-10-28, "'자율 개발 크루'의 경우 파이프라인을
+    참조해 실제 개발 품질을 보장하며 수행될 수 있도록 재구성") — 이
+    3단계는 이 파이프라인이 "실제 품질을 보장"한다고 말할 수 있으려면
+    적어도 중간 강도로는 막아야 한다는 사용자 결정. 나머지 단계(요구
+    분석/설계/개발 계획 수립)는 위 이유 그대로 0.0 유지."""
     existing = conn.execute(
         "SELECT id FROM pipeline_templates WHERE name = ?", (DEV_PIPELINE_NAME,)
     ).fetchone()
@@ -706,10 +750,11 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
         is_primary,
         agents,
     ) in enumerate(DEV_PIPELINE_STAGES, start=1):
+        gate_ratio = 0.5 if name in _DEV_PIPELINE_GATED_STAGE_NAMES else 0.0
         cur = conn.execute(
             "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
-            "lead_role_name, instructions, requires_human_approval, is_primary_deliverable) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "lead_role_name, instructions, requires_human_approval, is_primary_deliverable, "
+            "min_gate_pass_ratio) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 template_id,
                 seq,
@@ -719,6 +764,7 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
                 instructions,
                 1 if requires_approval else 0,
                 1 if is_primary else 0,
+                gate_ratio,
             ),
         )
         stage_id = cur.lastrowid
@@ -733,3 +779,13 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
                 "instructions) VALUES (?, ?, ?, ?)",
                 (stage_id, role_name, agent_seq, agent_instructions),
             )
+    # "자율 개발 크루" 팀을 이 템플릿에 연결한다 — `@팀이름` 멘션이
+    # 이 파이프라인을 타게 하는 스위치(`conversations.run_team_
+    # mention_job()` 참고). `teams`가 아직 안 만들어졌을 수도 있는
+    # 호출 순서(둘 다 `seed()`가 호출하지만 순서를 서로 가정하지
+    # 않기 위해 방어적으로 존재 확인).
+    conn.execute(
+        "UPDATE teams SET pipeline_template_id = ? "
+        "WHERE name = ? AND pipeline_template_id IS NULL",
+        (template_id, DEV_CREW_TEAM_NAME),
+    )

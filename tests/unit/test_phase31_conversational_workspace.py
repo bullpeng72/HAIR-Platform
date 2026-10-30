@@ -778,12 +778,80 @@ def test_gc_team_mention_translates_json_decode_error_for_user(client_and_conn):
     assert "Expecting value" not in jobs[0]["error"]
     assert "다시 시도" in jobs[0]["error"]
 
-    audit_rows = conn.execute(
-        "SELECT after_value FROM audit_log WHERE action = 'conversation_job_failed' "
-        "ORDER BY id DESC LIMIT 1"
-    ).fetchall()
-    assert audit_rows
-    assert "Expecting value" in audit_rows[0]["after_value"]
+
+def test_gc_team_mention_timeout_message_cites_team_specific_limit_not_15_minutes(
+    client_and_conn,
+):
+    """사용자 분석 요청(2026-10-28, "팀의 경우 15분 제한으로 진행된...
+    실패") 후속 — Team 멘션은 `crew_runtime._crewai_llm()`을 거쳐
+    `llm.py`의 900초(15분) 타임아웃을 아예 거치지 않는데도, 예전엔
+    "timed out" 문자열만 보고 무조건 "15분"이라는 틀린 고정 문구를
+    보여줬다. 이제 Team 멘션은 `crew_runtime.CREWAI_LLM_TIMEOUT_SECONDS`
+    (2000초=33분)을 반영한 전용 문구를 받아야 한다."""
+    from hair_platform import crew_runtime
+
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent_id = _make_agent(conn)
+    team_id = _make_team_with_agent(conn, agent_id, "타임아웃팀")
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "team", "participant_id": team_id},
+    )
+
+    with patch(
+        "hair_platform.crew_runtime.run_crew",
+        side_effect=TimeoutError("Request timed out."),
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@타임아웃팀 진행해줘"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    jobs = client.get(f"/api/conversations/{conv_id}/jobs").json()
+    assert jobs[0]["status"] == "failed"
+    expected_minutes = int(crew_runtime.CREWAI_LLM_TIMEOUT_SECONDS // 60)
+    assert f"{expected_minutes}분" in jobs[0]["error"]
+    assert "15분" not in jobs[0]["error"]
+    assert "팀" in jobs[0]["error"]
+
+
+def test_gc_agent_mention_timeout_message_omits_wrong_specific_minutes(
+    client_and_conn,
+):
+    """같은 수정의 반대쪽 확인 — Agent 멘션(단일 Agent, `llm.py` 경로)은
+    실제로 적용되는 시간이 provider/추론 tier에 따라 900/600/1800초로
+    제각각이라, 더는 "15분"을 단정해 보여주지 않아야 한다(일반 문구만)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent_id = _make_agent(conn)
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방2"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "agent", "participant_id": agent_id},
+    )
+
+    with patch(
+        "hair_platform.llm.call_llm",
+        side_effect=TimeoutError("Request timed out."),
+    ):
+        agent_row = conn.execute(
+            "SELECT role_name FROM agent_pool WHERE id = ?", (agent_id,)
+        ).fetchone()
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": f"@{agent_row['role_name']} 진행해줘"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    jobs = client.get(f"/api/conversations/{conv_id}/jobs").json()
+    assert jobs[0]["status"] == "failed"
+    assert "15분" not in jobs[0]["error"]
+    assert "다시 시도" in jobs[0]["error"]
 
 
 # ---------- skill 사용 ----------

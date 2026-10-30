@@ -523,6 +523,126 @@ def test_gc153_delete_task_cascades_deliverables_after_assignment_superseded(
     )
 
 
+def test_gc_delete_brief_cascades_pipeline_runs_and_stages(client_and_conn):
+    """사용자 보고(2026-10-28, "업무 요청 목록에서 삭제 버튼을 클릭해도
+    삭제가 안됨" — 대화 `@자율 개발 크루` 멘션이 자동 생성한 브리프를
+    지우려다 실패) 재현/수정 — 이 모듈은 `pipeline_runtime.py`
+    (2026-10-18 도입)의 `pipeline_runs`/`pipeline_run_stages`를 몰랐다.
+    `pipeline_runs.task_id`가 `tasks(id)`를, `pipeline_run_stages.
+    deliverable_id`가 `deliverables(id)`를 참조하는데 둘 다 안 지우고
+    brief를 지우면 `sqlite3.IntegrityError`(FK 위반)가 그대로 사용자
+    에게 노출됐다 — test_gc153과 같은 종류의 갭을 설계 원칙 1번대로
+    메운다."""
+    from unittest.mock import patch
+
+    from hair_platform import pipeline_runtime
+
+    client, conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    task_name = "파이프라인 연계 업무"
+    resp = client.post("/api/briefs", json={"raw_text": task_name})
+    brief_id = resp.json()["id"]
+    resp = client.post(
+        f"/api/briefs/{brief_id}/tasks",
+        json={"tasks": [{"role_name": "요구사항 분석가", "required_skills": []}]},
+    )
+    task_id = resp.json()["tasks"][0]["id"]
+
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    template_id = conn.execute(
+        "SELECT id FROM pipeline_templates WHERE name = '소프트웨어 개발 파이프라인'"
+    ).fetchone()["id"]
+
+    def _fake_run_crew(
+        conn,
+        agent_ids,
+        task_descriptions,
+        actor_id,
+        process="sequential",
+        provider=None,
+        model=None,
+        manager_agent_id=None,
+        expected_outputs=None,
+    ):
+        return {
+            "final_output": "x",
+            "agents": [
+                {"agent_id": a, "role_name": "r", "name": None, "output": "o"}
+                for a in agent_ids
+            ],
+            "gate_scores": {"A": {"score": 0.9, "passed": True}},
+            "tcr": 90.0,
+            "delegations": [],
+            "resolved_provider": "openai",
+            "resolved_model": "gpt-4o-mini",
+        }
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_fake_run_crew):
+        run_id = pipeline_runtime.start_pipeline_run(
+            conn, admin_id, template_id, task_id
+        )
+        pipeline_runtime.run_pipeline_stage_job(conn, run_id, admin_id)
+
+    run = conn.execute(
+        "SELECT status FROM pipeline_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    # 1단계는 사람 승인 필수라 Gate 통과해도 여기서 멈춘다 — deliverable
+    # 과 pipeline_run_stages가 둘 다 실제로 남아있는 상태에서 지워야
+    # 재현/검증 의미가 있다.
+    assert run["status"] == "paused_for_approval"
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM pipeline_run_stages WHERE pipeline_run_id = ?",
+            (run_id,),
+        ).fetchone()["c"]
+        == 1
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM deliverables WHERE task_id = ?", (task_id,)
+        ).fetchone()["c"]
+        == 1
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM approvals WHERE subject_type = 'pipeline_run_stage'"
+        ).fetchone()["c"]
+        == 1
+    )
+
+    data_admin.delete_brief(conn, admin_id, brief_id)  # IntegrityError면 여기서 실패
+
+    assert (
+        conn.execute("SELECT * FROM briefs WHERE id = ?", (brief_id,)).fetchone()
+        is None
+    )
+    for table, column in [
+        ("pipeline_runs", "task_id"),
+        ("deliverables", "task_id"),
+    ]:
+        assert (
+            conn.execute(
+                f"SELECT COUNT(*) AS c FROM {table} WHERE {column} = ?", (task_id,)
+            ).fetchone()["c"]
+            == 0
+        )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM pipeline_run_stages WHERE pipeline_run_id = ?",
+            (run_id,),
+        ).fetchone()["c"]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM approvals WHERE subject_type = 'pipeline_run_stage'"
+        ).fetchone()["c"]
+        == 0
+    )
+
+
 # ---------- 사용자 요청(2026-10-27, "pip 설치나 패키지 배포시 에이전트와
 # 도구/스킬 정보는 포함하고, 나머지 다른 정보들은 초기화 상태로 배포되도록")
 # — reset_to_factory_state(). ----------

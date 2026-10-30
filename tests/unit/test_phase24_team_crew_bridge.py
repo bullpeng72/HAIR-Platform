@@ -791,10 +791,14 @@ def test_update_team_defaults_requires_admin_or_manager_and_validates(client_and
         },
     )
     assert resp.status_code == 200, resp.text
+    # `pipeline_template_id`(2026-10-29, "TF팀을 teams의 확장으로")가
+    # 응답에 추가됐다 — 이 테스트는 그 전에는 없던 필드라 안 건드렸으면
+    # None이어야 한다.
     assert resp.json() == {
         "id": team_id,
         "default_process": "hierarchical",
         "default_manager_agent_id": manager_agent,
+        "pipeline_template_id": None,
     }
 
     resp = client.get(f"/api/teams/{team_id}")

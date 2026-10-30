@@ -48,6 +48,7 @@ import os
 import sqlite3
 from collections.abc import Callable
 from contextlib import ExitStack
+from typing import Any
 
 from hair_platform import (
     agent_evaluation,
@@ -235,6 +236,25 @@ def _reset_crewai_local_task_output_storage() -> None:
         pass
 
 
+# 사용자 보고(2026-10-28, "자율 개발 크루" 실행이 "시간 제한(15분)을
+# 넘겨 중단됐습니다"로 실패) 분석 후 조치 — 이 함수가 만드는
+# `crewai.LLM`에는 지금까지 `timeout`을 전혀 지정하지 않았다. `llm.py`
+# 의 단발 호출 경로(900초/1800초/600초, 과거 실측 장애를 거쳐 튜닝된
+# 값)와 달리 이 경로는 litellm/provider SDK의 미지의 내부 기본값에
+# 그대로 노출돼 있었다 — 정작 사용자에게 뜬 "15분" 문구는
+# `_describe_job_failure()`가 "timed out" 문자열만 보고 값과 무관하게
+# 붙이는 고정 문구였을 뿐, 실제로 900초가 적용된 적은 없다(별도로
+# `conversations.py`의 해당 메시지도 바로잡는다).
+#
+# Team 실행(특히 hierarchical)은 매니저가 여러 코워커의 위임 결과를
+# 받아 하나의 산출물로 종합하는 호출을 포함해 입출력이 단일 Agent
+# 호출보다 크다 — 사용자 결정으로 "추론 tier(1800초)보다 높게"
+# 잡는다. 너무 높이면 Gate 재시도가 겹칠 때 프런트 폴링 포기 시한
+# (40분)을 넘길 위험이 있어, 그 한도 안에 한 번의 재시도까지 들어오는
+# 수준(2000초)으로 둔다.
+CREWAI_LLM_TIMEOUT_SECONDS = 2000.0
+
+
 def _crewai_llm(provider: str, model: str, temperature: float | None = None):
     from crewai import LLM  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
 
@@ -243,7 +263,9 @@ def _crewai_llm(provider: str, model: str, temperature: float | None = None):
     # Agent 전용 LLM 인스턴스를 새로 만든다(없으면 호출자가 Crew 전체가
     # 공유하는 기존 LLM 인스턴스를 그대로 쓴다 — 매번 새로 안 만들어도
     # 되는 경우까지 쪼갤 이유가 없다).
-    kwargs = {} if temperature is None else {"temperature": temperature}
+    kwargs: dict[str, Any] = {"timeout": CREWAI_LLM_TIMEOUT_SECONDS}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
     if provider == "ollama":
         base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         return LLM(model=f"ollama/{model}", base_url=base_url, **kwargs)

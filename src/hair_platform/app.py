@@ -980,11 +980,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
                    a.team_leader_id,
                    hp.name AS human_name,
                    COALESCE(ap.name, ap.role_name) AS agent_role_name,
-                   t.name AS team_name
+                   t.name AS team_name,
+                   pt.name AS pipeline_name
             FROM assignments a
             LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
             LEFT JOIN agent_pool ap ON ap.id = a.resource_id AND a.resource_type = 'agent'
             LEFT JOIN teams t ON t.id = a.resource_id AND a.resource_type = 'team'
+            LEFT JOIN pipeline_templates pt ON pt.id = a.resource_id AND a.resource_type = 'pipeline'
             WHERE a.task_id = ?
             ORDER BY a.id DESC
             """,
@@ -994,6 +996,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "human": lambda row: row["human_name"],
             "agent": lambda row: row["agent_role_name"],
             "team": lambda row: row["team_name"],
+            "pipeline": lambda row: row["pipeline_name"],
         }
         return [
             {
@@ -3150,11 +3153,60 @@ def create_app(db_path: str | None = None) -> FastAPI:
     ):
         try:
             team_id = teams.create_team(
-                conn, user["id"], payload.name, payload.description
+                conn,
+                user["id"],
+                payload.name,
+                payload.description,
+                task_id=payload.task_id,
+                brief_id=payload.brief_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": team_id, "name": payload.name}
+
+    @app.post("/api/teams/{team_id}/onboard")
+    def onboard_team_endpoint(
+        team_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-10-29, "Team 온보딩 라이프사이클") —
+        `pending_onboarding` 상태의 TF팀을 실제로 @멘션/배정 후보에
+        노출시킨다(Buzz 비교 분석의 "명시적 권한 부여" 원칙)."""
+        try:
+            return teams.onboard_team(conn, user["id"], team_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="팀을 찾을 수 없습니다"
+            ) from exc
+
+    @app.post("/api/teams/{team_id}/deprecate")
+    def deprecate_team_endpoint(
+        team_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            return teams.deprecate_team(conn, user["id"], team_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="팀을 찾을 수 없습니다"
+            ) from exc
+
+    @app.post("/api/teams/{team_id}/complete-mission")
+    def complete_team_mission_endpoint(
+        team_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            return teams.complete_team_mission(conn, user["id"], team_id)
+        except ValueError as exc:
+            if str(exc) == "team_not_found":
+                raise HTTPException(
+                    status_code=404, detail="팀을 찾을 수 없습니다"
+                ) from exc
+            detail = {
+                "team_not_active": "활성 상태인 팀만 미션 완료로 표시할 수 있습니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from exc
 
     @app.patch("/api/teams/{team_id}/active")
     def set_team_active_endpoint(
@@ -3190,6 +3242,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 ) from exc
             detail = {
                 "manager_must_be_active_agent_member_of_team": "지정한 매니저가 이 팀의 온보딩(active)된 Agent 멤버가 아닙니다",
+                "pipeline_template_not_found": "파이프라인 템플릿을 찾을 수 없습니다",
+                "pipeline_template_inactive": "비활성화된 파이프라인 템플릿입니다",
             }.get(str(exc), str(exc))
             raise HTTPException(status_code=400, detail=detail) from exc
         return {"id": team_id, **saved}
@@ -3202,6 +3256,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
         try:
             teams.delete_team(conn, user["id"], team_id)
         except ValueError as exc:
+            if str(exc) == "confirmed_assignment_exists":
+                raise HTTPException(
+                    status_code=409, detail="확정된 배정이 있어 삭제할 수 없습니다"
+                ) from exc
             raise HTTPException(
                 status_code=404, detail="팀을 찾을 수 없습니다"
             ) from exc
@@ -3957,16 +4015,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
         조직도 위에"라는 핵심 가치와 어긋났다 — Agent는 고용관계상 상사가 없으므로
         그 업무를 실제로 요청·소유한 사람(`assignments.requested_by`)을 관리자로
         귀속시킨다.
+
+        **정정(2026-10-29)**: `team`/`pipeline` 배정도 지금까지 `teams`/
+        `pipeline_templates`를 JOIN하지 않아 agent 분기로 떨어져
+        "Agent#N (None)"으로 잘못 표시되고 있었다 — 이번에 리소스 타입
+        4가지 모두를 올바르게 분기한다. `team`은 팀의 결재 주체
+        (`team_leader_id`, 비었으면 요청자)를 관리자로 삼고, `pipeline`은
+        소유자 개념이 없어 agent와 같이 요청자를 관리자로 삼는다.
         """
         rows = conn.execute("""
             SELECT a.id AS assignment_id, a.task_id, a.resource_type, a.resource_id,
-                   a.requested_by, t.role_name,
+                   a.requested_by, a.team_leader_id, t.role_name,
                    hp.name AS human_name, hp.manager_id AS human_manager_id,
-                   COALESCE(ap.name, ap.role_name) AS agent_role_name
+                   COALESCE(ap.name, ap.role_name) AS agent_role_name,
+                   tm.name AS team_name,
+                   pt.name AS pipeline_name
             FROM assignments a
             JOIN tasks t ON t.id = a.task_id
             LEFT JOIN human_pool hp ON hp.id = a.resource_id AND a.resource_type = 'human'
             LEFT JOIN agent_pool ap ON ap.id = a.resource_id AND a.resource_type = 'agent'
+            LEFT JOIN teams tm ON tm.id = a.resource_id AND a.resource_type = 'team'
+            LEFT JOIN pipeline_templates pt ON pt.id = a.resource_id AND a.resource_type = 'pipeline'
             WHERE a.status = 'confirmed'
             """).fetchall()
 
@@ -3975,6 +4044,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
             if row["resource_type"] == "human":
                 manager_id = row["human_manager_id"]
                 resource_name = row["human_name"]
+            elif row["resource_type"] == "team":
+                manager_id = row["team_leader_id"] or row["requested_by"]
+                resource_name = row["team_name"]
+            elif row["resource_type"] == "pipeline":
+                manager_id = row["requested_by"]
+                resource_name = row["pipeline_name"]
             else:
                 # Agent는 상사가 없으니 이 배정을 요청/소유한 사람을 관리자로 삼는다.
                 manager_id = row["requested_by"]
@@ -4139,6 +4214,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
             assignment_result = None
             deliverable_result = None
             pipeline_run_id = None
+            new_pipeline_run_id = None
+            new_pipeline_run_actor_id = None
             next_step_pending = False
             if payload.approve:
                 next_step_pending = approvals_mod.activate_next_step(
@@ -4149,6 +4226,33 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     assignment_result = assignments.resolve_assignment_decision(
                         conn, subject_id, True, user["id"]
                     )
+                    # 사용자 요청(2026-10-29, "파이프라인을 assignments.
+                    # resource_type에 추가... 사람/Agent/Team 배정과 동일하게
+                    # 결재를 거치게") — 지금까지 배정 승인은 레코드 상태만
+                    # 바꿀 뿐 아무 실행도 트리거하지 않았다. resource_type이
+                    # "pipeline"이면 확정되는 순간 실제로 실행을 시작한다.
+                    if assignment_result["status"] == "confirmed":
+                        arow = conn.execute(
+                            "SELECT resource_type, resource_id, task_id, requested_by "
+                            "FROM assignments WHERE id = ?",
+                            (subject_id,),
+                        ).fetchone()
+                        if arow["resource_type"] == "pipeline":
+                            try:
+                                new_pipeline_run_id = (
+                                    pipeline_runtime.start_pipeline_run(
+                                        conn,
+                                        arow["requested_by"],
+                                        arow["resource_id"],
+                                        arow["task_id"],
+                                    )
+                                )
+                                new_pipeline_run_actor_id = arow["requested_by"]
+                            except (LookupError, ValueError):
+                                # 이미 같은 task에 실행 중인 run이 있거나
+                                # 템플릿이 그 사이 비활성화됨 — 배정 자체는
+                                # confirmed로 남기고 실행은 건너뛴다.
+                                pass
                 elif not next_step_pending and subject_type == "deliverable":
                     # Phase 2 — 체인의 마지막 단계 통과 시에만 산출물을 확정한다
                     # (assignment와 같은 원리 — deliverables.py docstring
@@ -4213,16 +4317,48 @@ def create_app(db_path: str | None = None) -> FastAPI:
             conn.rollback()
             raise
         if pipeline_run_id is not None:
-            run_status = conn.execute(
-                "SELECT status FROM pipeline_runs WHERE id = ?", (pipeline_run_id,)
-            ).fetchone()["status"]
-            if run_status == "running":
+            pipeline_run_row = conn.execute(
+                "SELECT status, actor_id FROM pipeline_runs WHERE id = ?",
+                (pipeline_run_id,),
+            ).fetchone()
+            if pipeline_run_row["status"] == "running":
+                # 사용자 보고(2026-10-28, "코드 검증의 경우 요청자가
+                # 대화중인 사람이 아닌 admin에 표기되며 어느 누구도
+                # 승인할 수 있는 상황이 아님") 원인 수정 — 지금까지
+                # 재개 시 넘기는 actor_id가 "지금 승인한 사람"(`user
+                # ["id"]`)이었다. 다음 단계가 또 에스컬레이션되면
+                # `approvals.create_approval_chain()`의 `requested_by`
+                # 가 그 **승인자 자신**이 돼, 그 사람이 다시 승인하려
+                # 하면 자기 승인 방지(`decide_approval()`의 self-
+                # approval 차단)에 걸려 아무도 승인할 수 없는 교착
+                # 상태가 됐다(실측 확인). 파이프라인을 일관되게
+                # "원래 실행을 요청한 사람"(`pipeline_runs.actor_id`,
+                # `start_pipeline_run()` 시점에 한 번 고정) 명의로
+                # 계속 진행해야 한다 — 승인 행위 자체의 감사 기록은
+                # `approvals.approved_by`에 이미 따로 남는다.
+                # 대화 `@팀이름` 멘션이 띄운 run이면 다음 단계 진행
+                # 후 그 대화에도 진행 상황을 올려야 하므로
+                # `conversations.run_pipeline_stage_job_and_notify()`가
+                # 감싼다(Task 기원 run은 평소와 동일하게 동작).
                 background_tasks.add_task(
-                    pipeline_runtime.run_pipeline_stage_job,
+                    conversations.run_pipeline_stage_job_and_notify,
                     conn,
                     pipeline_run_id,
-                    user["id"],
+                    pipeline_run_row["actor_id"],
                 )
+        if new_pipeline_run_id is not None:
+            # 배정(assignment) 승인으로 새로 시작된 run — 연결된 대화가
+            # 없으므로 `execute-pipeline` 엔드포인트와 동일하게 알림
+            # 콜백 없는 plain 버전을 쓴다. actor_id는 승인자(`user["id"]`)
+            # 가 아니라 배정을 원래 요청한 사람(`new_pipeline_run_actor_id`)
+            # — 위 self-approval 교착과 똑같은 이유.
+            assert new_pipeline_run_actor_id is not None
+            background_tasks.add_task(
+                pipeline_runtime.run_pipeline_stage_job,
+                conn,
+                new_pipeline_run_id,
+                new_pipeline_run_actor_id,
+            )
         return {
             "id": approval_id,
             "status": new_status,
@@ -4230,6 +4366,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "assignment": assignment_result,
             "deliverable": deliverable_result,
             "pipeline_run_id": pipeline_run_id,
+            "new_pipeline_run_id": new_pipeline_run_id,
         }
 
     @app.get("/", response_class=HTMLResponse)

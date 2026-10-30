@@ -52,6 +52,7 @@ from hair_platform import (
     crew_runtime,
     deliverables,
     llm,
+    pipeline_runtime,
     pool_registry,
     teams,
 )
@@ -1081,7 +1082,7 @@ def _finish_job_with_message(
     conn.commit()
 
 
-def _describe_job_failure(exc: Exception) -> str:
+def _describe_job_failure(exc: Exception, trigger_type: str | None = None) -> str:
     """사용자 보고(2026-10-15, "@자율 개발 크루... 일부 응답이 실패했습니다:
     Expecting value: line 1 column 1 (char 0)") 재발 방지 — 이 메시지는
     CrewAI/litellm 내부(에이전트 간 위임 도구 호출 인자를 JSON으로 파싱하는
@@ -1103,9 +1104,25 @@ def _describe_job_failure(exc: Exception) -> str:
     # Agent를 멘션하면, 응답 생성이 `llm.py`의 넉넉해진 타임아웃(900초)
     # 조차 넘기는 경우가 있다(raw 예외 문자열이 그냥 "timed out"이라
     # 어느 Agent가, 왜 실패했는지 사용자가 알 길이 없었다).
+    #
+    # 재발/정정(2026-10-28, 사용자 분석 요청 — "팀의 경우 15분 제한으로
+    # 실패했다") — 실측 확인 결과 Team 멘션(`crew_runtime._crewai_llm()`)
+    # 경로는 애초에 `llm.py`의 900초 타임아웃을 거친 적이 없다(완전히
+    # 별도 LLM 생성 경로). 그런데도 이 메시지는 "timed out" 문자열만
+    # 보고 실제 적용된 값과 무관하게 "15분"을 고정으로 박아 넣고
+    # 있었다 — Team에는 틀린 숫자를 보여준 셈이다. `trigger_type`으로
+    # 실제 어느 타임아웃 값이 적용됐는지 구분해 정확한 분만 보여준다.
     if "timed out" in str(exc).lower() or isinstance(exc, TimeoutError):
+        if trigger_type == "team_mention":
+            minutes = int(crew_runtime.CREWAI_LLM_TIMEOUT_SECONDS // 60)
+            return (
+                f"👥 팀(여러 Agent 협업) 응답 생성이 시간 제한(약 {minutes}분)을 "
+                "넘겨 중단됐습니다 — 팀원이 많거나 위임·종합할 내용이 복잡할 때 "
+                "발생할 수 있는 문제입니다. 요청을 더 간결하게 나눠서 다시 "
+                "시도하거나, 팀 구성(멤버 수)을 줄여보세요."
+            )
         return (
-            "AI 모델의 응답 생성이 시간 제한(15분)을 넘겨 중단됐습니다 — 대화가 "
+            "AI 모델의 응답 생성이 시간 제한을 넘겨 중단됐습니다 — 대화가 "
             "길어졌거나 요청한 내용이 복잡할 때 발생할 수 있는 문제입니다. "
             "요청을 더 간결하게 나눠서 다시 시도하거나, 대화가 많이 길어졌다면 "
             "새 대화를 시작해 보세요."
@@ -1118,7 +1135,11 @@ def _fail_job(
 ) -> None:
     conn.rollback()
     raw_error = str(exc)
-    error = _describe_job_failure(exc)
+    trigger_row = conn.execute(
+        "SELECT trigger_type FROM conversation_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    trigger_type = trigger_row["trigger_type"] if trigger_row else None
+    error = _describe_job_failure(exc, trigger_type)
     conn.execute(
         "UPDATE conversation_jobs SET status = 'failed', error = ?, "
         "finished_at = datetime('now') WHERE id = ?",
@@ -1275,7 +1296,31 @@ def run_team_mention_job(
        (`_ANTI_ANCHORING_NOTE`).
     2) Gate A-G가 fail해도 이 경로는 측정만 하고 버려졌다 — 메시지에
        `gate_scores`/`delegation_count`를 같이 저장해 화면에서 바로
-       보이게 한다(아래 INSERT)."""
+       보이게 한다(아래 INSERT).
+
+    사용자 요청(2026-10-28, "팀 관리의 '#3 자율 개발 크루'의 경우
+    파이프라인을 참조해 실제 개발 품질을 보장하며 수행될 수 있도록
+    재구성해줘") — 위 두 문제(앵커링/Gate 방치)를 메워도 이 경로는
+    여전히 매니저 LLM 한 번의 위임+자유 서술 종합일 뿐, 코드 검증/QA
+    기능테스트/품질 관리 같은 실제 검증 단계가 없다. `teams.
+    pipeline_template_id`가 연결된 팀(현재는 "자율 개발 크루"만)은
+    이 단발 실행 대신 `pipeline_runtime`의 단계형 엔진(Gate 기준
+    자동 재시도, 재시도 소진 시 사람 승인 에스컬레이션)을 태운다 —
+    `_run_team_mention_via_pipeline()` 참고. 연결 안 된 팀은 아래
+    기존 로직 그대로(하위 호환)."""
+    team_row = conn.execute(
+        "SELECT pipeline_template_id FROM teams WHERE id = ?", (team_id,)
+    ).fetchone()
+    if team_row is not None and team_row["pipeline_template_id"] is not None:
+        _run_team_mention_via_pipeline(
+            conn,
+            job_id,
+            conversation_id,
+            team_id,
+            team_row["pipeline_template_id"],
+            actor_id,
+        )
+        return
     try:
         agent_ids = teams.active_agent_member_ids(conn, team_id)
         if not agent_ids:
@@ -1352,6 +1397,289 @@ def run_team_mention_job(
         conn.commit()
     except Exception as exc:  # noqa: BLE001
         _fail_job(conn, job_id, actor_id, exc)
+
+
+_PIPELINE_STAGE_STATUS_LABEL = {
+    "running": "진행 중",
+    "passed": "통과",
+    "failed_retrying": "재시도 중",
+    "escalated": "승인 대기(재시도 소진)",
+    "approved": "승인됨",
+    "rejected": "반려",
+}
+_PIPELINE_RUN_STATUS_LABEL = {
+    "running": "진행 중",
+    "paused_for_approval": "사람 승인 대기",
+    "completed": "완료",
+    "failed": "실패",
+    "cancelled": "취소됨",
+}
+
+
+def _run_team_mention_via_pipeline(
+    conn: sqlite3.Connection,
+    job_id: int,
+    conversation_id: int,
+    team_id: int,
+    pipeline_template_id: int,
+    actor_id: int,
+) -> None:
+    """`run_team_mention_job()`이 `teams.pipeline_template_id`가 연결된
+    팀일 때 위임한다 — `pipeline_runtime.py`의 단계 실행/Gate 재시도/
+    에스컬레이션 로직은 전혀 수정하지 않고 그대로 재사용한다(Task
+    협업 워크스페이스 경로가 이미 실전 검증한 바로 그 엔진). 이
+    함수가 하는 일은 순전히 "대화라는 Task 없는 맥락을 어떻게 그
+    엔진에 먹이고, 진행 상황을 어떻게 다시 대화로 돌려주는가"뿐이다.
+
+    **Task 확보** — 대화가 `linked_task_id`로 이미 특정 Task에
+    종속돼 있으면 그 Task를 그대로 쓴다. 없으면(가장 흔한 자유
+    대화의 경우) `briefs`/`tasks`에 최소 synthetic 행을 만든다
+    (`eval_wiring.py`의 `_run_generation()`이 쓰는 것과 같은 2-INSERT
+    패턴) — `tasks.notes`에 출처를 남겨 Task Board에서 구분 가능하게
+    한다. 새 스키마 컬럼은 추가하지 않는다(최소 침습).
+
+    **진행 상황 전달** — `pipeline_runtime.run_pipeline_stage_job()`은
+    이미 승인 대기/완료/실패 중 하나에 도달할 때까지 재귀적으로
+    돈다. 그 시점에 바로 `conversation_jobs`를 마감하고(무기한 폴링
+    방지) `post_pipeline_run_status_message()`로 대화에 진행 요약
+    메시지를 올린다. 승인 후 재개됐을 때의 후속 메시지는
+    `pipeline_runs.source_conversation_id`를 보고 `app.py`의
+    `decide_approval()`이 같은 헬퍼를 한 번 더 호출한다."""
+    try:
+        conv = conn.execute(
+            "SELECT title, linked_task_id FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if conv is None:
+            raise ValueError("conversation_not_found")
+
+        # 사용자 보고(2026-10-29, "브레이크 아웃 게임 생성 대화에서 마지막
+        # 승인 처리했지만 생성된 코드가 제시안된 원인") 근본원인 수정 —
+        # `pipeline_runtime._stage_initial_input()`은 1단계 프롬프트를
+        # `tasks.role_name`(+사람이 올린 deliverable이 있으면 그것)으로만
+        # 만든다. synthetic task의 role_name을 지금까지 팀 이름("자율
+        # 개발 크루")으로 넣어왔는데, 그게 그대로 1단계 Agent에게 "자율
+        # 개발 크루 업무를 수행하라"는 프롬프트가 돼버렸다 — 실제 대화
+        # 내용(예: "브레이크아웃 게임을 개발해줘")은 어디에도 안 들어가
+        # 1단계부터 완전히 엉뚱한 주제(크루 자체를 관리하는 시스템)로
+        # 산출물이 나왔고, 이후 모든 단계가 그 틀린 기반 위에서 그대로
+        # 이어졌다(Gate는 "글이 갖춰져 있는지"만 보는 휴리스틱이라 내용이
+        # 틀려도 계속 통과시켰다). 대화 전사록을 **사람이 작성한
+        # deliverable**로 심어두면 `_stage_initial_input()`의 기존
+        # "사람 작성 자료" 폴백이 그대로 집어가므로, 파이프라인 엔진은
+        # 전혀 안 고치고 1단계가 받는 입력만 바로잡을 수 있다.
+        transcript = _build_transcript(conn, conversation_id) or "대화를 시작합니다."
+
+        if conv["linked_task_id"] is not None:
+            task_id = conv["linked_task_id"]
+        else:
+            task_title = conv["title"] or f"대화 #{conversation_id}"
+            team_row = conn.execute(
+                "SELECT name FROM teams WHERE id = ?", (team_id,)
+            ).fetchone()
+            team_name = team_row["name"] if team_row else "팀"
+            brief_cur = conn.execute(
+                "INSERT INTO briefs (submitted_by, raw_text, stub_roles) "
+                "VALUES (?, ?, '[]')",
+                (actor_id, f"[대화 '{task_title}'] {transcript}"[:2000]),
+            )
+            brief_id = brief_cur.lastrowid
+            task_cur = conn.execute(
+                "INSERT INTO tasks (brief_id, role_name, notes) VALUES (?, ?, ?)",
+                (
+                    brief_id,
+                    task_title,
+                    (
+                        f"대화 '{task_title}'에서 @{team_name} 호출로 자동 생성됨"
+                        "(파이프라인 기반 실행)."
+                    ),
+                ),
+            )
+            task_id = task_cur.lastrowid
+            assert task_id is not None
+
+        conn.execute(
+            "INSERT INTO deliverables (task_id, author_type, author_id, content, "
+            "content_type, status) VALUES (?, 'human', ?, ?, 'text', 'approved')",
+            (task_id, actor_id, transcript),
+        )
+
+        run_id = pipeline_runtime.start_pipeline_run(
+            conn, actor_id, pipeline_template_id, task_id
+        )
+        conn.execute(
+            "UPDATE pipeline_runs SET source_conversation_id = ? WHERE id = ?",
+            (conversation_id, run_id),
+        )
+        conn.commit()
+
+        # 사용자 보고(2026-10-28, "결재 승인 되었으나, 대화창의 경우
+        # 이후 진행 확인되지 않음") 분석 후 조치 — 승인이 필요 없는
+        # 단계가 여러 개 연달아 자동 통과하면(Gate 0.0) `run_pipeline_
+        # stage_job()` 호출 하나가 그 전부를 조용히 끝낼 때까지 수
+        # 분~수십 분 아무 메시지도 안 올라왔다. 매 단계 resolve마다
+        # 콜백으로 진행 메시지를 올려 "멈춘 게 아니라 진행 중"임을
+        # 그때그때 보여준다 — 끝나고 나서 한 번 더 부르면 콜백이 이미
+        # 마지막 상태도 올렸으므로 중복이라 빼낸다.
+        pipeline_runtime.run_pipeline_stage_job(
+            conn,
+            run_id,
+            actor_id,
+            on_stage_resolved=lambda: post_pipeline_run_status_message(conn, run_id),
+        )
+
+        conn.execute(
+            "UPDATE conversation_jobs SET status = 'succeeded', "
+            "finished_at = datetime('now') WHERE id = ?",
+            (job_id,),
+        )
+        audit.record(
+            conn,
+            actor_id,
+            "conversation_team_mention_completed",
+            "conversation_jobs",
+            job_id,
+            after={
+                "conversation_id": conversation_id,
+                "team_id": team_id,
+                "pipeline_run_id": run_id,
+            },
+        )
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        _fail_job(conn, job_id, actor_id, exc)
+
+
+def post_pipeline_run_status_message(conn: sqlite3.Connection, run_id: int) -> None:
+    """`pipeline_runs.source_conversation_id`가 있는 run의 진행 상황을
+    그 대화에 메시지 한 건으로 요약해 올린다 — 최초 트리거
+    (`_run_team_mention_via_pipeline()`)와 승인 후 재개
+    (`app.py`의 `decide_approval()`) 양쪽에서 공유하는 헬퍼다."""
+    run = conn.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+    if run is None or run["source_conversation_id"] is None:
+        return
+    template = conn.execute(
+        "SELECT name FROM pipeline_templates WHERE id = ?",
+        (run["pipeline_template_id"],),
+    ).fetchone()
+    stages = conn.execute(
+        "SELECT id, seq_order, name FROM pipeline_stages "
+        "WHERE pipeline_template_id = ? ORDER BY seq_order",
+        (run["pipeline_template_id"],),
+    ).fetchall()
+    lines = [f"**파이프라인 '{template['name'] if template else '?'}' 진행 상황**"]
+    for stage in stages:
+        latest = conn.execute(
+            "SELECT id, status, attempt FROM pipeline_run_stages WHERE pipeline_run_id = ? "
+            "AND stage_id = ? ORDER BY attempt DESC, id DESC LIMIT 1",
+            (run_id, stage["id"]),
+        ).fetchone()
+        if latest is None:
+            label = "대기"
+        else:
+            status_value = str(latest["status"])
+            label = _PIPELINE_STAGE_STATUS_LABEL.get(status_value, status_value)
+            if status_value == "failed_retrying":
+                label += f"({latest['attempt']}회차)"
+            # 사용자 요청(2026-10-28, "승인자가 누구인지 표시되도록
+            # 개선") — 사람이 실제로 결정(승인/반려)한 단계는 그
+            # 결재자 이름을 같이 보여준다. 다단계 결재 체인이면 가장
+            # 마지막(= id가 가장 큰)으로 처리된 결정자를 보여준다 —
+            # Gate 자동 통과(승인 단계 자체가 없는 "통과")는 애초에
+            # `approvals` 행이 없으니 그대로 빠진다.
+            if status_value in ("approved", "rejected"):
+                decider = conn.execute(
+                    """
+                    SELECT u.username FROM approvals a
+                    JOIN users u ON u.id = a.approved_by
+                    WHERE a.subject_type = 'pipeline_run_stage' AND a.subject_id = ?
+                      AND a.approved_by IS NOT NULL
+                    ORDER BY a.id DESC LIMIT 1
+                    """,
+                    (latest["id"],),
+                ).fetchone()
+                if decider is not None:
+                    label += f"(결재: {decider['username']})"
+        marker = "▶" if stage["seq_order"] == run["current_stage_seq"] else " "
+        lines.append(f"{marker} {stage['seq_order']}. {stage['name']} — {label}")
+    overall = _PIPELINE_RUN_STATUS_LABEL.get(run["status"], run["status"])
+    lines.append(f"\n전체 상태: **{overall}**")
+    if run["status"] == "paused_for_approval":
+        # 사용자 요청(2026-10-28, "사람 승인 대기로 표시, 승인자가
+        # 누구인지 알 수 없음") — 지정된 승인자(`approver_id`)가 있으면
+        # 이름을 밝히고, 없으면(상사 체인이 비어 admin/manager 누구나
+        # 처리 가능한 경우) 그렇다고 명시한다.
+        pending_approval = conn.execute(
+            """
+            SELECT a.approver_id, u.username AS approver_username
+            FROM approvals a
+            JOIN pipeline_run_stages prs ON a.subject_type = 'pipeline_run_stage'
+                AND a.subject_id = prs.id
+            LEFT JOIN users u ON u.id = a.approver_id
+            WHERE prs.pipeline_run_id = ? AND a.status = 'pending'
+            ORDER BY a.id DESC LIMIT 1
+            """,
+            (run_id,),
+        ).fetchone()
+        if pending_approval is not None and pending_approval["approver_username"]:
+            lines.append(
+                f"사람 승인이 필요합니다 — {pending_approval['approver_username']}님이 "
+                "결재함에서 확인해주세요."
+            )
+        else:
+            lines.append(
+                "사람 승인이 필요합니다 — 지정된 승인자가 없어 admin/manager 누구나 "
+                "결재함에서 확인할 수 있습니다."
+            )
+    elif run["status"] == "failed":
+        lines.append("재시도를 모두 소진해 실패로 종료됐습니다.")
+    content = "\n".join(lines)
+
+    team_row = conn.execute(
+        """
+        SELECT t.id FROM teams t
+        WHERE t.pipeline_template_id = ?
+        """,
+        (run["pipeline_template_id"],),
+    ).fetchone()
+    author_agent_id = None
+    if team_row is not None:
+        author_agent_id = teams.manager_agent_id_for_team(conn, team_row["id"])
+        if author_agent_id is None:
+            active_ids = teams.active_agent_member_ids(conn, team_row["id"])
+            author_agent_id = active_ids[0] if active_ids else None
+    if author_agent_id is None:
+        return  # 메시지를 붙일 Agent가 없음(팀이 비활성화됐거나 멤버가 전혀 없음) — 조용히 포기.
+
+    conn.execute(
+        "INSERT INTO conversation_messages (conversation_id, author_type, author_id, "
+        "content) VALUES (?, 'agent', ?, ?)",
+        (run["source_conversation_id"], author_agent_id, content),
+    )
+    conn.commit()
+
+
+def run_pipeline_stage_job_and_notify(
+    conn: sqlite3.Connection, run_id: int, actor_id: int
+) -> None:
+    """`app.py`의 `decide_approval()`이 `pipeline_run_stage` 승인/반려
+    처리 후 재개 BackgroundTask로 쓴다(`pipeline_runtime.run_pipeline_
+    stage_job` 자리 대체) — 승인 후 재개된 단계부터 다시 자동 진행되는
+    매 단계마다(승인 불필요 단계가 여러 개 연달아 지나가도 각각)
+    대화에서 트리거된 run이면(`source_conversation_id`가 있으면)
+    진행 상황 메시지를 대화에 올린다(2026-10-28, 사용자 보고 "결재
+    승인 되었으나, 대화창의 경우 이후 진행 확인되지 않음" — 예전엔
+    전체가 다 끝난 뒤 한 번만 올려서, 자동 통과 단계가 여러 개
+    이어지면 그 긴 시간 동안 대화창에 아무 신호가 없었다). Task
+    협업 워크스페이스에서 직접 띄운 run은 `post_pipeline_run_status_
+    message()`가 `source_conversation_id`가 없음을 보고 조용히 아무
+    것도 안 해 기존 동작과 100% 동일하다."""
+    pipeline_runtime.run_pipeline_stage_job(
+        conn,
+        run_id,
+        actor_id,
+        on_stage_resolved=lambda: post_pipeline_run_status_message(conn, run_id),
+    )
 
 
 # ---------- 트리거: 대화 자체의 기본 AI(자동응답/skill 명시) ----------

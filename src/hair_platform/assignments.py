@@ -62,6 +62,21 @@ def create_assignment_request(
             raise ValueError("team_not_found")
         if team_leader_id is None:
             team_leader_id = requested_by
+    if resource_type == "pipeline":
+        # 사용자 요청(2026-10-29, "파이프라인을 assignments.resource_type에
+        # 추가") — 승인 확정 시점에 `pipeline_runtime.start_pipeline_run()`
+        # 이 똑같은 존재/활성 여부를 다시 확인하지만, 여기서 먼저
+        # 검증해두면 "요청" 시점에 바로 400으로 피드백할 수 있다
+        # (`deliverables.py`의 "some_agents_not_active" 동기 사전 체크와
+        # 같은 이유).
+        template = conn.execute(
+            "SELECT id, is_active FROM pipeline_templates WHERE id = ?",
+            (resource_id,),
+        ).fetchone()
+        if template is None:
+            raise ValueError("pipeline_template_not_found")
+        if not template["is_active"]:
+            raise ValueError("pipeline_template_inactive")
     if replaces_assignment_id is not None:
         target = conn.execute(
             "SELECT task_id FROM assignments WHERE id = ?", (replaces_assignment_id,)

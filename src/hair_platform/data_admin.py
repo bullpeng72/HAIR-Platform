@@ -40,7 +40,7 @@ import sqlite3
 from hair_platform import audit, id_scheme
 
 
-def _confirmed_assignment_exists(
+def confirmed_assignment_exists(
     conn: sqlite3.Connection,
     *,
     task_ids: list[int] | None = None,
@@ -114,6 +114,57 @@ def _delete_assignments_for_tasks(conn: sqlite3.Connection, task_ids: list[int])
     return len(assignment_ids)
 
 
+def _delete_pipeline_runs_for_tasks(
+    conn: sqlite3.Connection, task_ids: list[int]
+) -> int:
+    """사용자 보고(2026-10-28, "업무 요청 목록에서 삭제 버튼을 클릭해도
+    삭제가 안됨") 원인 수정 — 이 모듈이 처음 작성됐을 때는
+    `pipeline_runs`/`pipeline_run_stages`(`pipeline_runtime.py`, 2026-10-18
+    도입)를 몰랐다. `pipeline_runs.task_id`는 `tasks(id)`를, `pipeline_run_
+    stages.deliverable_id`는 `deliverables(id)`를 참조하는데, 이 둘을
+    먼저 안 지우고 `tasks`/`deliverables`를 지우면 `sqlite3.
+    IntegrityError`(FK 위반)가 그대로 사용자에게 노출돼 "삭제가 안
+    된다"로 보였다(`_delete_deliverables_for_tasks()`가 겪었던 것과
+    같은 종류의 갭 — 이 모듈의 설계 원칙 1번을 그대로 따라 채운다).
+    `_delete_deliverables_for_tasks()`보다 **먼저** 호출해야 한다 —
+    `pipeline_run_stages.deliverable_id` 참조를 먼저 끊어야 그 함수가
+    deliverables를 안전하게 지울 수 있다."""
+    if not task_ids:
+        return 0
+    t_placeholders = ",".join("?" * len(task_ids))
+    run_ids = [
+        r["id"]
+        for r in conn.execute(
+            f"SELECT id FROM pipeline_runs WHERE task_id IN ({t_placeholders})",
+            task_ids,
+        ).fetchall()
+    ]
+    if not run_ids:
+        return 0
+    r_placeholders = ",".join("?" * len(run_ids))
+    stage_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM pipeline_run_stages WHERE pipeline_run_id IN "
+            f"({r_placeholders})",
+            run_ids,
+        ).fetchall()
+    ]
+    if stage_ids:
+        s_placeholders = ",".join("?" * len(stage_ids))
+        conn.execute(
+            "DELETE FROM approvals WHERE subject_type = 'pipeline_run_stage' "
+            f"AND subject_id IN ({s_placeholders})",
+            stage_ids,
+        )
+        conn.execute(
+            f"DELETE FROM pipeline_run_stages WHERE id IN ({s_placeholders})",
+            stage_ids,
+        )
+    conn.execute(f"DELETE FROM pipeline_runs WHERE id IN ({r_placeholders})", run_ids)
+    return len(run_ids)
+
+
 def _delete_deliverables_for_tasks(
     conn: sqlite3.Connection, task_ids: list[int]
 ) -> int:
@@ -171,10 +222,11 @@ def delete_task(conn: sqlite3.Connection, actor_id: int, task_id: int) -> None:
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
-    if _confirmed_assignment_exists(conn, task_ids=[task_id]):
+    if confirmed_assignment_exists(conn, task_ids=[task_id]):
         raise PermissionError("confirmed_assignment_exists")
 
     deleted_assignments = _delete_assignments_for_tasks(conn, [task_id])
+    _delete_pipeline_runs_for_tasks(conn, [task_id])
     _delete_deliverables_for_tasks(conn, [task_id])
     conn.execute(
         "UPDATE agent_pool SET source_job_item_id = NULL WHERE source_job_item_id IN "
@@ -208,10 +260,11 @@ def delete_brief(conn: sqlite3.Connection, actor_id: int, brief_id: int) -> None
             "SELECT id FROM tasks WHERE brief_id = ?", (brief_id,)
         ).fetchall()
     ]
-    if _confirmed_assignment_exists(conn, task_ids=task_ids):
+    if confirmed_assignment_exists(conn, task_ids=task_ids):
         raise PermissionError("confirmed_assignment_exists")
 
     deleted_assignments = _delete_assignments_for_tasks(conn, task_ids)
+    _delete_pipeline_runs_for_tasks(conn, task_ids)
     _delete_deliverables_for_tasks(conn, task_ids)
     if task_ids:
         placeholders = ",".join("?" * len(task_ids))
@@ -251,7 +304,7 @@ def delete_human(conn: sqlite3.Connection, actor_id: int, human_id: int) -> None
     row = conn.execute("SELECT * FROM human_pool WHERE id = ?", (human_id,)).fetchone()
     if row is None:
         raise ValueError("human_not_found")
-    if _confirmed_assignment_exists(conn, resource_type="human", resource_id=human_id):
+    if confirmed_assignment_exists(conn, resource_type="human", resource_id=human_id):
         raise PermissionError("confirmed_assignment_exists")
 
     conn.execute("DELETE FROM human_pool WHERE id = ?", (human_id,))
@@ -274,7 +327,7 @@ def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None
     row = conn.execute("SELECT * FROM agent_pool WHERE id = ?", (agent_id,)).fetchone()
     if row is None:
         raise ValueError("agent_not_found")
-    if _confirmed_assignment_exists(conn, resource_type="agent", resource_id=agent_id):
+    if confirmed_assignment_exists(conn, resource_type="agent", resource_id=agent_id):
         raise PermissionError("confirmed_assignment_exists")
 
     conn.execute("DELETE FROM knowledge_chunks WHERE source_agent_id = ?", (agent_id,))

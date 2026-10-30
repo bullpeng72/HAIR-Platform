@@ -175,12 +175,44 @@ CREATE TABLE IF NOT EXISTS agent_pool (
 -- human_pool/agent_pool 멤버를 역할명과 함께 묶어 여러 업무에 재사용
 -- 가능한 "팀"으로 등록한다(skill_pool/tool_pool과 같은 "등록→재사용"
 -- 패턴). 사람/Agent 풀 자체는 그대로 두고 참조만 한다.
+-- `pipeline_template_id`(2026-10-28, 사용자 요청 "자율 개발 크루'의
+-- 경우 파이프라인을 참조해 실제 개발 품질을 보장하며 수행될 수
+-- 있도록 재구성") — 연결돼 있으면 `@팀이름` 멘션이 `crew_runtime.
+-- run_crew()` 단발 실행 대신 그 파이프라인(Gate 기준 자동 재시도·
+-- 사람 승인 에스컬레이션까지 갖춘 엔진)을 탄다. NULL이면 기존 단발
+-- 실행 그대로(하위 호환) — `conversations.run_team_mention_job()`
+-- 참고.
+-- `status`/`task_id`/`brief_id`/`completed_at`(2026-10-29, 사용자 요청
+-- "TF팀을 teams의 확장으로") — `task_id`/`brief_id`가 주어지면 그
+-- 업무에 종속된 TF팀(생성 즉시 `pending_onboarding`), 안 주어지면
+-- 기존처럼 재사용 가능한 범용 팀("자율 개발 크루" 등, 생성 즉시
+-- `active`) — `teams.create_team()` 참고. `is_active`는 `status`의
+-- 거울(`status=='active' ⟺ is_active==1`)로 계속 유지한다 — 기존에
+-- `is_active`만 읽는 지점들(`conversations.py`의 팀 @멘션 검색,
+-- `webui.py`의 Task 배정 드롭다운)이 코드 변경 없이 그대로 올바르게
+-- 동작하게 하기 위함. `task_id`/`brief_id`에 FK를 안 거는 이유는
+-- `assignments.resource_id`와 같다 — task/brief 삭제 시 선행 처리를
+-- 늘리지 않기 위해서다(UI에서 LEFT JOIN으로 느슨하게 처리). 컬럼
+-- 기본값은 `'active'`(= `is_active` 기본값 1과 맞춤) — `create_team()`
+-- 은 항상 두 값을 명시적으로 같이 넣어 이 기본값을 안 쓰지만,
+-- `name`만 주는 단순 raw INSERT(테스트 픽스처 등)가 두 컬럼을
+-- 서로 어긋나게 두지 않기 위한 안전장치다. 기존 DB 마이그레이션은
+-- 백필 판별을 위해 일부러 다른 기본값(`'pending_onboarding'`)을
+-- 쓴다 — 아래 `_migrate_schema()` 참고.
 CREATE TABLE IF NOT EXISTS teams (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    is_active INTEGER NOT NULL DEFAULT 1
+    is_active INTEGER NOT NULL DEFAULT 1,
+    pipeline_template_id INTEGER REFERENCES pipeline_templates(id),
+    status TEXT NOT NULL DEFAULT 'active',
+    task_id INTEGER,
+    brief_id INTEGER,
+    completed_at TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_teams_task_id ON teams(task_id);
+CREATE INDEX IF NOT EXISTS idx_teams_brief_id ON teams(brief_id);
 
 CREATE TABLE IF NOT EXISTS team_members (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -516,6 +548,11 @@ CREATE TABLE IF NOT EXISTS pipeline_stage_agents (
 CREATE INDEX IF NOT EXISTS idx_pipeline_stage_agents_stage_id
     ON pipeline_stage_agents(stage_id);
 
+-- `source_conversation_id`(2026-10-28, "자율 개발 크루" 파이프라인화) —
+-- 대화 `@팀이름` 멘션이 띄운 run이면 채워진다. 승인 후 재개돼 다음
+-- 단계가 끝나거나 전체가 완료/실패할 때 어느 대화에 진행 메시지를
+-- 올릴지 이 컬럼으로 안다(`conversations.post_pipeline_run_status_
+-- message()`). Task 협업 워크스페이스에서 직접 띄운 run은 NULL.
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pipeline_template_id INTEGER NOT NULL REFERENCES pipeline_templates(id),
@@ -525,12 +562,21 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
         CHECK (status IN ('running', 'paused_for_approval', 'completed', 'failed', 'cancelled')),
     current_stage_seq INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    finished_at TEXT
+    finished_at TEXT,
+    source_conversation_id INTEGER REFERENCES conversations(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_task_id
     ON pipeline_runs(task_id);
 
+-- `decision_reason`(2026-10-28, 사용자 요청 "반려 사유를 재시도
+-- 지시문에 직접 끼워 넣는 식으로 개선") — 사람이 결재함에서 반려할 때
+-- 적는 사유(`ApprovalDecision.reason`)를 지금까지 `audit_log`에만
+-- 남기고 재시도 프롬프트엔 전혀 안 넣었다. Gate 실패 재시도는 이미
+-- `gate_scores` 기반 피드백을 넣어주는데, 사람이 반려한 단계는 애초에
+-- Gate를 통과했길래 사람 승인까지 온 것이라(`_gate_failure_summary()`
+-- 가 "세부 사유 없음"만 돌려줌) 사람이 적은 진짜 반려 이유가 재시도에
+-- 전혀 반영되지 않는 공백이 있었다.
 CREATE TABLE IF NOT EXISTS pipeline_run_stages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pipeline_run_id INTEGER NOT NULL REFERENCES pipeline_runs(id),
@@ -543,7 +589,8 @@ CREATE TABLE IF NOT EXISTS pipeline_run_stages (
     tcr REAL,
     deliverable_id INTEGER REFERENCES deliverables(id),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    finished_at TEXT
+    finished_at TEXT,
+    decision_reason TEXT
 );
 
 -- 사용자 요청(2026-10-20, "crewai의 잠재력을 모두 끌어내고... Crew 빌더"
@@ -1027,6 +1074,273 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_employee_id "
         "ON users(employee_id)"
     )
+    _sync_dev_pipeline_implementation_stage_agents(conn)
+    # 사용자 요청(2026-10-28, "반려 사유를 재시도 지시문에 직접 끼워
+    # 넣는 식으로 개선") — 기존 DB에도 컬럼을 추가한다.
+    _ensure_column(conn, "pipeline_run_stages", "decision_reason", "TEXT")
+    # 사용자 요청(2026-10-28, "팀 관리의 '#3 자율 개발 크루'의 경우
+    # 파이프라인을 참조해 실제 개발 품질을 보장하며 수행될 수 있도록
+    # 재구성해줘") — 정적 SCHEMA의 `teams`/`pipeline_runs`는 새로
+    # 만들어지는 DB에만 해당 컬럼이 있다. 기존 DB에도 추가한다.
+    _ensure_column(
+        conn,
+        "teams",
+        "pipeline_template_id",
+        "INTEGER REFERENCES pipeline_templates(id)",
+    )
+    _ensure_column(
+        conn,
+        "pipeline_runs",
+        "source_conversation_id",
+        "INTEGER REFERENCES conversations(id)",
+    )
+    _sync_dev_crew_pipeline_integration(conn)
+    # 사용자 요청(2026-10-29, "TF팀을 teams의 확장으로, Team 온보딩
+    # 라이프사이클 도입 — 기존 활성 팀은 전부 자동 active 처리") —
+    # 기존 DB에도 컬럼을 추가하고, 이미 활성/비활성이던 팀들을
+    # 재검토 없이 새 status로 백필한다. `status='pending_onboarding'`
+    # 조건이 "이미 한 번 백필됐거나 관리자가 그 뒤 직접 바꾼 행은
+    # 다시 안 건드린다"는 멱등 가드 역할을 한다.
+    _ensure_column(
+        conn, "teams", "status", "TEXT NOT NULL DEFAULT 'pending_onboarding'"
+    )
+    _ensure_column(conn, "teams", "task_id", "INTEGER")
+    _ensure_column(conn, "teams", "brief_id", "INTEGER")
+    _ensure_column(conn, "teams", "completed_at", "TEXT")
+    conn.execute(
+        "UPDATE teams SET status = 'active' "
+        "WHERE is_active = 1 AND status = 'pending_onboarding'"
+    )
+    conn.execute(
+        "UPDATE teams SET status = 'deprecated' "
+        "WHERE is_active = 0 AND status = 'pending_onboarding'"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_task_id ON teams(task_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_brief_id ON teams(brief_id)")
+
+
+# 위 마이그레이션이 지우는 대상 — 2026-10-26 "자율 개발 크루" 12명→6명
+# 정리 전, "구현" 단계에 심어졌던 중복 클론 role_name들(지금의
+# agent_pool에는 존재하지 않는 고아 참조).
+_DEV_PIPELINE_STALE_IMPLEMENTATION_ROLES = (
+    "개발자",
+    "백엔드 개발자 2",
+    "백엔드 개발자 3",
+    "백엔드 개발자 4",
+    "프론트엔드 개발자 2",
+    "프론트엔드 개발자 3",
+    "데이터/인프라 개발자 1",
+    "데이터/인프라 개발자 2",
+)
+# 위 정리 전 `DEV_PIPELINE_DESCRIPTION`에 있던 문구 — 아래 함수가 DB에
+# 이 문구가 그대로 남아 있을 때만 새 문구로 바꾼다(관리자가 이미 직접
+# 수정했다면 더 이상 이 문자열과 일치하지 않으므로 건드리지 않는다).
+_DEV_PIPELINE_STALE_DESCRIPTION = (
+    "기획서 → 요구분석(계획 확정, 사람 승인 1회) → 설계(AA→DA) → 개발 계획 수립 → "
+    "구현(매니저가 10명+UI기획자에게 실제 위임) → 코드 검증 → QA 기능테스트 → "
+    "품질 관리 최종 판정까지, Gate A-G 기준으로 자동 반복하며 진행하는 정식 "
+    "개발 파이프라인(BMAD-METHOD 대응 — 계획 확정 시점에만 사람이 개입한다)."
+)
+
+
+def _sync_dev_pipeline_implementation_stage_agents(conn: sqlite3.Connection) -> None:
+    """사용자 요청(2026-10-28, "파이프라인 관리 — '#1 소프트웨어 개발
+    파이프라인(software_dev)'을 현행화해줘") — `_seed_dev_pipeline()`은
+    `pipeline_templates.name`이 이미 있으면 그냥 return한다(관리자가
+    고친 내용을 재기동 때 덮어쓰지 않으려는 의도적 설계, 그 함수의
+    docstring 참고). 그런데 그 설계 때문에 "자율 개발 크루"를 12명→6명
+    으로 정리한 2026-10-26 커밋(`DEV_CREW_TEAM_MEMBER_SPECS` 변경)이
+    `DEV_PIPELINE_STAGES`의 "구현" 단계 agents 목록까지 맞게 고쳤어도
+    이미 한 번 심어진 `pipeline_stage_agents` 행에는 전혀 반영되지
+    않았다(실측 확인 — "구현" 단계에 더 이상 agent_pool에 없는
+    "백엔드 개발자 2/3/4" 등 8개 role_name이 고아로 남아 있었고, 정작
+    지금 쓰이는 "백엔드 개발자"/"데이터/인프라 개발자"는 빠져 있었다).
+    "파이프라인 관리" 화면은 이 테이블을 그대로 읽어 보여주므로
+    (`pipeline_runtime.py`), 화면에 옛 12명 체제가 계속 떴다.
+
+    고아 role_name만 지우고 현재 `DEV_PIPELINE_STAGES`에 있는데 빠진
+    role만 추가한다 — 멱등(이미 현행화됐으면 두 쿼리 다 0건)이고,
+    관리자가 "구현" 단계에 직접 추가한(위 고아 목록에 없는) 다른
+    role_name은 건드리지 않는다."""
+    stage_row = conn.execute(
+        """
+        SELECT ps.id FROM pipeline_stages ps
+        JOIN pipeline_templates pt ON pt.id = ps.pipeline_template_id
+        WHERE pt.name = ? AND ps.name = '구현'
+        """,
+        (reference_pipeline_seeds.DEV_PIPELINE_NAME,),
+    ).fetchone()
+    if stage_row is None:
+        return
+    stage_id = stage_row["id"]
+    placeholders = ",".join("?" for _ in _DEV_PIPELINE_STALE_IMPLEMENTATION_ROLES)
+    conn.execute(
+        "DELETE FROM pipeline_stage_agents WHERE stage_id = ? "
+        f"AND role_name IN ({placeholders})",
+        (stage_id, *_DEV_PIPELINE_STALE_IMPLEMENTATION_ROLES),
+    )
+    current_roles = {
+        r["role_name"]
+        for r in conn.execute(
+            "SELECT role_name FROM pipeline_stage_agents WHERE stage_id = ?",
+            (stage_id,),
+        ).fetchall()
+    }
+    implementation_stage = next(
+        s for s in reference_pipeline_seeds.DEV_PIPELINE_STAGES if s[0] == "구현"
+    )
+    for seq, (role_name, instructions) in enumerate(implementation_stage[6], start=1):
+        if role_name in current_roles:
+            continue
+        if (
+            conn.execute(
+                "SELECT 1 FROM agent_pool WHERE role_name = ?", (role_name,)
+            ).fetchone()
+            is None
+        ):
+            continue
+        conn.execute(
+            "INSERT INTO pipeline_stage_agents (stage_id, role_name, seq_order, "
+            "instructions) VALUES (?, ?, ?, ?)",
+            (stage_id, role_name, seq, instructions),
+        )
+    conn.execute(
+        "UPDATE pipeline_templates SET description = ? "
+        "WHERE name = ? AND description = ?",
+        (
+            reference_pipeline_seeds.DEV_PIPELINE_DESCRIPTION,
+            reference_pipeline_seeds.DEV_PIPELINE_NAME,
+            _DEV_PIPELINE_STALE_DESCRIPTION,
+        ),
+    )
+
+
+# "코드 검증"/"QA 기능테스트"/"품질 관리 최종 판정" — 사용자 결정
+# (2026-10-28, "자율 개발 크루" 재구성 중강도 Gate 선택)으로 이
+# 3단계만 min_gate_pass_ratio를 0.0(항상 통과)에서 0.5로 올린다.
+_DEV_PIPELINE_GATED_STAGE_NAMES = ("코드 검증", "QA 기능테스트", "품질 관리 최종 판정")
+_DEV_PIPELINE_GATE_PASS_RATIO = 0.5
+
+# 사용자 결정(2026-10-28, 같은 재구성)으로 "자율 개발 크루" 전 멤버를
+# 로컬 Ollama에서 클라우드로 전환한다 — `llm.DEFAULT_MODELS["openai"]`
+# 와 같은 값(db.py는 llm.py를 import하지 않는 저수준 모듈이라 값만
+# 그대로 가져와 썼다 — 이 값이 바뀌면 여기도 같이 바꿔야 한다). 이
+# 배포의 `.env`에는 OPENAI_API_KEY만 있고 ANTHROPIC_API_KEY가 없어
+# (실측 확인, 2026-10-28) provider를 openai로 잡는다 — anthropic으로
+# 잡으면 실제 호출 시점에 API 키 누락으로 조용히 실패한다. 나중에
+# ANTHROPIC_API_KEY를 추가하면 관리자가 "AI 에이전트 관리"에서 직접
+# anthropic으로 바꿀 수 있다(이 마이그레이션은 `llm_provider='ollama'`
+# 인 행만 건드리므로 그 이후엔 다시 안 건드림).
+_DEV_CREW_CLOUD_PROVIDER = "openai"
+_DEV_CREW_CLOUD_MODEL = "gpt-4o-mini"
+
+# "구현" 단계 6명뿐이던 시절의 옛 role_label → 새 "N단계: ..." 표기.
+# 정확히 이 옛 문자열 그대로인 행만 바꾼다(관리자가 이미 고친 라벨은
+# 보존).
+_DEV_CREW_LEGACY_ROLE_LABEL_MIGRATIONS = (
+    (
+        "매니저(hierarchical 실행 시 지정)",
+        "3단계: 개발 계획 수립 / 4단계: 매니저(hierarchical 위임 리드)",
+    ),
+    ("백엔드", "4단계: 구현(백엔드)"),
+    ("프론트엔드", "4단계: 구현(프론트엔드)"),
+    ("데이터/인프라", "4단계: 구현(데이터/인프라)"),
+    ("풀스택(유동 배치)", "4단계: 구현(풀스택, 유동 배치)"),
+    ("UI/UX", "4단계: 구현(UI/UX)"),
+)
+
+
+def _sync_dev_crew_pipeline_integration(conn: sqlite3.Connection) -> None:
+    """사용자 요청(2026-10-28, "팀 관리의 '#3 자율 개발 크루'의 경우
+    파이프라인을 참조해 실제 개발 품질을 보장하며 수행될 수 있도록
+    재구성해줘") — 오늘 세션에서 "@자율 개발 크루"로 만든 Breakout
+    게임이 "Gate 1/5 통과"에도 동작하지 않는 코드였던 근본원인 3가지를
+    메운다: (1) 팀을 "소프트웨어 개발 파이프라인"(코드 검증/QA/품질
+    관리 전용 단계 + Gate 기준 자동 재시도를 갖춘 엔진)에 연결하고,
+    (2) 그 3단계 Gate를 실제로 의미 있게(0.5) 걸고, (3) 전 멤버를
+    약한 로컬 Ollama에서 클라우드 모델로 바꾼다. 전부 멱등 — 이미
+    적용됐거나 관리자가 그 이후 직접 다른 값으로 바꾼 행은 조건절이
+    더 이상 일치하지 않아 건드리지 않는다(이 파일 전체에서 쓰는
+    표준 패턴과 동일 — 마이그레이션 이력 테이블이 없는 이 코드베이스
+    설계상, "관리자가 의도적으로 다시 되돌린 값"과 "아직 마이그레이션
+    전인 옛 값"을 완벽히 구분할 수는 없다는 한계는 그대로 따른다)."""
+    template_row = conn.execute(
+        "SELECT id FROM pipeline_templates WHERE name = ?",
+        (reference_pipeline_seeds.DEV_PIPELINE_NAME,),
+    ).fetchone()
+    if template_row is None:
+        return
+    template_id = template_row["id"]
+
+    # (1) 팀 ↔ 파이프라인 연결
+    conn.execute(
+        "UPDATE teams SET pipeline_template_id = ? "
+        "WHERE name = ? AND pipeline_template_id IS NULL",
+        (template_id, reference_pipeline_seeds.DEV_CREW_TEAM_NAME),
+    )
+
+    # (2) Gate 임계값
+    placeholders = ",".join("?" for _ in _DEV_PIPELINE_GATED_STAGE_NAMES)
+    conn.execute(
+        "UPDATE pipeline_stages SET min_gate_pass_ratio = ? "
+        f"WHERE pipeline_template_id = ? AND name IN ({placeholders}) "
+        "AND min_gate_pass_ratio = 0.0",
+        (_DEV_PIPELINE_GATE_PASS_RATIO, template_id, *_DEV_PIPELINE_GATED_STAGE_NAMES),
+    )
+
+    team_row = conn.execute(
+        "SELECT id FROM teams WHERE name = ?",
+        (reference_pipeline_seeds.DEV_CREW_TEAM_NAME,),
+    ).fetchone()
+
+    # (3) 멤버 구성 — "구현" 단계 6명뿐이던 구성을 파이프라인 7단계
+    # 전체가 참조하는 13개 역할로 넓힌다(사용자 요청, 2026-10-28,
+    # "파이프라인의 에이전트 구성과 흐름을 참조해... 구성과 업무
+    # 흐름을... 재구성") — "팀 관리" 화면만 봐도 이 팀이 요구분석부터
+    # 품질 관리까지 전체를 수행한다는 게 보이게 한다. 이미 있는 멤버는
+    # `UNIQUE(team_id, member_type, member_id)`에 걸려 INSERT OR
+    # IGNORE가 건너뛴다 — 빠진 역할만 새로 추가된다. 아래 (4) 모델
+    # 전환보다 **먼저** 해야 새로 추가되는 멤버도 같은 재기동에서 바로
+    # 클라우드 모델로 전환된다(순서를 바꾸면 새 멤버는 다음 재기동까지
+    # Ollama로 남는다).
+    if team_row is not None:
+        for (
+            role_name,
+            role_label,
+        ) in reference_pipeline_seeds.DEV_CREW_TEAM_MEMBER_SPECS:
+            agent_row = conn.execute(
+                "SELECT id FROM agent_pool WHERE role_name = ?", (role_name,)
+            ).fetchone()
+            if agent_row is None:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO team_members "
+                "(team_id, member_type, member_id, role_label) "
+                "VALUES (?, 'agent', ?, ?)",
+                (team_row["id"], agent_row["id"], role_label),
+            )
+        # 기존 6명의 role_label도 새 "N단계: ..." 표기로 맞춘다 — 옛
+        # 문구 그대로인 행만(관리자가 이미 직접 고친 라벨은 안 건드림).
+        for old_label, new_label in _DEV_CREW_LEGACY_ROLE_LABEL_MIGRATIONS:
+            conn.execute(
+                "UPDATE team_members SET role_label = ? "
+                "WHERE team_id = ? AND member_type = 'agent' AND role_label = ?",
+                (new_label, team_row["id"], old_label),
+            )
+
+    # (4) 모델 전환 — "자율 개발 크루" 팀원 중 지금 Ollama인 agent만
+    if team_row is not None:
+        conn.execute(
+            """
+            UPDATE agent_pool SET llm_provider = ?, llm_model = ?
+            WHERE llm_provider = 'ollama'
+              AND id IN (
+                  SELECT member_id FROM team_members
+                  WHERE team_id = ? AND member_type = 'agent'
+              )
+            """,
+            (_DEV_CREW_CLOUD_PROVIDER, _DEV_CREW_CLOUD_MODEL, team_row["id"]),
+        )
 
 
 def _backfill_show_in_conversation(conn: sqlite3.Connection) -> None:

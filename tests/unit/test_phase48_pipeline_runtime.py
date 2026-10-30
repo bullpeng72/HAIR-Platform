@@ -312,6 +312,39 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
     )  # 승인 불필요 단계는 자동 승인
 
 
+def test_on_stage_resolved_callback_fires_once_per_auto_advanced_stage():
+    """사용자 보고(2026-10-28, "결재 승인 되었으나, 대화창의 경우 이후
+    진행 확인되지 않음") 원인 수정 확인 — 승인 불필요 단계가 여러 개
+    연달아 자동 통과하면 예전엔 `run_pipeline_stage_job()` 호출 전체가
+    끝날 때까지 호출자가 전혀 알 길이 없었다. `on_stage_resolved`
+    콜백이 있으면 단계가 resolve될 때마다(이 템플릿은 2단계 모두
+    승인 불필요라 한 번의 `run_pipeline_stage_job()` 호출 안에서
+    전부 자동 완주한다) 매번 불려야 한다 — 콜백을 안 넘기면(기존
+    Task 협업 워크스페이스 경로) 지금까지와 100% 동일하게 그냥 전혀
+    안 불려도 된다(해당 경로는 이 테스트 대상이 아님, 위
+    `test_sequential_relay_then_parallel_delegated_auto_advance_
+    without_approval`가 콜백 없이도 여전히 끝까지 완주하는지 이미
+    검증한다)."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+    task_id = _make_task(conn)
+    tid = pr.create_pipeline_template(conn, admin_id, "p3", "", "x")
+    pr.add_stage(conn, admin_id, tid, "설계", "single", [("AA", "")])
+    pr.add_stage(conn, admin_id, tid, "구현", "single", [("백엔드 개발자", "")])
+
+    calls = []
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
+        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
+        pr.run_pipeline_stage_job(
+            conn, run_id, admin_id, on_stage_resolved=lambda: calls.append(1)
+        )
+
+    run = conn.execute("SELECT * FROM pipeline_runs WHERE id=?", (run_id,)).fetchone()
+    assert run["status"] == "completed"
+    assert len(calls) == 2  # 단계 2개 각각 resolve될 때마다 한 번씩
+
+
 def test_is_primary_deliverable_round_trips_through_add_stage_and_template():
     """사용자 보고(2026-10-19, "최종 결과물에 코드가 아니라 품질 리포트만
     있다") — `is_primary_deliverable`이 `add_stage()` → `get_pipeline_
@@ -640,6 +673,237 @@ def test_resolve_stage_decision_reject_also_rejects_the_deliverable():
     assert d["status"] == "rejected"
 
 
+def test_reject_reason_is_fed_into_the_retry_instructions():
+    """사용자 요청(2026-10-28, "반려 사유를 재시도 지시문에 직접 끼워
+    넣는 식으로 개선") — 사람이 반려하며 적은 사유가 같은 단계의 다음
+    시도 때 `crew_runtime.run_crew()`에 넘어가는 task_description에
+    그대로 포함돼야 한다. Gate 실패 재시도(`_gate_failure_summary()`
+    기반)와는 다른 경로다 — 이 단계는 애초에 Gate를 통과했어야 사람
+    승인까지 왔으므로, Gate 기반 피드백("세부 사유 없음")만으로는
+    사람이 적은 진짜 이유가 전혀 안 보였다."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+    task_id = _make_task(conn)
+    tid = pr.create_pipeline_template(conn, admin_id, "p6", "", "x")
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "s1",
+        "single",
+        [("요구사항 분석가", "")],
+        requires_human_approval=True,
+        max_retry=2,
+    )
+
+    descriptions_by_attempt = []
+
+    def _tracking_run_crew(
+        conn,
+        agent_ids,
+        task_descriptions,
+        actor_id,
+        process="sequential",
+        provider=None,
+        model=None,
+        manager_agent_id=None,
+        expected_outputs=None,
+    ):
+        descriptions_by_attempt.append(task_descriptions[0])
+        return _good_run_crew()(
+            conn,
+            agent_ids,
+            task_descriptions,
+            actor_id,
+            process,
+            provider,
+            model,
+            manager_agent_id,
+            expected_outputs,
+        )
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew):
+        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+        approval = conn.execute(
+            "SELECT * FROM approvals WHERE subject_type='pipeline_run_stage'"
+        ).fetchone()
+        pr.resolve_stage_decision(
+            conn,
+            admin_id,
+            approval["subject_id"],
+            approved=False,
+            reason="요구사항에 비기능 요구사항(성능/보안)이 전혀 없습니다. 추가해주세요.",
+        )
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+
+    assert len(descriptions_by_attempt) == 2
+    assert "사람 반려 사유" in descriptions_by_attempt[1]
+    assert "비기능 요구사항" in descriptions_by_attempt[1]
+
+    run_stage = conn.execute(
+        "SELECT * FROM pipeline_run_stages WHERE pipeline_run_id=? AND attempt=1",
+        (run_id,),
+    ).fetchone()
+    assert run_stage["decision_reason"] == (
+        "요구사항에 비기능 요구사항(성능/보안)이 전혀 없습니다. 추가해주세요."
+    )
+
+
+def test_reject_without_reason_still_retries_with_generic_notice():
+    """사유를 안 적고 반려해도(`reason=None`) 재시도 자체는 그대로
+    되고, "반려됐다"는 사실만 알려주는 일반 문구가 들어가야 한다(빈
+    문자열을 그대로 프롬프트에 끼워 넣어 어색해지면 안 됨)."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+    task_id = _make_task(conn)
+    tid = pr.create_pipeline_template(conn, admin_id, "p7", "", "x")
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "s1",
+        "single",
+        [("요구사항 분석가", "")],
+        requires_human_approval=True,
+        max_retry=2,
+    )
+
+    descriptions_by_attempt = []
+
+    def _tracking_run_crew(
+        conn,
+        agent_ids,
+        task_descriptions,
+        actor_id,
+        process="sequential",
+        provider=None,
+        model=None,
+        manager_agent_id=None,
+        expected_outputs=None,
+    ):
+        descriptions_by_attempt.append(task_descriptions[0])
+        return _good_run_crew()(
+            conn,
+            agent_ids,
+            task_descriptions,
+            actor_id,
+            process,
+            provider,
+            model,
+            manager_agent_id,
+            expected_outputs,
+        )
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew):
+        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+        approval = conn.execute(
+            "SELECT * FROM approvals WHERE subject_type='pipeline_run_stage'"
+        ).fetchone()
+        pr.resolve_stage_decision(
+            conn, admin_id, approval["subject_id"], approved=False
+        )
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+
+    assert "사람이 반려했습니다" in descriptions_by_attempt[1]
+    assert "구체적 사유 입력 없음" in descriptions_by_attempt[1]
+
+
+def test_approval_resume_keeps_original_requester_not_the_approver(client_and_conn):
+    """사용자 보고(2026-10-28, "코드 검증의 경우 요청자가 대화중인
+    사람이 아닌 admin에 표기되며 어느 누구도 승인할 수 있는 상황이
+    아님") 재현/수정 — 1단계를 admin1이 승인해 재개시키면, 그 뒤
+    자동 재시도 끝에 2단계가 에스컬레이션될 때 그 결재 요청의
+    `requested_by`가 "방금 승인한 admin1"이 아니라 "원래 이 파이프
+    라인을 실행시킨 사람"(member1)이어야 한다 — 그래야 admin1이 자기
+    승인 방지에 걸리지 않고 2단계도 승인할 수 있다(실측 확인된 버그:
+    `app.py`의 `decide_approval()`이 재개 BackgroundTask에 `user["id"]`
+    (승인자)를 그대로 actor_id로 넘겨, 그게 다음 에스컬레이션의
+    requested_by가 돼 버렸다)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    r = client.post(
+        "/api/pipeline-templates",
+        json={"name": "재개 테스트 파이프라인", "description": "d", "domain": "x"},
+    )
+    template_id = r.json()["id"]
+    client.post(
+        f"/api/pipeline-templates/{template_id}/stages",
+        json={
+            "name": "요구분석",
+            "mode": "single",
+            "agents": [{"role_name": "요구사항 분석가", "instructions": ""}],
+            "requires_human_approval": True,
+        },
+    )
+    r = client.post(
+        f"/api/pipeline-templates/{template_id}/stages",
+        json={
+            "name": "코드 검증",
+            "mode": "single",
+            "agents": [{"role_name": "코드 검증가", "instructions": ""}],
+            "min_gate_pass_ratio": 1.0,
+        },
+    )
+    stage2_id = r.json()["id"]
+    client.patch(
+        f"/api/pipeline-templates/{template_id}/stages/{stage2_id}",
+        json={"max_retry": 1},
+    )
+
+    # member1이 "대화중인 사람"(원래 요청자) 역할 — 직접 파이프라인을
+    # 시작시킨다.
+    member1_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'member1'"
+    ).fetchone()["id"]
+    task_id = _make_task(conn)
+    bad_gate = {
+        "A": {"score": 0.1, "passed": False}
+    }  # 1.0 기준을 못 넘김 → 에스컬레이션
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
+        run_id = pr.start_pipeline_run(conn, member1_id, template_id, task_id)
+        pr.run_pipeline_stage_job(conn, run_id, member1_id)
+
+    stage1_approval = conn.execute(
+        "SELECT * FROM approvals WHERE subject_type='pipeline_run_stage' "
+        "ORDER BY id LIMIT 1"
+    ).fetchone()
+    assert stage1_approval["requested_by"] == member1_id
+
+    # admin1이 1단계를 승인 — 재개된 2단계가 Gate 미달로 바로
+    # 에스컬레이션된다(max_retry=1).
+    with patch(
+        "hair_platform.crew_runtime.run_crew",
+        side_effect=_good_run_crew(gate_scores=bad_gate),
+    ):
+        resp = client.post(
+            f"/api/approvals/{stage1_approval['id']}/decide", json={"approve": True}
+        )
+        assert resp.status_code == 200, resp.text
+
+    stage2_approval = conn.execute(
+        "SELECT * FROM approvals WHERE subject_type='pipeline_run_stage' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert stage2_approval["id"] != stage1_approval["id"]
+    # 핵심 단언 — 승인자(admin1)가 아니라 원래 요청자(member1)여야 한다.
+    assert stage2_approval["requested_by"] == member1_id
+
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    assert stage2_approval["requested_by"] != admin_id
+    # 자기 승인 방지에 안 걸리고 admin1이 그대로 2단계도 승인할 수
+    # 있어야 한다(이게 안 되면 버그가 재발한 것).
+    resp = client.post(
+        f"/api/approvals/{stage2_approval['id']}/decide", json={"approve": True}
+    )
+    assert resp.status_code == 200, resp.text
+
+
 # ---------- HTTP 엔드포인트(사용자 요청, "화면에서 단계를 직접 구성하는
 # 빌더까지") ----------
 
@@ -737,6 +1001,11 @@ def test_pipeline_builder_http_endpoints_round_trip():
             a for a in inbox if a["subject_type"] == "pipeline_run_stage"
         )
         assert "요구분석" in pipeline_approval.get("resource_name", "")
+        # 사용자 보고(2026-10-28, "결재에서 승인을 요청하고 있으나,
+        # 해당 컨텐츠를 검토할 수 있는 UI가 없어") — 결재함이 실제
+        # 단계 산출물을 같이 내려줘야 한다.
+        assert pipeline_approval.get("content")
+        assert pipeline_approval.get("content_type") == "markdown"
 
         with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
             r = client.post(

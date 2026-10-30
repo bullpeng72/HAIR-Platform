@@ -42,14 +42,25 @@ manager 경로, 2026-10-18에 이 세션에서 고치고 실측 확인한 그 �
 **기존 코드와의 관계** — 새 LLM 호출/평가 로직을 만들지 않는다.
 `crew_runtime.run_crew()`가 이미 반환하는 `gate_scores`/`tcr`/`agents`를
 그대로 쓰고, `approvals.create_approval_chain()`/`agent_evaluation.
-record_evaluation()`을 그대로 재사용한다. "자율 개발 크루" 팀
-(`teams`/`team_members`)은 건드리지 않는다(하위 호환 — 수동 Crew 실행에
-계속 쓸 수 있다) — 이 파이프라인이 "정식 개발 진행 경로"로 추가된다."""
+record_evaluation()`을 그대로 재사용한다. 이 모듈 자체(단계 실행/Gate
+재시도/에스컬레이션 로직)는 호출자가 누구든 전혀 모른다 — "자율 개발
+크루" 팀(`teams`/`team_members`)이 Task 협업 워크스페이스에서 직접
+호출하든, 대화 `@팀이름` 멘션이 호출하든 똑같이 동작한다.
+
+(2026-10-28 갱신 — 처음 추가됐을 땐 "자율 개발 크루" 팀은 건드리지
+않고 하위 호환용 수동 Crew 실행으로만 남겨뒀었다. 사용자 요청
+("'자율 개발 크루'의 경우 파이프라인을 참조해 실제 개발 품질을
+보장하며 수행될 수 있도록 재구성")으로 이제 그 팀도
+`teams.pipeline_template_id`를 통해 이 엔진에 연결돼 있다 —
+`conversations.run_team_mention_job()`/`_run_team_mention_via_
+pipeline()` 참고. 연결 안 된 다른 팀은 여전히 기존 단발 Crew 실행
+그대로다.)"""
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 
 from hair_platform import agent_evaluation, approvals, audit, crew_runtime, deliverables
 
@@ -536,13 +547,26 @@ def _resolve_role_agent_id(conn: sqlite3.Connection, role_name: str) -> int:
 
 
 def run_pipeline_stage_job(
-    conn: sqlite3.Connection, run_id: int, actor_id: int
+    conn: sqlite3.Connection,
+    run_id: int,
+    actor_id: int,
+    on_stage_resolved: Callable[[], None] | None = None,
 ) -> None:
     """`start_pipeline_run()`/`resolve_stage_decision()`이 BackgroundTasks로
     예약한다 — 현재 단계 1개만 실행하고 끝낸다(통과하면 즉시 다음 단계를
     재귀적으로 실행, 승인 대기/에스컬레이션이면 멈춘다). 백그라운드
     경계(`deliverables.run_team_crew_job()`과 같은 원칙) — 예외는 여기서
-    끝내고 `pipeline_runs.status='failed'`로 기록한다."""
+    끝내고 `pipeline_runs.status='failed'`로 기록한다.
+
+    `on_stage_resolved`(2026-10-28, 사용자 보고 "결재 승인 되었으나,
+    대화창의 경우 이후 진행 확인되지 않음") — 승인 불필요 단계가
+    여러 개 연달아 통과하면(Gate 0.0인 단계들) `_execute_stage_attempt()`
+    가 같은 호출 안에서 그 전부를 재귀로 조용히 통과시킨다. 대화에서
+    트리거된 실행은 전체가 끝날 때까지(수 분~수십 분) 아무 메시지도
+    안 올라와 "멈췄나?"로 보였다 — 이 콜백을 매 단계 resolve 시점마다
+    불러 `conversations.post_pipeline_run_status_message()`가 그때그때
+    진행 메시지를 올릴 수 있게 한다. Task 협업 워크스페이스 경로(콜백
+    안 넘김)는 기존과 100% 동일하게 동작한다."""
     run = conn.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
     if run is None or run["status"] not in ("running",):
         return  # 이미 멈춰있거나(승인대기/완료/실패) 삭제됨 — 조용히 무시.
@@ -558,10 +582,12 @@ def run_pipeline_stage_job(
             (run_id,),
         )
         conn.commit()
+        if on_stage_resolved is not None:
+            on_stage_resolved()
         return
 
     try:
-        _execute_stage_attempt(conn, run, stage, actor_id)
+        _execute_stage_attempt(conn, run, stage, actor_id, on_stage_resolved)
     except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
         conn.rollback()
         conn.execute(
@@ -578,10 +604,16 @@ def run_pipeline_stage_job(
             after={"error": str(exc)},
         )
         conn.commit()
+        if on_stage_resolved is not None:
+            on_stage_resolved()
 
 
 def _execute_stage_attempt(
-    conn: sqlite3.Connection, run: sqlite3.Row, stage: sqlite3.Row, actor_id: int
+    conn: sqlite3.Connection,
+    run: sqlite3.Row,
+    stage: sqlite3.Row,
+    actor_id: int,
+    on_stage_resolved: Callable[[], None] | None = None,
 ) -> None:
     run_id = run["id"]
     stage_id = stage["id"]
@@ -610,13 +642,32 @@ def _execute_stage_attempt(
 
     retry_feedback = ""
     if attempt > 1:
-        last_failed = conn.execute(
-            "SELECT gate_scores FROM pipeline_run_stages WHERE pipeline_run_id = ? "
-            "AND stage_id = ? AND attempt = ? ORDER BY id DESC LIMIT 1",
+        last_attempt = conn.execute(
+            "SELECT status, gate_scores, decision_reason FROM pipeline_run_stages "
+            "WHERE pipeline_run_id = ? AND stage_id = ? AND attempt = ? "
+            "ORDER BY id DESC LIMIT 1",
             (run_id, stage_id, attempt - 1),
         ).fetchone()
-        if last_failed is not None and last_failed["gate_scores"]:
-            summary = _gate_failure_summary(json.loads(last_failed["gate_scores"]))
+        # 사용자 요청(2026-10-28, "반려 사유를 재시도 지시문에 직접
+        # 끼워 넣는 식으로 개선") — 이전 시도가 사람 반려였으면(Gate는
+        # 이미 통과했던 상태라 `_gate_failure_summary()`로는 "세부
+        # 사유 없음"만 나와 사람이 왜 반려했는지 전혀 안 알려줬다)
+        # 사람이 적은 사유를 그대로 다음 시도 지시문에 끼워 넣는다 —
+        # Gate 자동 실패 재시도(기존 로직)와는 별개 분기.
+        if last_attempt is not None and last_attempt["status"] == "rejected":
+            if last_attempt["decision_reason"]:
+                retry_feedback = (
+                    f"\n\n[이전 시도({attempt - 1}차) 사람 반려 사유] "
+                    f"{last_attempt['decision_reason']} 이를 구체적으로 반영해 "
+                    "다시 작성하세요."
+                )
+            else:
+                retry_feedback = (
+                    f"\n\n[이전 시도({attempt - 1}차)] 사람이 반려했습니다(구체적 "
+                    "사유 입력 없음) — 내용을 다시 점검해 더 신중하게 작성하세요."
+                )
+        elif last_attempt is not None and last_attempt["gate_scores"]:
+            summary = _gate_failure_summary(json.loads(last_attempt["gate_scores"]))
             retry_feedback = (
                 f"\n\n[이전 시도({attempt - 1}차) Gate 결과] 다음 기준을 통과하지 "
                 f"못했습니다: {summary}. 이를 구체적으로 보완해 다시 작성하세요."
@@ -711,7 +762,9 @@ def _execute_stage_attempt(
     if not passed:
         if attempt < stage["max_retry"]:
             conn.commit()
-            _execute_stage_attempt(conn, run, stage, actor_id)
+            if on_stage_resolved is not None:
+                on_stage_resolved()
+            _execute_stage_attempt(conn, run, stage, actor_id, on_stage_resolved)
             return
         conn.execute(
             "UPDATE pipeline_run_stages SET status = 'escalated' WHERE id = ?",
@@ -733,6 +786,8 @@ def _execute_stage_attempt(
             after={"attempt": attempt, "gate_scores": gate_scores},
         )
         conn.commit()
+        if on_stage_resolved is not None:
+            on_stage_resolved()
         return
 
     # 통과 — 사람이 볼 수 있게 deliverables에 남긴다(요청대로 Task 협업
@@ -773,6 +828,8 @@ def _execute_stage_attempt(
             after={"deliverable_id": deliverable_id},
         )
         conn.commit()
+        if on_stage_resolved is not None:
+            on_stage_resolved()
         return
 
     next_seq = run["current_stage_seq"] + 1
@@ -788,12 +845,16 @@ def _execute_stage_attempt(
         )
         audit.record(conn, actor_id, "pipeline_run_completed", "pipeline_run", run_id)
         conn.commit()
+        if on_stage_resolved is not None:
+            on_stage_resolved()
         return
     conn.execute(
         "UPDATE pipeline_runs SET current_stage_seq = ? WHERE id = ?",
         (next_seq, run_id),
     )
     conn.commit()
+    if on_stage_resolved is not None:
+        on_stage_resolved()
     next_run = conn.execute(
         "SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)
     ).fetchone()
@@ -801,7 +862,7 @@ def _execute_stage_attempt(
         "SELECT * FROM pipeline_stages WHERE pipeline_template_id = ? AND seq_order = ?",
         (run["pipeline_template_id"], next_seq),
     ).fetchone()
-    _execute_stage_attempt(conn, next_run, next_stage, actor_id)
+    _execute_stage_attempt(conn, next_run, next_stage, actor_id, on_stage_resolved)
 
 
 def resolve_stage_decision(
@@ -880,9 +941,15 @@ def resolve_stage_decision(
         # 반려 = "다시 해와"(기존 human-approval-loop 스킬 안내와 일치) —
         # max_retry를 아직 안 넘었으면 사유를 피드백으로 반영해 같은
         # 단계를 재시도시킨다. 이미 다 썼으면 파이프라인을 종료한다.
+        # `reason`을 `decision_reason`에 저장해두면(2026-10-28, 사용자
+        # 요청 "반려 사유를 재시도 지시문에 직접 끼워 넣는 식으로
+        # 개선") 재시도 시 `_execute_stage_attempt()`가 그대로 읽어
+        # 다음 시도의 프롬프트에 끼워 넣는다 — 여기서 비워뒀으면 그냥
+        # `audit_log`에만 남고 끝(기존 동작과 동일).
         conn.execute(
-            "UPDATE pipeline_run_stages SET status = 'rejected' WHERE id = ?",
-            (pipeline_run_stage_id,),
+            "UPDATE pipeline_run_stages SET status = 'rejected', decision_reason = ? "
+            "WHERE id = ?",
+            (reason, pipeline_run_stage_id),
         )
         if run_stage["deliverable_id"] is not None:
             deliverables.resolve_deliverable_decision(

@@ -217,9 +217,17 @@ class AssignmentRequest(BaseModel):
     `team_leader_id`는 팀 배정의 결재 주체(비워두면 요청자 본인이
     기본값). `replaces_assignment_id`는 "다중 confirmed 허용"으로 바뀐
     뒤에도 "이 배정이 저 배정을 명시적으로 교체한다"를 표현하는 선택적
-    필드 — 비워두면 기존 confirmed 배정들과 그냥 공존한다(교체 아님)."""
+    필드 — 비워두면 기존 confirmed 배정들과 그냥 공존한다(교체 아님).
 
-    resource_type: Literal["human", "agent", "team"]
+    사용자 요청(2026-10-29, "파이프라인을 assignments.resource_type에
+    추가")으로 `"pipeline"`을 추가했다 — `resource_id`는 이때
+    `pipeline_templates.id`다. 사람/Agent/Team 배정과 동일하게 결재
+    체인을 거치고, 체인의 마지막 단계가 승인되는 순간
+    `pipeline_runtime.start_pipeline_run()`이 트리거된다(`app.py`의
+    `decide_approval()` 참고). 소유자 개념이 없어 `team_leader_id`는
+    쓰지 않는다(결재 주체는 항상 `requested_by`)."""
+
+    resource_type: Literal["human", "agent", "team", "pipeline"]
     resource_id: int
     team_leader_id: int | None = None
     replaces_assignment_id: int | None = None
@@ -241,8 +249,16 @@ class AssignmentCancelRequest(BaseModel):
 
 
 class TeamCreate(BaseModel):
+    """사용자 요청(2026-10-29, "TF팀을 teams의 확장으로") — `task_id`/
+    `brief_id` 중 하나라도 주면 그 업무에 종속된 TF팀(생성 즉시
+    `pending_onboarding`)으로, 둘 다 비우면 기존처럼 재사용 가능한
+    범용 팀(생성 즉시 `active`)으로 만들어진다. `teams.create_team()`
+    참고."""
+
     name: str
     description: str = ""
+    task_id: int | None = None
+    brief_id: int | None = None
 
 
 class TeamActiveUpdate(BaseModel):
@@ -256,9 +272,15 @@ class TeamDefaultsUpdate(BaseModel):
     자리에서 바꿀 수 있다), `@팀멘션`도 이 매니저를 우선 쓴다
     (`teams.manager_agent_id_for_team()` 참고). 부분 갱신
     (`exclude_unset=True`로 읽는다) — `None`을 명시적으로 보내면 그
-    기본값을 지운다(다시 매번 선택/기존 자동 추정으로 되돌림)."""
+    기본값을 지운다(다시 매번 선택/기존 자동 추정으로 되돌림).
+
+    `pipeline_template_id`(2026-10-29) — 이 팀을 파이프라인에 연결한다
+    (`@팀멘션`이 단발 실행 대신 그 파이프라인을 타게 됨). 과거엔 팀
+    이름이 "자율 개발 크루"일 때만 1회성 마이그레이션으로 세팅됐는데,
+    이제 어느 팀이든 이 필드로 설정할 수 있다."""
 
     default_process: CrewProcess | None = None
+    pipeline_template_id: int | None = None
     default_manager_agent_id: int | None = None
 
 

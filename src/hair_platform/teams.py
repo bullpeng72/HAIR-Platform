@@ -14,23 +14,135 @@ from __future__ import annotations
 
 import sqlite3
 
-from hair_platform import audit
+from hair_platform import audit, data_admin
 
 
 def create_team(
-    conn: sqlite3.Connection, actor_id: int, name: str, description: str = ""
+    conn: sqlite3.Connection,
+    actor_id: int,
+    name: str,
+    description: str = "",
+    task_id: int | None = None,
+    brief_id: int | None = None,
 ) -> int:
+    """사용자 요청(2026-10-29, "TF팀을 teams의 확장으로") — `task_id`/
+    `brief_id`를 주면 그 업무에 종속된 TF팀으로, 생성 즉시 `pending_
+    onboarding`(온보딩 전까지 @멘션/배정 후보에서 제외 — Buzz 비교
+    분석에서 가져온 "명시적 권한 부여" 원칙). 둘 다 안 주면 기존처럼
+    재사용 가능한 범용 팀("자율 개발 크루" 등)으로, 생성 즉시 `active`
+    (기존 동작 그대로 — 하위 호환)."""
     name = name.strip()
     if not name:
         raise ValueError("empty_name")
+    initial_status = "pending_onboarding" if (task_id or brief_id) else "active"
+    is_active = 1 if initial_status == "active" else 0
     cur = conn.execute(
-        "INSERT INTO teams (name, description) VALUES (?, ?)", (name, description)
+        "INSERT INTO teams (name, description, is_active, status, task_id, brief_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (name, description, is_active, initial_status, task_id, brief_id),
     )
     team_id = cur.lastrowid
     assert team_id is not None
-    audit.record(conn, actor_id, "team_created", "team", team_id, after={"name": name})
+    audit.record(
+        conn,
+        actor_id,
+        "team_created",
+        "team",
+        team_id,
+        after={
+            "name": name,
+            "status": initial_status,
+            "task_id": task_id,
+            "brief_id": brief_id,
+        },
+    )
     conn.commit()
     return team_id
+
+
+def onboard_team(conn: sqlite3.Connection, actor_id: int, team_id: int) -> dict:
+    """`pending_onboarding` → `active`(agent_pool의 onboard와 동일 패턴).
+    `is_active`를 거울로 동시 갱신 — `teams.is_active`만 읽는 기존 지점
+    (팀 @멘션 검색, Task 배정 드롭다운)이 코드 변경 없이 바로 반영받는다."""
+    row = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if row is None:
+        raise ValueError("team_not_found")
+    conn.execute(
+        "UPDATE teams SET status = 'active', is_active = 1 WHERE id = ?", (team_id,)
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "team_onboarded",
+        "team",
+        team_id,
+        before={"status": row["status"]},
+        after={"status": "active"},
+    )
+    conn.commit()
+    return {"id": team_id, "status": "active"}
+
+
+def deprecate_team(conn: sqlite3.Connection, actor_id: int, team_id: int) -> dict:
+    """`status` → `deprecated`, `is_active` 거울 0으로. agent_pool의
+    deprecate와 동일 패턴(일방향 — 되돌리려면 직접 DB/관리자 개입)."""
+    row = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if row is None:
+        raise ValueError("team_not_found")
+    conn.execute(
+        "UPDATE teams SET status = 'deprecated', is_active = 0 WHERE id = ?",
+        (team_id,),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "team_deprecated",
+        "team",
+        team_id,
+        before={"status": row["status"]},
+        after={"status": "deprecated"},
+    )
+    conn.commit()
+    return {"id": team_id, "status": "deprecated"}
+
+
+def complete_team_mission(
+    conn: sqlite3.Connection, actor_id: int, team_id: int
+) -> dict:
+    """TF팀이 맡은 업무를 끝냈을 때 쓴다 — `active`에서만 허용한다.
+    4번째 상태값을 새로 만들지 않고 기존 `deprecated`로 수렴시키되
+    (agent_pool과 같은 3단계 enum을 유지해, 모든 기존 게이팅 지점에
+    새 값을 추가로 제외시키는 수고를 피한다), `completed_at` 타임
+    스탬프와 별도 audit action으로 "정상 종료"와 "강제 폐기"를
+    구분한다."""
+    row = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if row is None:
+        raise ValueError("team_not_found")
+    if row["status"] != "active":
+        raise ValueError("team_not_active")
+    conn.execute(
+        "UPDATE teams SET status = 'deprecated', is_active = 0, "
+        "completed_at = datetime('now') WHERE id = ?",
+        (team_id,),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "team_mission_completed",
+        "team",
+        team_id,
+        before={"status": "active"},
+        after={"status": "deprecated"},
+    )
+    conn.commit()
+    updated = conn.execute(
+        "SELECT status, completed_at FROM teams WHERE id = ?", (team_id,)
+    ).fetchone()
+    return {
+        "id": team_id,
+        "status": updated["status"],
+        "completed_at": updated["completed_at"],
+    }
 
 
 def _member_row_to_dict(row: sqlite3.Row) -> dict:
@@ -67,6 +179,11 @@ def get_team(conn: sqlite3.Connection, team_id: int) -> dict | None:
         "name": row["name"],
         "description": row["description"],
         "is_active": bool(row["is_active"]),
+        "status": row["status"],
+        "task_id": row["task_id"],
+        "brief_id": row["brief_id"],
+        "completed_at": row["completed_at"],
+        "pipeline_template_id": row["pipeline_template_id"],
         "default_process": row["default_process"],
         "default_manager_agent_id": row["default_manager_agent_id"],
         "members": [_member_row_to_dict(m) for m in members],
@@ -110,7 +227,12 @@ def update_team_defaults(
     화면이 그 값을 미리 채워주고(여전히 그 자리에서 바꿀 수 있다),
     `@팀멘션`/hierarchical 라우팅도 이 매니저를 우선 쓴다
     (`manager_agent_id_for_team()` 참고)."""
-    allowed = {"default_process", "default_manager_agent_id"}
+    # 사용자 요청(2026-10-29, "TF팀을 teams의 확장으로") — 지금까지
+    # `pipeline_template_id`는 팀 이름이 정확히 "자율 개발 크루"일 때만
+    # 1회성 마이그레이션으로 세팅됐다(`db.py`의 `_sync_dev_crew_pipeline_
+    # integration()`). 이제 어느 팀이든 이 필드로 직접 연결할 수 있게
+    # 일반화한다.
+    allowed = {"default_process", "default_manager_agent_id", "pipeline_template_id"}
     unknown = set(fields) - allowed
     if unknown:
         raise ValueError(f"unsupported_fields:{sorted(unknown)}")
@@ -121,6 +243,7 @@ def update_team_defaults(
         return {
             "default_process": team["default_process"],
             "default_manager_agent_id": team["default_manager_agent_id"],
+            "pipeline_template_id": team["pipeline_template_id"],
         }
     if (
         "default_process" in fields
@@ -135,6 +258,15 @@ def update_team_defaults(
         not in active_agent_member_ids(conn, team_id)
     ):
         raise ValueError("manager_must_be_active_agent_member_of_team")
+    if "pipeline_template_id" in fields and fields["pipeline_template_id"] is not None:
+        template = conn.execute(
+            "SELECT id, is_active FROM pipeline_templates WHERE id = ?",
+            (fields["pipeline_template_id"],),
+        ).fetchone()
+        if template is None:
+            raise ValueError("pipeline_template_not_found")
+        if not template["is_active"]:
+            raise ValueError("pipeline_template_inactive")
 
     set_clauses = [f"{key} = ?" for key in fields]
     values = list(fields.values()) + [team_id]
@@ -153,7 +285,8 @@ def update_team_defaults(
     )
     conn.commit()
     updated = conn.execute(
-        "SELECT default_process, default_manager_agent_id FROM teams WHERE id = ?",
+        "SELECT default_process, default_manager_agent_id, pipeline_template_id "
+        "FROM teams WHERE id = ?",
         (team_id,),
     ).fetchone()
     return dict(updated)
@@ -161,14 +294,21 @@ def update_team_defaults(
 
 def delete_team(conn: sqlite3.Connection, actor_id: int, team_id: int) -> None:
     """사용자 요청(2026-09-28)의 "각 메뉴에서 데이터 삭제 기능" 관례를
-    그대로 따른다 — 이 팀을 참조하는 `assignments.resource_id`(resource_
-    type='team')가 있어도 FK가 안 걸려 있어(JSON이 아니라 정수 참조지만
-    tool_pool/skill_pool과 마찬가지로 엄격한 FK는 안 둠) 막지 않는다 —
-    과거 배정 이력(assignment_history)은 "그 당시 팀 이름"을 알아야
-    하는 감사 목적이라 팀 자체를 지워도 레코드는 남는다(append-only 원칙)."""
+    따른다. **정정(2026-10-29, "TF팀을 teams의 확장으로")**: 과거엔
+    `assignments.resource_id`(resource_type='team')에 확정된 배정이
+    있어도 막지 않았다(FK가 없다는 이유로) — "업무 수행 중인 TF팀은
+    삭제 불가"라는 요구와 정면으로 어긋났다. `task/brief/human/agent`
+    삭제에 이미 쓰이는 `data_admin.confirmed_assignment_exists()`와
+    같은 보호를 이제 team에도 적용한다. 과거 배정 이력
+    (assignment_history)은 "그 당시 팀 이름"을 알아야 하는 감사 목적이라
+    팀 자체를 지워도 레코드는 남는다(append-only 원칙)."""
     row = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
     if row is None:
         raise ValueError("team_not_found")
+    if data_admin.confirmed_assignment_exists(
+        conn, resource_type="team", resource_id=team_id
+    ):
+        raise ValueError("confirmed_assignment_exists")
     conn.execute("DELETE FROM team_members WHERE team_id = ?", (team_id,))
     conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
     audit.record(
