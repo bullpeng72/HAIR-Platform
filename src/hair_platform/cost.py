@@ -71,4 +71,23 @@ def report(conn: sqlite3.Connection) -> dict:
                 "total_cost": cost,
             }
         )
+    # 사용자 요청(2026-10-29, 개선 계획 Phase 1 "Team 성과/비용 집계") —
+    # Team 자체는 `cost_estimate` 컬럼이 없다(비용은 멤버 Agent 개별로만
+    # 입력된다 — 위 agent 루프에서 이미 집계됨). 여기서는 "이 팀이
+    # 확정 배정으로 얼마나 투입됐는지"만 보여주고, `total_cost`에는
+    # 더하지 않는다(멤버 Agent 쪽 집계와 중복 합산되지 않도록).
+    for row in conn.execute("SELECT * FROM teams WHERE status = 'active'").fetchall():
+        count = _confirmed_count(conn, "team", row["id"])
+        resources.append(
+            {
+                "type": "team",
+                "id": row["id"],
+                "code": None,
+                "name": row["name"],
+                "role": None,
+                "cost_estimate": None,
+                "confirmed_assignments": count,
+                "total_cost": None,
+            }
+        )
     return {"resources": resources, "total_cost": total_cost}

@@ -95,6 +95,25 @@ def full_review(conn: sqlite3.Connection) -> list[dict]:
                 "confirmed_assignments": _confirmed_count(conn, "agent", row["id"]),
             }
         )
+    # 사용자 요청(2026-10-29, 개선 계획 Phase 1 "Team 성과/비용 집계") —
+    # `_confirmed_count()`는 이미 `resource_type='team'`을 받을 수 있게
+    # 범용으로 짜여 있었으나(assignments.resource_type이 다형이라) 호출
+    # 루프가 없었다. Team은 `performance_score`/`code`라는 자체 개념이
+    # 없어(점수는 멤버 Agent 개별로만 매긴다) 그 두 필드는 항상 None —
+    # "이 팀이 확정 배정으로 얼마나 투입됐는지"만 사실로 보여준다.
+    for row in conn.execute("SELECT * FROM teams WHERE status = 'active'").fetchall():
+        result.append(
+            {
+                "type": "team",
+                "id": row["id"],
+                "code": None,
+                "name": row["name"],
+                "role": None,
+                "performance_score": None,
+                "performance_consent": None,
+                "confirmed_assignments": _confirmed_count(conn, "team", row["id"]),
+            }
+        )
     return result
 
 

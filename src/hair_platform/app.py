@@ -3584,13 +3584,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/crew-runs")
     def list_crew_runs(
         limit: int = 50,
+        team_id: int | None = None,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         """사용자 요청(2026-10-20, "Crew 빌더... 실행 이력") — "Crew
         빌더"의 "실행 이력" 탭이 Task를 가로질러 조회한다(admin/manager
         전용 — 이 목록이 모든 Task의 실행을 한 번에 보여주므로 개별
-        Task 참가자 권한 범위를 넘는다)."""
-        return crew_history.list_recent_runs(conn, limit=limit)
+        Task 참가자 권한 범위를 넘는다).
+
+        `team_id`(2026-10-29, 개선 계획 Phase 1) — "팀 관리" 화면에서
+        특정 팀의 실행 이력만 좁혀볼 수 있게 한다."""
+        return crew_history.list_recent_runs(conn, limit=limit, team_id=team_id)
 
     @app.get("/api/crew-runs/{run_id}")
     def get_crew_run(run_id: int, user: sqlite3.Row = Depends(get_current_user)):

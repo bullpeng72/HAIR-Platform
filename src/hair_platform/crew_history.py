@@ -174,10 +174,23 @@ def list_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[dict]:
     return [_row_to_dict(r) for r in rows]
 
 
-def list_recent_runs(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+def list_recent_runs(
+    conn: sqlite3.Connection, limit: int = 50, team_id: int | None = None
+) -> list[dict]:
     """ "Crew 빌더"의 전체 "실행 이력" 탭(admin/manager 전용, Task를
-    가로지르는 조회)이 쓴다."""
-    rows = conn.execute(
-        "SELECT * FROM crew_runs ORDER BY id DESC LIMIT ?", (limit,)
-    ).fetchall()
+    가로지르는 조회)이 쓴다.
+
+    `team_id`(2026-10-29, 개선 계획 Phase 1 "Team 실행 이력 필터") —
+    지금까지 `crew_runs.team_id`는 저장만 되고 팀별로 걸러볼 방법이
+    없었다. 주어지면 그 팀의 실행만 좁혀서 보여준다(None이면 기존처럼
+    전체)."""
+    if team_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM crew_runs WHERE team_id = ? ORDER BY id DESC LIMIT ?",
+            (team_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM crew_runs ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
     return [_row_to_dict(r) for r in rows]

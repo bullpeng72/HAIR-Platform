@@ -6036,8 +6036,10 @@ async function renderTeams(content) {
       lifecycleButtonsHtml +
       '<button class="small" data-toggle-active="' + t.id + '" data-next-active="' + (t.is_active ? "0" : "1") + '">' +
       (t.is_active ? "비활성화" : "활성화") + '</button>' +
+      '<button class="small" data-view-team-history="' + t.id + '">실행 이력 보기</button>' +
       (isAdmin ? '<button class="small danger" data-delete-team="' + t.id + '">팀 삭제</button>' : "") +
       '</div>' +
+      '<div id="team-history-' + t.id + '"></div>' +
       '</section>';
   };
 
@@ -6153,6 +6155,16 @@ async function renderTeams(content) {
         await api("POST", "/api/teams/" + btn.dataset.completeMission + "/complete-mission");
         showMsg("global-msg", "미션 완료로 표시했습니다.", "ok");
         refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+
+  content.querySelectorAll("[data-view-team-history]").forEach(btn => {
+    btn.onclick = async () => {
+      const teamId = btn.dataset.viewTeamHistory;
+      const panel = document.getElementById("team-history-" + teamId);
+      try {
+        await _renderCrewHistory(panel, Number(teamId));
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
@@ -6851,8 +6863,12 @@ function crewRunProgressHtml(run) {
     '</div>' + completed + '/' + total;
 }
 
-async function _renderCrewHistory(container) {
-  const runs = await api("GET", "/api/crew-runs");
+async function _renderCrewHistory(container, teamId) {
+  // 사용자 요청(2026-10-29, 개선 계획 Phase 1 "Team 실행 이력 필터") —
+  // teamId가 주어지면 그 팀의 실행만 좁혀 보여준다("팀 관리" 탭의
+  // "실행 이력 보기"가 씀). 안 주면 기존처럼 전체(Crew 빌더의
+  // "실행 이력" 탭).
+  const runs = await api("GET", "/api/crew-runs" + (teamId ? "?team_id=" + teamId : ""));
   container.innerHTML =
     '<section class="card">' +
     '<p class="muted">팀 Agent 실행·즉석 실행 둘 다 여기 기록됩니다(즉석 테스트 샌드박스는 지금도 저장되지 않습니다). 진행 중인 실행은 "진행" 열에서 지금까지 끝난 Agent 수를 볼 수 있습니다 — 새로고침하면 갱신됩니다.</p>' +
@@ -8057,11 +8073,14 @@ async function renderCost(content) {
     '<li>이 "합계"는 "단가(cost_estimate, 사람/에이전트 관리 탭에서 수동 입력)" × "확정 배정 수"입니다.</li>' +
     '<li>실제로 LLM API에 청구된 금액이 아닙니다(simple_llm/crewai 생성이나 Crew 실행·에이전트 실행 때 실제로 나간 API 비용은 이 리포트에 잡히지 않습니다).</li>' +
     '<li>즉 "일 시켰을 때 실제 API 비용"이 아니라 "이 인력을 계속 쓰면 예상되는 인건비/도입비" 관점의 숫자입니다.</li>' +
+    '<li>팀(Team) 행은 단가·합계 개념이 없어("-") 확정 배정 수만 보여줍니다 — 팀의 비용은 그 멤버 Agent/사람 행에 이미 개별로 집계돼 있습니다(중복 합산 방지).</li>' +
     '</ul>' +
     // 사용자 요청(2026-10-27, "비용의 ID도 agent code로 변경") — agent는
     // code, human은 employee_id(둘 다 없으면 "#id" 폴백).
     table(["타입", "코드", "이름", "역할", "단가", "확정 배정 수", "합계"], report.resources.map(r => [
-      esc(label(r.type)), esc(r.code || ("#" + r.id)), esc(r.name || r.role), esc(r.role), r.cost_estimate, r.confirmed_assignments, r.total_cost,
+      esc(label(r.type)), esc(r.code || ("#" + r.id)), esc(r.name || r.role), esc(r.role),
+      r.cost_estimate === null ? "-" : r.cost_estimate, r.confirmed_assignments,
+      r.total_cost === null ? "-" : r.total_cost,
     ])) + "</section>";
 }
 
@@ -8471,7 +8490,9 @@ const MANUAL_MARKDOWN = [
 '',
 '- **"업무에 바로 실행"**: 실제 할 일(Task)에 결과를 남기며 실행합니다(기본 모드) — 여러 Agent를 고르고, 처리 방식(sequential/hierarchical)과 hierarchical일 때의 매니저 Agent를 직접 선택합니다.',
 '- **"즉석 테스트(저장 안 됨)"**: 업무에 연결하지 않고 협업 구조만 가볍게 실험해봅니다 — 결과가 할 일에 남지 않습니다.',
-'- **"실행 이력"**(admin/manager 전용): 과거 Crew 실행의 협업 다이어그램·토큰 사용량·Gate 점수를 그대로 다시 볼 수 있습니다.',
+'- **"실행 이력"**(admin/manager 전용): 과거 Crew 실행의 협업 다이어그램·토큰 사용량·Gate 점수를 그대로 다시 볼 수 있습니다. "팀 관리" 탭의 각 팀 카드에서 "실행 이력 보기"를 누르면 이 목록이 그 팀의 실행만으로 좁혀져 나옵니다.',
+'',
+'**이 조합을 팀/파이프라인으로 저장**: "업무에 바로 실행"으로 한 번 실행하면 결과 아래에 "이 조합을 저장해 다음에 재사용" 패널이 나타납니다(admin/manager 전용) — 방금 쓴 Agent 구성(+처리 방식/매니저)을 그대로 **"팀으로 저장"**(이후 "팀 관리"에서 재사용·배정 가능)하거나, 기존 파이프라인에 **"파이프라인 단계로 저장"**할 수 있습니다(hierarchical이면 매니저를 직접 지정해 실행했을 때만 — 자동 배정으로 실행했으면 저장 버튼이 비활성화됩니다). 매번 즉석으로 Agent를 고르는 게 번거로워졌다면 이 버튼으로 바로 정식 팀/파이프라인으로 승격시키세요.',
 '',
 '<h2 id="agent">5. Agent / Agent 그룹 만들기</h2>',
 '',
