@@ -211,8 +211,13 @@ CREATE TABLE IF NOT EXISTS teams (
     completed_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_teams_task_id ON teams(task_id);
-CREATE INDEX IF NOT EXISTS idx_teams_brief_id ON teams(brief_id);
+-- `idx_teams_task_id`/`idx_teams_brief_id`는 여기서 안 만든다 — 기존
+-- DB의 `teams`는 이 시점에 아직 `task_id`/`brief_id` 컬럼이 없어
+-- (`CREATE TABLE IF NOT EXISTS`가 no-op이라 컬럼이 안 생김) 인덱스
+-- 생성이 바로 실패한다(실측). `_migrate_schema()`가 `_ensure_column`
+-- 으로 컬럼을 추가한 뒤 같은 인덱스를 만든다 — 신규 DB도 그 시점에
+-- 문제없이 만들어지므로(컬럼이 이미 있어 `_ensure_column`이 no-op)
+-- 여기 두는 건 중복일 뿐 아니라 기존 DB에서 깨진다.
 
 CREATE TABLE IF NOT EXISTS team_members (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
