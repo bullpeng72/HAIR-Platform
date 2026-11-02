@@ -6017,8 +6017,16 @@ async function renderTeams(content) {
       (t.status === "active" && (t.task_id || t.brief_id)
         ? '<button class="small" data-complete-mission="' + t.id + '">미션 완료</button>'
         : "");
+    // 사용자 요청(2026-10-29, 개선 계획 Phase 3 "조직도 용어 재정리") —
+    // 기존 "조직도" 메뉴(상사 체인 뷰)는 그대로 두고 이름도 안 바꾼다
+    // (혼란 위험이 더 크다는 판단) — 대신 "TF팀"이라는 용어가 실제로
+    // 쓰이는 자리인 여기서 배지로 명확히 구분한다. task_id/brief_id가
+    // 있으면 범용 재사용 팀이 아니라 "TF팀"임을 바로 보여준다.
+    const tfTeamBadgeHtml = (t.task_id || t.brief_id)
+      ? ' <span class="gate-badge" title="업무에 종속된 조직 — 기존 조직도 메뉴(상사 체인 뷰)와는 다른 개념입니다">TF팀</span>'
+      : "";
     return '<section class="card" data-team-card="' + t.id + '">' +
-      '<h3>#' + t.id + " " + esc(t.name) + ' <span class="gate-badge' + statusBadgeClass + '">' + esc(label(t.status)) + '</span></h3>' +
+      '<h3>#' + t.id + " " + esc(t.name) + tfTeamBadgeHtml + ' <span class="gate-badge' + statusBadgeClass + '">' + esc(label(t.status)) + '</span></h3>' +
       (t.description ? '<p class="muted">' + esc(t.description) + '</p>' : "") +
       linkedTaskHtml +
       humanStripHtml +
@@ -7831,6 +7839,7 @@ async function renderOrgChart(content) {
     '<li>여기 나오는 건 결재까지 끝나 상태가 confirmed(확정)된 배정뿐입니다 — "인력 매칭/배정"에서 방금 요청했거나 "결재" 탭에서 아직 대기 중인 건은 승인되기 전까지 이 화면에 나타나지 않습니다.</li>' +
     '<li>묶는 기준(관리자)이 사람과 AI 에이전트가 다릅니다: 사람 배정은 그 사람의 "상사"(사용자 관리에서 지정)로, AI 에이전트 배정은 Agent에게 상사가 없으므로 그 배정을 요청한 사람으로 귀속시킵니다.</li>' +
     '<li>상사가 없으면 "(지정된 관리자 없음)" 묶음에 들어갑니다.</li>' +
+    '<li>이름이 비슷해 헷갈리기 쉬운 점: 이 화면은 "조직도"라는 이름이지만 confirmed 배정을 모아 보여주는 스냅샷일 뿐 생성·삭제가 되는 조직이 아닙니다 — 업무에 종속되고 생성·온보딩·해체되는 실제 조직은 "팀 관리" 탭에서 "TF팀" 배지가 붙은 팀들입니다(Task/Brief ID를 지정해 만든 팀).</li>' +
     '</ul>';
   if (chart.length) {
     html += '<p class="muted">' +
