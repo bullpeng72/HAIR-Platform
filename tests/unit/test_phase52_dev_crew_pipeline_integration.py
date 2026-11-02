@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from hair_platform import reference_pipeline_seeds
+
 
 def _login(client, username="admin1", password="adminpass"):
     resp = client.post("/login", json={"username": username, "password": password})
@@ -66,25 +68,47 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
 
 
 def _dev_crew_team_id(conn):
-    row = conn.execute("SELECT id FROM teams WHERE name = '자율 개발 크루'").fetchone()
-    assert row is not None
-    return row["id"]
-
-
-def test_gc_dev_crew_team_is_linked_to_pipeline_by_default(client_and_conn):
-    """시드 직후 바로 "자율 개발 크루"가 "소프트웨어 개발 파이프라인"에
-    연결돼 있어야 한다 — 이게 안 되면 아래 모든 테스트의 전제가
-    깨진다."""
-    _client, conn = client_and_conn
-    team = conn.execute(
-        "SELECT pipeline_template_id FROM teams WHERE name = '자율 개발 크루'"
+    """2026-11-02 — 사용자 요청("기존 대화, 업무 요청, 팀 관리 내용을
+    모두 초기화해줘" — "자율 개발 크루"도 포함)으로 `reference_
+    pipeline_seeds.seed()`가 이 팀을 더는 자동 생성하지 않는다. 이
+    파일의 테스트들은 "파이프라인에 연결된 팀"의 동작을 확인하는 게
+    목적이라, 없으면 옛 시드와 같은 모양으로 직접 만든다."""
+    row = conn.execute(
+        "SELECT id FROM teams WHERE name = ?",
+        (reference_pipeline_seeds.DEV_CREW_TEAM_NAME,),
     ).fetchone()
-    assert team["pipeline_template_id"] is not None
+    if row is not None:
+        return row["id"]
+
     template = conn.execute(
-        "SELECT name FROM pipeline_templates WHERE id = ?",
-        (team["pipeline_template_id"],),
+        "SELECT id FROM pipeline_templates WHERE name = ?",
+        (reference_pipeline_seeds.DEV_PIPELINE_NAME,),
     ).fetchone()
-    assert template["name"] == "소프트웨어 개발 파이프라인"
+    assert template is not None
+    cur = conn.execute(
+        "INSERT INTO teams (name, description, is_active, status, pipeline_template_id) "
+        "VALUES (?, ?, 1, 'active', ?)",
+        (
+            reference_pipeline_seeds.DEV_CREW_TEAM_NAME,
+            reference_pipeline_seeds.DEV_CREW_TEAM_DESCRIPTION,
+            template["id"],
+        ),
+    )
+    team_id = cur.lastrowid
+    for role_name, role_label in reference_pipeline_seeds.DEV_CREW_TEAM_MEMBER_SPECS:
+        agent_row = conn.execute(
+            "SELECT id FROM agent_pool WHERE role_name = ?", (role_name,)
+        ).fetchone()
+        if agent_row is None:
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO team_members "
+            "(team_id, member_type, member_id, role_label) "
+            "VALUES (?, 'agent', ?, ?)",
+            (team_id, agent_row["id"], role_label),
+        )
+    conn.commit()
+    return team_id
 
 
 def test_gc_dev_crew_mention_without_linked_task_creates_synthetic_task_and_pauses_for_approval(

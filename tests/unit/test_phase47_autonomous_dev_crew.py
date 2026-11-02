@@ -140,69 +140,6 @@ def test_gc_hierarchical_crew_excludes_manager_from_worker_agents_and_allows_del
         )  # 워커별 개별 산출물이 아니라 매니저 통합본 하나
 
 
-def test_gc_autonomous_dev_crew_team_is_visible_and_has_thirteen_members():
-    """사용자 보고(2026-10-14, "위 Agent 그룹 확인이 안되") 재발 방지 —
-    Agent를 개별로 만드는 것만으로는 "팀 관리" 화면에 그룹이 보이지
-    않는다. 실제 `teams`/`team_members` 레코드가 생겨야 한다.
-
-    사용자 요청(2026-10-28, "파이프라인의 에이전트 구성과 흐름을
-    참조해... '자율 개발 크루'의 구성과 업무 흐름을... 재구성")으로
-    "구현" 단계 6명뿐이던 구성이 "소프트웨어 개발 파이프라인" 7단계
-    전체가 참조하는 13개 역할로 넓어졌다 — `DEV_CREW_TEAM_MEMBER_
-    SPECS`(reference_pipeline_seeds.py) 참고."""
-    conn = db.get_connection(":memory:")
-    db.init_schema(conn)
-
-    team = conn.execute(
-        "SELECT id, pipeline_template_id FROM teams WHERE name = '자율 개발 크루'"
-    ).fetchone()
-    assert team is not None
-    assert team["pipeline_template_id"] is not None
-
-    member_roles = {
-        r["role_name"]
-        for r in conn.execute(
-            """
-            SELECT ap.role_name FROM team_members tm
-            JOIN agent_pool ap ON ap.id = tm.member_id AND tm.member_type = 'agent'
-            WHERE tm.team_id = ?
-            """,
-            (team["id"],),
-        ).fetchall()
-    }
-    expected_roles = {
-        "요구사항 분석가",
-        "AA",
-        "DA",
-        "개발 계획 수립가",
-        *_WORKER_ROLE_NAMES,
-        "코드 검증가",
-        "테스트 계획 수립가",
-        "QA 기능테스터",
-        "품질 관리자",
-    }
-    assert member_roles == expected_roles
-    assert len(member_roles) == 13
-
-    manager_label = conn.execute(
-        """
-        SELECT role_label FROM team_members tm
-        JOIN agent_pool ap ON ap.id = tm.member_id AND tm.member_type = 'agent'
-        WHERE tm.team_id = ? AND ap.role_name = '개발 계획 수립가'
-        """,
-        (team["id"],),
-    ).fetchone()["role_label"]
-    assert "매니저" in manager_label
-
-
-def test_gc_autonomous_dev_crew_team_seeding_is_idempotent():
-    conn = db.get_connection(":memory:")
-    db.init_schema(conn)
-    db.init_schema(conn)
-    assert conn.execute("SELECT COUNT(*) c FROM teams").fetchone()["c"] == 1
-    assert conn.execute("SELECT COUNT(*) c FROM team_members").fetchone()["c"] == 13
-
-
 def test_gc_autonomous_dev_crew_developers_carry_tdd_and_commit_skills():
     """하네스 방법론 적용 확인 — 4명 전원이 TDD-AI 워크플로우·커밋 규칙
     스킬을 보유해야 한다(사용자 요청의 "가능하면 하네스 방법론 적용")."""

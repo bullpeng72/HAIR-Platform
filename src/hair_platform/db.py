@@ -313,6 +313,19 @@ CREATE TABLE IF NOT EXISTS embedding_config (
     model TEXT NOT NULL
 );
 
+-- 사용자 요청(2026-11-02, "LLM 설정에 HAIR-Platform 공통/기본 동작을
+-- 위한 LLM을 지정할 수 있게") — `llm.resolve_provider_and_model()`이
+-- 지금까지 명시 인자 → 환경변수 → API 키 자동판별 순으로만 provider/
+-- model을 골랐다. admin이 "플랫폼 공통 기본 LLM"을 지정해두면 그게
+-- 환경변수보다 먼저 적용되도록 하는 단일 설정 행이다 — embedding_config
+-- 와 똑같은 `id=1` 싱글턴 패턴이되, 여긴 임베딩 전용 제약(openai/ollama
+-- 만)과 달리 Anthropic도 포함한 3종 provider를 전부 받는다.
+CREATE TABLE IF NOT EXISTS platform_llm_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    provider TEXT NOT NULL CHECK (provider IN ('anthropic', 'openai', 'ollama')),
+    model TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agent_tool_links (
     agent_id INTEGER NOT NULL REFERENCES agent_pool(id),
     tool_pool_id INTEGER NOT NULL REFERENCES tool_pool(id),

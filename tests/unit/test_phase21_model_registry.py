@@ -84,37 +84,49 @@ def test_gc222_model_registry_crud_via_api(client_and_conn):
 
 
 def test_gc223_model_registry_rbac(client_and_conn):
-    """등록/수정/조회는 admin+manager, 삭제는 admin 전용(tool_pool/
-    skill_pool과 같은 권한 매트릭스) — member/viewer는 전부 403."""
+    """사용자 요청(2026-11-02, "모델 관리 메뉴 영역은 관리자(admin)
+    전용으로 변경") — 조회/등록/수정/삭제 전부 admin 전용으로
+    좁혀졌다(기존엔 삭제만 admin 전용, 나머지는 admin+manager였다) —
+    manager/member/viewer는 전부 403. 단 `/api/model-registry/names`
+    (provider+name만 노출하는 조회 전용 엔드포인트)는 그대로 전
+    role에 열려 있다(아래 별도 테스트)."""
     client, _conn = client_and_conn
-    _login(client, "manager1", "managerpass")
+    _login(client, "admin1", "adminpass")
     resp = client.post(
         "/api/model-registry", json={"provider": "anthropic", "name": "claude-sonnet-5"}
     )
     assert resp.status_code == 201, resp.text
     model_id = resp.json()["id"]
 
-    resp = client.delete(f"/api/model-registry/{model_id}")
-    assert resp.status_code == 403  # manager는 삭제 불가
-
-    _login(client, "member1", "memberpass")
-    assert client.get("/api/model-registry").status_code == 403
-    assert (
-        client.post(
-            "/api/model-registry", json={"provider": "openai", "name": "x"}
-        ).status_code
-        == 403
-    )
-    assert (
-        client.patch(
-            f"/api/model-registry/{model_id}/active", json={"is_active": False}
-        ).status_code
-        == 403
-    )
-    assert client.delete(f"/api/model-registry/{model_id}").status_code == 403
-
-    _login(client, "viewer1", "viewerpass")
-    assert client.get("/api/model-registry").status_code == 403
+    for username, password in (
+        ("manager1", "managerpass"),
+        ("member1", "memberpass"),
+        ("viewer1", "viewerpass"),
+    ):
+        _login(client, username, password)
+        assert client.get("/api/model-registry").status_code == 403, username
+        assert (
+            client.post(
+                "/api/model-registry", json={"provider": "openai", "name": "x"}
+            ).status_code
+            == 403
+        ), username
+        assert (
+            client.patch(
+                f"/api/model-registry/{model_id}/active", json={"is_active": False}
+            ).status_code
+            == 403
+        ), username
+        assert (
+            client.patch(
+                f"/api/model-registry/{model_id}/optimization-tiers",
+                json={"optimization_tiers": ["standard"]},
+            ).status_code
+            == 403
+        ), username
+        assert (
+            client.delete(f"/api/model-registry/{model_id}").status_code == 403
+        ), username
 
 
 def test_gc_model_registry_names_endpoint_open_to_all_roles_no_sensitive_fields(
@@ -122,8 +134,9 @@ def test_gc_model_registry_names_endpoint_open_to_all_roles_no_sensitive_fields(
 ):
     """사용자 보고(2026-10-22, 스크린샷 — "member 권한으로 대화시 모델
     프로바이더를 선택해도 등록된 모델이 불려오지 않음") — `/api/model-
-    registry`(위 RBAC 테스트)는 admin+manager 전용으로 유지하되,
-    대화 워크스페이스 등 4개 화면의 provider 드롭다운이 공유하는
+    registry`(위 RBAC 테스트)는 admin 전용으로 유지하되(2026-11-02,
+    "모델 관리 메뉴 영역은 관리자 전용으로 변경"으로 manager도
+    제외됨), 대화 워크스페이스 등 4개 화면의 provider 드롭다운이 공유하는
     `fetchModelsByProvider()`는 member/viewer에서도 모델 목록을 받아야
     한다. `/api/model-registry/names`는 모든 로그인 role에 열려 있고,
     `id`/`is_active` 같은 관리용 필드 없이 `provider`/`name`만 반환해야
@@ -288,13 +301,14 @@ def test_optimization_tiers_endpoint_rbac_and_round_trip(client_and_conn):
     )
     assert resp.status_code == 404
 
-    # manager도 가능(active 토글과 같은 등급), member/viewer는 403.
+    # 사용자 요청(2026-11-02, "모델 관리 메뉴 영역은 관리자(admin)
+    # 전용으로 변경") — manager도 이제 403.
     _login(client, "manager1", "managerpass")
     resp = client.patch(
         f"/api/model-registry/{model_id}/optimization-tiers",
         json={"optimization_tiers": ["standard"]},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 403, resp.text
 
     _login(client, "member1", "memberpass")
     resp = client.patch(

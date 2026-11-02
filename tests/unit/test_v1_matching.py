@@ -67,3 +67,40 @@ def test_gc8_no_candidates_suggests_generate_new():
 
     assert result.generate_new is True
     assert result.top == []
+
+
+# ---------- 역할명 부분일치(사용자 요청, 2026-11-02, "찾기시에...
+# 부분일치로 찾아지도록 개선") ----------
+
+
+def test_gc9_role_name_substring_match_finds_candidate_with_longer_role():
+    """사용자 보고("프론트엔드 개발" Task 찾기 안 됨) 재현 + 수정
+    확인 — Task role_name이 Candidate role의 부분 문자열이면(또는
+    반대로) 매칭돼야 한다."""
+    frontend_dev = _candidate(
+        id=1, role="프론트엔드 개발자", skill_tags=["html", "css"]
+    )
+    result = match_candidates("프론트엔드 개발", ["html"], [frontend_dev])
+
+    assert result.generate_new is False
+    assert result.top[0].candidate.id == 1
+
+
+def test_gc10_role_name_substring_match_is_bidirectional():
+    """반대 방향(후보 role이 Task role_name의 부분 문자열)도 매칭된다."""
+    short_role = _candidate(id=1, role="개발", skill_tags=[])
+    result = match_candidates("프론트엔드 개발", [], [short_role])
+
+    assert result.generate_new is False
+    assert result.top[0].candidate.id == 1
+
+
+def test_gc11_completely_different_role_names_still_require_generate_new():
+    """서로 포함 관계가 아닌 역할명(접두/접미만 다른 게 아니라 아예
+    다른 단어 조합)은 부분일치로도 못 잡는다 — 이 경우는 여전히 LLM
+    judge 폴백이 담당해야 한다(이 테스트는 그 경계를 고정한다)."""
+    copywriter_agent = _candidate(id=1, role="카피라이팅 에이전트", skill_tags=[])
+    result = match_candidates("콘텐츠 카피라이팅", [], [copywriter_agent])
+
+    assert result.generate_new is True
+    assert result.top == []

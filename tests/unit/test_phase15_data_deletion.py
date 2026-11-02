@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from hair_platform import data_admin, model_registry, pool_registry
+from hair_platform import data_admin, model_registry, pool_registry, teams
 
 
 def _login(client, username, password):
@@ -651,8 +651,6 @@ _REFERENCE_TABLES = (
     "agent_pool",
     "tool_pool",
     "skill_pool",
-    "teams",
-    "team_members",
     "pipeline_templates",
     "pipeline_stages",
     "pipeline_stage_agents",
@@ -687,6 +685,32 @@ def test_reset_to_factory_state_keeps_reference_tables_untouched(client_and_conn
 
     after = _table_counts(conn, _REFERENCE_TABLES)
     assert after == before
+
+
+def test_reset_to_factory_state_keeps_teams_untouched(client_and_conn):
+    """2026-11-02 — `reference_pipeline_seeds.seed()`가 더는 "자율 개발
+    크루"를 자동 생성하지 않아(사용자 요청, "기존 대화, 업무 요청, 팀
+    관리 내용을 모두 초기화해줘" — 그 팀도 포함) 위
+    `_REFERENCE_TABLES`에서 `teams`/`team_members`를 뺐다 — 더는 미리
+    시드돼 있지 않기 때문. 그래도 `reset_to_factory_state()`가 팀 데이터
+    자체는 건드리지 않는 동작은 여전히 보장해야 하므로, 직접 만든 팀으로
+    확인한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    team_id = teams.create_team(conn, admin_id, "테스트 팀")
+    agent_id = conn.execute("SELECT id FROM agent_pool LIMIT 1").fetchone()["id"]
+    teams.add_team_member(conn, admin_id, team_id, "agent", agent_id)
+
+    data_admin.reset_to_factory_state(conn)
+
+    assert conn.execute(
+        "SELECT COUNT(*) AS c FROM teams WHERE id = ?", (team_id,)
+    ).fetchone()["c"] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?", (team_id,)
+    ).fetchone()["c"] == 1
 
 
 def test_reset_to_factory_state_wipes_operational_tables(client_and_conn):

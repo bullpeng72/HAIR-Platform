@@ -543,37 +543,10 @@ def seed(conn: sqlite3.Connection) -> None:
             ),
         )
 
-    # `teams.create_team()`/`add_team_member()`는 `audit.record()`를 거쳐
-    # `actor_id`가 실제 `users` 행을 가리켜야 한다(FK 제약) — `init_schema()`
-    # 는 아직 사용자가 하나도 없는 완전히 빈 DB에서도 호출되므로, 위
-    # agent_pool처럼 감사로그 없이 직접 INSERT한다(`teams.id`는 UNIQUE
-    # 제약이 없어 이름으로 존재를 확인한다).
-    team_row = conn.execute(
-        "SELECT id FROM teams WHERE name = ?", (DEV_CREW_TEAM_NAME,)
-    ).fetchone()
-    if team_row is None:
-        # `status`도 명시한다(2026-10-29) — 안 그러면 `teams.status` 컬럼의
-        # 기본값(`'pending_onboarding'`, TF팀용)과 여기 `is_active=1`이
-        # 서로 어긋난다. 이건 재사용 가능한 범용 팀이라 바로 `active`.
-        cur = conn.execute(
-            "INSERT INTO teams (name, description, is_active, status) "
-            "VALUES (?, ?, 1, 'active')",
-            (DEV_CREW_TEAM_NAME, DEV_CREW_TEAM_DESCRIPTION),
-        )
-        team_id = cur.lastrowid
-        for role_name, role_label in DEV_CREW_TEAM_MEMBER_SPECS:
-            agent_row = conn.execute(
-                "SELECT id FROM agent_pool WHERE role_name = ?", (role_name,)
-            ).fetchone()
-            if agent_row is None:
-                continue  # 방어적 처리 — AGENT_SPECS에 이미 다 있어 정상 경로에선 안 탐.
-            conn.execute(
-                "INSERT OR IGNORE INTO team_members "
-                "(team_id, member_type, member_id, role_label) "
-                "VALUES (?, 'agent', ?, ?)",
-                (team_id, agent_row["id"], role_label),
-            )
-
+    # 사용자 요청(2026-11-02, "기존 대화, 업무 요청, 팀 관리 내용을 모두
+    # 초기화해줘" — "자율 개발 크루"도 포함해 전부 삭제)로 이 팀의 자동
+    # 재생성 로직을 제거했다. `teams`/`team_members`는 더 이상 `seed()`가
+    # 건드리지 않는다 — 필요하면 "팀 관리" UI에서 다시 만든다.
     _seed_dev_pipeline(conn)
 
 

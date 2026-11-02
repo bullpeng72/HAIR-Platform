@@ -805,6 +805,16 @@ class EmbeddingConfigUpdate(BaseModel):
     model: str
 
 
+class PlatformLlmConfigUpdate(BaseModel):
+    """사용자 요청(2026-11-02, "LLM 설정에 HAIR-Platform 공통/기본
+    동작을 위한 LLM을 지정할 수 있게") — `EmbeddingConfigUpdate`와 같은
+    `id=1` 싱글턴 설정 패턴이지만, 임베딩과 달리 Anthropic도 지원
+    대상이라 3종 `LlmProvider`를 그대로 쓴다."""
+
+    provider: LlmProvider
+    model: str
+
+
 class ManualKnowledgeTextCreate(BaseModel):
     """사용자 요청(2026-10-26, "Admin에 VectorDB... 관리 기능을 추가해줘
     (데이터 입력...)") — 파일 없이 "지식 베이스" 탭에서 텍스트를 바로

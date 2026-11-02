@@ -69,21 +69,48 @@ def test_gc73_html_shell_has_two_nav_groups_and_admin_badge_markup():
     "common"을 "오늘 할 일" 하나로 합치고 "admin"을 "설정"으로
     바꿨다. `TABS` 배열 자체의 `group` 값(user/common/admin, 아래
     테스트들)은 바뀌지 않았다 — 바뀐 건 `buildNav()`가 그 값들을
-    렌더링하는 방식뿐이다."""
+    렌더링하는 방식뿐이다.
+
+    **2026-11-02 갱신** — 사용자 요청("설정 메뉴 배치를... 4개 그룹으로
+    조정")으로 "설정"이라는 단일 묶음이 "리소스 관리"/"그라운딩
+    관리"/"모델 관리"/"운영 관리" 4개로 다시 나뉘었다(`SETTINGS_GROUPS`,
+    `buildNav()` 참고) — 이제 "설정"이라는 라벨 자체는 더는 렌더링되지
+    않고(`addGroup("설정", ...)` 호출도 없어짐), 그 4개 그룹 라벨로
+    대체됐다.
+
+    **2026-11-02 재갱신** — 사용자 요청("'리소스 매칭/배정' 버튼은
+    가장 먼저 위치 및 구분선 추가, agent 관리 문구 삭제")로 "Agent
+    관리" 하위 소제목 묶음(`.nav-sublabel`/`.nav-subgroup`)을 완전히
+    걷어내고 라벨 없는 `.nav-divider` 하나로 단순화했다 — 그 두 CSS
+    클래스는 이제 `webui.py`에 실제로 존재하지 않으므로 마커 목록에서
+    뺀다(남겨두면 주석 속 글자로만 우연히 통과하는 거짓양성 테스트가
+    된다)."""
     for marker in [
         "오늘 할 일",
-        "설정",
+        "리소스 관리",
+        "그라운딩 관리",
+        "모델 관리",
+        "운영 관리",
+        "SETTINGS_GROUPS",
         "nav-group",
         "admin-group",
+        "nav-divider",
         "badge-adminonly",
     ]:
         assert marker in INDEX_HTML
     # 옛 3구역 라벨이 실제 렌더링 호출로 되살아나지 않았는지 회귀 방지.
     assert 'addGroup("관리자 도구"' not in INDEX_HTML
-    assert 'addGroup("운영 관리"' not in INDEX_HTML
     assert 'addGroup("공용 조회"' not in INDEX_HTML
     assert 'addGroup("오늘 할 일"' in INDEX_HTML
-    assert 'addGroup("설정"' in INDEX_HTML
+    # "설정" 단일 그룹 호출은 4개 그룹으로 쪼개지며 사라졌다 — 되살아나지
+    # 않았는지 회귀 방지.
+    assert 'addGroup("설정"' not in INDEX_HTML
+    # "Agent 관리" 하위 소제목 묶음(CSS 클래스 정의 자체)이 되살아나지
+    # 않았는지 회귀 방지 — 역사적 설명을 담은 주석 속 문자열은 걸리지
+    # 않도록 실제 CSS 선언/JS 리터럴 모양으로 좁혀서 찾는다.
+    assert ".nav-sublabel {" not in INDEX_HTML
+    assert ".nav-subgroup {" not in INDEX_HTML
+    assert '{ subLabel: "Agent 관리"' not in INDEX_HTML
 
 
 def test_gc74_every_tab_has_a_group_assigned():
@@ -118,16 +145,26 @@ def test_gc75_group_classification_matches_existing_rbac_roles():
 
 
 def test_gc76_admin_only_tab_is_flagged_and_truly_admin_only():
+    """`admin_only` 배지는 `roles == ["admin"]`(manager도 못 들어가는
+    진짜 admin 전용 탭)에만 붙어야 한다 — 매니저도 접근 가능한데
+    배지를 붙이면 오해를 준다. 사용자 요청(2026-11-02, "모델 관리
+    메뉴 영역은 관리자(admin) 전용으로 변경")으로 "사용자 관리"
+    하나뿐이던 admin 전용 탭이 "LLM 설정 최적화"/"모델 레지스트리"
+    까지 3개로 늘었다 — id를 하드코딩해 나열하는 대신 `roles` 값
+    자체로 일반화해 앞으로 admin 전용 탭이 더 늘어도 이 테스트가
+    그대로 맞는지 검증한다."""
     entries = {e["id"]: e for e in _parse_tab_entries()}
     admin_tab = entries["admin"]
     assert admin_tab["admin_only"] is True
     assert admin_tab["roles"] == ["admin"]
 
-    # 다른 관리자 그룹 탭들은 admin_only가 아니어야 한다(매니저도 접근 가능하므로
-    # "관리자 전용" 배지를 붙이면 오해를 준다).
     for e in entries.values():
-        if e["group"] == "admin" and e["id"] != "admin":
-            assert e["admin_only"] is False, f"{e['id']}는 admin_only가 아니어야 합니다"
+        if e["group"] != "admin":
+            continue
+        expected = e["roles"] == ["admin"]
+        assert e["admin_only"] is expected, (
+            f"{e['id']}: roles={e['roles']}인데 admin_only={e['admin_only']}"
+        )
 
 
 def test_gc77_common_group_is_exactly_the_pure_reference_screens():

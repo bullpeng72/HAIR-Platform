@@ -61,6 +61,8 @@ from hair_platform import (
     graphquery,
     inbox,
     jobs,
+    llm,
+    match_llm_judge,
     model_registry,
     performance,
     pipeline_runtime,
@@ -124,6 +126,7 @@ from hair_platform.models import (
     PipelineStageUpdate,
     PipelineTemplateActiveUpdate,
     PipelineTemplateCreate,
+    PlatformLlmConfigUpdate,
     SkillPoolCreate,
     SkillPoolUpdate,
     TaskDecomposition,
@@ -445,8 +448,62 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/briefs")
     def list_briefs(user: sqlite3.Row = Depends(get_current_user)):
         """Web UI가 브리프 목록을 브라우징할 수 있어야 Task 분해 화면으로
-        이어갈 수 있다 — 지금까지는 생성 응답의 id를 기억해야만 했다."""
-        rows = conn.execute("SELECT * FROM briefs ORDER BY id DESC").fetchall()
+        이어갈 수 있다 — 지금까지는 생성 응답의 id를 기억해야만 했다.
+
+        사용자 요청(2026-11-02, "업무 요청 목록에 요청자를 명시해줘") —
+        `submitted_by`는 원래도 응답에 있었지만 숫자 ID뿐이라 화면에
+        표시할 수 없었다. `users`를 조인해 이름도 같이 내려준다(계정이
+        삭제돼도 `submitted_by` 자체는 FK라 브리프가 남아있는 한 안
+        끊기지만, 혹시 몰라 `None` 폴백은 둔다).
+
+        사용자 보고(2026-11-02, "admin이 요청한 업무가 모든 멤버에게
+        보이고 있어") — 실측 확인된 진짜 버그. 이 엔드포인트는
+        `get_current_user`만 요구해 member/viewer를 포함한 로그인한
+        전원이 조직 전체 브리프를 다 봤다. `/api/my-work`
+        (`deliverables.list_my_work`, 전원 — 본인 관련 것만) vs
+        `/api/all-work`(admin/manager 전용, 조직 전체)로 이미 갈라
+        둔 "조직 전체 현황은 admin/manager만" 원칙과 어긋난다. 같은
+        원칙을 그대로 적용한다: admin/manager는 전체, member/viewer는
+        **본인이 제출했거나(submitted_by) 그 브리프 아래 Task에 확정
+        배정으로 관련된(사람 당사자/Agent 요청자/팀 리더·팀원) 것만**
+        — `list_my_work()`의 관계 판정 로직(사람은 human_pool.user_id로,
+        팀은 team_leader_id 또는 team_members 소속으로 식별)을 그대로
+        따른다."""
+        base_sql = (
+            "SELECT b.*, u.username AS submitted_by_username FROM briefs b "
+            "LEFT JOIN users u ON u.id = b.submitted_by"
+        )
+        if user["role"] in (Role.ADMIN.value, Role.MANAGER.value):
+            rows = conn.execute(base_sql + " ORDER BY b.id DESC").fetchall()
+        else:
+            rows = conn.execute(
+                base_sql
+                + """
+                WHERE b.submitted_by = ?
+                   OR EXISTS (
+                       SELECT 1 FROM tasks t
+                       JOIN assignments a ON a.task_id = t.id AND a.status = 'confirmed'
+                       LEFT JOIN human_pool hp
+                           ON hp.id = a.resource_id AND a.resource_type = 'human'
+                       WHERE t.brief_id = b.id
+                         AND (
+                           (a.resource_type = 'human' AND hp.user_id = ?)
+                           OR (a.resource_type = 'agent' AND a.requested_by = ?)
+                           OR (a.resource_type = 'team' AND (
+                               a.team_leader_id = ?
+                               OR EXISTS (
+                                   SELECT 1 FROM team_members tm
+                                   JOIN human_pool hp2
+                                       ON hp2.id = tm.member_id AND tm.member_type = 'human'
+                                   WHERE tm.team_id = a.resource_id AND hp2.user_id = ?
+                               )
+                           ))
+                         )
+                   )
+                ORDER BY b.id DESC
+                """,
+                (user["id"], user["id"], user["id"], user["id"], user["id"]),
+            ).fetchall()
         return [
             {
                 "id": row["id"],
@@ -454,6 +511,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "stub_roles": json.loads(row["stub_roles"]),
                 "status": row["status"],
                 "submitted_by": row["submitted_by"],
+                "submitted_by_username": row["submitted_by_username"],
             }
             for row in rows
         ]
@@ -852,6 +910,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/tasks/{task_id}/match")
     def match_task(
         task_id: int,
+        use_llm_judge: bool = False,
         user: sqlite3.Row = Depends(
             require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
         ),
@@ -861,7 +920,23 @@ def create_app(db_path: str | None = None) -> FastAPI:
         사용자 결정(2026-09-29, "매칭 점수 breakdown을 배정 후보
         본인에게 공개") — MEMBER도 호출할 수 있게 열되, 다른 후보의
         breakdown까지 보이면 프라이버시 문제라 자기 자신(human_pool.
-        user_id로 연결된 항목)에 해당하는 한 건만 필터링해 돌려준다."""
+        user_id로 연결된 항목)에 해당하는 한 건만 필터링해 돌려준다.
+
+        사용자 요청(2026-11-02, "LLM judge로 추천 인력을 찾도록 개선") —
+        결정론적 매칭(`match_candidates()`, 무료·즉시 — 역할명 부분일치
+        포함)이 `generate_new=True`를 반환했을 때만, 그리고 호출부가
+        `use_llm_judge=True`를 명시적으로 줬을 때만 `match_llm_judge.
+        judge_candidates()`를 2차로 호출한다 — `llm.py`의 "비용 발생
+        호출은 상위에서 게이팅" 원칙과 동일하게 기본값은 호출 없이
+        무료로 끝난다(`retry_job_item`의 `use_llm` 파라미터와 같은
+        패턴).
+
+        사용자 요청(2026-11-02, "1번 방식 찾기시에 3번(직접 검색)처럼
+        부분일치로 찾아지도록 개선하고 3번 방식은 삭제") — 수동 검색
+        폴백("인력 검색"과 같은 `/api/pool/search` 재사용)은 제거했다.
+        결정론적 매칭 자체가 역할명 부분일치까지 보도록 넓어졌고
+        (`assignment._role_matches()`), 그래도 못 찾으면 LLM judge가
+        최종 수단이다."""
         task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if task is None:
             raise HTTPException(status_code=404, detail="Task를 찾을 수 없습니다")
@@ -869,6 +944,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
         required_skills = json.loads(task["required_skills"])
         candidates = pool.human_pool_candidates(conn) + pool.agent_pool_candidates(conn)
         result = match_candidates(task["role_name"], required_skills, candidates)
+        match_mode = "deterministic"
+
+        if result.generate_new and use_llm_judge:
+            result = match_llm_judge.judge_candidates(conn, task, candidates)
+            match_mode = "llm_judge" if not result.generate_new else "llm_judge_failed"
 
         top = [
             {
@@ -876,6 +956,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "score": sc.score,
                 "breakdown": sc.breakdown,
                 "exact_match": sc.exact_match,
+                "rationale": sc.rationale,
             }
             for sc in result.top
         ]
@@ -895,6 +976,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "task_id": task_id,
             "generate_new": result.generate_new,
             "top": top,
+            "match_mode": match_mode,
         }
 
     @app.post("/api/tasks/{task_id}/assignments", status_code=201)
@@ -2709,10 +2791,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/agent-pool-optimization/recommendations")
     def list_agent_optimize_recommendations(
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         """ "LLM 설정 최적화" 일괄 화면용 — 전체 Agent(deprecated 제외)의
-        규칙 기반 추천을 한 번에 반환한다(비용 없음)."""
+        규칙 기반 추천을 한 번에 반환한다(비용 없음).
+
+        사용자 요청(2026-11-02, "모델 관리 메뉴 영역은 관리자(admin)
+        전용으로 변경") — "AI 에이전트 관리" 화면의 Agent별 "⚡ 최적화
+        추천"(`GET /api/agent-pool/{id}/optimize-recommendation`)은
+        manager도 그대로 쓸 수 있다(다른 엔드포인트, 영향 없음) — 이
+        엔드포인트는 "LLM 설정 최적화" 일괄 화면 전용이라 그 화면만
+        admin 전용으로 좁힌다."""
         return agent_optimizer.recommend_all(conn)
 
     @app.post("/api/agent-pool/{agent_id}/index-knowledge")
@@ -2964,7 +3053,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/model-registry")
     def list_model_registry(
         provider: str | None = None,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         return model_registry.list_models(conn, provider=provider)
 
@@ -2975,18 +3064,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
     ):
         """사용자 보고(2026-10-22, 스크린샷 — "member 권한으로 대화시
         모델 프로바이더를 선택해도 등록된 모델이 불려오지 않음") —
-        `/api/model-registry`(바로 위)는 admin+manager 전용인데,
-        `webui.py`의 `fetchModelsByProvider()`가 이걸로 조회하고
-        403을 조용히 빈 목록으로 폴백한다(`catch (e) { return
+        `/api/model-registry`(바로 위)는 admin 전용인데(2026-11-02,
+        "모델 관리 메뉴 영역은 관리자 전용으로 변경"으로 manager도
+        제외됐다), `webui.py`의 `fetchModelsByProvider()`가 이걸로
+        조회하고 403을 조용히 빈 목록으로 폴백한다(`catch (e) { return
         byProvider; }`) — "AI 에이전트 생성"·"AI 에이전트 관리(모델
-        설정)"·"Crew 실행"·대화 워크스페이스 4곳 전부 member/viewer가
-        쓰는 화면인데 모델 드롭다운만 "기본값 사용"/"직접 입력..."으로
-        비어 보였다. `model_registry`엔 provider/모델명뿐 민감 정보가
-        없으므로(`/api/skill-pool/names`와 같은 이유), id/is_active
-        같은 관리용 필드는 빼고 provider+name만 모든 role에 노출하는
-        조회 전용 엔드포인트를 따로 둔다(`/api/model-registry`의
-        admin+manager 제한은 그대로 — 등록/수정/삭제 RBAC 테스트
-        `test_gc223_model_registry_rbac`가 이미 그 경계를 검증한다)."""
+        설정)"·"Crew 실행"·대화 워크스페이스 4곳 전부 admin이 아닌
+        역할도 쓰는 화면인데 모델 드롭다운만 "기본값 사용"/"직접
+        입력..."으로 비어 보였다. `model_registry`엔 provider/모델명뿐
+        민감 정보가 없으므로(`/api/skill-pool/names`와 같은 이유),
+        id/is_active 같은 관리용 필드는 빼고 provider+name만 모든
+        role에 노출하는 조회 전용 엔드포인트를 따로 둔다(`/api/model-
+        registry`의 admin 전용 제한은 그대로 — 등록/수정/삭제 RBAC
+        테스트 `test_gc223_model_registry_rbac`가 이미 그 경계를
+        검증한다)."""
         return [
             {"provider": m["provider"], "name": m["name"]}
             for m in model_registry.list_models(conn, provider=provider)
@@ -2996,7 +3087,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/model-registry/fetch")
     def fetch_model_registry_candidates(
         provider: str,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         """provider가 실제로 제공/보유한 모델 후보를 라이브로 조회한다 —
         조회만으로는 아무것도 저장되지 않는다(등록은 별도
@@ -3020,7 +3111,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/model-registry", status_code=201)
     def create_model_registry_entry(
         payload: ModelRegistryCreate,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         try:
             model_id = model_registry.create_model(
@@ -3038,7 +3129,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def set_model_registry_active(
         model_id: int,
         payload: ModelActiveUpdate,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         try:
             model_registry.set_model_active(
@@ -3054,7 +3145,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def set_model_registry_optimization_tiers(
         model_id: int,
         payload: ModelOptimizationTiersUpdate,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         """사용자 요청(2026-10-26, "모델 레지스트리에 llm 설정 최적화
         각 tier에 적용되는 모델을 매핑하는 기능을 제공") — `agent_
@@ -3118,6 +3209,34 @@ def create_app(db_path: str | None = None) -> FastAPI:
     ):
         try:
             vectorstore.set_embedding_config(
+                conn, user["id"], payload.provider, payload.model
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"provider": payload.provider, "model": payload.model}
+
+    @app.get("/api/platform-llm-config")
+    def get_platform_llm_config_endpoint(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """사용자 요청(2026-11-02, "LLM 설정에 HAIR-Platform 공통/기본
+        동작을 위한 LLM을 지정할 수 있게") — `/api/embedding-config`와
+        같은 모양: admin이 명시적으로 설정해둔 값이 있으면 그걸,
+        없으면 지금 실제로 쓰이는 자동판별 결과를 `is_explicit=False`로
+        알려준다."""
+        configured = llm.get_platform_default_llm(conn)
+        if configured is not None:
+            return {**configured, "is_explicit": True}
+        provider, model = llm.resolve_provider_and_model(None, None)
+        return {"provider": provider, "model": model, "is_explicit": False}
+
+    @app.put("/api/platform-llm-config")
+    def set_platform_llm_config_endpoint(
+        payload: PlatformLlmConfigUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        try:
+            llm.set_platform_default_llm(
                 conn, user["id"], payload.provider, payload.model
             )
         except ValueError as exc:

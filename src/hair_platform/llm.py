@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from hair_platform import pool_registry
+from hair_platform import audit, pool_registry
 
 DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-5",
@@ -34,10 +34,87 @@ DEFAULT_MODELS = {
 }
 
 
+def get_platform_default_llm(conn: sqlite3.Connection) -> dict | None:
+    """admin이 설정해둔 플랫폼 공통 기본 provider/모델 — 한 번도 설정한
+    적 없으면(행이 없으면) `None`(호출부가 환경변수/자동판별로 폴백한다).
+    `vectorstore.get_embedding_config()`와 같은 패턴."""
+    row = conn.execute(
+        "SELECT provider, model FROM platform_llm_config WHERE id = 1"
+    ).fetchone()
+    if row is None:
+        return None
+    return {"provider": row["provider"], "model": row["model"]}
+
+
+def set_platform_default_llm(
+    conn: sqlite3.Connection, actor_id: int, provider: str, model: str
+) -> None:
+    """사용자 요청(2026-11-02, "LLM 설정에 HAIR-Platform 공통/기본
+    동작을 위한 LLM을 지정할 수 있게") — `vectorstore.set_embedding_
+    config()`와 같은 `id=1` 싱글턴 upsert + 감사로그 패턴.
+
+    사용자 요청(2026-11-02, "모델 레지스트리에 등록된 모델에 한해
+    선택할 수 있도록 개선") — 자유 텍스트 모델명을 더는 안 받는다.
+    `model_registry`에 등록+활성화된 (provider, model) 조합만 허용한다
+    (`agent_optimizer.refine_with_llm()`이 LLM 응답을 활성 레지스트리와
+    대조 검증하는 것과 같은 원칙 — 여긴 LLM 환각 대신 사람의 직접
+    오타/무효 입력을 막는다). `model_registry` 테이블을 직접 SELECT
+    할 뿐 `model_registry.py`를 import하진 않는다(순환 import 방지
+    목적은 아니고 — 그 모듈 함수들은 전부 `audit.record()`까지 겸하는
+    무거운 API라, 여기선 단순 존재 확인만 필요하기 때문)."""
+    if provider not in DEFAULT_MODELS:
+        raise ValueError(f"unsupported_provider:{provider!r}")
+    model = (model or "").strip()
+    if not model:
+        raise ValueError("empty_model")
+    registered = conn.execute(
+        "SELECT 1 FROM model_registry WHERE provider = ? AND name = ? AND is_active = 1",
+        (provider, model),
+    ).fetchone()
+    if registered is None:
+        raise ValueError(f"model_not_registered:{provider}:{model}")
+    before = get_platform_default_llm(conn)
+    conn.execute(
+        "INSERT INTO platform_llm_config (id, provider, model) VALUES (1, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, "
+        "model = excluded.model",
+        (provider, model),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "platform_llm_config_updated",
+        "platform_llm_config",
+        1,
+        before=before,
+        after={"provider": provider, "model": model},
+    )
+    conn.commit()
+
+
 def resolve_provider_and_model(
-    provider: str | None, model: str | None
+    provider: str | None,
+    model: str | None,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[str, str]:
-    """provider/model이 명시되지 않으면 환경변수 → API 키 존재 여부 순으로 판별한다."""
+    """provider/model이 명시되지 않으면 (conn이 주어졌을 때) admin이
+    설정해둔 플랫폼 공통 기본값 → 환경변수 → API 키 존재 여부 순으로
+    판별한다.
+
+    사용자 요청(2026-11-02, "LLM 설정에 HAIR-Platform 공통/기본 동작을
+    위한 LLM을 지정할 수 있게") — `conn`은 키워드 전용 선택 인자라
+    기존 호출부(전부 위치 인자 2개만 씀)는 전혀 안 바뀐다. "공통/기본
+    동작"에 해당하는 호출부(`agent_optimizer.refine_with_llm()`,
+    `conversations.py`의 "기본 AI"/요약)만 의도적으로 `conn=conn`을
+    넘겨 이 폴백을 받는다 — Agent 실행(crew_runtime/agent_runtime/
+    deliverables/jobs)은 Agent별 설정 우선순위를 그대로 지키기 위해
+    건드리지 않는다."""
+    if provider is None and conn is not None:
+        configured = get_platform_default_llm(conn)
+        if configured is not None:
+            provider = configured["provider"]
+            model = model or configured["model"]
     provider = (
         provider or os.environ.get("HAIR_PLATFORM_LLM_PROVIDER") or _auto_detect()
     )

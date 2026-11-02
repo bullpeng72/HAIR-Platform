@@ -453,16 +453,24 @@ def test_optimize_recommendation_endpoint_permissions_and_shape(
 
 
 def test_optimize_recommendation_bulk_endpoint(client_and_conn, monkeypatch):
+    """사용자 요청(2026-11-02, "모델 관리 메뉴 영역은 관리자(admin)
+    전용으로 변경") — "LLM 설정 최적화" 일괄 화면 전용인 이 엔드포인트는
+    이제 admin 전용이다(Agent별 "⚡ 최적화 추천"은 별개 엔드포인트라
+    manager도 그대로 쓸 수 있음, 위 refine 테스트가 그걸 확인한다)."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     client, conn = client_and_conn
     _make_agent(conn, "백엔드 개발자", [])
     _make_agent(conn, "DA", [])
 
-    client.post("/login", json={"username": "manager1", "password": "managerpass"})
+    client.post("/login", json={"username": "admin1", "password": "adminpass"})
     resp = client.get("/api/agent-pool-optimization/recommendations")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert len(body) >= 2
+
+    client.post("/login", json={"username": "manager1", "password": "managerpass"})
+    resp = client.get("/api/agent-pool-optimization/recommendations")
+    assert resp.status_code == 403, resp.text
 
 
 def test_optimize_recommendation_refine_endpoint_uses_patched_llm(

@@ -410,7 +410,7 @@ def refine_with_llm(conn: sqlite3.Connection, agent_id: int) -> dict:
     )
 
     try:
-        provider, model = llm.resolve_provider_and_model(None, None)
+        provider, model = llm.resolve_provider_and_model(None, None, conn=conn)
         raw = llm.call_llm(provider, model, system, prompt)
         match = _JSON_BLOCK_RE.search(raw)
         if not match:

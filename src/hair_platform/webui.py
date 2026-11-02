@@ -83,6 +83,58 @@ INDEX_HTML = """<!DOCTYPE html>
   .nav-group.admin-group button { border-color: var(--color-admin-border); }
   .nav-group.admin-group button.active { background: var(--color-admin); border-color: var(--color-admin); }
   .badge-adminonly { font-size: 0.65rem; background: var(--color-admin); color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
+  /* 사용자 요청(2026-11-02, "설정 메뉴 배치를... 4개 그룹으로 조정") —
+     "설정" 한 묶음을 4개 그룹(리소스/그라운딩/모델/운영 관리)으로
+     나눈다. 그룹 간 구분은 기존 `.nav-group + .nav-group` 점선이
+     그대로 해 준다 — 그룹 수만 1개에서 4개로 늘면 된다.
+     한 그룹 안에서 특정 버튼만 한 번 더 떼어 보여줄 때는(예:
+     "리소스 매칭/배정"을 나머지와 분리 — 아래 `.nav-divider`)
+     세로선 하나로 충분해, 한때 쓰던 하위 소제목 묶음(`.nav-sublabel`/
+     `.nav-subgroup`, "Agent 관리"라는 라벨을 달았던 것)은 2026-11-02
+     "agent 관리 문구 삭제" 요청으로 걷어냈다. */
+  /* 사용자 요청(2026-11-02, "'리소스 매칭/배정' 버튼은 가장 먼저
+     위치 및 구분선 추가") — 그룹 맨 앞의 버튼 하나를 나머지와
+     세로선으로 나눈다. **정정(스크린샷 — "선 모양이 서로 달라")**:
+     처음엔 고정 `height`를 준 `background` 블록으로 만들었더니
+     형제 요소(버튼 높이에 맞춰 자동으로 늘어남)보다 짧아 보여 선의
+     모양이 달랐다 — `border-left` + `align-self: stretch`(행 높이에
+     자동으로 맞춰짐)로 통일해 모양을 맞춘다.
+     **추가(2026-11-02, 스크린샷 — "사람 인력 관리" 뒤, "Crew 빌더"
+     뒤에도 구분선 추가)** — 같은 `.nav-divider`를 `SETTINGS_GROUPS`의
+     "리소스 관리" `entries`에 두 번 더 넣어, 리소스 매칭/배정 | 사람
+     인력 관리 | (AI 에이전트 생성·관리/Crew 빌더) | 팀 관리 4묶음으로
+     나눈다 — CSS는 안 바뀌고 `buildNav()`가 그대로 반복 렌더링한다. */
+  .nav-divider { align-self: stretch; width: 0; border-left: 2px solid var(--color-border); margin: 0 0.3rem; }
+  .nav-group.admin-group .nav-divider { border-left-color: var(--color-admin-border); }
+  /* 사용자 요청(2026-11-02, "그라운딩 관리, 모델관리, 운영관리 3메뉴
+     영역은 숨겨져 있다가 펼쳐 보는 방식으로") — `.nav-group`은 이미
+     `display: flex`라 네이티브 `<details>`에 그대로 얹어도 펼친 상태의
+     레이아웃(라벨+버튼 한 줄)은 안 바뀐다 — 접힌 상태에서 `<summary>`
+     말고 나머지 자식을 안 그리는 건 브라우저가 알아서 한다. 여기선
+     `<summary>`만 클릭 가능해 보이게 손본다. */
+  .nav-group.nav-collapsible { cursor: default; }
+  .nav-group.nav-collapsible > summary.nav-label { cursor: pointer; user-select: none; }
+  .nav-group.nav-collapsible > summary.nav-label:hover { color: var(--color-admin); }
+  /* 사용자 보고(2026-11-02, 스크린샷 — "그라운딩 관리, 모델관리,
+     운영관리 메뉴 영역의 각 버튼 배치가 리소스 관리에서처럼 버튼사이에
+     여백을 두도록") + "각 메뉴 영역 첫번째 버튼의 세로 정렬이 되도록
+     (그라운딩 관리가 리소스 매칭/배정, LLM설정 최적화 버튼과 줄이 안
+     맞음)" — 원인은 네이티브 `<summary>`가 브라우저 기본 스타일로
+     라벨 텍스트 앞에 세모 마커(disclosure marker)를 그리는데, "리소스
+     관리"는 `<details>`가 아니라 평범한 `<div>`+`<span class="nav-
+     label">`라 그 마커가 없다 — 그래서 "그라운딩 관리"/"모델 관리"/
+     "운영 관리"(전부 `<details>`)만 라벨 폭이 마커만큼 더 넓어져
+     첫 버튼이 오른쪽으로 밀리고(세로 정렬 어긋남), 동시에 버튼 사이
+     여백도 `gap`이 그 폭 계산에 밀려 상대적으로 좁아 보였다. 마커를
+     완전히 지워 `summary.nav-label`을 `span.nav-label`과 같은 폭으로
+     맞춘다(펼침/닫힘 자체는 클릭·hover 색 변화로 여전히 동작). */
+  .nav-group.nav-collapsible > summary.nav-label { list-style: none; }
+  .nav-group.nav-collapsible > summary.nav-label::-webkit-details-marker { display: none; }
+  .nav-group.nav-collapsible > summary.nav-label::marker { content: ""; }
+  /* 버튼 사이 여백을 `gap`에만 맡기지 않고 각 버튼에도 명시적으로
+     줘서, 위 마커 제거 이후에도(또는 줄바꿈 등 다른 레이아웃 변화가
+     있어도) "리소스 관리"와 똑같은 간격을 항상 보장한다. */
+  .nav-group.nav-collapsible > button { margin: 0 0.25rem 0.25rem 0; }
   /* 사용자 보고(2026-10-18, 스크린샷 — 넓은 화면에서도 "이용 가이드"
      본문이 좁은 고정폭에 갇혀 오른쪽이 텅 비어 보임) — 기존엔
      `max-width: 1100px`로 **고정**돼 있어 화면이 아무리 넓어도 딱
@@ -1506,15 +1558,15 @@ const TABS = [
   { id: "cost", label: "비용", group: "admin", roles: ["admin", "manager"], render: renderCost },
   { id: "fairness", label: "공정성 지표", group: "admin", roles: ["admin", "manager"], render: renderFairness },
   { id: "audit", label: "활동 기록", group: "admin", roles: ["admin", "manager"], render: renderAudit },
-  { id: "match", label: "인력 매칭/배정", group: "admin", roles: ["admin", "manager"], render: renderMatch },
+  { id: "match", label: "리소스 매칭/배정", group: "admin", roles: ["admin", "manager"], render: renderMatch },
   { id: "jobs", label: "AI 에이전트 생성", group: "admin", roles: ["admin", "manager"], render: renderJobs },
   { id: "agentpool", label: "AI 에이전트 관리", group: "admin", roles: ["admin", "manager"], render: renderAgentPool },
-  { id: "agentoptimize", label: "LLM 설정 최적화", group: "admin", roles: ["admin", "manager"], render: renderAgentOptimization },
+  { id: "agentoptimize", label: "LLM 설정 최적화", group: "admin", roles: ["admin"], adminOnly: true, render: renderAgentOptimization },
   { id: "humanpool", label: "사람 인력 관리", group: "admin", roles: ["admin", "manager"], render: renderHumanPool },
   { id: "poolregistry", label: "도구/스킬 Pool", group: "admin", roles: ["admin", "manager"], render: renderPoolRegistry },
   { id: "teams", label: "팀 관리", group: "admin", roles: ["admin", "manager"], render: renderTeams },
   { id: "pipelines", label: "파이프라인 관리", group: "admin", roles: ["admin", "manager"], render: renderPipelines },
-  { id: "modelregistry", label: "모델 레지스트리", group: "admin", roles: ["admin", "manager"], render: renderModelRegistry },
+  { id: "modelregistry", label: "모델 레지스트리", group: "admin", roles: ["admin"], adminOnly: true, render: renderModelRegistry },
   { id: "knowledgebase", label: "지식 베이스", group: "admin", roles: ["admin", "manager"], render: renderKnowledgeBase },
   { id: "crew", label: "Crew 빌더", group: "admin", roles: ["admin", "manager"], render: renderCrewBuilder },
   { id: "admin", label: "사용자 관리", group: "admin", roles: ["admin"], adminOnly: true, render: renderAdmin },
@@ -1549,6 +1601,62 @@ async function boot() {
 // 더 좁은 해석도 가능했지만, 매일 쓰는 "업무 요청"을 "설정"에 숨기면
 // 오히려 더 불편해질 위험이 커서 "admin 전용 여부"를 기준으로
 // 묶었다 — 이 해석은 의도적 판단이었다는 걸 정직하게 기록해둔다.
+//
+// 사용자 요청(2026-11-02, "설정 메뉴 배치를 Group 1 리소스 관리...
+// Group 4 운영관리 순으로 조정하고 각 그룹별 분리될 수 있도록") —
+// 위에서 하나로 뭉쳐 있던 "설정"(`group==="admin"`인 16개 탭)을 4개
+// 하위 그룹으로 다시 나눈다. `TABS`의 `group` 필드는 "오늘 할 일" vs
+// "설정" 1차 분류에만 쓰이므로 그대로 두고, 여기 `SETTINGS_GROUPS`가
+// "설정" 내부의 2차 배치(순서+묶음)만 따로 정의한다 — 두 분류 기준이
+// 섞이면 나중에 셋 중 어느 쪽을 고치는 건지 헷갈리기 때문에 분리해
+// 둔다. "공정성 지표"는 사용자 지정 목록에 없었으나(사용자 결정)
+// 운영 성격상 운영관리 끝에 둔다.
+//
+// 사용자 요청(2026-11-02, "그라운딩 관리, 모델관리, 운영관리 3메뉴
+// 영역은 숨겨져 있다가 펼쳐 보는 방식으로") — 가장 자주 쓰는 "리소스
+// 관리"만 항상 펼쳐두고 나머지 3그룹은 기본 접힌 상태로 시작한다.
+// 커스텀 토글 상태/아이콘을 직접 관리하는 대신 네이티브
+// `<details>/<summary>`(이 파일의 다른 곳에서도 이미 쓰는 패턴 — 예:
+// "팀에 배정 요청", "실행 이력 보기")를 쓴다 — 펼침 여부를 브라우저가
+// 알아서 관리해주고, JS 쪽엔 상태 변수가 하나도 늘지 않는다.
+// `collapsible: true`인 그룹만 `<details>`+`<summary>`로, 아니면 기존
+// 그대로 `<div>`+평범한 `<span>` 라벨로 렌더링한다(`buildNav()` 참고).
+//
+// 사용자 요청(2026-11-02, "'인력 매칭/배정'을 '리소스 매칭/배정'으로
+// 변경, 가장 먼저 위치 및 구분선 추가, agent 관리 문구 삭제") — 가장
+// 자주 누르는 동작이라 그룹 맨 앞으로 옮기고 구분선(`"__divider__"`
+// 토큰 — `buildNav()`가 라벨 없는 `.nav-divider`만 그린다)으로
+// 나머지와 시각적으로 나눈다. "Agent 관리" 하위 소제목은 더 이상
+// 안 쓴다 — 나머지(사람 인력 관리/AI 에이전트 생성·관리/Crew 빌더/팀
+// 관리)는 전부 같은 레벨의 평범한 버튼으로 나열한다. 라벨 텍스트
+// 자체("리소스 매칭/배정")는 `TABS`의 `match` 항목에서 바뀐다.
+const SETTINGS_GROUPS = [
+  {
+    label: "리소스 관리",
+    entries: [
+      "match", "__divider__",
+      "humanpool", "__divider__",
+      "jobs", "agentpool", "crew", "__divider__",
+      "teams",
+    ],
+  },
+  {
+    label: "그라운딩 관리",
+    entries: ["pipelines", "poolregistry", "knowledgebase"],
+    collapsible: true,
+  },
+  {
+    label: "모델 관리",
+    entries: ["agentoptimize", "modelregistry"],
+    collapsible: true,
+  },
+  {
+    label: "운영 관리",
+    entries: ["dashboard", "cost", "fairness", "audit", "admin"],
+    collapsible: true,
+  },
+];
+
 function buildNav() {
   const nav = document.getElementById("tabs");
   nav.innerHTML = "";
@@ -1556,7 +1664,22 @@ function buildNav() {
   const todayTabs = TABS.filter(
     t => (t.group === "user" || t.group === "common") && t.roles.includes(ME.role)
   );
-  const settingsTabs = TABS.filter(t => t.group === "admin" && t.roles.includes(ME.role));
+  const byId = {};
+  TABS.forEach(t => { byId[t.id] = t; });
+
+  const makeButton = (t) => {
+    const btn = document.createElement("button");
+    btn.textContent = t.label;
+    if (t.adminOnly) {
+      const badge = document.createElement("span");
+      badge.className = "badge-adminonly";
+      badge.textContent = "관리자 전용";
+      btn.appendChild(badge);
+    }
+    btn.dataset.tab = t.id;
+    btn.onclick = () => selectTab(t.id);
+    return btn;
+  };
 
   const addGroup = (label, tabs, cls) => {
     if (!tabs.length) return;
@@ -1566,24 +1689,37 @@ function buildNav() {
     tag.className = "nav-label";
     tag.textContent = label;
     row.appendChild(tag);
-    for (const t of tabs) {
-      const btn = document.createElement("button");
-      btn.textContent = t.label;
-      if (t.adminOnly) {
-        const badge = document.createElement("span");
-        badge.className = "badge-adminonly";
-        badge.textContent = "관리자 전용";
-        btn.appendChild(badge);
-      }
-      btn.dataset.tab = t.id;
-      btn.onclick = () => selectTab(t.id);
-      row.appendChild(btn);
-    }
+    for (const t of tabs) row.appendChild(makeButton(t));
     nav.appendChild(row);
   };
 
   addGroup("오늘 할 일", todayTabs, "");
-  addGroup("설정", settingsTabs, "admin-group");
+
+  for (const group of SETTINGS_GROUPS) {
+    const row = document.createElement(group.collapsible ? "details" : "div");
+    const tag = document.createElement(group.collapsible ? "summary" : "span");
+    tag.className = "nav-label";
+    tag.textContent = group.label;
+    const children = [tag];
+    let hasVisible = false;
+    for (const entry of group.entries) {
+      if (entry === "__divider__") {
+        const divider = document.createElement("span");
+        divider.className = "nav-divider";
+        children.push(divider);
+        continue;
+      }
+      const t = byId[entry];
+      if (t && t.roles.includes(ME.role)) {
+        children.push(makeButton(t));
+        hasVisible = true;
+      }
+    }
+    if (!hasVisible) continue;
+    row.className = "nav-group admin-group" + (group.collapsible ? " nav-collapsible" : "");
+    children.forEach(c => row.appendChild(c));
+    nav.appendChild(row);
+  }
 }
 
 let currentTab = null;
@@ -4069,16 +4205,16 @@ async function renderBriefs(content) {
   }
   html += "</section><section class=\\"card\\"><h2>업무 요청 목록</h2>" +
     '<ul class="muted help-list">' +
-    '<li>"할 일로 나누기"로 만든 할 일(Task)이 "인력 매칭/배정"·"AI 에이전트 생성" 탭에서 쓸 단위입니다.</li>' +
+    '<li>"할 일로 나누기"로 만든 할 일(Task)이 "리소스 매칭/배정"·"AI 에이전트 생성" 탭에서 쓸 단위입니다.</li>' +
     '<li><b>삭제</b>(관리자 전용)는 이 업무 요청과 그 아래 할 일·배정·이력까지 전부 되돌릴 수 없게 지웁니다 — 확정된(confirmed) 배정이 하나라도 있으면 막힙니다. 이땐 "할 일 보기 → 상세"에서 그 배정을 먼저 <b>"배정 취소"</b>하세요.</li>' +
     '</ul>';
-  html += table(["ID", "내용", "상태", "제안된 역할", "동작"], briefs.map(b => {
+  html += table(["ID", "요청자", "내용", "상태", "제안된 역할", "동작"], briefs.map(b => {
     let actions = '<button class="small" data-decompose="' + b.id + '">할 일로 나누기</button>' +
       '<button class="small" data-viewtasks="' + b.id + '">할 일 보기</button>';
     if (isAdmin) {
       actions += '<button class="small danger" data-delete-brief="' + b.id + '">삭제</button>';
     }
-    return [b.id, esc(b.raw_text), esc(label(b.status)), esc(b.stub_roles.join(", ")),
+    return [b.id, esc(b.submitted_by_username || ("#" + b.submitted_by)), esc(b.raw_text), esc(label(b.status)), esc(b.stub_roles.join(", ")),
       canWrite ? '<div class="actions">' + actions + "</div>" : ""];
   }));
   html += '<div id="brief-detail"></div></section>';
@@ -4185,7 +4321,7 @@ async function renderTaskList(briefId) {
     // 통합은 매니저의 일괄 처리 효율을 떨어뜨릴 위험이 있어 기각했다.
     '<ul class="muted help-list">' +
     '<li>"상세"에서 배정 현황을 바로 확인할 수 있습니다.</li>' +
-    '<li>"인력 매칭/배정"·"결재"는 여러 할 일을 한꺼번에 처리할 때, "AI 에이전트 생성"은 새 Agent가 필요할 때 씁니다.</li>' +
+    '<li>"리소스 매칭/배정"·"결재"는 여러 할 일을 한꺼번에 처리할 때, "AI 에이전트 생성"은 새 Agent가 필요할 때 씁니다.</li>' +
     '</ul>' +
     '<div id="task-detail"></div>';
   detail.querySelectorAll("[data-delete-task]").forEach(btn => {
@@ -4418,8 +4554,8 @@ async function renderMatch(content) {
     '<section class="card"><h2>할 일에 맞는 인력 찾기</h2>' +
     '<ul class="muted help-list">' +
     '<li>아래 목록은 "업무 요청" 탭에서 "할 일로 나누기"로 만든 할 일 전체입니다(브리프별로 묶음).</li>' +
-    '<li>완전히 일치하는 역할·스킬을 가진 후보가 있으면 그것부터 보여주고, 없으면 가용성40%·적합도35%·비용25% 가중치로 점수를 매겨 상위 3명을 제시합니다(사람 후보가 아직 성과점수를 안 받았으면 적합도를 빼고 가용성60%·비용40%로 재계산).</li>' +
-    '<li>후보가 아예 없으면 "AI 에이전트 생성" 탭으로 유도합니다.</li>' +
+    '<li>역할명이 서로 포함 관계(부분일치 — 예: "프론트엔드 개발" ↔ "프론트엔드 개발자")인 후보 중 필요 스킬까지 다 가진 후보가 있으면 그것부터 보여주고, 없으면 가용성40%·적합도35%·비용25% 가중치로 점수를 매겨 상위 3명을 제시합니다(사람 후보가 아직 성과점수를 안 받았으면 적합도를 빼고 가용성60%·비용40%로 재계산).</li>' +
+    '<li>역할명이 부분일치로도 전혀 안 걸리는 후보가 없으면(예: "콘텐츠 카피라이팅" ↔ "카피라이팅 에이전트"처럼 문자열이 서로 포함되지 않는 경우), "AI로 추천 받기"로 LLM이 전체 Pool에서 의미상 맞는 후보를 찾아줍니다(비용 발생 가능, 명시적으로 눌러야만 호출됨).</li>' +
     '<li>"배정 요청"을 누르면 즉시 확정되는 게 아니라 "결재" 탭에서 승인 절차를 거쳐야 확정(confirmed)됩니다.</li>' +
     '</ul>' +
     (hasTasks
@@ -4452,10 +4588,67 @@ async function renderMatch(content) {
 // 둔다. `onAssigned`는 배정 요청 성공 직후 호출돼, 임베드한 쪽(할 일
 // 상세 패널)이 자기 상태를 새로고침할 수 있게 한다(이 함수 자체는 그
 // 화면 구조를 몰라도 된다).
+// 사용자 요청(2026-11-02, "LLM judge로 추천 인력을 찾도록 개선,
+// 추천인력이 없는 경우 기존의 사람/에이전트를 지정해 찾을 수 있도록
+// 개선") — 배정 요청 버튼 클릭 처리를 공용 헬퍼로 뺐다. 원래
+// `renderMatchResult()`의 매칭 결과 테이블에서만 쓰던 로직인데, 아래
+// 수동 검색 결과 테이블에도 똑같이 필요해져 중복을 피하려고 분리했다
+// (동작은 그대로 — 계정 미연결 경고 confirm, 배정 요청 POST, 성공 시
+// onAssigned 콜백).
+function _wireMatchAssignButtons(container, taskId, onAssigned) {
+  container.querySelectorAll("[data-assign-id]").forEach(btn => {
+    btn.onclick = async () => {
+      if (btn.dataset.unlinked === "1" && !window.confirm(
+        "이 사람은 로그인 계정이 연결돼 있지 않습니다 — 배정이 승인돼도 본인이 \\"내 업무\\"에서 확인할 방법이 없습니다. \\"사람 인력 관리\\"에서 계정을 먼저 연결하는 걸 권장합니다. 그래도 배정 요청하시겠습니까?"
+      )) return;
+      try {
+        await api("POST", "/api/tasks/" + taskId + "/assignments", {
+          resource_type: btn.dataset.assignType, resource_id: Number(btn.dataset.assignId),
+        });
+        showMsg("global-msg", "배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.", "ok");
+        if (onAssigned) onAssigned();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+}
+
 function renderMatchResult(taskId, result, containerId = "match-result", onAssigned) {
   const box = document.getElementById(containerId);
+  // 사용자 보고(2026-11-02, 스크린샷 — "Cannot set properties of null
+  // (setting 'innerHTML')") — 실측 원인: "AI로 추천 받기"에 진행 중
+  // 표시가 없어 사용자가 응답을 기다리다 여러 번 눌렀고(서버 로그에
+  // use_llm_judge=true 요청이 연달아 5건 찍힘), 그중 하나가 응답을
+  // 기다리는 동안 다른 탭으로 이동해 이 컨테이너가 DOM에서 사라진
+  // 뒤에 뒤늦게 응답이 와서 `box.innerHTML = ...`가 null에 쓰려다
+  // 터졌다. 화면을 이미 벗어났으면 반영할 대상이 없으니 조용히
+  // 무시한다(에러 아님).
+  if (!box) return;
   if (result.generate_new) {
-    box.innerHTML = '<p class="msg error">매칭되는 후보가 없습니다 — "AI 에이전트 생성" 탭에서 새 Agent를 만들거나, "사람 인력 관리" 탭에서 이 역할의 사람을 등록해보세요.</p>';
+    const triedLlm = result.match_mode === "llm_judge_failed";
+    box.innerHTML =
+      '<p class="msg error">' + (triedLlm ? "AI 추천도 적합한 후보를 찾지 못했습니다." : "매칭되는 후보가 없습니다.") + '</p>' +
+      (triedLlm
+        ? ""
+        : '<button class="small" id="' + containerId + '-llm-judge-btn">AI로 추천 받기(LLM 호출, 비용 발생 가능)</button>') +
+      '<p class="muted">또는 "AI 에이전트 생성" 탭에서 새 Agent를 만들거나, "사람 인력 관리" 탭에서 이 역할의 사람을 등록해보세요.</p>';
+    const llmBtn = document.getElementById(containerId + "-llm-judge-btn");
+    if (llmBtn) {
+      llmBtn.onclick = async () => {
+        // 위 버그의 근본 원인 수정 — 요청 중엔 버튼을 비활성화하고
+        // 진행 중임을 표시해, 응답을 못 받았다고 오해해 여러 번
+        // 누르는 일을 막는다.
+        llmBtn.disabled = true;
+        llmBtn.textContent = "AI 추천 받는 중…";
+        try {
+          const r2 = await api("POST", "/api/tasks/" + taskId + "/match?use_llm_judge=true");
+          renderMatchResult(taskId, r2, containerId, onAssigned);
+        } catch (e) {
+          showMsg("global-msg", e.message, "error");
+          llmBtn.disabled = false;
+          llmBtn.textContent = "AI로 추천 받기(LLM 호출, 비용 발생 가능)";
+        }
+      };
+    }
     return;
   }
   // 사용자 보고(2026-10-06, "매칭/배정 화면에도 계정 미연결 경고
@@ -4479,13 +4672,17 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
   // 있는지 확인") — ResourceCandidate.code(human=employee_id,
   // agent=code)로 교체.
   box.innerHTML = table(
-    ["순위", "타입", "코드", "이름", "역할", "가용", "비용", "점수", "점수 상세", "계정", "동작"],
+    ["순위", "타입", "코드", "이름", "역할", "가용", "비용", "점수", "근거", "계정", "동작"],
     result.top.map((sc, i) => [
       i + 1, esc(label(sc.candidate.type)), esc(sc.candidate.code || ("#" + sc.candidate.id)), esc(sc.candidate.name || sc.candidate.role), esc(sc.candidate.role),
       sc.candidate.is_available ? "가능" : "불가",
       sc.candidate.cost,
-      sc.score.toFixed(3) + (sc.exact_match ? " (완전일치)" : ""),
-      esc(JSON.stringify(sc.breakdown)),
+      sc.score.toFixed(3) + (sc.exact_match ? " (역할 일치)" : (sc.rationale ? " (AI 추천)" : "")),
+      // 사용자 요청(2026-11-02, "LLM judge로 추천 인력을 찾도록 개선") —
+      // LLM이 근거(rationale)를 줬으면 그걸 사람이 읽는 문장으로
+      // 보여주고, 기존 결정론적 매칭(rationale 없음)은 그대로 점수
+      // breakdown JSON을 보여준다.
+      esc(sc.rationale || JSON.stringify(sc.breakdown)),
       accountCell(sc.candidate),
       '<div class="actions">' +
       '<button class="small" data-assign-type="' + esc(sc.candidate.type) + '" data-assign-id="' + sc.candidate.id + '" data-unlinked="' + (sc.candidate.type === "human" && sc.candidate.user_id == null ? "1" : "0") + '">배정 요청</button>' +
@@ -4498,20 +4695,7 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
       '</div>',
     ])
   );
-  box.querySelectorAll("[data-assign-id]").forEach(btn => {
-    btn.onclick = async () => {
-      if (btn.dataset.unlinked === "1" && !window.confirm(
-        "이 사람은 로그인 계정이 연결돼 있지 않습니다 — 배정이 승인돼도 본인이 \\"내 업무\\"에서 확인할 방법이 없습니다. \\"사람 인력 관리\\"에서 계정을 먼저 연결하는 걸 권장합니다. 그래도 배정 요청하시겠습니까?"
-      )) return;
-      try {
-        await api("POST", "/api/tasks/" + taskId + "/assignments", {
-          resource_type: btn.dataset.assignType, resource_id: Number(btn.dataset.assignId),
-        });
-        showMsg("global-msg", "배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.", "ok");
-        if (onAssigned) onAssigned();
-      } catch (e) { showMsg("global-msg", e.message, "error"); }
-    };
-  });
+  _wireMatchAssignButtons(box, taskId, onAssigned);
   box.querySelectorAll("[data-delegate-agent-id]").forEach(btn => {
     btn.onclick = async () => {
       if (!window.confirm(
@@ -4548,7 +4732,7 @@ async function renderApprovals(content) {
   html += '<section class="card"><h2>내가 요청한 건</h2>' +
     '<ul class="muted help-list">' +
     '<li><b>승인</b>하면 배정 상태가 confirmed(확정)로 바뀌어 조직도·비용·성과 리뷰에 실제로 반영됩니다.</li>' +
-    '<li><b>반려</b>하면 그 배정 요청은 거기서 끝나고(재사용 불가), 다시 배정하려면 "인력 매칭/배정"에서 새로 요청해야 합니다.</li>' +
+    '<li><b>반려</b>하면 그 배정 요청은 거기서 끝나고(재사용 불가), 다시 배정하려면 "리소스 매칭/배정"에서 새로 요청해야 합니다.</li>' +
     '</ul>' +
     approvalTable(mine, false) +
     (isDecider ? "" : '<div id="approval-content-detail" style="margin-top:0.75rem"></div>') +
@@ -5484,16 +5668,59 @@ async function renderAgentPool(content) {
 
 async function renderAgentOptimization(content) {
   content.innerHTML = '<section class="card"><h2>LLM 설정 최적화 추천</h2><p class="muted">불러오는 중…</p></section>';
-  let recs;
+  let recs, platformLlm;
+  let registry;
   try {
-    recs = await api("GET", "/api/agent-pool-optimization/recommendations");
+    [recs, platformLlm, registry] = await Promise.all([
+      api("GET", "/api/agent-pool-optimization/recommendations"),
+      api("GET", "/api/platform-llm-config"),
+      api("GET", "/api/model-registry"),
+    ]);
   } catch (e) {
     content.innerHTML = "";
     showMsg("global-msg", e.message, "error");
     return;
   }
+  // 사용자 요청(2026-11-02, "LLM 설정에 HAIR-Platform 공통/기본 동작을
+  // 위한 LLM을 지정할 수 있게") — `embedding-config` 폼(지식 베이스
+  // 탭)과 같은 모양: 명시적으로 설정해둔 값이 있으면 그걸, 없으면 지금
+  // 실제로 쓰이는 자동판별 결과를 보여준다. 설정하면 agent_optimizer.
+  // refine_with_llm()·대화 "기본 AI"/요약처럼 Agent별 설정이 따로
+  // 없는 공통 동작에서 환경변수보다 먼저 적용된다(Agent 실행 자체의
+  // provider/model 해석은 그대로 — 범위 밖).
+  //
+  // 사용자 요청(2026-11-02, "모델 레지스트리에 등록된 모델에 한해
+  // 선택할 수 있도록 개선") — 자유 텍스트 provider/모델명 입력을
+  // "모델 레지스트리" 탭에 등록+활성화된 모델 중에서 고르는 셀렉트로
+  // 바꾼다(백엔드 `llm.set_platform_default_llm()`도 같은 조건으로
+  // 다시 검증한다 — 여기 목록에 없는 값은 선택 자체가 안 되지만,
+  // API를 직접 호출해도 막힌다).
+  const activeModels = registry.filter(m => m.is_active);
+  const platformLlmFormHtml = activeModels.length
+    ? '<form class="inline" id="platform-llm-config-form">' +
+      '<select id="plc-model" required>' +
+      activeModels.map(m => {
+        const value = m.provider + "|" + m.name;
+        const selected = (m.provider === platformLlm.provider && m.name === platformLlm.model) ? " selected" : "";
+        return '<option value="' + escAttr(value) + '"' + selected + '>' + esc(m.provider) + " / " + esc(m.name) + '</option>';
+      }).join("") +
+      '</select>' +
+      '<button type="submit" class="small primary">저장</button>' +
+      '</form>'
+    : '<p class="msg error">등록·활성화된 모델이 없습니다 — "모델 레지스트리" 탭에서 먼저 모델을 등록하세요.</p>';
+  const platformLlmHtml =
+    '<section class="card"><h2>플랫폼 공통 기본 LLM</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>Agent별 설정이 없는 공통 동작(LLM 설정 최적화 추천 보정, 대화창 "기본 AI"/요약 등)이 쓰는 기본값입니다 — 설정하면 환경변수보다 먼저 적용됩니다. 각 Agent 자체의 모델 설정과는 별개입니다.</li>' +
+    '<li>"모델 레지스트리" 탭에 등록되고 활성화된 모델만 고를 수 있습니다.</li>' +
+    '</ul>' +
+    '<p>' + (platformLlm.is_explicit ? '<b>설정됨</b>' : '<span class="muted">자동판별 중(아직 명시적으로 설정 안 함)</span>') +
+    ' — provider: <b>' + esc(platformLlm.provider) + '</b>, 모델: <b>' + esc(platformLlm.model) + '</b></p>' +
+    platformLlmFormHtml +
+    "</section>";
+
   const changedCount = recs.filter(r => r.changed).length;
-  content.innerHTML = '<section class="card"><h2>LLM 설정 최적화 추천</h2>' +
+  content.innerHTML = platformLlmHtml + '<section class="card"><h2>LLM 설정 최적화 추천</h2>' +
     '<ul class="muted help-list">' +
     '<li>모델 랭킹은 기본적으로 모델명 패턴 추정(실제 벤치마크 데이터 아님)이지만, "모델 레지스트리" 화면에서 모델별로 심층추론/정밀·신속/표준 tier를 직접 매핑해두면(★ 표시) 그 매핑이 패턴 추정보다 항상 우선합니다 — 새 모델 출시·provider 교체 시 여기 코드가 아니라 그 화면에서 매핑만 바꾸면 됩니다.</li>' +
     '<li>이 화면은 <b>일괄 적용</b> 화면입니다 — 체크한 Agent는 "선택 적용"을 누르면 미리보기 없이 바로 모델/파인튜닝 설정이 저장됩니다. 하나씩 검토하려면 "AI 에이전트 관리" 화면의 "⚡ 최적화 추천" 버튼을 쓰세요(그쪽은 입력란에 채우기만 하고 저장은 admin이 직접 합니다).</li>' +
@@ -5543,6 +5770,17 @@ async function renderAgentOptimization(content) {
       ];
     })) +
     "</section>";
+
+  const platformLlmForm = document.getElementById("platform-llm-config-form");
+  if (platformLlmForm) platformLlmForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const [provider, model] = document.getElementById("plc-model").value.split("|");
+    try {
+      await api("PUT", "/api/platform-llm-config", { provider, model });
+      showMsg("global-msg", "플랫폼 공통 기본 LLM을 저장했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
 
   document.getElementById("select-changed-optimize").onclick = () => {
     Array.from(content.querySelectorAll(".optimize-apply-check")).forEach(chk => {
@@ -7732,7 +7970,7 @@ async function renderSearch(content) {
   content.innerHTML =
     '<section class="card"><h2>사람·AI 에이전트 통합 검색</h2>' +
     '<ul class="muted help-list">' +
-    '<li>이 화면은 매칭 알고리즘 없이 필터로 후보를 훑어보는 용도입니다(실제 배정 점수·순위를 보려면 "인력 매칭/배정" 탭을 쓰세요).</li>' +
+    '<li>이 화면은 매칭 알고리즘 없이 필터로 후보를 훑어보는 용도입니다(실제 배정 점수·순위를 보려면 "리소스 매칭/배정" 탭을 쓰세요).</li>' +
     '<li>AI 에이전트는 온보딩 승인(active) 안 된 것(pending_onboarding/deprecated)은 여기 안 뜹니다 — "AI 에이전트 관리" 탭에서 상태 무관 전체 목록을 볼 수 있습니다. 오프보딩된 사람도 마찬가지로 빠집니다.</li>' +
     '<li>"부서" 필터는 없습니다 — 이 시스템엔 부서 데이터가 없고, "역할"이 사실상 같은 구실을 합니다.</li>' +
     '</ul>' +
@@ -7836,7 +8074,7 @@ async function renderOrgChart(content) {
   const chart = await api("GET", "/api/org-chart");
   let html = '<section class="card"><h2>조직도(확정된 배정)</h2>' +
     '<ul class="muted help-list">' +
-    '<li>여기 나오는 건 결재까지 끝나 상태가 confirmed(확정)된 배정뿐입니다 — "인력 매칭/배정"에서 방금 요청했거나 "결재" 탭에서 아직 대기 중인 건은 승인되기 전까지 이 화면에 나타나지 않습니다.</li>' +
+    '<li>여기 나오는 건 결재까지 끝나 상태가 confirmed(확정)된 배정뿐입니다 — "리소스 매칭/배정"에서 방금 요청했거나 "결재" 탭에서 아직 대기 중인 건은 승인되기 전까지 이 화면에 나타나지 않습니다.</li>' +
     '<li>묶는 기준(관리자)이 사람과 AI 에이전트가 다릅니다: 사람 배정은 그 사람의 "상사"(사용자 관리에서 지정)로, AI 에이전트 배정은 Agent에게 상사가 없으므로 그 배정을 요청한 사람으로 귀속시킵니다.</li>' +
     '<li>상사가 없으면 "(지정된 관리자 없음)" 묶음에 들어갑니다.</li>' +
     '<li>이름이 비슷해 헷갈리기 쉬운 점: 이 화면은 "조직도"라는 이름이지만 confirmed 배정을 모아 보여주는 스냅샷일 뿐 생성·삭제가 되는 조직이 아닙니다 — 업무에 종속되고 생성·온보딩·해체되는 실제 조직은 "팀 관리" 탭에서 "TF팀" 배지가 붙은 팀들입니다(Task/Brief ID를 지정해 만든 팀).</li>' +
@@ -8450,7 +8688,7 @@ const MANUAL_MARKDOWN = [
 '',
 '*(A) 후보를 찾아서 배정 요청(사람/Agent)*',
 '',
-'"할 일 보기" 목록에서 "**상세**"를 누르고 **"후보 매칭하기"**(또는 "인력 매칭/배정" 탭에서 할 일을 고르고 **"찾기"**) — 완전히 일치하는 후보가 있으면 그것부터, 없으면 **가용성 40%·적합도 35%·비용 25%** 가중치로(사람 후보가 아직 성과점수를 못 받았으면 적합도를 빼고 가용성 60%·비용 40%로) 점수 매긴 상위 3명을 보여줍니다.',
+'"할 일 보기" 목록에서 "**상세**"를 누르고 **"후보 매칭하기"**(또는 "리소스 매칭/배정" 탭에서 할 일을 고르고 **"찾기"**) — 역할명이 서로 포함 관계(부분일치)인 후보 중 필요 스킬까지 다 가진 후보가 있으면 그것부터, 없으면 **가용성 40%·적합도 35%·비용 25%** 가중치로(사람 후보가 아직 성과점수를 못 받았으면 적합도를 빼고 가용성 60%·비용 40%로) 점수 매긴 상위 3명을 보여줍니다. 부분일치로도 후보가 전혀 없으면 "**AI로 추천 받기**" 버튼으로 LLM이 전체 Pool에서 의미상 맞는 후보를 찾아줍니다(비용 발생 가능, 눌러야만 호출됨).',
 '원하는 후보 줄에서 "**배정 요청**"을 누르면 조직도 매니저 체인을 따라 결재 단계가 자동 생성됩니다 — 아직 승인 전(requested) 상태입니다.',
 '',
 '*(B) 아직 쓸 Agent가 없다면*',
@@ -8533,8 +8771,8 @@ const MANUAL_MARKDOWN = [
 '   - **모델 설정**: 기본 LLM provider/model(비용 없음, 설정만 저장).',
 '   - **파인튜닝**: temperature·reasoning on/off·재시도 횟수 등 CrewAI 동작 파라미터(비용 없음, 설정만 저장 — "Crew 빌더"로 실제 CrewAI Crew에 투입될 때만 반영).',
 '   - **⚡ 최적화 추천**: 이 Agent의 역할 특성(심층추론/정밀·신속/표준 3단계 중 하나로 분류)에 맞는 provider/model/파인튜닝을 추천받습니다(규칙 기반, 비용 없음). "등록된 모델 중 선택" 드롭다운에 **레지스트리의 활성 모델 전체가 순위대로** 뜨므로 1위 추천 대신 다른 모델을 직접 골라도 됩니다(★ 표시는 관리자가 "모델 레지스트리"에서 그 tier에 직접 매핑해둔 모델 — 아래 참고). 추천값은 입력란에 채워지기만 하고 저장은 직접 눌러야 합니다. "AI 의견 보기"를 누르면 LLM에게 추가로 검토받을 수 있습니다(이건 비용 발생).',
-'5. 여러 Agent를 한꺼번에 최적화하려면 **"LLM 설정 최적화"** 탭(admin/manager 전용)에서 전체 목록을 보고 체크한 Agent에 바로 적용합니다 — 이미 추천과 같거나 한 번 적용한 Agent도 다시 체크해서 다른 모델로 재적용할 수 있습니다.',
-'6. **"모델 레지스트리"** 탭(admin/manager 전용)에서 모델별로 **"최적화 Tier 매핑"** 체크박스(심층추론/정밀·신속/표준, 모델 하나가 여러 tier에 동시 매핑 가능)를 지정해두면 ⚡ 최적화 추천이 이름 패턴 추정 대신 그 매핑을 항상 먼저 후보로 올립니다 — 새 모델이 나오거나 provider를 바꿀 때 코드 수정 없이 여기서 매핑만 바꾸면 되고, 몇 번이든 다시 바꿀 수 있습니다(아무것도 체크 안 하면 기존처럼 모델명 패턴 추정으로 동작).',
+'5. 여러 Agent를 한꺼번에 최적화하려면 **"LLM 설정 최적화"** 탭(admin 전용)에서 전체 목록을 보고 체크한 Agent에 바로 적용합니다 — 이미 추천과 같거나 한 번 적용한 Agent도 다시 체크해서 다른 모델로 재적용할 수 있습니다.',
+'6. **"모델 레지스트리"** 탭(admin 전용)에서 모델별로 **"최적화 Tier 매핑"** 체크박스(심층추론/정밀·신속/표준, 모델 하나가 여러 tier에 동시 매핑 가능)를 지정해두면 ⚡ 최적화 추천이 이름 패턴 추정 대신 그 매핑을 항상 먼저 후보로 올립니다 — 새 모델이 나오거나 provider를 바꿀 때 코드 수정 없이 여기서 매핑만 바꾸면 되고, 몇 번이든 다시 바꿀 수 있습니다(아무것도 체크 안 하면 기존처럼 모델명 패턴 추정으로 동작).',
 '',
 '### Agent 그룹(팀) 만들기',
 '',
@@ -8609,7 +8847,7 @@ const MANUAL_MARKDOWN = [
 '',
 '**조회(common, 전원 접근)**: 인력 검색 · 조직도 · 이용 가이드(이 화면)',
 '',
-'**설정/운영(admin·manager 전용, 일부 admin 전용)**: 대시보드 · 비용 · 공정성 지표 · 활동 기록 · 인력 매칭/배정 · AI 에이전트 생성 · AI 에이전트 관리 · LLM 설정 최적화 · 사람 인력 관리 · 도구/스킬 Pool · 팀 관리 · 파이프라인 관리 · 모델 레지스트리 · 지식 베이스 · Crew 빌더 · 사용자 관리(admin 전용)',
+'**설정/운영(admin·manager 전용, 일부 admin 전용)**: 대시보드 · 비용 · 공정성 지표 · 활동 기록 · 리소스 매칭/배정 · AI 에이전트 생성 · AI 에이전트 관리 · 사람 인력 관리 · 도구/스킬 Pool · 팀 관리 · 파이프라인 관리 · 지식 베이스 · Crew 빌더 · LLM 설정 최적화(admin 전용) · 모델 레지스트리(admin 전용) · 사용자 관리(admin 전용)',
 '',
 '<h2 id="trouble">9. 자주 겪는 문제</h2>',
 '',

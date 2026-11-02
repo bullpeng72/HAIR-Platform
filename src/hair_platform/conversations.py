@@ -845,7 +845,7 @@ def _ensure_context_summary(
     new_text = _format_messages_for_summary(new_rows)
 
     provider, model = llm.resolve_provider_and_model(
-        conv["llm_provider"], conv["llm_model"]
+        conv["llm_provider"], conv["llm_model"], conn=conn
     )
     prompt = (
         (f"[기존 요약]\n{existing_summary}\n\n" if existing_summary else "")
@@ -1727,7 +1727,7 @@ def run_default_ai_job(
         conv = get_conversation(conn, conversation_id)
         assert conv is not None
         provider, model = llm.resolve_provider_and_model(
-            conv["llm_provider"], conv["llm_model"]
+            conv["llm_provider"], conv["llm_model"], conn=conn
         )
         last_human = conn.execute(
             "SELECT content FROM conversation_messages WHERE conversation_id = ? "
