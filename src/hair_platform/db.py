@@ -26,10 +26,24 @@ from hair_platform import id_scheme, reference_pipeline_seeds
 
 
 def get_connection(path: str | Path) -> sqlite3.Connection:
+    """이 앱은 프로세스 전체가 이 커넥션 객체 하나를 공유한다(`app.state.db`,
+    `app.py`). `sqlite3.threadsafety == 3`(SERIALIZED — 이 환경에서 직접
+    확인됨)이라 여러 스레드가 동시에 같은 커넥션을 써도 SQLite 자체의
+    뮤텍스가 호출을 직렬화해 데이터 손상 위험은 없다 — 다만 기본
+    `busy_timeout`(0)에서는 잠금 경합 시 기다리지 않고 즉시
+    `sqlite3.OperationalError: database is locked`를 던진다. 사용자
+    요청(2026-11-03, "사내망을 통해 다른 사용자도 접속하도록 개선 방안을
+    제안해줘" → "1번, 2번 진행")으로 사내망 다중 사용자 노출을 준비하며
+    발견 — 앱 자신의 스레드 간 경합은 SQLite 뮤텍스가 이미 안전하게
+    처리하지만, DB 파일을 직접 여는 외부 프로세스(백업 스크립트, `sqlite3`
+    CLI로 직접 들여다보기 — 이번 세션에도 디버깅 중 실제로 이렇게 한 적
+    있음)와 겹치면 그 즉시 실패가 뜰 수 있다. 짧게 기다렸다 재시도하도록
+    busy_timeout을 켠다."""
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 

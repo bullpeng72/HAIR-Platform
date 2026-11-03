@@ -140,11 +140,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "reset-data",
         help="운영 데이터 전부 초기화(Agent/Tool/Skill/팀/파이프라인 템플릿은 유지)",
         description=(
-            "사용자 계정·업무 요청/할 일/배정/결재/결과물·대화·업로드 문서·\n"
-            "Crew/파이프라인 실행 이력·모델 레지스트리·활동 기록(audit_log)을\n"
-            "전부 지운다. Agent(22종)/Tool·Skill Pool/팀/파이프라인 템플릿은\n"
-            "손대지 않는다 — hair.db 재기동 시 항상 자동으로 다시 채워지는\n"
-            "레퍼런스 데이터이기 때문이다. 되돌릴 수 없다."
+            "사용자 계정·사람 인력(human_pool)·업무 요청/할 일/배정/결재/\n"
+            "결과물·대화·업로드 문서·VectorDB 지식 조각·Crew/파이프라인\n"
+            "실행 이력·모델 레지스트리·임베딩 설정·Tool-Agent 연결·\n"
+            "활동 기록(audit_log)을 전부 지운다. Agent(22종)/Tool·Skill\n"
+            "Pool/팀/파이프라인 템플릿은 손대지 않는다 — hair.db 재기동 시\n"
+            "항상 자동으로 다시 채워지는 레퍼런스 데이터이기 때문이다.\n"
+            "되돌릴 수 없다."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -187,6 +189,29 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # 호출한다 — 그 경로로 `db_path`를 전달할 수단이 환경변수 말고는
     # 없다(`create_app()`이 `HAIR_PLATFORM_DB_PATH`를 보는 이유).
     os.environ["HAIR_PLATFORM_DB_PATH"] = args.db_path
+
+    # 사용자 요청(2026-11-03, "사내망을 통해 다른 사용자도 접속하도록
+    # 개선 방안을 제안해줘" → "1번, 2번 진행") — `--host 0.0.0.0` 등
+    # 루프백이 아닌 주소로 띄우면서 `HAIR_PLATFORM_SECRET_KEY`를 안 주면
+    # `app.py`의 세션 서명 키가 소스에 공개된 고정값("dev-secret-
+    # change-in-production")으로 폴백한다 — 같은 네트워크의 누구나 그
+    # 값으로 다른 사용자(admin 포함)의 로그인 세션을 위조할 수 있다.
+    # 막지는 않는다(로컬 1인 개발 흐름까지 깨면 안 됨) — 조용히 넘어가지
+    # 않고 기동 시점에 경고만 한다.
+    if args.host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get(
+        "HAIR_PLATFORM_SECRET_KEY"
+    ):
+        print(
+            "경고: HAIR_PLATFORM_SECRET_KEY 환경변수가 설정되지 않았습니다.\n"
+            f"  --host {args.host}로 외부에서 접속 가능한 상태로 서버를 띄우면서\n"
+            "  세션 서명 키가 소스코드에 공개된 고정값으로 동작합니다 — 같은\n"
+            "  네트워크의 누구나 다른 사용자의 로그인 세션을 위조할 수 있습니다.\n"
+            "  다음처럼 랜덤 키를 지정한 뒤 다시 실행하세요:\n"
+            "    export HAIR_PLATFORM_SECRET_KEY=\"$(python3 -c "
+            "'import secrets; print(secrets.token_hex(32))')\"\n",
+            file=sys.stderr,
+        )
+
     import uvicorn
 
     if not args.no_browser:

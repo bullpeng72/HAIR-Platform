@@ -232,6 +232,23 @@ hair serve --reload       # 개발 중 — 코드 변경 시 자동 재시작
 hair serve --no-browser   # 브라우저 자동 열기 끄기(서버만 실행)
 ```
 
+사내망을 통해 다른 PC에서도 접속하려면(같은 네트워크의 팀원 여러 명이
+함께 쓰는 경우) `--host 0.0.0.0`로 모든 인터페이스에 바인딩한다 —
+단, 띄우기 전에 **반드시** 랜덤 세션 서명 키를 지정해야 한다(안 하면
+소스에 공개된 고정값으로 세션이 서명돼, 같은 네트워크의 누구나 다른
+사용자의 로그인 세션을 위조할 수 있다 — `hair serve`가 기동 시점에
+이걸 감지하면 경고를 띄운다):
+
+```bash
+export HAIR_PLATFORM_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+hair serve --host 0.0.0.0 --no-browser   # 다른 PC에서 http://<이 PC의 사내망 IP>:8000/
+```
+
+`--reload`는 개발 전용이다 — 여러 명이 같이 쓰는 인스턴스에는 쓰지 않는다
+(파일 변경마다 재시작되며 접속이 전부 끊긴다). 로그인 비밀번호는 평문
+HTTP로 오가므로, 민감도가 높다면 앞단에 리버스 프록시로 TLS를 추가하는
+걸 권장한다.
+
 Gate A–G 수동 실측(선택, 서비스 경로는 이미 상시 연결돼 있음 —
 `agent_evaluation.py`):
 

@@ -219,6 +219,40 @@ def test_gc_serve_wildcard_host_opens_localhost_in_browser():
     assert mock_timer.call_args.kwargs["args"] == ["http://127.0.0.1:9000/"]
 
 
+# ---------- `hair serve --host <비-루프백>` 세션 키 경고(사용자 요청,
+# 2026-11-03, "사내망을 통해 다른 사용자도 접속하도록 개선 방안을
+# 제안해줘" → "1번, 2번 진행") ----------
+
+
+def test_gc_serve_warns_when_non_loopback_host_without_secret_key(
+    capsys, monkeypatch
+):
+    monkeypatch.delenv("HAIR_PLATFORM_SECRET_KEY", raising=False)
+    with patch("uvicorn.run"), patch("threading.Timer"):
+        cli.main(["serve", "--host", "0.0.0.0", "--no-browser"])
+    err = capsys.readouterr().err
+    assert "HAIR_PLATFORM_SECRET_KEY" in err
+    assert "0.0.0.0" in err
+
+
+def test_gc_serve_no_warning_for_loopback_host_without_secret_key(
+    capsys, monkeypatch
+):
+    monkeypatch.delenv("HAIR_PLATFORM_SECRET_KEY", raising=False)
+    with patch("uvicorn.run"), patch("threading.Timer"):
+        cli.main(["serve", "--host", "127.0.0.1", "--no-browser"])
+    err = capsys.readouterr().err
+    assert err == ""
+
+
+def test_gc_serve_no_warning_when_secret_key_is_set(capsys, monkeypatch):
+    monkeypatch.setenv("HAIR_PLATFORM_SECRET_KEY", "a-real-random-secret")
+    with patch("uvicorn.run"), patch("threading.Timer"):
+        cli.main(["serve", "--host", "0.0.0.0", "--no-browser"])
+    err = capsys.readouterr().err
+    assert err == ""
+
+
 def test_gc_eval_subcommand_delegates_to_eval_wiring_main_block():
     with patch("runpy.run_module") as mock_run:
         code = cli.main(["eval"])
