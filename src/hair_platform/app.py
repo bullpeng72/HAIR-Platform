@@ -127,6 +127,7 @@ from hair_platform.models import (
     PipelineTemplateActiveUpdate,
     PipelineTemplateCreate,
     PlatformLlmConfigUpdate,
+    RagSearchConfigUpdate,
     SkillPoolCreate,
     SkillPoolUpdate,
     TaskDecomposition,
@@ -3215,6 +3216,33 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"provider": payload.provider, "model": payload.model}
 
+    @app.get("/api/rag-search-config")
+    def get_rag_search_config_endpoint(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-11-03, "RAG 검색 품질 향상... 우선순위를
+        정해 진행해줘") — `/api/embedding-config`와 같은 모양: admin이
+        설정해둔 값이 있으면 그걸, 없으면 기본값을 `is_explicit=False`로
+        알려준다."""
+        configured = vectorstore.get_rag_search_config(conn)
+        if configured is not None:
+            return {**configured, "is_explicit": True}
+        top_k, min_score = vectorstore.resolve_rag_search_config(conn)
+        return {"top_k": top_k, "min_score": min_score, "is_explicit": False}
+
+    @app.put("/api/rag-search-config")
+    def set_rag_search_config_endpoint(
+        payload: RagSearchConfigUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        try:
+            vectorstore.set_rag_search_config(
+                conn, user["id"], payload.top_k, payload.min_score
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"top_k": payload.top_k, "min_score": payload.min_score}
+
     @app.get("/api/platform-llm-config")
     def get_platform_llm_config_endpoint(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
@@ -4221,8 +4249,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
         함께 내려준다(대상이 지워졌으면 전부 None — 에러로 막지 않음).
         """
         if scope == "mine":
+            # 사용자 요청(2026-11-03, "내가 요청한 건의 경우 결재권자가
+            # 표시되도록") — `list_inbox()`와 같은 3종 username 조인
+            # (요청자는 자기 자신이라 의미 없지만, 응답 모양을
+            # scope 둘 다 똑같이 맞춰두면 프런트가 고르기 편하다).
             rows = conn.execute(
-                "SELECT * FROM approvals WHERE requested_by = ? ORDER BY id DESC",
+                "SELECT a.*, "
+                "ru.username AS requested_by_username, "
+                "apv.username AS approver_username, "
+                "adu.username AS approved_by_username "
+                "FROM approvals a "
+                "LEFT JOIN users ru ON ru.id = a.requested_by "
+                "LEFT JOIN users apv ON apv.id = a.approver_id "
+                "LEFT JOIN users adu ON adu.id = a.approved_by "
+                "WHERE a.requested_by = ? ORDER BY a.id DESC",
                 (user["id"],),
             ).fetchall()
             return [

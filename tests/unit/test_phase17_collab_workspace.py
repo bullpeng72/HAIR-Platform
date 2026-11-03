@@ -1251,8 +1251,21 @@ def test_gc189_execute_agent_records_and_exposes_retrieved_context(client_and_co
         client, task_id, "agent", agent_id, requester=("manager1", "managerpass")
     )
 
+    # 사용자 요청(2026-11-03, "RAG 검색 품질 향상... 우선순위를 정해
+    # 진행해줘")으로 `vectorstore.search()`가 관련성 임계값(기본
+    # min_score=0.2, 원시 코사인 기준)을 도입했다 — 실제 실행 경로의
+    # 검색 쿼리(`deliverables.start_agent_execution()`이 만드는
+    # "'{role_name}' 업무를 수행하세요(필요 스킬: ...)." 프롬프트)에도
+    # 가짜 임베딩을 등록해둬야 한다. 등록 안 된 입력은 `_fake_openai_
+    # embeddings()`가 0벡터로 반환해(아래 helper 주석 참고) 코사인이
+    # 0이 되어 새 임계값에 걸러진다 — 이전엔 임계값이 없어 0건이어도
+    # 무조건 반환됐지만, 지금은 "실제로 관련 있는 척" 벡터를 줘야
+    # 그라운딩이 성립한다.
     fake_client = _fake_openai_embeddings(
-        {"원격근무는 3개월 수습 기간 중 사용할 수 없다": [1.0, 0.0]}
+        {
+            "원격근무는 3개월 수습 기간 중 사용할 수 없다": [1.0, 0.0],
+            "'정책 문의 응답' 업무를 수행하세요(필요 스킬: rag).": [0.95, 0.05],
+        }
     )
     with patch("openai.OpenAI", return_value=fake_client):
         agent_runtime.index_knowledge(

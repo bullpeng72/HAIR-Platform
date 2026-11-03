@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sqlite3
 
 from hair_platform import audit
@@ -104,6 +105,85 @@ def resolve_default_provider_and_model(conn: sqlite3.Connection) -> tuple[str, s
         return configured["provider"], configured["model"]
     provider = _default_embedding_provider()
     return provider, DEFAULT_EMBEDDING_MODELS[provider]
+
+
+# 사용자 요청(2026-11-03, "RAG 검색 품질 향상을 위한 기능이 적절히
+# 반영되어 있는지 확인... 우선순위를 정해 진행해줘") — `search()`가
+# 지금까지 관련성 임계값 없이 top_k만큼 무조건 반환했다(무관한 결과도
+# 그대로 섞여 나옴). `embedding_config`와 같은 `id=1` 싱글턴 패턴 —
+# admin이 top_k/min_score(코사인 유사도 하한)를 조정할 수 있게 한다.
+DEFAULT_RAG_TOP_K = 3
+DEFAULT_RAG_MIN_SCORE = 0.2
+
+
+def get_rag_search_config(conn: sqlite3.Connection) -> dict | None:
+    """admin이 설정해둔 top_k/min_score — 한 번도 설정한 적 없으면
+    (행이 없으면) `None`(호출부가 기본값으로 폴백한다)."""
+    row = conn.execute(
+        "SELECT top_k, min_score FROM rag_search_config WHERE id = 1"
+    ).fetchone()
+    if row is None:
+        return None
+    return {"top_k": row["top_k"], "min_score": row["min_score"]}
+
+
+def set_rag_search_config(
+    conn: sqlite3.Connection, actor_id: int, top_k: int, min_score: float
+) -> None:
+    """`set_embedding_config()`와 같은 `id=1` 싱글턴 upsert + 감사로그
+    패턴."""
+    if top_k < 1:
+        raise ValueError("invalid_top_k")
+    if not (0.0 <= min_score <= 1.0):
+        raise ValueError("invalid_min_score")
+    before = get_rag_search_config(conn)
+    conn.execute(
+        "INSERT INTO rag_search_config (id, top_k, min_score) VALUES (1, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET top_k = excluded.top_k, "
+        "min_score = excluded.min_score",
+        (top_k, min_score),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "rag_search_config_updated",
+        "rag_search_config",
+        1,
+        before=before,
+        after={"top_k": top_k, "min_score": min_score},
+    )
+    conn.commit()
+
+
+def resolve_rag_search_config(conn: sqlite3.Connection) -> tuple[int, float]:
+    """`search()`가 `top_k`/`min_score`를 안 받았을 때 쓸 기본값을
+    고른다 — `resolve_default_provider_and_model()`과 같은 2단 폴백
+    (admin이 설정해둔 값이 있으면 그걸 우선, 없으면 하드코딩 기본값)."""
+    configured = get_rag_search_config(conn)
+    if configured is not None:
+        return configured["top_k"], configured["min_score"]
+    return DEFAULT_RAG_TOP_K, DEFAULT_RAG_MIN_SCORE
+
+
+_KEYWORD_TOKEN_RE = re.compile(r"\w+")
+_COSINE_WEIGHT = 0.8
+_KEYWORD_WEIGHT = 0.2
+
+
+def _keyword_overlap_ratio(query: str, text: str) -> float:
+    """비용 없는 재순위화 보조 신호 — 토큰 "경계" 일치가 아니라 "부분
+    문자열 포함" 기준이다. 한국어는 조사가 명사에 붙어("텍스트를")
+    교착어 특성상 정확한 토큰 경계 매칭은 과소매칭이 심하다 — 질의
+    토큰이 청크 텍스트 안에 부분 문자열로 들어있는지만 본다("텍스트"
+    토큰이 "텍스트를" 안에서 발견됨). 완전한 한국어 형태소 분석은
+    아니다 — `_KEYWORD_WEIGHT`(0.2)짜리 보조 신호일 뿐이라 이 저장소
+    규모에선 허용 가능한 한계로 판단한다."""
+    query_tokens = {t for t in _KEYWORD_TOKEN_RE.findall(query.lower()) if len(t) >= 2}
+    if not query_tokens:
+        return 0.0
+    text_lower = text.lower()
+    matched = sum(1 for t in query_tokens if t in text_lower)
+    return matched / len(query_tokens)
 
 
 # 사용자 보고(2026-10-14, "Error code: 400 - ... maximum context length is
@@ -232,7 +312,8 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 def search(
     conn: sqlite3.Connection,
     query: str,
-    top_k: int = 3,
+    top_k: int | None = None,
+    min_score: float | None = None,
     provider: str | None = None,
     model: str | None = None,
 ) -> list[dict]:
@@ -244,7 +325,21 @@ def search(
     `provider`/`model`을 안 넘기면 `index_text()`와 같은 방식으로
     `embedding_config`(없으면 자동판별)를 쓴다 — 색인할 때와 검색할
     때 기본값이 서로 달라지면 매칭되는 청크가 하나도 없어 보이므로
-    반드시 같은 해석 경로를 거쳐야 한다."""
+    반드시 같은 해석 경로를 거쳐야 한다.
+
+    `top_k`/`min_score`를 안 넘기면 `resolve_rag_search_config(conn)`로
+    해석한다(명시 인자가 항상 우선).
+
+    순서가 중요하다 — ① 원시 코사인으로 `min_score` 필터 → ②
+    `_keyword_overlap_ratio()`를 섞은 블렌드 점수로 정렬 → ③ `top_k`
+    슬라이스. 필터를 코사인 기준으로 먼저 거는 이유: 키워드 일치
+    때문에 블렌드 점수가 올라가도 실제로는 무관한 청크(코사인이 낮은
+    청크)를 관련성 기준으로 통과시켜버리면 안 되기 때문이다. 반대로
+    `top_k`를 먼저 자르면 재순위화가 이미 버려진 후보를 못 살린다."""
+    if top_k is None or min_score is None:
+        default_top_k, default_min_score = resolve_rag_search_config(conn)
+        top_k = top_k if top_k is not None else default_top_k
+        min_score = min_score if min_score is not None else default_min_score
     if provider is None or model is None:
         default_provider, default_model = resolve_default_provider_and_model(conn)
         provider = provider or default_provider
@@ -259,20 +354,34 @@ def search(
     scored = []
     for row in rows:
         chunk_embedding = json.loads(row["embedding"])
-        score = _cosine_similarity(query_embedding, chunk_embedding)
+        cosine_score = _cosine_similarity(query_embedding, chunk_embedding)
+        if cosine_score < min_score:
+            continue
+        keyword_score = _keyword_overlap_ratio(query, row["text"])
+        blended_score = (
+            _COSINE_WEIGHT * cosine_score + _KEYWORD_WEIGHT * keyword_score
+        )
         scored.append(
             {
                 "id": row["id"],
                 "text": row["text"],
                 "source_agent_id": row["source_agent_id"],
-                "score": score,
+                "score": cosine_score,
+                "_blended_score": blended_score,
             }
         )
-    scored.sort(key=lambda s: s["score"], reverse=True)
-    return scored[:top_k]
+    scored.sort(key=lambda s: s["_blended_score"], reverse=True)
+    top = scored[:top_k]
+    for item in top:
+        del item["_blended_score"]
+    return top
 
 
-def as_crewai_tool(conn: sqlite3.Connection, top_k: int = 3):
+def as_crewai_tool(
+    conn: sqlite3.Connection,
+    top_k: int | None = None,
+    min_score: float | None = None,
+):
     """VectorDB 검색을 실제 CrewAI Tool로 감싼다(사용자 요청
     2026-09-27 — "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘").
 
@@ -299,7 +408,7 @@ def as_crewai_tool(conn: sqlite3.Connection, top_k: int = 3):
     def search_knowledge_base(query: str) -> str:
         """과거에 저장된 산출물 중 이 질의와 관련된 내용을 검색한다.
         검색이 실제로 필요할 때만 호출하라 — 불필요하게 반복 호출하지 마라."""
-        hits = search(conn, query, top_k=top_k)
+        hits = search(conn, query, top_k=top_k, min_score=min_score)
         if not hits:
             return "관련된 과거 산출물을 찾지 못했습니다."
         return "\n".join(f"- {h['text']}" for h in hits)

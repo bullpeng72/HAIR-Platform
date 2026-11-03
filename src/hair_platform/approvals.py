@@ -224,17 +224,36 @@ def list_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
     가능하게 뽑아냈다(동작 변경 없음, 순수 추출) — "내가 지금 결정할 수
     있는 건"만 보여준다: 아직 `pending`이고, 내가 요청자가 아니며
     (self-approval 제외), Admin이면 전부, 매니저면 승인자
-    미지정이거나 나로 지정된 건만. Admin/매니저가 아니면 빈 리스트."""
+    미지정이거나 나로 지정된 건만. Admin/매니저가 아니면 빈 리스트.
+
+    사용자 요청(2026-11-03, "결재 내 승인 대기의 경우 요청자가, 내가
+    요청한 건의 경우 결재권자가 표시되도록") — `requested_by`/
+    `approver_id`/`approved_by`는 전부 숫자 user id뿐이라 화면에
+    이름을 못 보여줬다. `users`를 세 번 조인해 세 이름을 전부
+    내려준다(어느 화면이 어떤 열을 쓸지는 `webui.py`가 고른다 —
+    `scope=mine`도 같은 모양으로 맞춘다, `app.py` `list_approvals`
+    참고)."""
+    base_select = (
+        "SELECT a.*, "
+        "ru.username AS requested_by_username, "
+        "apv.username AS approver_username, "
+        "adu.username AS approved_by_username "
+        "FROM approvals a "
+        "LEFT JOIN users ru ON ru.id = a.requested_by "
+        "LEFT JOIN users apv ON apv.id = a.approver_id "
+        "LEFT JOIN users adu ON adu.id = a.approved_by "
+    )
     if role == "admin":
         rows = conn.execute(
-            "SELECT * FROM approvals WHERE status = 'pending' AND requested_by != ? "
-            "ORDER BY id ASC",
+            base_select
+            + "WHERE a.status = 'pending' AND a.requested_by != ? ORDER BY a.id ASC",
             (user_id,),
         ).fetchall()
     elif role == "manager":
         rows = conn.execute(
-            "SELECT * FROM approvals WHERE status = 'pending' AND requested_by != ? "
-            "AND (approver_id IS NULL OR approver_id = ?) ORDER BY id ASC",
+            base_select
+            + "WHERE a.status = 'pending' AND a.requested_by != ? "
+            "AND (a.approver_id IS NULL OR a.approver_id = ?) ORDER BY a.id ASC",
             (user_id, user_id),
         ).fetchall()
     else:

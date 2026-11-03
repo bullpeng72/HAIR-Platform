@@ -102,11 +102,18 @@ def test_chunk_text_packs_paragraphs_within_limit():
 
 
 def test_chunk_text_splits_a_single_huge_paragraph():
+    """오버랩이 있으므로(사용자 요청 2026-11-03, "RAG 검색 품질 향상")
+    인접 청크는 끝/시작이 겹친다 — 단순 `"".join()` 재조립이 아니라
+    겹치는 부분을 확인하고 그만큼을 걷어내야 원문과 일치한다."""
     text = "x" * 1000
     chunks = documents.chunk_text(text, max_chars=300)
     assert len(chunks) == 4
     assert all(len(c) <= 300 for c in chunks)
-    assert "".join(chunks) == text
+    overlap = documents._CHUNK_OVERLAP_CHARS
+    for prev, nxt in zip(chunks, chunks[1:]):
+        assert prev[-overlap:] == nxt[:overlap]
+    rebuilt = chunks[0] + "".join(c[overlap:] for c in chunks[1:])
+    assert rebuilt == text
 
 
 # ---------- ingest_document() ----------

@@ -92,10 +92,23 @@ def _extract_pdf_text(raw_bytes: bytes) -> str:
     return "\n\n".join(page.extract_text() or "" for page in reader.pages)
 
 
-def chunk_text(text: str, max_chars: int) -> list[str]:
-    """빈 줄 기준 문단 단위로 묶어 `max_chars` 이내 청크로 패킹한다
-    (오버랩 없는 단순 구현). 문단 하나가 `max_chars`보다 길면 그 문단만
-    강제로 잘라 나눈다."""
+# 사용자 요청(2026-11-03, "RAG 검색 품질 향상... 우선순위를 정해
+# 진행해줘") — 강제분할(hard-split) 시 오버랩 없이 자르면 경계에서
+# 문맥이 끊긴다(한 문장이 두 청크로 쪼개지면 양쪽 다 불완전한 문맥만
+# 갖게 됨). 문단 패킹(문단 경계 유지) 브랜치는 이미 의미 경계를
+# 지키고 있어 오버랩 이득이 없으므로 건드리지 않는다 — 강제분할
+# 브랜치에만 적용한다.
+_CHUNK_OVERLAP_CHARS = 50
+
+
+def chunk_text(
+    text: str, max_chars: int, overlap_chars: int = _CHUNK_OVERLAP_CHARS
+) -> list[str]:
+    """빈 줄 기준 문단 단위로 묶어 `max_chars` 이내 청크로 패킹한다.
+    문단 하나가 `max_chars`보다 길면 그 문단만 강제로 잘라 나누는데,
+    이때는 `overlap_chars`만큼 겹쳐서 잘라 경계의 문맥 손실을 줄인다
+    (문단 패킹 쪽은 이미 문단 경계를 지키므로 오버랩을 적용하지
+    않는다)."""
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     if not paragraphs:
         paragraphs = [text]
@@ -107,8 +120,13 @@ def chunk_text(text: str, max_chars: int) -> list[str]:
             if current:
                 chunks.append(current)
                 current = ""
-            for i in range(0, len(para), max_chars):
+            step = max(1, max_chars - min(overlap_chars, max_chars // 3))
+            i = 0
+            while i < len(para):
                 chunks.append(para[i : i + max_chars])
+                if i + max_chars >= len(para):
+                    break
+                i += step
             continue
         candidate = f"{current}\n\n{para}" if current else para
         if len(candidate) > max_chars:

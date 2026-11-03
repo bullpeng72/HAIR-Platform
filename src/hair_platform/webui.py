@@ -4725,7 +4725,7 @@ async function renderApprovals(content) {
       '<li>본인이 요청한 건은 본인이 승인할 수 없습니다(자기 승인 방지) — "내 승인 대기함"에는 애초에 안 뜹니다.</li>' +
       '</ul>';
     inbox = await api("GET", qs("/api/approvals", { scope: "inbox" }));
-    html += '<section class="card"><h2>내 승인 대기함</h2>' + approvalTable(inbox, true) +
+    html += '<section class="card"><h2>내 승인 대기함</h2>' + approvalTable(inbox, true, "requester") +
       '<div id="approval-content-detail" style="margin-top:0.75rem"></div></section>';
   }
   const mine = await api("GET", qs("/api/approvals", { scope: "mine" }));
@@ -4734,7 +4734,7 @@ async function renderApprovals(content) {
     '<li><b>승인</b>하면 배정 상태가 confirmed(확정)로 바뀌어 조직도·비용·성과 리뷰에 실제로 반영됩니다.</li>' +
     '<li><b>반려</b>하면 그 배정 요청은 거기서 끝나고(재사용 불가), 다시 배정하려면 "리소스 매칭/배정"에서 새로 요청해야 합니다.</li>' +
     '</ul>' +
-    approvalTable(mine, false) +
+    approvalTable(mine, false, "approver") +
     (isDecider ? "" : '<div id="approval-content-detail" style="margin-top:0.75rem"></div>') +
     "</section>";
   content.innerHTML = html;
@@ -4788,8 +4788,16 @@ async function renderApprovals(content) {
 // pipeline_run_stage는 볼 수 있는 다른 화면 자체가 없었다). "내용"
 // 열을 추가해 `a.content`가 있으면 보기 버튼을, 없으면(assignment
 // 등 애초에 리뷰할 본문이 없는 유형) "-"를 보여준다.
-function approvalTable(rows, withActions) {
-  const headers = ["ID", "업무", "대상", "단계", "상태", "내용"];
+// 사용자 요청(2026-11-03, "결재 내 승인 대기의 경우 요청자가, 내가
+// 요청한 건의 경우 결재권자가 표시되도록 개선") — 화면마다 궁금한
+// "사람"이 다르다: "내 승인 대기함"은 누가 이걸 요청했는지(요청자),
+// "내가 요청한 건"은 누가 처리하는지/했는지(결재권자). `personColumn`
+// 으로 어느 쪽을 보여줄지 고른다.
+function approvalTable(rows, withActions, personColumn) {
+  const headers = ["ID", "업무", "대상"];
+  if (personColumn === "requester") headers.push("요청자");
+  else if (personColumn === "approver") headers.push("결재권자");
+  headers.push("단계", "상태", "내용");
   if (withActions) headers.push("동작");
   return table(headers, rows.map(a => {
     const taskCell = a.task_id != null
@@ -4801,7 +4809,23 @@ function approvalTable(rows, withActions) {
     const contentCell = a.content
       ? '<button type="button" class="small" data-approval-content-toggle="' + a.id + '">내용 보기</button>'
       : '<span class="muted">-</span>';
-    const row = [a.id, taskCell, resourceCell, a.step, esc(label(a.status)), contentCell];
+    const row = [a.id, taskCell, resourceCell];
+    if (personColumn === "requester") {
+      row.push(esc(a.requested_by_username || ("#" + a.requested_by)));
+    } else if (personColumn === "approver") {
+      // 처리 완료됐으면 실제로 결정한 사람(approved_by)을, 아직
+      // pending이면 배정된 결재권자(approver_id)를 보여준다 —
+      // approver_id가 비어 있으면(상사 미지정) "Admin/매니저 누구나"가
+      // 처리할 수 있다는 뜻이라 그대로 알려준다.
+      if (a.status !== "pending") {
+        row.push(a.approved_by_username ? esc(a.approved_by_username) : '<span class="muted">-</span>');
+      } else if (a.approver_id != null) {
+        row.push(esc(a.approver_username || ("#" + a.approver_id)));
+      } else {
+        row.push('<span class="muted">미지정(Admin/매니저 누구나)</span>');
+      }
+    }
+    row.push(a.step, esc(label(a.status)), contentCell);
     if (withActions) {
       row.push(a.status === "pending"
         ? '<div class="actions">' +
@@ -6859,8 +6883,9 @@ let _kbChunkOffset = 0;
 const _KB_CHUNK_LIMIT = 20;
 
 async function renderKnowledgeBase(content) {
-  const [embeddingConfig, knowledgeDocs, chunkStats, chunkPage, graphStats, relationships] = await Promise.all([
+  const [embeddingConfig, ragSearchConfig, knowledgeDocs, chunkStats, chunkPage, graphStats, relationships] = await Promise.all([
     api("GET", "/api/embedding-config"),
+    api("GET", "/api/rag-search-config"),
     api("GET", "/api/documents"),
     api("GET", "/api/knowledge-chunks/stats"),
     api("GET", qs("/api/knowledge-chunks", { limit: _KB_CHUNK_LIMIT, offset: _kbChunkOffset })),
@@ -6902,6 +6927,22 @@ async function renderKnowledgeBase(content) {
     '<option value="ollama"' + (embeddingConfig.provider === "ollama" ? " selected" : "") + '>Ollama(로컬)</option>' +
     '</select>' +
     '<input id="ec-model" placeholder="모델명(예: mxbai-embed-large:latest)" value="' + escAttr(embeddingConfig.model) + '" style="flex:1;min-width:220px" required>' +
+    '<button type="submit" class="small primary">저장</button>' +
+    '</form>' +
+    "</section>" +
+    // 사용자 요청(2026-11-03, "RAG 검색 품질 향상... 우선순위를 정해
+    // 진행해줘") — top_k(검색 결과 개수)와 min_score(관련성 하한,
+    // 코사인 유사도 기준)를 admin/manager가 조정할 수 있게 한다.
+    '<section class="card"><h2>RAG 검색 설정</h2>' +
+    '<ul class="muted help-list">' +
+    '<li>top_k: 검색 1회당 가져올 결과 개수(기본 3개).</li>' +
+    '<li>min_score: 관련성 하한(코사인 유사도, 0.0~1.0) — 이보다 낮은 결과는 무관한 것으로 보고 제외합니다(기본 0.2). 너무 높이면 관련 있는 결과도 걸러질 수 있습니다.</li>' +
+    '</ul>' +
+    '<p>' + (ragSearchConfig.is_explicit ? '<b>설정됨</b>' : '<span class="muted">기본값 사용 중(아직 명시적으로 설정 안 함)</span>') +
+    ' — top_k: <b>' + esc(ragSearchConfig.top_k) + '</b>, min_score: <b>' + esc(ragSearchConfig.min_score) + '</b></p>' +
+    '<form class="inline" id="rag-search-config-form">' +
+    '<input id="rsc-top-k" type="number" min="1" step="1" placeholder="top_k" value="' + escAttr(ragSearchConfig.top_k) + '" style="width:100px" required>' +
+    '<input id="rsc-min-score" type="number" min="0" max="1" step="0.05" placeholder="min_score" value="' + escAttr(ragSearchConfig.min_score) + '" style="width:120px" required>' +
     '<button type="submit" class="small primary">저장</button>' +
     '</form>' +
     "</section>" +
@@ -6955,8 +6996,17 @@ async function renderKnowledgeBase(content) {
     '<li>관계 자체를 바꾸려면 "사람 인력 관리"에서 상사를 지정하거나, 배정을 승인/반려하세요.</li>' +
     '</ul>' +
     '<p class="muted">상사가 지정된 사용자 ' + graphStats.users_with_manager_count + '명 · 직속 관리자 ' + graphStats.distinct_managers_count + '명 · 확정된 배정 ' + graphStats.confirmed_assignments_count + '건</p>' +
-    table(["요청자 ID", "역할", "리소스", "Task ID"], relationships.map(r => [
-      r.requested_by, esc(r.role_name), esc(r.resource_type) + " #" + r.resource_id, r.task_id,
+    // 사용자 요청(2026-11-03, "요청자ID, 리소스, Task ID만으로는 관계를
+    // 파악하기 어려워... 가독성 높고 의미있는 정보전달이 되기 위한
+    // 노출 항목을 제안해줘" → "그렇게 수정해줘") — 원시 ID 대신
+    // 사람이 읽을 이름/상태로 바꾼다. Task ID는 업무명 옆 괄호로
+    // 축소 표기(별도 컬럼으로 안 둠 — 매니저가 "몇 번"보다 "뭘 하는
+    // 업무인지"를 먼저 읽는 게 자연스러움).
+    table(["요청자", "업무명", "배정된 리소스", "업무 상태"], relationships.map(r => [
+      esc(r.requested_by_username) + " (user#" + r.requested_by + ")",
+      esc(r.role_name) + " (#" + r.task_id + ")",
+      esc(LABELS[r.resource_type] || r.resource_type) + ": " + esc(r.resource_name || (r.resource_type + " #" + r.resource_id)),
+      esc(LABELS[r.task_status] || r.task_status),
     ])) +
     (relationships.length ? "" : '<p class="muted">확정된 배정 관계가 없습니다.</p>') +
     "</section>";
@@ -6969,6 +7019,18 @@ async function renderKnowledgeBase(content) {
         model: document.getElementById("ec-model").value,
       });
       showMsg("global-msg", "임베딩 모델 설정을 저장했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  document.getElementById("rag-search-config-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      await api("PUT", "/api/rag-search-config", {
+        top_k: Number(document.getElementById("rsc-top-k").value),
+        min_score: Number(document.getElementById("rsc-min-score").value),
+      });
+      showMsg("global-msg", "RAG 검색 설정을 저장했습니다.", "ok");
       refresh();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });

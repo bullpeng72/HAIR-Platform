@@ -129,7 +129,7 @@ def retrieve_context(
         # "검색 실패가 Agent 실행 자체를 막으면 안 된다" 원칙을 여기도
         # 똑같이 적용한다.
         try:
-            hits = vectorstore.search(conn, query, top_k=3)
+            hits = vectorstore.search(conn, query)
         except Exception:  # noqa: BLE001 — 임베딩 API 실패를 보강 실패로만 취급
             hits = []
         if hits:

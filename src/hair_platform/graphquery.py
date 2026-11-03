@@ -82,11 +82,35 @@ def task_assignment_owner(conn: sqlite3.Connection, task_id: int) -> dict | None
 
 def org_chart_summary(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
     """조직도와 같은 데이터를 관계 목록으로 요약한다 — 성과 데이터는
-    포함하지 않는다."""
+    포함하지 않는다.
+
+    사용자 요청(2026-11-03, "표시되는 내용 중 요청자ID, 리소스, Task
+    ID만으로는 관계를 파악하기 어려워... 가독성 높고 의미있는 정보전달이
+    되기 위한 노출 항목을 제안해줘" → "그렇게 수정해줘") — "Admin
+    GraphDB 관계 조회" 화면이 원시 ID(`requested_by=1`, `resource=
+    agent #51`)만 보여줘서 매니저가 다른 화면을 오가야 관계를 읽을 수
+    있었다. `users`/`agent_pool`/`human_pool`을 LEFT JOIN해 사람이 읽을
+    이름(`requested_by_username`/`resource_name`)과 업무 상태
+    (`task_status`)를 추가한다 — 기존 필드(`task_id`/`resource_type`/
+    `resource_id`/`requested_by`/`role_name`)는 그대로 둬서
+    `context_for_prompt()`가 깨지지 않게 한다. `resource_name`은
+    agent_pool에 admin이 지정한 `name`이 있으면 그걸, 없으면
+    `role_name`을 쓴다(사람은 `human_pool.name` 하나뿐). 성과 컬럼
+    (`performance_score`/`performance_consent`)은 여전히 어디에도
+    SELECT하지 않는다(`test_gc86`이 계속 보증)."""
     rows = conn.execute(
         "SELECT a.id AS assignment_id, a.task_id, a.resource_type, a.resource_id, "
-        "a.requested_by, t.role_name FROM assignments a "
+        "a.requested_by, ru.username AS requested_by_username, "
+        "t.role_name, t.status AS task_status, "
+        "CASE a.resource_type "
+        "WHEN 'agent' THEN COALESCE(ap.name, ap.role_name) "
+        "WHEN 'human' THEN hp.name "
+        "ELSE NULL END AS resource_name "
+        "FROM assignments a "
         "JOIN tasks t ON t.id = a.task_id "
+        "JOIN users ru ON ru.id = a.requested_by "
+        "LEFT JOIN agent_pool ap ON a.resource_type = 'agent' AND a.resource_id = ap.id "
+        "LEFT JOIN human_pool hp ON a.resource_type = 'human' AND a.resource_id = hp.id "
         "WHERE a.status = 'confirmed' ORDER BY a.id DESC LIMIT ?",
         (limit,),
     ).fetchall()

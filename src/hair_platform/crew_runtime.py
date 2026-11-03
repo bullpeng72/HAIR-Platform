@@ -186,7 +186,7 @@ def _static_augmentation(
         return description
     parts = []
     if "vectordb_search" in native_ids:
-        hits = vectorstore.search(conn, description, top_k=3)
+        hits = vectorstore.search(conn, description)
         if hits:
             parts.append(
                 "참고할 과거 산출물:\n" + "\n".join(f"- {h['text']}" for h in hits)

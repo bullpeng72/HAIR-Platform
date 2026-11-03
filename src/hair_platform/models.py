@@ -805,6 +805,16 @@ class EmbeddingConfigUpdate(BaseModel):
     model: str
 
 
+class RagSearchConfigUpdate(BaseModel):
+    """사용자 요청(2026-11-03, "RAG 검색 품질 향상... 우선순위를 정해
+    진행해줘") — `vectorstore.search()`가 관련성 임계값 없이 항상
+    top_k개를 반환하던 문제를 admin이 조정 가능한 설정으로 뺀다.
+    `EmbeddingConfigUpdate`와 같은 `id=1` 싱글턴 설정 패턴."""
+
+    top_k: int
+    min_score: float
+
+
 class PlatformLlmConfigUpdate(BaseModel):
     """사용자 요청(2026-11-02, "LLM 설정에 HAIR-Platform 공통/기본
     동작을 위한 LLM을 지정할 수 있게") — `EmbeddingConfigUpdate`와 같은

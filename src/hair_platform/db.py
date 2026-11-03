@@ -326,6 +326,20 @@ CREATE TABLE IF NOT EXISTS platform_llm_config (
     model TEXT NOT NULL
 );
 
+-- 사용자 요청(2026-11-03, "RAG 검색 품질 향상... 우선순위를 정해
+-- 진행해줘") — `vectorstore.search()`가 지금까지 관련성 임계값 없이
+-- top_k(모든 호출부에 3으로 하드코딩)만큼 무조건 반환했다(무관한
+-- 결과도 그대로 섞여 나옴). embedding_config와 같은 id=1 싱글턴
+-- 패턴으로 admin이 top_k/min_score(코사인 유사도 하한)를 조정할 수
+-- 있게 뺀다. 설정 안 하면(행 없음) 기존 top_k=3 + 신규 기본
+-- min_score=0.2로 폴백한다(vectorstore.DEFAULT_RAG_TOP_K/
+-- DEFAULT_RAG_MIN_SCORE 참고).
+CREATE TABLE IF NOT EXISTS rag_search_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    top_k INTEGER NOT NULL CHECK (top_k >= 1),
+    min_score REAL NOT NULL CHECK (min_score >= 0.0 AND min_score <= 1.0)
+);
+
 CREATE TABLE IF NOT EXISTS agent_tool_links (
     agent_id INTEGER NOT NULL REFERENCES agent_pool(id),
     tool_pool_id INTEGER NOT NULL REFERENCES tool_pool(id),
