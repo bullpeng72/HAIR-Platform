@@ -14,7 +14,7 @@ Task 종속 대화 흡수 + Brief 승격 공존), 단계형 개발 파이프라�
 (Gate A-G 기준 자동 재시도/에스컬레이션, BMAD-METHOD식 계획 승인
 1회 + 최소 HITL), Agent별 LLM 모델/설정 최적화 추천(admin), **통합
 CLI**(`hair serve`/`bootstrap-admin`/`reset-data`/`eval`)까지 전부 구현돼 실제로
-쓸 수 있다. `pytest` 610건 통과, API 엔드포인트 157개. 개념·아키텍처
+쓸 수 있다. `pytest` 715건 통과, API 엔드포인트 169개. 개념·아키텍처
 전체 설명은
 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은 `git log`
 (커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를 참고.
@@ -140,7 +140,7 @@ pip install -e ".[dev,all]"
 # 발견 — `test_documents.py`만 `pytest.importorskip()`로 이 문제를
 # 스스로 막고 있었다). `all`(= crewai+mcp+llm+documents 묶음, pyproject.toml
 # 참고)까지 같이 설치해야 아래 골든셋이 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 610건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 715건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -265,7 +265,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(157개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(169개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   approvals.py       # 다단계 결재라인(조직도 매니저 체인)
@@ -306,7 +306,7 @@ docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 610건 통과
+tests/unit/                            # 골든셋 715건 통과
 ```
 
 ## 로드맵
@@ -319,6 +319,30 @@ tests/unit/                            # 골든셋 610건 통과
 
 버전별 핵심 변경만 요약한다 — 세부 배경·버그 재현 과정은 커밋 메시지
 (`git log --oneline --all`)에 날짜·사용자 요청 원문과 함께 남아 있다.
+
+### v0.1.1 (2026-11-03) — 리소스 매칭/RAG 품질 향상 + 결재·GraphDB 가독성 + 사내망 접속 준비
+
+- ✨ 리소스 매칭: 역할명 부분일치(substring) 매칭 + LLM judge 폴백 도입,
+  "직접 검색해서 배정"(수동 3번째 단계) 제거
+- ✨ RAG 검색 품질 향상 — 관련성 임계값(min_score) + admin 설정 가능한
+  top_k/min_score, 청크 오버랩, 코사인+키워드 하이브리드 재순위화
+- ✨ 결재 화면 — "내 승인 대기함"에 요청자, "내가 요청한 건"에 결재권자
+  (또는 "미지정") 표시
+- ✨ GraphDB 관계 조회 화면 가독성 개선 — 원시 ID 대신 요청자명/업무명/
+  리소스명/업무 상태로 표시
+- ✨ Crew 빌더(즉석 Agent 조합 실행+저장), 배정 취소, TF팀 확장 +
+  파이프라인 배정 통합, 자율 개발 크루 파이프라인 재구성
+- ✨ 사내망 다중 사용자 접속 준비 — 비루프백 호스트+시크릿 키 미설정
+  조합 기동 시 경고, SQLite busy_timeout 적용, Tavily 실시간 웹검색,
+  `hair reset-data` 공장 초기화 커맨드, 임베딩 모델 설정 admin 구성화
+- 🔧 설정 메뉴 재구성 — "모델 관리"(LLM 설정 최적화·모델 레지스트리)
+  admin 전용화, 리소스 관리 그룹 구분선/정렬 정리
+- 🔧 화면 상단 도움말 39곳 현행화 + 접기 UI(기본 닫힘) 전환, `hair`
+  명령어 도움말 현행화(`reset-data` 설명 보완 + 사내망 접속 가이드)
+- 🔧 Team 성과/비용 집계 + 실행 이력 필터, 조직도 용어 재정리(TF팀 배지),
+  Agent/Tool/Skill 코드 체계 + 사번 체계 정비
+- 🐛 `teams` 인덱스 생성이 기존 DB 마이그레이션보다 먼저 실행돼 서버
+  기동이 실패하던 문제 수정
 
 ### v0.1.0 (2026-10-26) — 외부 자료 업로드(RAG) + Admin 지식 베이스 관리 + 응답 형식 일관성
 
