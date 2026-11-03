@@ -90,10 +90,28 @@ def _build_parser() -> argparse.ArgumentParser:
             "  hair serve\n"
             "  hair serve --no-browser                  브라우저 자동 열기 끄기\n"
             "  hair serve --db-path :memory: --reload   휘발성 DB로 임시 실행 + 자동 재시작\n"
+            "\n"
+            "사내망 접속(같은 네트워크의 다른 PC에서도 접속):\n"
+            "  export HAIR_PLATFORM_SECRET_KEY=\"$(python3 -c "
+            "'import secrets; print(secrets.token_hex(32))')\"\n"
+            "  hair serve --host 0.0.0.0 --no-browser   다른 PC에서 "
+            "http://<이 PC의 사내망 IP>:8000/\n"
+            "  (키를 안 주면 기동 시 경고가 뜬다 — 소스에 공개된 고정 "
+            "키로 세션이 서명돼 같은 망의\n"
+            "   누구나 다른 사용자 세션을 위조할 수 있다. --reload는 "
+            "공용 인스턴스에 쓰지 않는다 —\n"
+            "   파일 변경마다 재시작되며 접속이 전부 끊긴다.)\n"
         ),
     )
     p_serve.add_argument(
-        "--host", default="127.0.0.1", help="바인딩할 호스트(기본: 127.0.0.1)"
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "바인딩할 호스트(기본: 127.0.0.1=로컬만 접속 가능). "
+            "0.0.0.0을 주면 같은 네트워크의 다른 PC에서도 접속 가능 — "
+            "이땐 HAIR_PLATFORM_SECRET_KEY를 먼저 설정해야 한다(자세히는 "
+            "아래 예시 참고)."
+        ),
     )
     p_serve.add_argument(
         "--port", type=int, default=8000, help="바인딩할 포트(기본: 8000)"
