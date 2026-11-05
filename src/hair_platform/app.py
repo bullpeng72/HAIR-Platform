@@ -48,6 +48,7 @@ from hair_platform import (
     agent_runtime,
     assignments,
     audit,
+    brief_decompose_llm,
     conversations,
     cost,
     crew_history,
@@ -135,6 +136,7 @@ from hair_platform.models import (
     TaskNotesUpdate,
     TaskParticipantInvite,
     TaskPriorityUpdate,
+    TaskRetryBudgetUpdate,
     TaskStatusUpdate,
     TeamActiveUpdate,
     TeamCreate,
@@ -478,8 +480,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             rows = conn.execute(base_sql + " ORDER BY b.id DESC").fetchall()
         else:
             rows = conn.execute(
-                base_sql
-                + """
+                base_sql + """
                 WHERE b.submitted_by = ?
                    OR EXISTS (
                        SELECT 1 FROM tasks t
@@ -758,7 +759,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
         payload: TaskDecomposition,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
-        """Task 분해 결과 등록(후보 매칭은 포함하지 않는다)."""
+        """Task 분해 결과 등록(후보 매칭은 포함하지 않는다).
+
+        `depends_on_index`(사용자 요청, 2026-11-04, "업무 분해 단위
+        가이드" 설계) — 같은 배치 안의 다른 항목을 선행 작업으로
+        지정할 수 있다. 전체 Task를 먼저 다 만든 뒤에야 실제
+        `task_id`가 생기므로, 의존관계는 Task 삽입이 끝난 다음
+        두 번째 루프에서 연결한다. 순환 등으로 하나라도 실패하면
+        이미 삽입한 Task·의존관계를 전부 롤백한다(부분 생성 상태로
+        남기지 않음 — 기존 코드는 이 분기 자체가 없었다)."""
         brief = conn.execute(
             "SELECT * FROM briefs WHERE id = ?", (brief_id,)
         ).fetchone()
@@ -778,9 +787,46 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 ),
             )
             created.append({"id": cur.lastrowid, "role_name": item.role_name})
+
+        try:
+            for i, item in enumerate(payload.tasks):
+                if item.depends_on_index is None:
+                    continue
+                deliverables.add_task_dependency_for_decomposition(
+                    conn,
+                    created[i]["id"],
+                    user["id"],
+                    created[item.depends_on_index]["id"],
+                )
+        except ValueError as exc:
+            conn.rollback()
+            detail = {
+                "cycle_detected": "이 의존관계 조합은 순환을 만듭니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=409, detail=detail) from None
+
         conn.execute("UPDATE briefs SET status = 'reviewed' WHERE id = ?", (brief_id,))
         conn.commit()
         return {"brief_id": brief_id, "tasks": created}
+
+    @app.post("/api/briefs/{brief_id}/decompose-suggest")
+    def suggest_brief_decomposition_endpoint(
+        brief_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """LLM이 업무 요청을 독립 검증 가능한 할 일 단위로 쪼개도록
+        제안만 돌려준다 — DB에 아무것도 쓰지 않는다(admin이 검토·수정
+        후 `POST /api/briefs/{brief_id}/tasks`로 직접 제출해야 실제로
+        생성됨). 실제 LLM API를 호출해 비용이 발생한다(이 엔드포인트를
+        명시적으로 호출했을 때만)."""
+        try:
+            return brief_decompose_llm.suggest_decomposition(conn, brief_id)
+        except ValueError as exc:
+            if str(exc) == "brief_not_found":
+                raise HTTPException(
+                    status_code=404, detail="브리프를 찾을 수 없습니다"
+                ) from None
+            raise
 
     @app.get("/api/briefs/{brief_id}/tasks")
     def list_tasks_for_brief(
@@ -1146,6 +1192,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
         return detail
 
+    @app.get("/api/tasks/{task_id}/budget")
+    def get_task_budget_endpoint(
+        task_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도
+        예산 추적") — `cost.task_report()`(단가 기반 추정 비용 + 실제
+        토큰 사용량)와 `dashboard.task_retry_summary()`(파이프라인
+        단계 시도 + Crew 재실행 합산)를 한 번에 돌려준다. 권한은
+        위 `GET /api/tasks/{task_id}`와 동일."""
+        task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, task_id, user["id"])
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return {
+            "cost": cost.task_report(conn, task_id),
+            "retries": dashboard.task_retry_summary(conn, task_id),
+        }
+
     @app.patch("/api/tasks/{task_id}/notes")
     def update_task_notes_endpoint(
         task_id: int,
@@ -1209,6 +1280,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=403,
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            ) from None
+
+    @app.patch("/api/tasks/{task_id}/retry-budget")
+    def update_task_retry_budget_endpoint(
+        task_id: int,
+        payload: TaskRetryBudgetUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도
+        예산 추적") — `notes`/`status`/`priority`(참가자 전용)와 달리
+        거버넌스성 설정이라 admin/manager 전용으로 좁힌다."""
+        try:
+            return deliverables.update_task_retry_budget(
+                conn, task_id, user["id"], payload.max_retry_budget
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
             ) from None
 
     @app.post("/api/tasks/{task_id}/dependencies", status_code=201)
@@ -2296,6 +2385,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=400,
                 detail="병렬 실행(parallel_agent_ids)은 process='sequential'에서만 지정할 수 있습니다",
             )
+        # 사용자 요청(2026-11-04, "Agent 자가비평" 설계) — 위 parallel_
+        # agent_ids 검증과 같은 이유로 BackgroundTasks 안에서 조용히
+        # 'failed'로만 남기지 않고 요청 시점에 400으로 막는다. self_review
+        # 자체는 provider/model 같은 비용 선택권이 없는 단순 토글이라
+        # 위 supervisor 전용 필드 체크에는 포함하지 않는다 — member도
+        # 설정할 수 있어야 한다.
+        if payload.self_review and (
+            payload.process != "sequential" or payload.parallel_agent_ids
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="자기 검토(self_review)는 process='sequential'이고 parallel_agent_ids가 비어 있을 때만 사용할 수 있습니다",
+            )
         try:
             job = deliverables.start_adhoc_crew_execution(
                 conn,
@@ -2342,6 +2444,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             manager_provider=payload.manager_provider,
             manager_model=payload.manager_model,
             parallel_agent_ids=payload.parallel_agent_ids,
+            self_review=payload.self_review,
         )
         return {"job_ids": list(job["job_by_agent_id"].values()), "status": "running"}
 

@@ -46,6 +46,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         return {
             "final_output": "단계 산출물",

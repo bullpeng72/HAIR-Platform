@@ -40,7 +40,11 @@ Agent 실행은 도구 호출이 없는 단발 LLM 호출이라 Gate B(행동 �
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 from collections.abc import Callable
 
 from agent_evaluator import (
@@ -55,6 +59,55 @@ from agent_evaluator.gates.base import evaluate_gate_scores
 
 GATE_IDS = ["A", "B", "C", "D", "E", "F", "G"]
 DEFAULT_GATE_THRESHOLD = 0.7
+
+_FENCED_CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+_PYTHON_TAGS = {"python", "py"}
+_JS_TAGS = {"javascript", "js"}
+_INLINE_SCRIPT_RE = re.compile(
+    r"<script(?:\s[^>]*)?>(.*?)</script>", re.DOTALL | re.IGNORECASE
+)
+
+
+def _extract_inline_scripts(html: str) -> list[str]:
+    """raw HTML 문서(또는 ` ```html ` 펜스 블록 내용)에서 인라인
+    `<script>` 본문만 뽑는다 — `<script src="...">`처럼 본문이 없는
+    외부 스크립트는 제외(검사할 내용 자체가 없음)."""
+    return [s for s in _INLINE_SCRIPT_RE.findall(html) if s.strip()]
+
+
+def _check_js_snippets_with_node(
+    snippets: list[str], node_path: str, label: str
+) -> tuple[int, list[str]]:
+    """각 JS 조각을 `.js` 임시 파일에 써서 `node --check`로 검사한다
+    (**`.html` 확장자를 쓰면 Node가 내용과 무관하게 `ERR_UNKNOWN_
+    FILE_EXTENSION`으로 항상 즉시 실패한다** — 2026-11-05 직접 실행
+    확인으로 발견한 버그, 이 함수로 재발을 막는다: HTML 원본을
+    통째로 Node에 넘기지 않고 인라인 `<script>` 본문만 `.js`로 검사).
+    `(검사한 개수, 에러 목록)`을 반환한다."""
+    checked = 0
+    errors: list[str] = []
+    for snippet in snippets:
+        checked += 1
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".js", delete=True, encoding="utf-8"
+        ) as f:
+            f.write(snippet)
+            f.flush()
+            try:
+                proc = subprocess.run(
+                    [node_path, "--check", f.name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                errors.append(f"{label}: node --check timeout")
+                continue
+            if proc.returncode != 0:
+                errors.append(f"{label}: {proc.stderr.strip()[:500]}")
+    return checked, errors
+
 
 # 실제 LLM 호출(수 초~수십 초) 기준 SLA. eval_wiring.py는 결정론적 스텁 기준
 # (5s/10s, "빨라야 정상"인 반대 근거)이라 여기 그대로 쓰면 정상 호출도 전부
@@ -227,4 +280,125 @@ def aggregate_agent_score(conn: sqlite3.Connection, agent_id: int) -> dict | Non
         "sample_count": len(rows),
         "gate_averages": gate_averages,
         "avg_tcr": (sum(tcr_values) / len(tcr_values) if tcr_values else None),
+    }
+
+
+def compute_code_syntax_check(content: str) -> dict:
+    """산출물 텍스트에서 펜스 코드 블록(` ```python ... ``` ` 등)을 뽑아
+    실제로 구문이 유효한지 결정론적으로 확인한다 — 추가 LLM 호출 없음,
+    비용 0. 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사") — Gate
+    A-G는 순수 휴리스틱이라 "코드"라고 주장하는 텍스트가 실제로 파싱
+    가능한지는 지금까지 아무도 기계적으로 확인하지 않았다.
+
+    Python은 `compile()`로 검사한다(`pool_registry._validate_custom_
+    python_source()`와 같은 선례, 새 의존성 없음). JS/HTML은 사용자가
+    명시적으로 선택한 방식대로 **Node.js가 PATH에 있을 때만**
+    `node --check`로 검사하고, 없으면 그 블록은 조용히 `not_measured`로
+    건너뛴다(이 저장소 어디에도 Node를 런타임 의존성으로 요구하는 곳이
+    없으므로 새로 강제하지 않는다).
+
+    블록이 하나도 없거나 전부 모르는 언어/검사 도구 없음이면
+    `status: "not_measured"` — "검사할 게 없었다"는 뜻이고 실패가
+    아니다. 호출부가 이 결과를 `gate_scores`에 넣을 때 `_gate_pass_
+    ratio()`(제네릭 순회라 어떤 키든 자동으로 통과/차단 계산에 들어감)
+    오염을 피하려면 필요에 따라 `not_measured`를 강제해야 한다 — 이
+    함수 자체는 그 결정에 관여하지 않는다."""
+    blocks = _FENCED_CODE_BLOCK_RE.findall(content or "")
+    checked = 0
+    errors: list[str] = []
+    node_path = None
+
+    for lang, code in blocks:
+        lang = lang.lower().strip()
+        if lang in _PYTHON_TAGS:
+            checked += 1
+            try:
+                compile(code, "<deliverable>", "exec")
+            except SyntaxError as exc:
+                errors.append(f"python: {exc}")
+        elif lang in _JS_TAGS:
+            if node_path is None:
+                node_path = shutil.which("node") or ""
+            if not node_path:
+                continue  # Node 없음 — 이 블록은 검사 대상에서 제외(not_measured 사유).
+            block_checked, block_errors = _check_js_snippets_with_node(
+                [code], node_path, lang
+            )
+            checked += block_checked
+            errors.extend(block_errors)
+        elif lang == "html":
+            if node_path is None:
+                node_path = shutil.which("node") or ""
+            if not node_path:
+                continue  # Node 없음 — 이 블록은 검사 대상에서 제외(not_measured 사유).
+            # 펜스 블록의 HTML 전체가 아니라, 그 안에 든 인라인
+            # <script>만 검사한다 — HTML 자체는 node --check로 검증할
+            # "문법" 개념이 없고(<script>가 하나도 없으면 검사할 게
+            # 없다는 뜻, fail이 아니다), html 태그를 그대로 .html로
+            # 저장해 node에 넘기면 내용과 무관하게 항상 실패한다.
+            scripts = _extract_inline_scripts(code)
+            block_checked, block_errors = _check_js_snippets_with_node(
+                scripts, node_path, "html(<script>)"
+            )
+            checked += block_checked
+            errors.extend(block_errors)
+        # 모르는 언어 태그는 건너뜀(아는 언어만 검사).
+
+    if checked == 0:
+        return {
+            "score": None,
+            "status": "not_measured",
+            "not_measured": True,
+            "passed": False,
+            "checked_blocks": 0,
+        }
+    score = 1.0 if not errors else 0.0
+    return {
+        "score": score,
+        "status": "pass" if not errors else "fail",
+        "not_measured": False,
+        "passed": not errors,
+        "checked_blocks": checked,
+        "errors": errors,
+    }
+
+
+def compute_raw_html_syntax_check(content: str) -> dict:
+    """펜스로 감싸지 않은 **전체 raw HTML 문서**용(로드맵 5번, 2026-11-05)
+    — `content_type="html"`로 명시 요청한 경우 LLM에게 주는 지시문
+    (`deliverables._CONTENT_TYPE_INSTRUCTIONS["html"]`)이 "완전한 HTML
+    문서로 작성하세요(`<!DOCTYPE html>`부터 `</html>`까지)"라 펜스를
+    요구하지 않는다 — `compute_code_syntax_check()`의 펜스 스캔은 이
+    경우 거의 항상 `checked_blocks=0`으로 빠져 검증 기회를 놓친다.
+
+    HTML 문서 자체는 `node --check`로 검증할 "문법" 개념이 없다 —
+    인라인 `<script>`가 있을 때만 그 내용을 검사한다(없으면
+    not_measured, fail이 아니다). 반환 shape은 `compute_code_syntax_
+    check()`와 동일."""
+    node_path = shutil.which("node") or ""
+    if not node_path:
+        return {
+            "score": None,
+            "status": "not_measured",
+            "not_measured": True,
+            "passed": False,
+            "checked_blocks": 0,
+        }
+    scripts = _extract_inline_scripts(content or "")
+    if not scripts:
+        return {
+            "score": None,
+            "status": "not_measured",
+            "not_measured": True,
+            "passed": False,
+            "checked_blocks": 0,
+        }
+    checked, errors = _check_js_snippets_with_node(scripts, node_path, "html(<script>)")
+    return {
+        "score": 1.0 if not errors else 0.0,
+        "status": "pass" if not errors else "fail",
+        "not_measured": False,
+        "passed": not errors,
+        "checked_blocks": checked,
+        "errors": errors,
     }

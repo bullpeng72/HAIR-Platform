@@ -243,6 +243,13 @@ INDEX_HTML = """<!DOCTYPE html>
   .gate-badge.gate-ok { background: var(--status-success-bg); color: var(--status-success-fg); }
   .gate-badge.gate-warn { background: var(--status-warn-bg); color: var(--status-warn-fg); }
   .gate-badge.gate-na { background: var(--status-muted-bg); color: var(--status-muted-fg); }
+  /* 사용자 요청(2026-11-05, 로드맵 8번 "Crew 빌더 diff 모드") — jsdiff의
+     diffLines() 청크 단위로 추가분/삭제분/변화없음을 구분. 기존
+     success(초록)/warn(빨강) 토큰을 그대로 재사용 — 새 색상 도입 없음. */
+  .diff-block { white-space: pre-wrap; word-break: break-word; }
+  .diff-block .diff-added { background: var(--status-success-bg); color: var(--status-success-fg); }
+  .diff-block .diff-removed { background: var(--status-warn-bg); color: var(--status-warn-fg); text-decoration: line-through; }
+  .diff-block .diff-unchanged { color: inherit; }
   /* 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — Drawflow
      노드 안쪽 콘텐츠(HTML을 그대로 넣는 자리)의 최소 스타일. Drawflow
      자체 CSS가 노드 박스 테두리/배경을 이미 그려주므로 라벨·버튼
@@ -458,6 +465,13 @@ INDEX_HTML = """<!DOCTYPE html>
      표(CRUD)는 전혀 영향받지 않는다(아래 renderTeams 참고). -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.css">
 <script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.js"></script>
+<!-- 사용자 요청(2026-11-05, 로드맵 8번 "Crew 빌더 diff 모드") — 로드러너
+     데모에서 Crew 재시도마다 기존 기능이 조용히 퇴행해도 매번 전체
+     코드를 사람이 다시 읽어 수동 비교해야 했다. jsdiff: vanilla JS,
+     의존성 0개, MIT — 위 라이브러리들과 같은 패턴. CDN 로드 실패 시
+     diff 없이 두 산출물을 그대로 나열해 보여주는 것으로 대체하고
+     나머지 기능은 전혀 영향받지 않는다(아래 renderTextDiff 참고). -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.2.0/diff.min.js"></script>
 </head>
 <body>
 
@@ -721,6 +735,27 @@ new MutationObserver(mutations => {
 // 으로 렌더링하므로 .md로 묶는다.
 const _DOWNLOAD_EXT = { html: "html", code: "txt", markdown: "md" };
 const _DOWNLOAD_MIME = { html: "text/html", code: "text/plain", md: "text/plain", txt: "text/plain" };
+
+// 사용자 요청(2026-11-05, 로드맵 8번 "Crew 빌더 diff 모드") — 로드러너
+// 데모에서 Crew 재시도마다 기존 기능이 조용히 퇴행해도 매번 전체
+// 산출물을 사람이 다시 읽어 수동 비교해야 했다. jsdiff(CDN, <head>
+// 참고)의 Diff.diffLines()로 줄 단위 추가/삭제를 시각화한다. CDN 로드
+// 실패 시(이 플랫폼의 기존 CDN 라이브러리 전부와 같은 원칙) diff 없이
+// 두 산출물을 그대로 나열해 보여주는 것으로 대체 — 나머지 기능은
+// 전혀 영향받지 않는다.
+function renderTextDiff(oldText, newText) {
+  if (typeof Diff === "undefined") {
+    return '<p class="muted">diff 라이브러리를 불러오지 못했습니다 — 두 산출물을 그대로 비교하세요.</p>' +
+      '<p><b>이전 실행</b></p><pre class="code-block">' + esc(oldText || "(없음)") + '</pre>' +
+      '<p><b>이번 실행</b></p><pre class="code-block">' + esc(newText || "(없음)") + '</pre>';
+  }
+  const parts = Diff.diffLines(oldText || "", newText || "");
+  const html = parts.map(p =>
+    '<span class="' + (p.added ? "diff-added" : p.removed ? "diff-removed" : "diff-unchanged") +
+    '">' + esc(p.value) + '</span>'
+  ).join("");
+  return '<pre class="code-block diff-block">' + html + '</pre>';
+}
 
 function renderContent(raw, contentType) {
   if (contentType === "html" || contentType === "code" || contentType === "markdown") {
@@ -3024,7 +3059,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   const modelsByProvider = isSupervisor ? await fetchModelsByProvider() : {};
   let items, jobs, permission, confirmedAgents, confirmedTeams, taskDetail, activity, depGraph, siblingTasks;
-  let pipelineTemplates, pipelineRuns;
+  let pipelineTemplates, pipelineRuns, budget;
   try {
     items = await api("GET", "/api/tasks/" + taskId + "/deliverables");
     jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
@@ -3076,6 +3111,10 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     pipelineTemplates = (await api("GET", "/api/pipeline-templates").catch(() => []))
       .filter(t => t.is_active);
     pipelineRuns = await api("GET", "/api/tasks/" + taskId + "/pipeline-runs").catch(() => []);
+    // 사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도 예산
+    // 추적") — 실패해도(권한 밖 등) 워크스페이스 전체가 깨지지 않게
+    // catch로 감싼다(기존 pipelineRuns 등과 같은 방어).
+    budget = await api("GET", "/api/tasks/" + taskId + "/budget").catch(() => null);
   } catch (e) {
     detail.innerHTML = "";
     showMsg("global-msg", e.message, "error");
@@ -3369,18 +3408,26 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       '</div>';
   };
 
+  // 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사 + 요구사항 추적성
+  // 자동 채점") — `gate_scores`는 A-G 7개 외에 "구현"/"코드 검증" 단계에
+  // 한해 `code_syntax`/`requirements_traceability` 키가 추가로 들어올 수
+  // 있다. 아래 렌더링은 원래 제네릭하게 모든 키를 순회하므로 자동으로
+  // 배지가 뜨지만, 긴 영문 키를 그대로 배지 글자로 쓰면 어색해 짧은
+  // 한글 라벨로 바꿔 보여준다(A-G는 그대로 글자 자체가 식별자).
+  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성" };
   const pipelineTimelineHtml = (run) => {
     if (!run) return "";
     const rows = run.stage_results.map(sr => {
       const gateSummary = sr.gate_scores
         ? Object.entries(sr.gate_scores)
             .map(([gid, g]) => {
+              const label = GATE_EXTRA_LABELS[gid] || gid;
               const cls = g.not_measured ? "gate-na" : (g.passed ? "gate-ok" : "gate-warn");
               const title = g.not_measured
-                ? "Gate " + gid + " — 미평가"
-                : "Gate " + gid + " — " + (g.passed ? "통과" : "미통과") +
+                ? "Gate " + label + " — 미평가"
+                : "Gate " + label + " — " + (g.passed ? "통과" : "미통과") +
                   (typeof g.score === "number" ? " (점수 " + g.score + ")" : "");
-              return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + '">' + gid + "</span>";
+              return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + '">' + label + "</span>";
             })
             .join(" ")
         : "";
@@ -3473,6 +3520,30 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '</select></label>' +
     '</div>';
 
+  // 사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도 예산
+  // 추적") — 파이프라인 단계 시도 + Crew 재실행을 합산한 총 재시도
+  // 수와, 확정 배정 단가 기반 추정 비용 + 실제 토큰 사용량을 보여준다.
+  // admin/manager에게만 "재시도 예산" 입력을 보여준다(거버넌스성
+  // 설정이라 `priority`/`status`와 달리 참가자 전체에 안 열어둠).
+  const budgetCardHtml = budget
+    ? '<div class="card" style="margin:0.25rem 0 0.75rem">' +
+      '<div class="stat-row"><span>총 재시도</span><span>' +
+      budget.retries.total_retries + '회(파이프라인 ' + budget.retries.pipeline_stage_attempts +
+      ' + Crew ' + budget.retries.crew_run_count + ')</span></div>' +
+      '<div class="stat-row"><span>추정 비용(단가 기반)</span><span>' +
+      budget.cost.estimated_cost.toFixed(2) + '</span></div>' +
+      '<div class="stat-row"><span>실제 토큰 사용량</span><span>' +
+      budget.cost.token_usage.total_tokens + '</span></div>' +
+      (isSupervisor
+        ? '<div class="inline" style="margin-top:0.4rem">' +
+          '<label>재시도 예산(빈 값=무제한) <input type="number" min="0" id="ws-retry-budget-input" ' +
+          'value="' + (taskDetail.max_retry_budget == null ? "" : taskDetail.max_retry_budget) + '" style="width:5rem"></label>' +
+          '<button class="small" type="button" id="ws-retry-budget-save">저장</button>' +
+          '</div>'
+        : '') +
+      '</div>'
+    : "";
+
   // 의존관계 그래프(사용자 결정: Riido 수준 시각화). 제거는
   // SVG 안에서 처리하기보다(클릭 판별이 번거롭다) 그래프 아래 평범한
   // 목록에 "제거" 버튼을 둬서 접근성·구현 단순성을 둘 다 잡는다 —
@@ -3525,6 +3596,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   detail.innerHTML =
     '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
     statusPriorityBar +
+    budgetCardHtml +
     finalResultCard +
     notesCard +
     // 2026-10-08 — 이
@@ -3667,6 +3739,17 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     try {
       await api("PATCH", "/api/tasks/" + taskId + "/priority", { priority: ev.target.value });
       showMsg("global-msg", "우선순위를 변경했습니다.", "ok");
+      renderCollabWorkspace(taskId, containerId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  const retryBudgetSaveBtn = document.getElementById("ws-retry-budget-save");
+  if (retryBudgetSaveBtn) retryBudgetSaveBtn.addEventListener("click", async () => {
+    const raw = document.getElementById("ws-retry-budget-input").value.trim();
+    const maxRetryBudget = raw === "" ? null : Number(raw);
+    try {
+      await api("PATCH", "/api/tasks/" + taskId + "/retry-budget", { max_retry_budget: maxRetryBudget });
+      showMsg("global-msg", "재시도 예산을 저장했습니다.", "ok");
       renderCollabWorkspace(taskId, containerId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
@@ -4306,7 +4389,16 @@ async function renderDecomposeForm(briefId, stubRoles) {
       '<li>목록에 없는 이름도 자유롭게 추가할 수 있습니다.</li>' +
       '</ul>'
     ) +
-    skillDatalist;
+    skillDatalist +
+    // 사용자 요청(2026-11-04, "업무 분해 단위 가이드" 설계) — 복잡한
+    // 업무를 통째로 할 일 하나에 몰아넣지 않도록, LLM이 독립 검증
+    // 가능한 단위 + 선행관계를 제안하면 admin이 검토·수정 후 한
+    // 배치로 제출한다. 위 단건 폼은 그대로 둔다(간단한 경우엔 그게
+    // 더 빠름) — 이건 복잡한 업무에 한해 쓰는 보조 흐름이다.
+    '<div id="decompose-batch">' +
+    '<button type="button" class="small" id="decompose-suggest-btn">AI로 분해 제안 받기(복잡한 업무용)</button>' +
+    '<div id="decompose-batch-rows"></div>' +
+    '</div>';
   const skillPicker = initSkillPicker("d-skills-picker", "d-skills", []);
   detail.querySelectorAll("[data-fill-role]").forEach(btn => {
     btn.onclick = () => { document.getElementById("d-role").value = btn.dataset.fillRole; };
@@ -4325,6 +4417,93 @@ async function renderDecomposeForm(briefId, stubRoles) {
       });
       showMsg("global-msg", "할 일을 추가했습니다.", "ok");
       renderTaskList(briefId);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  // 배치(LLM 제안) 행 상태 — "즉시 모드" UI: 배열을 고치고 매번
+  // innerHTML을 통째로 다시 그린다(행 추가/삭제 시 선행업무 드롭다운의
+  // 보기 목록 자체가 바뀌어야 하므로 부분 갱신보다 단순하고 안전함).
+  let batchItems = [];
+
+  function syncBatchItemsFromInputs() {
+    batchItems = batchItems.map((item, i) => ({
+      role_name: document.getElementById("db-role-" + i)?.value ?? item.role_name,
+      required_skills: (document.getElementById("db-skills-" + i)?.value ?? "")
+        .split(",").map(s => s.trim()).filter(Boolean),
+      depends_on_index: (() => {
+        const v = document.getElementById("db-dep-" + i)?.value ?? "";
+        return v === "" ? null : Number(v);
+      })(),
+    }));
+  }
+
+  function renderBatchRows() {
+    const container = document.getElementById("decompose-batch-rows");
+    if (!batchItems.length) {
+      container.innerHTML = "";
+      return;
+    }
+    container.innerHTML =
+      table(["역할", "필요 스킬(쉼표로 구분)", "선행 업무", "동작"], batchItems.map((item, i) => [
+        '<input id="db-role-' + i + '" value="' + escAttr(item.role_name) + '" style="width:100%">',
+        '<input id="db-skills-' + i + '" value="' + escAttr(item.required_skills.join(", ")) + '" style="width:100%">',
+        '<select id="db-dep-' + i + '">' +
+          '<option value="">(없음)</option>' +
+          batchItems.map((other, j) => j === i ? "" :
+            '<option value="' + j + '"' + (item.depends_on_index === j ? " selected" : "") + '>' +
+            esc(other.role_name || ("#" + (j + 1))) + '</option>').join("") +
+          '</select>',
+        '<button type="button" class="small danger" data-batch-remove="' + i + '">삭제</button>',
+      ])) +
+      '<div class="inline">' +
+      '<button type="button" class="small" id="decompose-batch-add-row">행 추가</button>' +
+      '<button type="button" class="primary small" id="decompose-batch-submit">이 배치로 할 일 추가</button>' +
+      '</div>';
+    container.querySelectorAll("[data-batch-remove]").forEach(btn => {
+      btn.onclick = () => {
+        syncBatchItemsFromInputs();
+        const removedIndex = Number(btn.dataset.batchRemove);
+        batchItems.splice(removedIndex, 1);
+        // 삭제된 행을 선행업무로 가리키던 항목은 다시 "(없음)"으로,
+        // 뒤쪽 인덱스를 가리키던 항목은 한 칸씩 당겨준다.
+        batchItems = batchItems.map(item => {
+          if (item.depends_on_index === null) return item;
+          if (item.depends_on_index === removedIndex) return { ...item, depends_on_index: null };
+          if (item.depends_on_index > removedIndex) {
+            return { ...item, depends_on_index: item.depends_on_index - 1 };
+          }
+          return item;
+        });
+        renderBatchRows();
+      };
+    });
+    document.getElementById("decompose-batch-add-row").onclick = () => {
+      syncBatchItemsFromInputs();
+      batchItems.push({ role_name: "", required_skills: [], depends_on_index: null });
+      renderBatchRows();
+    };
+    document.getElementById("decompose-batch-submit").onclick = async () => {
+      syncBatchItemsFromInputs();
+      if (batchItems.some(item => !item.role_name.trim())) {
+        showMsg("global-msg", "역할명이 비어있는 행이 있습니다.", "error");
+        return;
+      }
+      try {
+        await api("POST", "/api/briefs/" + briefId + "/tasks", { tasks: batchItems });
+        showMsg("global-msg", "배치로 할 일 " + batchItems.length + "건을 추가했습니다.", "ok");
+        renderTaskList(briefId);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  }
+
+  document.getElementById("decompose-suggest-btn").addEventListener("click", async () => {
+    try {
+      const result = await api("POST", "/api/briefs/" + briefId + "/decompose-suggest", {});
+      batchItems = result.tasks || [];
+      if (!batchItems.length) {
+        showMsg("global-msg", "AI 제안을 받지 못했습니다 — 수동으로 입력해주세요.", "error");
+      }
+      renderBatchRows();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 }
@@ -4592,7 +4771,7 @@ async function renderMatch(content) {
       '<li>아래 목록은 "업무 요청" 탭에서 "할 일로 나누기"로 만든 할 일 전체입니다(브리프별로 묶음).</li>' +
       '<li>역할명이 서로 포함 관계(부분일치 — 예: "프론트엔드 개발" ↔ "프론트엔드 개발자")인 후보 중 필요 스킬까지 다 가진 후보가 있으면 그것부터 보여주고, 없으면 가용성40%·적합도35%·비용25% 가중치로 점수를 매겨 상위 3명을 제시합니다(사람 후보가 아직 성과점수를 안 받았으면 적합도를 빼고 가용성60%·비용40%로 재계산).</li>' +
       '<li>역할명이 부분일치로도 전혀 안 걸리는 후보가 없으면(예: "콘텐츠 카피라이팅" ↔ "카피라이팅 에이전트"처럼 문자열이 서로 포함되지 않는 경우), "AI로 추천 받기"로 LLM이 전체 Pool에서 의미상 맞는 후보를 찾아줍니다(비용 발생 가능, 명시적으로 눌러야만 호출됨).</li>' +
-      '<li>"배정 요청"을 누르면 즉시 확정되는 게 아니라 "결재" 탭에서 승인 절차를 거쳐야 확정(confirmed)됩니다.</li>' +
+      '<li>"배정 요청"을 누르면 즉시 확정되는 게 아니라 "결재" 탭에서 승인 절차를 거쳐야 확정(confirmed)됩니다(단, 본인 셀프배정은 결재 없이 즉시 확정됩니다).</li>' +
       '</ul>'
     ) +
     (hasTasks
@@ -4639,10 +4818,16 @@ function _wireMatchAssignButtons(container, taskId, onAssigned) {
         "이 사람은 로그인 계정이 연결돼 있지 않습니다 — 배정이 승인돼도 본인이 \\"내 업무\\"에서 확인할 방법이 없습니다. \\"사람 인력 관리\\"에서 계정을 먼저 연결하는 걸 권장합니다. 그래도 배정 요청하시겠습니까?"
       )) return;
       try {
-        await api("POST", "/api/tasks/" + taskId + "/assignments", {
+        const result = await api("POST", "/api/tasks/" + taskId + "/assignments", {
           resource_type: btn.dataset.assignType, resource_id: Number(btn.dataset.assignId),
         });
-        showMsg("global-msg", "배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.", "ok");
+        // 사용자 요청(2026-11-05, 로드맵 7번 "셀프배정 결재 단순화") —
+        // 본인 셀프배정은 결재 없이 즉시 confirmed로 돌아온다.
+        showMsg("global-msg",
+          result.status === "confirmed"
+            ? "셀프배정이 결재 없이 바로 확정됐습니다 — 바로 협업 워크스페이스에서 작업을 시작할 수 있습니다."
+            : "배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.",
+          "ok");
         if (onAssigned) onAssigned();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
@@ -7411,25 +7596,25 @@ async function _renderAdhocCrewForm(formBox, taskId) {
           '<option value="ollama">Ollama(로컬)</option></select>' + modelSelectHtml("crewbuilder-adhoc-model")
         : '<span class="muted">provider/model은 매니저·관리자만 선택할 수 있습니다(기본값 사용).</span>') +
       '<button class="primary" type="submit">이 업무에 바로 실행(비용 발생)</button>' +
-      '</div>' + crewAdvancedOptionsHtml("crewbuilder-adhoc", isSupervisor) +
+      '</div>' + crewAdvancedOptionsHtml("crewbuilder-adhoc", isSupervisor, true) +
       '</form><div id="crewbuilder-adhoc-promotion"></div></section>'
     : '<p class="muted">온보딩된(활성) 에이전트가 없습니다 — "AI 에이전트 생성"·"AI 에이전트 관리" 탭에서 먼저 준비하세요.</p>';
   if (!active.length) return;
   if (isSupervisor) wireProviderModelSelect("crewbuilder-adhoc-provider", "crewbuilder-adhoc-model", modelsByProvider);
   wireCrewAdvancedOptions("crewbuilder-adhoc", modelsByProvider, isSupervisor);
   wireCrewRowRemovers();
-  wireCrewProcessToggle("crewbuilder-adhoc-process", "crewbuilder-adhoc-rows");
+  wireCrewProcessToggle("crewbuilder-adhoc-process", "crewbuilder-adhoc-rows", "crewbuilder-adhoc-self-review");
   document.getElementById("crewbuilder-adhoc-add-row").onclick = () => {
     document.getElementById("crewbuilder-adhoc-rows").insertAdjacentHTML("beforeend", crewRowHtml(active));
     wireCrewRowRemovers();
-    wireCrewProcessToggle("crewbuilder-adhoc-process", "crewbuilder-adhoc-rows");
+    wireCrewProcessToggle("crewbuilder-adhoc-process", "crewbuilder-adhoc-rows", "crewbuilder-adhoc-self-review");
   };
   const clearBtn = document.getElementById("crewbuilder-adhoc-clear-suggestion");
   if (clearBtn) {
     clearBtn.onclick = () => {
       document.getElementById("crewbuilder-adhoc-rows").innerHTML = crewRowHtml(active);
       wireCrewRowRemovers();
-      wireCrewProcessToggle("crewbuilder-adhoc-process", "crewbuilder-adhoc-rows");
+      wireCrewProcessToggle("crewbuilder-adhoc-process", "crewbuilder-adhoc-rows", "crewbuilder-adhoc-self-review");
       clearBtn.closest("p").remove();
     };
   }
@@ -7458,7 +7643,7 @@ async function _renderAdhocCrewForm(formBox, taskId) {
       process: document.getElementById("crewbuilder-adhoc-process").value,
       manager_agent_id: managerVal ? Number(managerVal) : null,
       parallel_agent_ids: parallelAgentIds,
-    }, crewAdvancedOptionsPayload("crewbuilder-adhoc", isSupervisor));
+    }, crewAdvancedOptionsPayload("crewbuilder-adhoc", isSupervisor, true));
     if (isSupervisor) {
       const provider = document.getElementById("crewbuilder-adhoc-provider").value;
       const model = modelSelectValue("crewbuilder-adhoc-model");
@@ -7598,7 +7783,12 @@ function agentDisplayLabel(a) {
 // 방어적 toggle) 모두에게 열어두고, `planning`/매니저 전용 LLM은
 // provider/model과 같은 이유로 admin/manager 전용이다(백엔드도 똑같이
 // 막는다 — `app.py`의 "팀원은... 직접 선택할 수 없습니다" 검사 참고).
-function crewAdvancedOptionsHtml(prefix, isSupervisor) {
+// `enableSelfReview`(사용자 요청, 2026-11-04, "Agent 자가비평" 설계) —
+// `self_review`는 `AdhocCrewExecuteRequest`에만 있는 필드라(team-crew·
+// 샌드박스는 지원 안 함), 이 공유 헬퍼 3개에 opt-in 파라미터로만
+// 추가한다 — 호출부가 안 넘기면(undefined, falsy) 기존 두 호출부는
+// 렌더링·payload 모두 한 글자도 안 바뀐다.
+function crewAdvancedOptionsHtml(prefix, isSupervisor, enableSelfReview) {
   const supervisorFields = isSupervisor
     ? '<div class="inline" style="margin-top:0.3rem">' +
       '<label><input type="checkbox" id="' + prefix + '-planning"> 사전 계획(planning, 추가 LLM 호출 비용 발생)</label>' +
@@ -7611,11 +7801,20 @@ function crewAdvancedOptionsHtml(prefix, isSupervisor) {
       modelSelectHtml(prefix + "-manager-model") +
       "</div>"
     : "";
+  // self_review는 provider/model 같은 비용 선택권이 없는 단순 토글이라
+  // supervisorFields(관리자 전용)가 아니라 항상 보이는 블록에 둔다 —
+  // member도 설정할 수 있어야 한다(백엔드 RBAC과 일치).
+  const selfReviewField = enableSelfReview
+    ? '<div class="inline" style="margin-top:0.3rem">' +
+      '<label><input type="checkbox" id="' + prefix + '-self-review"> 자기 검토(완료 후 같은 Agent가 자신의 초안을 요구사항과 대조해 한 번 더 수정 — sequential·비병렬 전용)</label>' +
+      '</div>'
+    : "";
   return '<details class="muted" style="margin-top:0.4rem">' +
     "<summary>고급 설정(메모리" + (isSupervisor ? "·사전 계획·매니저 전용 LLM" : "") + ")</summary>" +
     '<div class="inline" style="margin-top:0.3rem">' +
     '<label><input type="checkbox" id="' + prefix + '-memory" checked> 메모리 사용(끄면 provider가 openai가 아니어도 OPENAI_API_KEY 없이 실행할 수 있습니다)</label>' +
     "</div>" +
+    selfReviewField +
     supervisorFields +
     "</details>";
 }
@@ -7626,7 +7825,7 @@ function wireCrewAdvancedOptions(prefix, modelsByProvider, isSupervisor) {
   }
 }
 
-function crewAdvancedOptionsPayload(prefix, isSupervisor) {
+function crewAdvancedOptionsPayload(prefix, isSupervisor, enableSelfReview) {
   const payload = { memory: document.getElementById(prefix + "-memory").checked };
   if (isSupervisor) {
     payload.planning = document.getElementById(prefix + "-planning").checked;
@@ -7634,6 +7833,9 @@ function crewAdvancedOptionsPayload(prefix, isSupervisor) {
     const managerModel = modelSelectValue(prefix + "-manager-model");
     if (managerProvider) payload.manager_provider = managerProvider;
     if (managerModel) payload.manager_model = managerModel;
+  }
+  if (enableSelfReview) {
+    payload.self_review = document.getElementById(prefix + "-self-review").checked;
   }
   return payload;
 }
@@ -7675,18 +7877,31 @@ function crewRowHtml(active, presetAgentId, presetTaskDesc) {
 // hierarchical(매니저 조율)에서는 "병렬" 지정이 적용될 지점이 없다
 // (`crew_runtime.run_crew()` 참고) — process select가 바뀔 때마다
 // 체크박스를 비활성화/활성화해 혼동을 막는다.
-function wireCrewProcessToggle(processSelectId, rowsContainerId) {
+// `selfReviewCheckboxId`(사용자 요청, 2026-11-04, "Agent 자가비평" 설계) —
+// 백엔드가 `self_review`를 `process='sequential'`이고 어느 행도 "병렬"
+// 체크 안 돼 있을 때만 허용하므로(`app.py`의 execute-adhoc-crew 400
+// 체크와 동일), 그 조건이 깨지면 체크박스를 미리 끄고 비활성화해
+// 사용자가 400을 직접 맞닥뜨리기 전에 UI에서 막는다. 생략하면
+// (team-crew/샌드박스 호출부) 기존 동작과 동일.
+function wireCrewProcessToggle(processSelectId, rowsContainerId, selfReviewCheckboxId) {
   const select = document.getElementById(processSelectId);
   const container = document.getElementById(rowsContainerId);
   if (!select || !container) return;
+  const selfReviewCb = selfReviewCheckboxId ? document.getElementById(selfReviewCheckboxId) : null;
   const sync = () => {
     const isSequential = select.value === "sequential";
     container.querySelectorAll(".crew-row-parallel").forEach(cb => {
       cb.disabled = !isSequential;
       if (!isSequential) cb.checked = false;
     });
+    if (selfReviewCb) {
+      const anyParallel = !!container.querySelector(".crew-row-parallel:checked");
+      selfReviewCb.disabled = !isSequential || anyParallel;
+      if (selfReviewCb.disabled) selfReviewCb.checked = false;
+    }
   };
   select.addEventListener("change", sync);
+  if (selfReviewCb) container.addEventListener("change", sync);
   sync();
 }
 
@@ -8045,9 +8260,25 @@ function crewDiagramSvg(result) {
   return { svg, unresolved };
 }
 
-function renderCrewResult(result) {
+async function renderCrewResult(result) {
   const box = document.getElementById("crew-result");
   const diagram = crewDiagramSvg(result);
+  // 사용자 요청(2026-11-05, 로드맵 8번 "Crew 빌더 diff 모드") — 이
+  // Task의 지난 Crew 실행들을 가져와 "바로 이전 실행"을 찾는다.
+  // 샌드박스(`/api/crew/run`)로 돌린 결과는 Task에 안 묶여 `task_id`
+  // 자체가 없으므로(기존에도 그랬다) 그 경우는 비교 기능 없이 기존
+  // 그대로 렌더한다 — 새로 뭔가 깨지는 게 없다.
+  let prevRun = null;
+  if (result.task_id) {
+    try {
+      const pastRuns = await api("GET", "/api/tasks/" + result.task_id + "/crew-runs");
+      const earlier = pastRuns.filter(r => result.id != null && r.id < result.id);
+      if (earlier.length) {
+        prevRun = earlier.reduce((a, b) => (a.id > b.id ? a : b));
+      }
+    } catch (e) { /* 이력 조회 실패해도 diff 없이 기존처럼 보여준다 */ }
+  }
+
   let html = "<h3>협업 관계 다이어그램</h3>" +
     helpBox(
       '<ul class="muted help-list">' +
@@ -8061,7 +8292,12 @@ function renderCrewResult(result) {
         table(["위임한 Agent", "LLM이 지목한 대상(원문)", "도구"], diagram.unresolved.map(d => [esc(d.from_agent_role || "-"), esc(d.to_agent_role || "(응답에 coworker 없음)"), esc(d.tool)])) +
         "</details>"
       : "");
-  html += '<h3>최종 산출물</h3><div class="msg ok">' + renderContent(result.final_output) + "</div>";
+  html += '<h3>최종 산출물' +
+    (prevRun
+      ? ' <button class="small" type="button" data-diff-final="1">이전 실행과 비교</button>'
+      : ' <button class="small" type="button" disabled title="비교할 이전 실행이 없습니다">이전 실행과 비교</button>') +
+    '</h3><div class="msg ok">' + renderContent(result.final_output) + "</div>" +
+    '<div id="crew-diff-final" style="display:none"></div>';
   // 사용자 요청(2026-10-12, "UI 개선 잔여 작업 진행해줘") — CrewAI가
   // 이미 집계해주는 토큰 사용량을 `run_crew()`가 이제 반환한다(크루
   // 완료 전엔 비어있을 수
@@ -8090,16 +8326,54 @@ function renderCrewResult(result) {
       (result.tcr === null ? "" : " · TCR " + result.tcr.toFixed(0) + "%") + '</p>';
   // 사용자 요청(2026-10-27, "다른 UI에도 ID가 남아 있는지 확인해줘") —
   // agent_pool은 이미 code가 있으니 raw agent_id 대신 쓴다.
-  html += "<h3>Agent별 산출물</h3>" + table(["Agent 코드", "역할", "산출물"], result.agents.map(a => [
-    esc(a.code || ("#" + a.agent_id)), agentDisplayLabel(a),
-    a.output === null ? "(없음 — 매니저는 조율만 하고 직접 산출물을 내지 않습니다)"
-      : esc(a.output).slice(0, 200) + (a.output.length > 200 ? "…" : ""),
-  ]));
+  // 사용자 요청(2026-11-05, 로드맵 8번) — "비교" 열 추가, 이전 실행에
+  // 같은 agent_id의 산출물이 있을 때만 버튼을 활성화한다.
+  html += "<h3>Agent별 산출물</h3>" + table(["Agent 코드", "역할", "산출물", "비교"], result.agents.map(a => {
+    const prevAgent = prevRun ? prevRun.agents.find(pa => pa.agent_id === a.agent_id && pa.output !== null) : null;
+    const compareCell = a.output === null
+      ? ""
+      : prevAgent
+        ? '<button class="small" type="button" data-diff-agent="' + a.agent_id + '">비교</button>'
+        : '<span class="muted">(이전 실행에 없음)</span>';
+    return [
+      esc(a.code || ("#" + a.agent_id)), agentDisplayLabel(a),
+      a.output === null ? "(없음 — 매니저는 조율만 하고 직접 산출물을 내지 않습니다)"
+        : esc(a.output).slice(0, 200) + (a.output.length > 200 ? "…" : ""),
+      compareCell,
+    ];
+  }));
+  html += '<div id="crew-diff-agent" style="display:none"></div>';
   html += "<h3>실제 위임/협업 발생 내역(" + result.delegations.length + "건)</h3>";
   html += result.delegations.length
     ? table(["위임한 Agent 역할", "대상 Agent 역할", "사용한 도구"], result.delegations.map(d => [esc(d.from_agent_role || "-"), esc(d.to_agent_role || "(확인 안 됨)"), esc(d.tool)]))
     : '<p class="muted">이번 실행에서는 Agent 간 실제 위임이 발생하지 않았습니다(각자 독립적으로 완수).</p>';
   box.innerHTML = html;
+
+  if (prevRun) {
+    const finalDiffBox = document.getElementById("crew-diff-final");
+    const finalBtn = box.querySelector("[data-diff-final]");
+    if (finalBtn) {
+      finalBtn.onclick = () => {
+        if (finalDiffBox.style.display === "none") {
+          finalDiffBox.innerHTML = renderTextDiff(prevRun.final_output, result.final_output);
+          finalDiffBox.style.display = "block";
+        } else {
+          finalDiffBox.style.display = "none";
+        }
+      };
+    }
+    const agentDiffBox = document.getElementById("crew-diff-agent");
+    box.querySelectorAll("[data-diff-agent]").forEach(btn => {
+      btn.onclick = () => {
+        const agentId = Number(btn.dataset.diffAgent);
+        const a = result.agents.find(x => x.agent_id === agentId);
+        const prevAgent = prevRun.agents.find(pa => pa.agent_id === agentId && pa.output !== null);
+        agentDiffBox.innerHTML = "<h4>" + esc(agentDisplayLabel(a)) + " — 이전 실행과 비교</h4>" +
+          renderTextDiff(prevAgent.output, a.output);
+        agentDiffBox.style.display = "block";
+      };
+    });
+  }
 }
 
 /* ---------- 인력 검색 ---------- */

@@ -344,6 +344,174 @@ def test_gc81_run_crew_captures_real_delegation_events():
     assert "agent_delegation_occurred" in actions
 
 
+# ---------- hierarchical_with_manager — 위임 결과 합성(사용자 요청,
+# 2026-11-04, "파이프라인 '구현' 단계가 위임 계획만 저장하고 실제 코드를
+# 합성 안 함" 버그 수정 — 로드러너 게임 데모에서 실측) ----------
+
+
+def test_run_crew_hierarchical_with_manager_appends_delegated_work_output(
+    client_and_conn,
+):
+    """회귀 테스트의 핵심 — 매니저의 최종 답변만으로는 코워커의 실제
+    작업 결과(코드 등)가 어디에도 없다는 걸 먼저 보장한 뒤(의도적으로
+    "위임 계획 요약"만 담은 매니저 답변을 씀), 합성 로직이 그 실제
+    결과를 반드시 덧붙이는지 확인한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)  # agent1=매니저
+
+    manager_only_summary = "Player Module은 분석가에게 위임했습니다."
+
+    def _kickoff_with_delegation(self, *args, **kwargs):
+        from crewai.events.event_bus import crewai_event_bus
+        from crewai.events.types.tool_usage_events import ToolUsageFinishedEvent
+
+        event = ToolUsageFinishedEvent(
+            tool_name="Delegate work to coworker",
+            tool_args={"coworker": "분석가"},
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            output="function playerModule() { /* 실제 구현 코드 */ }",
+            agent_role="기획자",
+        )
+        crewai_event_bus.emit(object(), event)
+        return _crew_output(manager_only_summary, [manager_only_summary])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_with_delegation):
+        result = crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["기획서를 작성해줘", "그 기획서를 분석해줘"],
+            admin_id,
+            process="hierarchical",
+            manager_agent_id=agent1,
+            provider="openai",
+        )
+
+    assert manager_only_summary not in [
+        "function playerModule() { /* 실제 구현 코드 */ }"
+    ]  # 전제 확인 — 매니저 답변 자체엔 코드가 없음
+    output = result["agents"][0]["output"]
+    assert manager_only_summary in output  # 매니저의 요약은 보존
+    assert "function playerModule()" in output  # 실제 위임 결과가 합성됨
+    assert "분석가" in output  # 어느 코워커의 결과인지 라벨링됨
+
+
+def test_run_crew_hierarchical_with_manager_ignores_ask_question_events(
+    client_and_conn,
+):
+    """"Ask question to coworker"(질의응답)는 실제 작업 결과가 아니므로
+    최종 산출물에 섞여 들어가면 안 된다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)
+
+    def _kickoff_with_question(self, *args, **kwargs):
+        from crewai.events.event_bus import crewai_event_bus
+        from crewai.events.types.tool_usage_events import ToolUsageFinishedEvent
+
+        event = ToolUsageFinishedEvent(
+            tool_name="Ask question to coworker",
+            tool_args={"coworker": "분석가"},
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            output="질문에 대한 답변입니다",
+            agent_role="기획자",
+        )
+        crewai_event_bus.emit(object(), event)
+        return _crew_output("최종 산출물", ["최종 산출물"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_with_question):
+        result = crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["기획서를 작성해줘", "그 기획서를 분석해줘"],
+            admin_id,
+            process="hierarchical",
+            manager_agent_id=agent1,
+            provider="openai",
+        )
+
+    output = result["agents"][0]["output"]
+    assert output == "최종 산출물"  # 질문 답변이 안 섞여 들어감
+    assert "질문에 대한 답변입니다" not in output
+
+
+def test_run_crew_hierarchical_with_manager_without_delegation_unchanged(
+    client_and_conn,
+):
+    """회귀 가드 — 위임 이벤트가 전혀 없으면(매니저가 혼자 처리) 기존
+    동작과 100% 동일해야 한다(부록 없음)."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)
+
+    def _kickoff_capture(self, *args, **kwargs):
+        return _crew_output("최종 산출물", ["최종 산출물"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_capture):
+        result = crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["기획서를 작성해줘", "그 기획서를 분석해줘"],
+            admin_id,
+            process="hierarchical",
+            manager_agent_id=agent1,
+            provider="openai",
+        )
+
+    assert result["agents"][0]["output"] == "최종 산출물"
+
+
+def test_run_crew_hierarchical_with_manager_appends_multiple_delegations_to_same_coworker(
+    client_and_conn,
+):
+    """같은 코워커에게 모듈을 나눠 여러 번 위임했으면, 합치거나 마지막
+    것만 남기지 않고 전부 보존해야 한다(전부 실제로 일어난 작업)."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent1, agent2 = _make_two_active_agents(conn)
+
+    def _kickoff_with_two_delegations(self, *args, **kwargs):
+        from crewai.events.event_bus import crewai_event_bus
+        from crewai.events.types.tool_usage_events import ToolUsageFinishedEvent
+
+        for output in ["Player Module 코드", "GameState Module 코드"]:
+            event = ToolUsageFinishedEvent(
+                tool_name="Delegate work to coworker",
+                tool_args={"coworker": "분석가"},
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
+                output=output,
+                agent_role="기획자",
+            )
+            crewai_event_bus.emit(object(), event)
+        return _crew_output("요약", ["요약"])
+
+    with patch("crewai.Crew.kickoff", new=_kickoff_with_two_delegations):
+        result = crew_runtime.run_crew(
+            conn,
+            [agent1, agent2],
+            ["기획서를 작성해줘", "그 기획서를 분석해줘"],
+            admin_id,
+            process="hierarchical",
+            manager_agent_id=agent1,
+            provider="openai",
+        )
+
+    output = result["agents"][0]["output"]
+    assert "Player Module 코드" in output
+    assert "GameState Module 코드" in output
+
+
 def test_gc219_resolve_delegation_target_sanitizes_like_crewai_and_falls_back():
     """`_resolve_delegation_target()`은 CrewAI 자신의 `sanitize_agent_name()`
     (공백 정리+소문자화)과 같은 기준으로 매칭해야, LLM이 대소문자/공백을

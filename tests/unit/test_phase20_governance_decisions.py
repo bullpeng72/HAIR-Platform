@@ -84,7 +84,10 @@ def test_gc200_member_can_request_assignment_for_own_human_pool_record(
         json={"resource_type": "human", "resource_id": human_id},
     )
     assert resp.status_code == 201
-    assert resp.json()["status"] == "requested"
+    # 로드맵 7번(2026-11-05, "셀프배정 결재 단순화") — 본인 셀프배정은
+    # 결재 체인 없이 즉시 confirmed된다(명세 변경 — 회귀 아님). 결재
+    # 단계의 전체 상세 검증은 test_phase64_self_assignment.py에 있다.
+    assert resp.json()["status"] == "confirmed"
 
     # 다른 사람 대신 요청하는 건 여전히 막힌다.
     resp = client.post(

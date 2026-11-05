@@ -72,6 +72,7 @@ from hair_platform import (
     agent_runtime,
     approvals,
     audit,
+    content_validators,
     crew_history,
     crew_runtime,
     llm,
@@ -1146,12 +1147,18 @@ def start_team_crew_execution(
 
     `start_agent_execution()`과 같은 비동기 2단계 패턴(검증+job 행
     생성까지만 동기, 실제 CrewAI kickoff은 `run_team_crew_job()`이
-    BackgroundTasks로 처리) — 다만 팀은 Agent가 여러 명이라
-    `agent_execution_jobs` 행도 **참여 Agent 수만큼** 만든다(매니저로
-    지정된 Agent는 산출물이 없으므로 job을 안 만든다 — `run_crew()`의
-    기존 관례와 동일). 기존 "AI 에이전트 실행" 폴링 UI(`GET .../
-    agent-execution-jobs`)가 그대로 여러 job을 보여줄 수 있어 새 폴링
-    메커니즘을 만들지 않았다.
+    BackgroundTasks로 처리) — 팀은 Agent가 여러 명이라 `agent_execution_
+    jobs` 행도 여러 개 만든다. `manager_agent_id`가 있으면
+    (hierarchical_with_manager) 결과물을 내는 주체가 매니저 1명뿐이라
+    (2026-10-18부터 — "매니저는 산출물 없음"이던 예전 관례가 "매니저가
+    코워커 결과를 통합한 진짜 결과물을 낸다"로 바뀜, `crew_runtime.
+    run_crew()` 참고) job도 매니저 1개만 만든다 — **정정(2026-11-04,
+    실측으로 재현한 버그 수정)**: 예전엔 이 변경 이후에도 계속 코워커
+    들에게만 job을 만들어, 결과물이 있는 매니저는 매칭되는 job이 없고
+    job이 있는 코워커는 결과물 목록에 안 나타나 **결과물이 하나도
+    생성되지 않았다**. 기존 "AI 에이전트 실행" 폴링 UI(`GET .../
+    agent-execution-jobs`)가 그대로 여러(또는 매니저 1개) job을 보여줄
+    수 있어 새 폴링 메커니즘을 만들지 않았다.
 
     참가자 판정은 단일 Agent 실행(`execution_eligibility()`, "요청자
     본인만")보다 넓다 — 팀 리더·팀원 둘 다 실행을 트리거할 수 있다(팀은
@@ -1185,9 +1192,17 @@ def start_team_crew_execution(
     if manager_agent_id is not None and manager_agent_id not in agent_ids:
         raise ValueError("manager_agent_not_in_team")
 
-    worker_agent_ids = [a for a in agent_ids if a != manager_agent_id]
+    # hierarchical_with_manager면 결과물을 내는 주체가 매니저 1명뿐이라
+    # (위 docstring 정정 참고) job도 매니저 1개만 — 코워커 job을 같이
+    # 만들면 영원히 'running'으로 남아(다음 실행을 "이미 실행 중"으로
+    # 막는 부작용까지 생김) 더 나쁘다.
+    job_target_ids: list[int]
+    if manager_agent_id is not None:
+        job_target_ids = [manager_agent_id]
+    else:
+        job_target_ids = agent_ids
     job_by_agent_id: dict[int, int] = {}
-    for agent_id in worker_agent_ids:
+    for agent_id in job_target_ids:
         cur = conn.execute(
             "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
             "VALUES (?, ?, 'running')",
@@ -1260,9 +1275,28 @@ def start_adhoc_crew_execution(
     if manager_agent_id is not None and manager_agent_id not in agent_ids:
         raise ValueError("manager_agent_not_in_agent_ids")
 
-    worker_agent_ids = [a for a in agent_ids if a != manager_agent_id]
+    # 실측으로 발견한 버그 수정(2026-11-04, 파이프라인 "구현" 단계
+    # 합성 로직 수정 작업 중 라이브 스모크 테스트로 재현) —
+    # `manager_agent_id`가 있으면(hierarchical_with_manager)
+    # `crew_runtime.run_crew()`는 `result["agents"]`에 **매니저 1건만**
+    # 돌려준다(2026-10-18에 "매니저는 산출물 없음"에서 "매니저가 통합한
+    # 진짜 결과물이 있음"으로 바뀜). 그런데 이 함수는 그 변경 이후에도
+    # 계속 "매니저를 제외한 코워커들에게만" job을 만들고 있었다 — 그
+    # 결과 매니저(결과물 있음)는 매칭되는 job이 없어서
+    # `run_adhoc_crew_job()`이 스킵하고, 코워커들(job 있음)은
+    # `result["agents"]`에 아예 안 나타나서 역시 매칭이 안 돼, 이
+    # 조합(hierarchical + manager_agent_id)에서는 **결과물이 단 하나도
+    # 안 생겼다**(라이브로 재현 확인). 코워커 job을 만들어봐야 영원히
+    # 'running' 상태로 남아(다음 실행을 "이미 실행 중"으로 막는
+    # 부작용까지 생김) 더 나쁘므로, "이 모드에서 실제로 결과물을 내는
+    # 주체가 누구인지"에 맞춰 매니저 1명한테만 job을 만든다.
+    job_target_ids: list[int]
+    if manager_agent_id is not None:
+        job_target_ids = [manager_agent_id]
+    else:
+        job_target_ids = agent_ids
     job_by_agent_id: dict[int, int] = {}
-    for agent_id in worker_agent_ids:
+    for agent_id in job_target_ids:
         cur = conn.execute(
             "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
             "VALUES (?, ?, 'running')",
@@ -1298,13 +1332,24 @@ def _persist_partial_crew_outputs(
     측정 불가능하다 — 거짓 점수를 채우지 않고 전부 `not_measured`로
     정직하게 남긴다(이미 있는 Gate B/E "미평가" 배지 표시를 그대로
     재사용)."""
-    not_measured_gate_scores = {
+    base_not_measured_gate_scores = {
         gid: {"not_measured": True} for gid in agent_evaluation.GATE_IDS
     }
     for agent_id, output_raw in partial_outputs.items():
         job_id = job_by_agent_id.get(agent_id)
         if job_id is None:
             continue
+        # 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사") — Gate A-G는
+        # kickoff 실패로 측정 불가능해도, 구문 검사는 완료된 Agent의 실제
+        # 출력 텍스트만으로 결정론적으로 계산 가능하므로 똑같이 추가한다.
+        # 로드맵 5번(2026-11-05) — `content_type`이 실제로 신뢰 가능한
+        # 값이므로(요청자 명시, DB CHECK로 검증됨) content_type별 보조
+        # 검증기까지 쓰는 `content_validators`로 교체(펜스 스캔만 하던
+        # `compute_code_syntax_check()` 직접 호출보다 더 정확함).
+        agent_gate_scores = dict(base_not_measured_gate_scores)
+        agent_gate_scores["code_syntax"] = content_validators.validate_by_content_type(
+            content_type, output_raw
+        )
         cur = conn.execute(
             "INSERT INTO deliverables (task_id, author_type, author_id, content, "
             "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
@@ -1313,7 +1358,7 @@ def _persist_partial_crew_outputs(
         deliverable_id = cur.lastrowid
         assert deliverable_id is not None
         agent_evaluation.record_evaluation(
-            conn, deliverable_id, not_measured_gate_scores, None
+            conn, deliverable_id, agent_gate_scores, None
         )
         approvals.create_approval_chain(conn, actor_id, "deliverable", deliverable_id)
         conn.execute(
@@ -1331,7 +1376,7 @@ def _persist_partial_crew_outputs(
                 "task_id": task_id,
                 "author_type": "agent",
                 "agent_id": agent_id,
-                "gate_scores": not_measured_gate_scores,
+                "gate_scores": agent_gate_scores,
                 "tcr": None,
                 "partial_recovery": True,
             },
@@ -1355,6 +1400,7 @@ def run_adhoc_crew_job(
     manager_provider: str | None = None,
     manager_model: str | None = None,
     parallel_agent_ids: list[int] | None = None,
+    self_review: bool = False,
 ) -> None:
     """`start_adhoc_crew_execution()`이 만든 job들을 실제로 실행한다 —
     `run_team_crew_job()`과 같은 백그라운드 경계·결과 저장 방식이지만,
@@ -1417,6 +1463,7 @@ def run_adhoc_crew_job(
             manager_provider=manager_provider,
             manager_model=manager_model,
             parallel_agent_ids=parallel_agent_ids,
+            self_review=self_review,
         )
         # 실제 Crew 실행(`run_crew()`) 자체는 여기서 이미 끝났다 —
         # 아래 deliverable 저장 단계가 따로 실패해도(`agent_execution_
@@ -1430,6 +1477,30 @@ def run_adhoc_crew_job(
             job_id = job_by_agent_id.get(agent["agent_id"])
             if job_id is None or agent["output"] is None:
                 continue  # 매니저 — job 자체를 안 만들었으므로 스킵
+            if agent.get("stage") == "draft":
+                # self_review=True(사용자 요청, 2026-11-04)면 worker당
+                # `result["agents"]`에 초안+검토 2건이 들어온다. `job_by_
+                # agent_id`는 worker 1명당 job 1개뿐이라, 필터링 없이
+                # 그대로 두면 같은 job에 deliverable+결재 체인이 2개씩
+                # 생겨(초안도 검토본도 결재 큐에 오름) 사람 개입을
+                # 오히려 늘려버린다 — self_review의 목적과 정반대다.
+                # 검토(최종)본만 결재 큐에 올리고, 초안은 `crew_history.
+                # complete_run()`이 이미 `result` 전체를 저장했으므로
+                # 실행 이력에서 그대로 조회 가능하다(투명성 유지).
+                continue
+            # 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사") — Agent마다
+            # 산출물 내용이 다르므로, crew 전체가 공유하는 `result["gate_
+            # scores"]`에 직접 쓰지 않고 deliverable별 복사본에만 넣는다
+            # (차단 개념이 없는 경로라 안전 — 아래 `record_evaluation()` 참고).
+            # 로드맵 5번(2026-11-05) — `content_type`이 실제로 신뢰
+            # 가능한 값(요청자 명시, DB CHECK로 검증됨)이므로 content_
+            # type별 보조 검증기까지 쓰는 `content_validators`로 교체.
+            agent_gate_scores = dict(result["gate_scores"])
+            agent_gate_scores["code_syntax"] = (
+                content_validators.validate_by_content_type(
+                    content_type, agent["output"]
+                )
+            )
             cur = conn.execute(
                 "INSERT INTO deliverables (task_id, author_type, author_id, content, "
                 "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
@@ -1438,7 +1509,7 @@ def run_adhoc_crew_job(
             deliverable_id = cur.lastrowid
             assert deliverable_id is not None
             agent_evaluation.record_evaluation(
-                conn, deliverable_id, result["gate_scores"], result["tcr"]
+                conn, deliverable_id, agent_gate_scores, result["tcr"]
             )
             approvals.create_approval_chain(
                 conn, actor_id, "deliverable", deliverable_id
@@ -1458,7 +1529,7 @@ def run_adhoc_crew_job(
                     "task_id": task_id,
                     "author_type": "agent",
                     "agent_id": agent["agent_id"],
-                    "gate_scores": result["gate_scores"],
+                    "gate_scores": agent_gate_scores,
                     "tcr": result["tcr"],
                 },
             )
@@ -1577,6 +1648,19 @@ def run_team_crew_job(
             job_id = job_by_agent_id.get(agent["agent_id"])
             if job_id is None or agent["output"] is None:
                 continue  # 매니저 — job 자체를 안 만들었으므로 스킵
+            # 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사") — Agent마다
+            # 산출물 내용이 다르므로, crew 전체가 공유하는 `result["gate_
+            # scores"]`에 직접 쓰지 않고 deliverable별 복사본에만 넣는다
+            # (차단 개념이 없는 경로라 안전 — 아래 `record_evaluation()` 참고).
+            # 로드맵 5번(2026-11-05) — `content_type`이 실제로 신뢰
+            # 가능한 값(요청자 명시, DB CHECK로 검증됨)이므로 content_
+            # type별 보조 검증기까지 쓰는 `content_validators`로 교체.
+            agent_gate_scores = dict(result["gate_scores"])
+            agent_gate_scores["code_syntax"] = (
+                content_validators.validate_by_content_type(
+                    content_type, agent["output"]
+                )
+            )
             cur = conn.execute(
                 "INSERT INTO deliverables (task_id, author_type, author_id, content, "
                 "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
@@ -1585,7 +1669,7 @@ def run_team_crew_job(
             deliverable_id = cur.lastrowid
             assert deliverable_id is not None
             agent_evaluation.record_evaluation(
-                conn, deliverable_id, result["gate_scores"], result["tcr"]
+                conn, deliverable_id, agent_gate_scores, result["tcr"]
             )
             approvals.create_approval_chain(
                 conn, actor_id, "deliverable", deliverable_id
@@ -1606,7 +1690,7 @@ def run_team_crew_job(
                     "author_type": "agent",
                     "agent_id": agent["agent_id"],
                     "team_id": team_id,
-                    "gate_scores": result["gate_scores"],
+                    "gate_scores": agent_gate_scores,
                     "tcr": result["tcr"],
                 },
             )
@@ -1888,6 +1972,39 @@ def update_task_priority(
     return detail
 
 
+def update_task_retry_budget(
+    conn: sqlite3.Connection, task_id: int, actor_id: int, max_retry_budget: int | None
+) -> dict:
+    """`PATCH /api/tasks/{task_id}/retry-budget`(로드맵 9번, 2026-11-05)
+    — `notes`/`status`/`priority`와 달리 참가자 전용이 아니라
+    admin/manager 전용 거버넌스 설정이다(호출부 `app.py`의
+    `require_role(Role.ADMIN, Role.MANAGER)`가 이미 막아주므로 여기선
+    참가자 판정을 하지 않는다). `None`이면 예산 해제(제한 없음)."""
+    task = conn.execute(
+        "SELECT max_retry_budget FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    old_budget = task["max_retry_budget"]
+    conn.execute(
+        "UPDATE tasks SET max_retry_budget = ? WHERE id = ?",
+        (max_retry_budget, task_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "task_retry_budget_updated",
+        "tasks",
+        task_id,
+        before={"max_retry_budget": old_budget},
+        after={"max_retry_budget": max_retry_budget},
+    )
+    conn.commit()
+    detail = get_task_detail(conn, task_id)
+    assert detail is not None
+    return detail
+
+
 def _would_create_cycle(
     conn: sqlite3.Connection, task_id: int, depends_on_task_id: int
 ) -> bool:
@@ -1918,19 +2035,17 @@ def _would_create_cycle(
     return False
 
 
-def add_task_dependency(
+def _insert_task_dependency_row(
     conn: sqlite3.Connection, task_id: int, actor_id: int, depends_on_task_id: int
 ) -> dict:
-    """`POST /api/tasks/{task_id}/dependencies`(Phase 4) —
-    참가자 전용(위와 같은 관례). 자기참조는 DB CHECK로도 막혀 있지만
-    (`db.py`), 더 명확한 에러 메시지를 위해 여기서도 먼저 본다. 간접
-    순환은 `_would_create_cycle()`로 애플리케이션 레벨에서 검사한다
-    (DB 제약만으로는 못 막는다)."""
+    """`add_task_dependency()`와 `add_task_dependency_for_decomposition()`이
+    공유하는 자기참조/순환 검사 + INSERT + 감사로그 — **commit은 안 한다**
+    (호출자가 트랜잭션 경계를 결정한다: 참가자 경로는 단건이라 바로
+    commit하고, 분해 시점 경로는 Task 생성 전체와 묶어 한 번에 commit해야
+    원자성이 보장된다)."""
     task = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
         raise ValueError("task_not_found")
-    if task_participant_relationship(conn, task_id, actor_id) is None:
-        raise PermissionError("not_a_participant")
     dep_task = conn.execute(
         "SELECT id FROM tasks WHERE id = ?", (depends_on_task_id,)
     ).fetchone()
@@ -1958,12 +2073,40 @@ def add_task_dependency(
         dependency_id,
         after={"task_id": task_id, "depends_on_task_id": depends_on_task_id},
     )
-    conn.commit()
     return {
         "id": dependency_id,
         "task_id": task_id,
         "depends_on_task_id": depends_on_task_id,
     }
+
+
+def add_task_dependency(
+    conn: sqlite3.Connection, task_id: int, actor_id: int, depends_on_task_id: int
+) -> dict:
+    """`POST /api/tasks/{task_id}/dependencies`(Phase 4) —
+    참가자 전용(위와 같은 관례). 자기참조는 DB CHECK로도 막혀 있지만
+    (`db.py`), 더 명확한 에러 메시지를 위해 여기서도 먼저 본다. 간접
+    순환은 `_would_create_cycle()`로 애플리케이션 레벨에서 검사한다
+    (DB 제약만으로는 못 막는다)."""
+    if task_participant_relationship(conn, task_id, actor_id) is None:
+        raise PermissionError("not_a_participant")
+    result = _insert_task_dependency_row(conn, task_id, actor_id, depends_on_task_id)
+    conn.commit()
+    return result
+
+
+def add_task_dependency_for_decomposition(
+    conn: sqlite3.Connection, task_id: int, actor_id: int, depends_on_task_id: int
+) -> dict:
+    """사용자 요청(2026-11-04, "업무 분해 단위 가이드" 설계) —
+    `POST /api/briefs/{brief_id}/tasks` 전용. 막 생성된 Task는 아직
+    참가자가 하나도 없으므로 `add_task_dependency()`의
+    `task_participant_relationship()` 게이트를 그대로 쓰면 항상
+    막힌다 — 의도적으로 그 체크를 생략한다(호출자가 이미 decompose
+    엔드포인트의 admin/manager 역할 게이트를 통과했으므로, 참가자
+    여부보다 강한 권한 보증이다). **commit은 호출자 책임** — 같은
+    배치의 다른 Task/의존관계 삽입과 원자적으로 묶여야 한다."""
+    return _insert_task_dependency_row(conn, task_id, actor_id, depends_on_task_id)
 
 
 def remove_task_dependency(

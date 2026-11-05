@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 # 사용자 요청(2026-10-27, "사람의 경우 ID는 향후 사번 적용 예정으로
 # 8자리~12자리 입력 및 표시 가능해야 함") — HumanPoolCreate/Update
@@ -165,17 +165,40 @@ class ApprovalDecision(BaseModel):
 
 
 class TaskItem(BaseModel):
-    """Resource Designer가 산출한 Task 분해 결과 한 건(후보 매칭 미포함)."""
+    """Resource Designer가 산출한 Task 분해 결과 한 건(후보 매칭 미포함).
+
+    `depends_on_index`(사용자 요청, 2026-11-04, "업무 분해 단위 가이드" —
+    로드러너 게임 데모에서 복잡한 업무를 통째로 Task 하나에 몰아넣었던
+    문제 보완) — 같은 `TaskDecomposition.tasks` 배열 안의 다른 항목을
+    가리키는 0-based 인덱스(선행 작업). `task_dependencies`는 이미
+    존재하는 표시용 기능이고(강제 차단 없음 — `dashboard.bottlenecks()`
+    경고용), 이 필드는 그걸 Task 생성 시점에 바로 연결할 수 있게 할
+    뿐이다."""
 
     role_name: str
     required_skills: list[str] = []
     headcount: int = 1
+    depends_on_index: int | None = None
 
 
 class TaskDecomposition(BaseModel):
     """매니저가 검토·조정한 Task 분해 결과 전체."""
 
     tasks: list[TaskItem]
+
+    @model_validator(mode="after")
+    def _validate_depends_on_index(self) -> "TaskDecomposition":
+        n = len(self.tasks)
+        for i, item in enumerate(self.tasks):
+            if item.depends_on_index is None:
+                continue
+            if not (0 <= item.depends_on_index < n):
+                raise ValueError(
+                    f"depends_on_index가 범위를 벗어났습니다: {item.depends_on_index}"
+                )
+            if item.depends_on_index == i:
+                raise ValueError("자기 자신을 선행 작업으로 지정할 수 없습니다")
+        return self
 
 
 class ResourceCandidate(BaseModel):
@@ -348,6 +371,13 @@ class TaskPriorityUpdate(BaseModel):
     """2026-10-08, Phase 4."""
 
     priority: TaskPriority
+
+
+class TaskRetryBudgetUpdate(BaseModel):
+    """사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도 예산
+    추적") — `None`이면 "예산 해제"(= 제한 없음, 기본값)로 취급한다."""
+
+    max_retry_budget: int | None = None
 
 
 class TaskDependencyCreate(BaseModel):
@@ -537,6 +567,14 @@ class AdhocCrewExecuteRequest(BaseModel):
     manager_provider: LlmProvider | None = None
     manager_model: str | None = None
     parallel_agent_ids: list[int] = []
+    # 사용자 요청(2026-11-04, "Agent 자가비평" 설계 — 로드러너 게임 데모에서
+    # Crew 재시도 때마다 이전에 되던 기능이 조용히 퇴행하던 문제 보완) —
+    # 켜면 각 worker의 초안 뒤에 같은 Agent의 검토 Task를 추가한다
+    # (`crew_runtime.run_crew()`가 `process="sequential"` + `parallel_
+    # agent_ids` 비어있을 때만 지원 — 그 외 조합은 400). 비용 선택권이
+    # 없는 단순 토글이라(provider/model override와 다름) member도 설정
+    # 가능하다(`app.py`의 supervisor 전용 필드 목록에 넣지 않음).
+    self_review: bool = False
 
 
 class TeamCrewExecuteRequest(BaseModel):

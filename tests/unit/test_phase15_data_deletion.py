@@ -565,6 +565,7 @@ def test_gc_delete_brief_cascades_pipeline_runs_and_stages(client_and_conn):
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         return {
             "final_output": "x",
@@ -705,12 +706,18 @@ def test_reset_to_factory_state_keeps_teams_untouched(client_and_conn):
 
     data_admin.reset_to_factory_state(conn)
 
-    assert conn.execute(
-        "SELECT COUNT(*) AS c FROM teams WHERE id = ?", (team_id,)
-    ).fetchone()["c"] == 1
-    assert conn.execute(
-        "SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?", (team_id,)
-    ).fetchone()["c"] == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM teams WHERE id = ?", (team_id,)
+        ).fetchone()["c"]
+        == 1
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?", (team_id,)
+        ).fetchone()["c"]
+        == 1
+    )
 
 
 def test_reset_to_factory_state_wipes_operational_tables(client_and_conn):

@@ -45,6 +45,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         return {
             "final_output": "단계 산출물",
@@ -145,6 +146,7 @@ def test_gc_dev_crew_mention_without_linked_task_creates_synthetic_task_and_paus
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         captured_descriptions.append(task_descriptions[0])
         return _good_run_crew()(
@@ -157,6 +159,7 @@ def test_gc_dev_crew_mention_without_linked_task_creates_synthetic_task_and_paus
             model,
             manager_agent_id,
             expected_outputs,
+            self_review,
         )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew):

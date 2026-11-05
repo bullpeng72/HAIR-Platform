@@ -1622,8 +1622,39 @@ def post_pipeline_run_status_message(conn: sqlite3.Connection, run_id: int) -> N
             (run_id,),
         ).fetchone()
         if pending_approval is not None and pending_approval["approver_username"]:
+            # 사용자 요청(2026-11-05, 로드맵 6번 "자동 단계적 에스컬레이션")
+            # — 실측 확인: 승인자 이름이 여기 적혀도 `@` 접두사가 없어
+            # `list_my_recent_mentions()`(`LIKE '%@username%'`)에 전혀
+            # 안 걸렸고, `@`를 붙여도 승인자가 이 대화의 참가자가 아니면
+            # 그 매칭 자체가 JOIN `conversation_participants`에서 빠진다
+            # — 즉 에스컬레이션이 걸려도 승인자는 대화창에서 전혀 알
+            # 길이 없었다(결재함을 직접 열어봐야만 보임). 승인자를
+            # (아직 참가자가 아니면) 이 대화에 추가한 뒤 실제로 `@`
+            # 멘션한다 — "에스컬레이션"이 이름만 뿐 사람에게 실제로
+            # 전달되지 않는 반쪽짜리였던 걸 고친다.
+            approver_id = pending_approval["approver_id"]
+            if approver_id is not None and not is_participant(
+                conn, run["source_conversation_id"], approver_id
+            ):
+                try:
+                    conn.execute(
+                        "INSERT INTO conversation_participants (conversation_id, "
+                        "participant_type, participant_id, invited_by) "
+                        "VALUES (?, 'human', ?, ?)",
+                        (run["source_conversation_id"], approver_id, run["actor_id"]),
+                    )
+                    audit.record(
+                        conn,
+                        run["actor_id"],
+                        "pipeline_escalation_approver_invited",
+                        "conversation_participants",
+                        run["source_conversation_id"],
+                        after={"approver_id": approver_id},
+                    )
+                except sqlite3.IntegrityError:
+                    pass  # 경합으로 이미 추가됨 — 무시(멱등).
             lines.append(
-                f"사람 승인이 필요합니다 — {pending_approval['approver_username']}님이 "
+                f"사람 승인이 필요합니다 — @{pending_approval['approver_username']}님이 "
                 "결재함에서 확인해주세요."
             )
         else:

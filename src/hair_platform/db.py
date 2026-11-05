@@ -927,6 +927,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 의사결정을 적어둘 수 있는 곳이 없었다.
     _ensure_column(conn, "tasks", "notes", "TEXT NOT NULL DEFAULT ''")
 
+    # 2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도 예산 추적" — 기본값
+    # NULL(= 예산 제한 없음, 기존 Task 전부 동작 무변화). 설정하면
+    # `pipeline_runtime._execute_stage_attempt()`가 `dashboard.
+    # task_retry_summary()`의 합산치와 비교해, 단계 내 `max_retry`가
+    # 아직 남아 있어도 Task 전체 예산을 넘으면 바로 에스컬레이션한다.
+    _ensure_column(conn, "tasks", "max_retry_budget", "INTEGER")
+
     # 2026-10-08, Phase 3 — 댓글
     # `@멘션`으로 트리거된 Agent 실행을 "AI 에이전트 실행" 버튼으로
     # 트리거된 것과 구분하기 위한 출처 표시. NULL이면 기존 경로(버튼),

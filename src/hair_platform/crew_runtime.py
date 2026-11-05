@@ -443,6 +443,7 @@ def run_crew(
     manager_provider: str | None = None,
     manager_model: str | None = None,
     parallel_agent_ids: list[int] | None = None,
+    self_review: bool = False,
 ) -> dict:
     """여러 온보딩된 Agent를 CrewAI Crew로 묶어 실제 협업
     실행한다. N번째 `agent_ids`가 N번째 `task_descriptions`를 맡는다.
@@ -502,6 +503,20 @@ def run_crew(
     `Task.agent` 배정을 무시) 이 플래그가 적용될 지점이 없으므로,
     `process != "sequential"`인데 지정하면 조용히 무시하지 않고 즉시
     거부한다.
+
+    `self_review`(사용자 요청, 2026-11-04, "Agent 자가비평" 설계 —
+    실시간 데모에서 Crew 재시도를 거듭할 때마다 새 기능을 추가하면서
+    이전에 되던 기능이 조용히 퇴행하는 문제를 3라운드 수동 피드백으로
+    직접 겪음) — 켜면 각 worker의 초안 Task 뒤에 **같은 Agent**의 검토
+    Task를 추가한다(`context=[초안]`로 자기 초안을 보고, 원 요구사항과
+    대조해 빠진/깨진 부분을 고치되 기존에 되던 기능은 보존하라고
+    지시). 다음 worker는 이전 worker의 "검토 후 최종본"에서 이어받는다
+    (초안이 아니라). `parallel_agent_ids`와 마찬가지로 `process=
+    "sequential"`이고 `parallel_agent_ids`가 비어 있을 때만 의미가
+    있으므로 그 외 조합은 즉시 거부한다(조용히 무시하지 않음 —
+    체크박스를 켰는데 아무 일도 안 일어나는 상태를 피한다). 결과
+    `per_agent` 각 항목에 `"stage": "draft"|"final"` 키가 붙는다
+    (`self_review=False`면 항상 `"final"` — 기존 소비자와 하위호환).
     """
     if len(agent_ids) != len(task_descriptions):
         raise ValueError("agent_ids와 task_descriptions의 개수가 같아야 합니다")
@@ -510,6 +525,11 @@ def run_crew(
     if parallel_agent_ids and process != "sequential":
         raise ValueError(
             "parallel_agent_ids는 process='sequential'에서만 지정할 수 있습니다"
+        )
+    if self_review and (process != "sequential" or parallel_agent_ids):
+        raise ValueError(
+            "self_review는 process='sequential'이고 parallel_agent_ids가 "
+            "비어 있을 때만 사용할 수 있습니다"
         )
     if manager_agent_id is not None:
         if process != "hierarchical":
@@ -662,6 +682,12 @@ def run_crew(
         # 한다는 게 우선이다. 대신 "한 번에 한 코워커씩만" 명시해 그
         # 배열-묶음 호출 실수를 줄인다.
         delegations: list[dict] = []
+        # hierarchical_with_manager 분기에서는 안 쓰지만(그 분기의 결과
+        # 귀속은 `rows[manager_index]`를 직접 쓴다) 미리 선언해둬야
+        # 아래 `_capture_task_completion`/결과 루프에서 "정의 안 됨"
+        # 경고 없이 안전하게 참조할 수 있다.
+        worker_task_rows: list[sqlite3.Row] = []
+        worker_task_stage: list[str] = []
         if hierarchical_with_manager:
             manager_row = rows[manager_index]
             coworker_roles = ", ".join(r["role_name"] for r in worker_rows)
@@ -709,28 +735,71 @@ def run_crew(
             ]
         else:
             tasks: list[Task] = []
+            # self_review(사용자 요청, 2026-11-04) — worker당 Task를 1개에서
+            # 최대 2개(초안+검토)로 늘리므로, `worker_rows`(agent 1명당 1개,
+            # 절대 안 늘어남)로는 더 이상 Task를 1:1로 인덱싱할 수 없다.
+            # `task_owner_rows`/`worker_task_stage`를 `tasks`와 나란히
+            # 쌓아 "이 Task가 어느 agent row 소속이고 초안인지 최종본인지"를
+            # Task 단위로 추적한다 — 아래 `_capture_task_completion()`과
+            # 최종 결과 루프가 이걸로 `worker_rows` 참조를 대체한다(실측으로
+            # 발견한 버그 수정 — self_review 없이는 Task 개수와 worker_rows
+            # 개수가 항상 같아 기존 동작과 100% 동일하다).
+            task_owner_rows: list[sqlite3.Row] = []
+            worker_task_stage: list[str] = []
             for i, description in enumerate(task_descriptions):
                 is_parallel = agent_ids[i] in (parallel_agent_ids or [])
                 context = (
                     None
                     if is_parallel
-                    else ([tasks[i - 1]] if i > 0 and process == "sequential" else None)
+                    else ([tasks[-1]] if tasks and process == "sequential" else None)
                 )
-                tasks.append(
-                    Task(
+                draft_task = Task(
+                    description=_static_augmentation(
+                        conn, json.loads(rows[i]["skill_tags"]), description
+                    ),
+                    expected_output=_expected_output_for(
+                        i, DEFAULT_EXPECTED_OUTPUT
+                    ),
+                    agent=crewai_agents[i],
+                    context=context,
+                    async_execution=is_parallel,
+                    guardrail=_min_length_guardrail,
+                )
+                tasks.append(draft_task)
+                task_owner_rows.append(rows[i])
+                worker_task_stage.append("final" if not self_review else "draft")
+
+                if self_review:
+                    review_description = (
+                        f"{description}\n\n"
+                        "[자기 검토] 위는 당신이 방금 작성한 초안입니다. "
+                        "원래 요구사항과 한 줄씩 비교해 (1) 빠졌거나 깨진 "
+                        "부분을 모두 고치고, (2) 이미 잘 동작하던 기능은 "
+                        "새 기능을 추가하거나 다른 문제를 고치는 과정에서 "
+                        "실수로 지우거나 망가뜨리지 말고 그대로 보존하세요. "
+                        "수정한 최종본 전체를 다시 제출하세요(초안을 그대로 "
+                        "복사해 제출하지 마세요)."
+                    )
+                    review_task = Task(
                         description=_static_augmentation(
-                            conn, json.loads(rows[i]["skill_tags"]), description
+                            conn, json.loads(rows[i]["skill_tags"]), review_description
                         ),
-                        expected_output=_expected_output_for(
-                            i, DEFAULT_EXPECTED_OUTPUT
-                        ),
+                        expected_output="모든 요구사항이 반영되고 기존 동작은 보존된 최종본",
                         agent=crewai_agents[i],
-                        context=context,
-                        async_execution=is_parallel,
+                        context=[draft_task],
                         guardrail=_min_length_guardrail,
                     )
-                )
+                    tasks.append(review_task)
+                    task_owner_rows.append(rows[i])
+                    worker_task_stage.append("final")
+
             worker_tasks = [t for i, t in enumerate(tasks) if i != manager_index]
+            # `manager_index`는 이 분기(non-hierarchical)에서 항상 `None`
+            # 이므로(매니저 Task는 위 `if` 분기에서만 만들어짐) 아래 둘은
+            # 사실상 `tasks`/`task_owner_rows`와 동일하다 — 방어적으로
+            # `worker_tasks`와 같은 필터링 규칙을 그대로 적용해둔다.
+            worker_task_rows = [r for i, r in enumerate(task_owner_rows) if i != manager_index]
+            worker_task_stage = [s for i, s in enumerate(worker_task_stage) if i != manager_index]
 
         task_completions: list[dict] = []
 
@@ -751,17 +820,28 @@ def run_crew(
             # 하나뿐이고 그 결과가 "매니저가 코워커들에게 위임해 통합한
             # 최종 산출물" 자체이므로 — 어느 특정 워커의 몫이 아니라 —
             # `worker_rows` 인덱싱 대신 매니저 본인의 role_name을 쓴다.
+            #
+            # self_review(2026-11-04)로 worker당 Task가 2개(초안+검토)가
+            # 될 수 있어, `worker_rows`(agent 1명당 1개, 절대 안 늘어남)
+            # 대신 Task 개수만큼 늘어나는 `worker_task_rows`/
+            # `worker_task_stage`로 인덱싱한다 — self_review가 꺼져있으면
+            # 둘 다 `worker_rows`와 완전히 같은 길이/순서라 기존 동작과
+            # 100% 동일하다.
             idx = len(task_completions)
             if hierarchical_with_manager:
                 agent_role = rows[manager_index]["role_name"]
                 agent_id = None  # 위임 통합 결과 — 특정 워커 한 명의 몫이 아니다
             else:
                 agent_role = (
-                    worker_rows[idx]["role_name"]
-                    if idx < len(worker_rows)
+                    worker_task_rows[idx]["role_name"]
+                    if idx < len(worker_task_rows)
                     else task_output.agent
                 )
-                agent_id = worker_rows[idx]["id"] if idx < len(worker_rows) else None
+                if idx < len(worker_task_rows) and worker_task_stage[idx] == "draft":
+                    agent_role = f"{agent_role} (초안)"
+                agent_id = (
+                    worker_task_rows[idx]["id"] if idx < len(worker_task_rows) else None
+                )
             # output_raw(사용자 요청, 2026-10-20, "실패 시 일부 재시도") —
             # 기존 output_preview(200자)는 화면 표시용이라 자르지만,
             # 부분 성공분을 실제 deliverable로 저장하려면 전체 텍스트가
@@ -824,6 +904,19 @@ def run_crew(
         crew = Crew(**crew_kwargs)
 
         known_roles = [r["role_name"] for r in rows]
+        # 사용자 요청(2026-11-04, "파이프라인 '구현' 단계가 위임만 하고
+        # 실제 코드를 합성 안 함" 버그 수정 — 로드러너 게임 데모에서
+        # 실측) — `hierarchical_with_manager`는 매니저의 마지막 답변
+        # 하나만 최종 결과물로 쓰는데, 매니저가 "위임 계획 요약"만
+        # 쓰고 코워커의 실제 산출물(코드 등)을 안 옮겨 적는 경우가
+        # 실제로 있었다. CrewAI 소스 확인 결과 매니저 LLM은 "Delegate
+        # work to coworker" 도구 결과를 자기 추론 스크래치패드에서는
+        # 실제로 보지만(`agent_utils.py`의 Observation), 그걸 최종
+        # 답변에 그대로 옮겨 적으라고 강제하는 장치가 없다 — 매니저의
+        # "기억"에 기대지 않고, 위임이 일어날 때마다 그 결과
+        # (`event.output`)를 여기서 직접 수집해둔다("Ask question to
+        # coworker"는 질의응답이라 제외 — 실제 작업 결과가 아님).
+        delegated_work_outputs: list[dict] = []
 
         def _capture_delegation(source, event) -> None:
             if _looks_like_delegation(event.tool_name):
@@ -834,6 +927,15 @@ def run_crew(
                             event.tool_args, known_roles
                         ),
                         "tool": event.tool_name,
+                    }
+                )
+            if event.tool_name == "Delegate work to coworker" and event.output:
+                delegated_work_outputs.append(
+                    {
+                        "to_agent_role": _resolve_delegation_target(
+                            event.tool_args, known_roles
+                        ),
+                        "output": str(event.output),
                     }
                 )
 
@@ -862,6 +964,19 @@ def run_crew(
         final_output_text = (
             result.tasks_output[0].raw if result.tasks_output else result.raw
         )
+        # 실측으로 발견한 버그 수정(2026-11-04) — 매니저의 최종 답변이
+        # "위임 계획 요약"뿐이고 실제 코워커 산출물(코드 등)을 전혀
+        # 옮겨 적지 않는 경우가 있었다. 매니저가 요약을 잘했든 못했든
+        # 실제 작업 결과가 최종 산출물에서 빠지는 일이 구조적으로
+        # 없도록, 위에서 수집해둔 `delegated_work_outputs`를 무조건
+        # 이어 붙인다 — 같은 코워커에게 여러 번 위임했으면 전부 보존
+        # (합치거나 마지막 것만 남기지 않음, 전부 실제로 일어난 작업).
+        if delegated_work_outputs:
+            appendix = "\n\n---\n## 위임된 하위 작업 결과물(원본)\n\n" + "\n\n".join(
+                f"### {d['to_agent_role'] or '코워커'}\n{d['output']}"
+                for d in delegated_work_outputs
+            )
+            final_output_text = final_output_text + appendix
         conn.execute(
             "UPDATE agent_pool SET last_output = ?, framework = 'crewai' WHERE id = ?",
             (final_output_text, manager_row["id"]),
@@ -880,7 +995,17 @@ def run_crew(
             }
         )
     else:
-        for row, task_output in zip(worker_rows, result.tasks_output, strict=False):
+        # self_review(2026-11-04) — `worker_rows`(agent 1명당 1개)가 아니라
+        # Task 개수만큼 늘어나는 `worker_task_rows`/`worker_task_stage`로
+        # zip한다. 실측으로 발견한 버그: self_review로 Task가 2배가 되는데
+        # `zip(worker_rows, result.tasks_output)`를 그대로 쓰면 `strict=False`
+        # 때문에 짧은 쪽(worker_rows) 길이에서 멈춰 뒤 worker들의 결과가
+        # 통째로 누락되거나 엉뚱한 agent_id에 잘못 귀속된다. self_review가
+        # 꺼져있으면 `worker_task_rows`는 `worker_rows`와 완전히 같은
+        # 길이/순서라 기존 동작과 100% 동일하다.
+        for row, stage, task_output in zip(
+            worker_task_rows, worker_task_stage, result.tasks_output, strict=False
+        ):
             # 사용자 요청(2026-10-06, "model provider/모델명이 AI 생성·관리·Crew
             # 실행 단계에 모두 있는데 최종 어떻게 적용되는지 분석" → "(b)
             # 실행 후 덮어쓰기만이라도 막는 방향으로 수정") — Crew 실행은 참여
@@ -911,6 +1036,9 @@ def run_crew(
                     # 화면 표시용으로만 지정한 이름을 따로 얹는다.
                     "name": row["name"],
                     "output": task_output.raw,
+                    # self_review=False면 항상 "final" — 기존 소비자
+                    # (run_adhoc_crew_job 등)와 하위호환.
+                    "stage": stage,
                 }
             )
 

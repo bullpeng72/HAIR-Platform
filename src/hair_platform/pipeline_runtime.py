@@ -62,7 +62,15 @@ import json
 import sqlite3
 from collections.abc import Callable
 
-from hair_platform import agent_evaluation, approvals, audit, crew_runtime, deliverables
+from hair_platform import (
+    agent_evaluation,
+    approvals,
+    audit,
+    crew_runtime,
+    dashboard,
+    deliverables,
+    requirements_traceability_llm,
+)
 
 VALID_MODES = ("single", "sequential_relay", "parallel_delegated")
 GATE_IDS = ["A", "B", "C", "D", "E", "F", "G"]
@@ -673,6 +681,28 @@ def _execute_stage_attempt(
                 f"못했습니다: {summary}. 이를 구체적으로 보완해 다시 작성하세요."
             )
 
+    # 사용자 요청(2026-11-05, 로드맵 6번 "자동 단계적 에스컬레이션") —
+    # 지금까지 에스컬레이션은 완전히 이진(재시도 N번 → 바로 사람)이었다.
+    # 사람에게 올라가기 직전(마지막 자동 시도)은 일반 재시도보다 한
+    # 단계 더 꼼꼼한 self_review(로드맵 2번 "Agent 자가비평")를 써서,
+    # "일반 재시도"와 "사람 에스컬레이션" 사이에 자동 단계를 하나 더
+    # 끼워 넣는다. `parallel_delegated`(process="hierarchical")는
+    # self_review와 구조적으로 호환되지 않는다(`crew_runtime.
+    # run_crew()` 자체의 검증과 동일한 제약) — 그 모드는 제외하고
+    # 기존 동작 그대로 둔다(현재 시드된 "코드 검증"/"QA 기능테스트"/
+    # "품질 관리 최종 판정" — 실제로 에스컬레이션 가능한 유일한 3단계
+    # — 는 전부 `single`/`sequential_relay`라 영향받음).
+    use_self_review_tier = (
+        attempt == stage["max_retry"] and stage["mode"] != "parallel_delegated"
+    )
+    if use_self_review_tier:
+        retry_feedback += (
+            "\n\n[마지막 자동 재시도] 이번이 자동 재시도의 마지막 기회입니다 — "
+            "스스로 작성한 초안을 원 요구사항과 한 줄씩 대조해 빠지거나 "
+            "깨진 부분을 반드시 수정하세요. 이번에도 기준을 충족하지 못하면 "
+            "사람에게 결재 요청이 올라갑니다."
+        )
+
     stage_instructions = stage["instructions"] + retry_feedback
     combined_base = (
         f"{base_input}\n\n{stage_instructions}" if stage_instructions else base_input
@@ -730,11 +760,9 @@ def _execute_stage_attempt(
         process=process,
         manager_agent_id=manager_agent_id,
         expected_outputs=expected_outputs,
+        self_review=use_self_review_tier,
     )
-    gate_scores = result["gate_scores"]
     tcr = result["tcr"]
-    ratio = _gate_pass_ratio(gate_scores)
-    passed = ratio >= stage["min_gate_pass_ratio"]
 
     stage_output = (
         result["agents"][-1]["output"] if result["agents"] else result["final_output"]
@@ -742,6 +770,49 @@ def _execute_stage_attempt(
     author_agent_id = (
         result["agents"][-1]["agent_id"] if result["agents"] else run_agent_ids[-1]
     )
+
+    # 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사 + 요구사항
+    # 추적성 자동 채점") — Gate A-G는 순수 휴리스틱이라 "구현" 단계
+    # 산출물이 실제로 파싱 가능한 코드인지 기계적으로 확인하지 않았다.
+    # `_gate_pass_ratio()`(아래)는 제네릭하게 모든 키를 순회하므로,
+    # 실제 차단 임계값(min_gate_pass_ratio=0.5)이 걸린 "코드 검증"/
+    # "QA 기능테스트"/"품질 관리 최종 판정" 단계에까지 이 점수를
+    # 무심코 끼워 넣으면(그 단계들의 리포트성 산출물이 코드를 인용하는
+    # 경우) 기존 통과/차단 동작이 조용히 바뀔 위험이 있다 — 그래서
+    # "구현" 단계(min_gate_pass_ratio=0.0, 절대 차단 안 됨)에만 한정해
+    # 실제 점수로 참여시킨다. 다른 단계는 아예 이 키를 추가하지 않는다.
+    gate_scores = dict(result["gate_scores"])
+    if stage["name"] == "구현":
+        gate_scores["code_syntax"] = agent_evaluation.compute_code_syntax_check(
+            stage_output
+        )
+
+    # "코드 검증" 단계는 바로 위 `prior` 조회처럼 이전 단계 출력만 보고
+    # 1단계(요구분석/계획 확정)의 요구사항 문서를 자동으로 보지 못한다
+    # — 별도로 직접 조회해 LLM judge로 요구사항 추적성을 채점한다.
+    # "코드 검증"은 이미 `min_gate_pass_ratio=0.5`인 실제 차단 임계값이
+    # 걸려 있는 단계라, 아직 임계값을 신뢰할 데이터가 없는 이 새 점수가
+    # 그 판정을 조용히 바꾸지 않도록 `not_measured`를 강제한다 —
+    # 정보 제공 전용(v1), 실제 점수/세부 내역은 그대로 저장돼 화면에는
+    # 보인다.
+    if stage["name"] == "코드 검증":
+        requirements_row = conn.execute(
+            "SELECT prs.output FROM pipeline_run_stages prs "
+            "JOIN pipeline_stages ps ON ps.id = prs.stage_id "
+            "WHERE prs.pipeline_run_id = ? AND ps.seq_order = 1 "
+            "AND prs.status IN ('passed', 'approved') "
+            "ORDER BY prs.id DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if requirements_row is not None:
+            traceability = requirements_traceability_llm.assess_traceability(
+                conn, requirements_row["output"], stage_output
+            )
+            traceability["not_measured"] = True
+            gate_scores["requirements_traceability"] = traceability
+
+    ratio = _gate_pass_ratio(gate_scores)
+    passed = ratio >= stage["min_gate_pass_ratio"]
 
     cur = conn.execute(
         "INSERT INTO pipeline_run_stages (pipeline_run_id, stage_id, attempt, status, "
@@ -760,7 +831,26 @@ def _execute_stage_attempt(
     assert run_stage_id is not None
 
     if not passed:
-        if attempt < stage["max_retry"]:
+        # 사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도
+        # 예산 추적") — `stage["max_retry"]`는 "이 단계 안에서"만의
+        # 상한이라, 여러 단계·여러 파이프라인 실행·여러 Crew 재시도에
+        # 걸쳐 전체적으로 계속 실패를 반복하는 Task를 막지 못한다.
+        # `tasks.max_retry_budget`(기본 NULL=제한 없음, 설정 시에만
+        # 적용)이 Task 전체 누적 재시도 수를 넘겼으면, 이 단계의
+        # 재시도가 아직 남아 있어도(`attempt < max_retry`) 더 재시도
+        # 하지 않고 바로 에스컬레이션한다 — 기존 "재시도 소진" 분기를
+        # 그대로 재사용(코드 중복 없음).
+        task_row = conn.execute(
+            "SELECT max_retry_budget FROM tasks WHERE id = ?", (run["task_id"],)
+        ).fetchone()
+        budget_exceeded = False
+        if task_row["max_retry_budget"] is not None:
+            retries_so_far = dashboard.task_retry_summary(conn, run["task_id"])[
+                "total_retries"
+            ]
+            budget_exceeded = retries_so_far >= task_row["max_retry_budget"]
+
+        if attempt < stage["max_retry"] and not budget_exceeded:
             conn.commit()
             if on_stage_resolved is not None:
                 on_stage_resolved()
@@ -783,7 +873,11 @@ def _execute_stage_attempt(
             "pipeline_stage_escalated",
             "pipeline_run_stage",
             run_stage_id,
-            after={"attempt": attempt, "gate_scores": gate_scores},
+            after={
+                "attempt": attempt,
+                "gate_scores": gate_scores,
+                "retry_budget_exceeded": budget_exceeded,
+            },
         )
         conn.commit()
         if on_stage_resolved is not None:

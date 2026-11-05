@@ -171,6 +171,32 @@ def bottlenecks(conn: sqlite3.Connection) -> list[dict]:
     return list(result.values())
 
 
+def task_retry_summary(conn: sqlite3.Connection, task_id: int) -> dict:
+    """사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도 예산
+    추적") — 서로 조율되지 않는 두 재시도 메커니즘을 Task 하나로
+    합산한다: ① `pipeline_run_stages.attempt`(단계 1개·파이프라인
+    실행 1개 안에서만 리셋되는 카운터 — 이 Task의 모든 파이프라인
+    실행·모든 단계에 걸쳐 합산), ② `crew_runs`(Task당 재실행마다
+    새 행이 쌓이는 append-only 이력 — 행 개수 자체가 "몇 번
+    재시도했는지"). `job_items.retry_count`(AgentForge Agent 스텁
+    생성 재시도)는 Task 작업 자체의 재시도가 아닌 전혀 다른
+    서브시스템이라 의도적으로 제외한다."""
+    pipeline_stage_attempts = conn.execute(
+        "SELECT COUNT(*) AS c FROM pipeline_run_stages prs "
+        "JOIN pipeline_runs pr ON pr.id = prs.pipeline_run_id "
+        "WHERE pr.task_id = ?",
+        (task_id,),
+    ).fetchone()["c"]
+    crew_run_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM crew_runs WHERE task_id = ?", (task_id,)
+    ).fetchone()["c"]
+    return {
+        "pipeline_stage_attempts": pipeline_stage_attempts,
+        "crew_run_count": crew_run_count,
+        "total_retries": pipeline_stage_attempts + crew_run_count,
+    }
+
+
 # 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 1번 "Gate
 # 점수 기반 자동 경고") — 연속 실패 몇 건부터 "주의 필요"로 볼지는 임의
 # 기준이다. task 쪽 반려 기준(`bottlenecks()`의 "2회 이상")보다 한 단계

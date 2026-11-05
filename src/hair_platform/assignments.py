@@ -88,6 +88,22 @@ def create_assignment_request(
 
     approval_chain_subject = team_leader_id if resource_type == "team" else requested_by
 
+    # 사용자 요청(2026-11-05, 로드맵 7번 "셀프배정 결재 단순화") — 요청자가
+    # 곧 배정 대상 본인(resource_type='human'이고 그 human_pool 레코드의
+    # user_id가 requested_by와 같음)이면, 결재 체인이 보호하려는 "타인
+    # 자원 배분 통제"라는 목적 자체가 성립하지 않는다(본인 시간만 쓸 뿐
+    # 아무도 커밋당하지 않음) — `create_delegation()`(Agent 위임 전용,
+    # 결재 없이 즉시 confirmed)과 같은 논리를 사람 셀프배정에도 적용한다.
+    # 역할(member/manager/admin)과 무관하게 "요청자==배정 대상 본인"
+    # 관계 하나로만 판단한다.
+    is_self_assignment = resource_type == "human" and (
+        conn.execute(
+            "SELECT 1 FROM human_pool WHERE id = ? AND user_id = ?",
+            (resource_id, requested_by),
+        ).fetchone()
+        is not None
+    )
+
     try:
         cur = conn.execute(
             "INSERT INTO assignments "
@@ -105,30 +121,51 @@ def create_assignment_request(
         )
         assignment_id = cur.lastrowid
         assert assignment_id is not None
-
-        approval_ids = approvals_mod.create_approval_chain(
-            conn, approval_chain_subject, "assignment", assignment_id
-        )
-
-        conn.execute(
-            "UPDATE assignments SET approval_id = ? WHERE id = ?",
-            (approval_ids[0], assignment_id),
-        )
         _record_history(conn, assignment_id, None, "requested", requested_by)
-        result = {
-            "assignment_id": assignment_id,
-            "approval_id": approval_ids[0],
-            "approval_ids": approval_ids,
-            "status": "requested",
-        }
-        audit.record(
-            conn,
-            requested_by,
-            "assignment_requested",
-            "assignment",
-            assignment_id,
-            after=result,
-        )
+
+        if is_self_assignment:
+            # 결재 체인을 만들지 않고 즉시 확정한다. `resolve_assignment_
+            # decision()`을 그대로 재사용해 `replaces_assignment_id`의
+            # supersede 로직·`requested→confirmed` 히스토리 기록까지
+            # 코드 중복 없이 그대로 적용받는다. `approval_id`는 결재
+            # 체인 자체가 없으므로 NULL로 남는다(delegation과 동일).
+            resolve_assignment_decision(conn, assignment_id, True, requested_by)
+            result = {
+                "assignment_id": assignment_id,
+                "approval_id": None,
+                "approval_ids": [],
+                "status": "confirmed",
+            }
+            audit.record(
+                conn,
+                requested_by,
+                "assignment_self_confirmed",
+                "assignment",
+                assignment_id,
+                after=result,
+            )
+        else:
+            approval_ids = approvals_mod.create_approval_chain(
+                conn, approval_chain_subject, "assignment", assignment_id
+            )
+            conn.execute(
+                "UPDATE assignments SET approval_id = ? WHERE id = ?",
+                (approval_ids[0], assignment_id),
+            )
+            result = {
+                "assignment_id": assignment_id,
+                "approval_id": approval_ids[0],
+                "approval_ids": approval_ids,
+                "status": "requested",
+            }
+            audit.record(
+                conn,
+                requested_by,
+                "assignment_requested",
+                "assignment",
+                assignment_id,
+                after=result,
+            )
         conn.commit()
     except Exception:
         conn.rollback()

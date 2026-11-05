@@ -57,6 +57,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         return {
             "final_output": "최종산출물",
@@ -267,6 +268,7 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         calls.append(
             {
@@ -275,6 +277,7 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
                 "manager_agent_id": manager_agent_id,
                 "descriptions": task_descriptions,
                 "expected_outputs": expected_outputs,
+                "self_review": self_review,
             }
         )
         return _good_run_crew()(
@@ -287,6 +290,7 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
             model,
             manager_agent_id,
             expected_outputs,
+            self_review,
         )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew):
@@ -491,6 +495,7 @@ def test_execute_stage_attempt_passes_stage_expected_output_to_run_crew():
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         calls.append(expected_outputs)
         return _good_run_crew()(
@@ -503,6 +508,7 @@ def test_execute_stage_attempt_passes_stage_expected_output_to_run_crew():
             model,
             manager_agent_id,
             expected_outputs,
+            self_review,
         )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking):
@@ -543,6 +549,7 @@ def test_gate_failure_retries_with_feedback_then_escalates():
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         descriptions_seen.append(task_descriptions[0])
         return _good_run_crew(gate_scores=bad_gate, tcr=10.0)(
@@ -555,6 +562,7 @@ def test_gate_failure_retries_with_feedback_then_escalates():
             model,
             manager_agent_id,
             expected_outputs,
+            self_review,
         )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_bad_run_crew):
@@ -709,6 +717,7 @@ def test_reject_reason_is_fed_into_the_retry_instructions():
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         descriptions_by_attempt.append(task_descriptions[0])
         return _good_run_crew()(
@@ -721,6 +730,7 @@ def test_reject_reason_is_fed_into_the_retry_instructions():
             model,
             manager_agent_id,
             expected_outputs,
+            self_review,
         )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew):
@@ -783,6 +793,7 @@ def test_reject_without_reason_still_retries_with_generic_notice():
         model=None,
         manager_agent_id=None,
         expected_outputs=None,
+        self_review=False,
     ):
         descriptions_by_attempt.append(task_descriptions[0])
         return _good_run_crew()(
@@ -795,6 +806,7 @@ def test_reject_without_reason_still_retries_with_generic_notice():
             model,
             manager_agent_id,
             expected_outputs,
+            self_review,
         )
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew):

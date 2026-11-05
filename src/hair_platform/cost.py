@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 
@@ -26,6 +27,90 @@ def _confirmed_count(
         (resource_type, resource_id),
     ).fetchone()
     return row["c"]
+
+
+def _confirmed_count_for_task(
+    conn: sqlite3.Connection, resource_type: str, resource_id: int, task_id: int
+) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM assignments "
+        "WHERE resource_type = ? AND resource_id = ? AND status = 'confirmed' "
+        "AND task_id = ?",
+        (resource_type, resource_id, task_id),
+    ).fetchone()
+    return row["c"]
+
+
+def task_report(conn: sqlite3.Connection, task_id: int) -> dict:
+    """사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도 예산
+    추적") — `report()`와 같은 "리소스 단가 × 확정 배정 건수" 계산을
+    **이 Task 하나로만** 좁힌다. 실 LLM 과금 연동은 `report()`의
+    docstring이 이미 "오픈 이슈로 이월"로 명시해둔 별개 영역이라
+    여기서도 건들지 않는다 — 대신 `crew_runs.token_usage`(CrewAI가
+    실제로 집계해 이미 저장해주는 진짜 토큰 수)를 이 Task의 모든
+    Crew 실행에 걸쳐 합산해 **추정 비용과 별개 키로** 돌려준다(달러로
+    지어내 환산하지 않는다 — "없는 값을 지어내지 않는다"는 이
+    코드베이스의 기존 원칙 그대로)."""
+    resources = []
+    total_cost = 0.0
+    for row in conn.execute("SELECT * FROM human_pool").fetchall():
+        count = _confirmed_count_for_task(conn, "human", row["id"], task_id)
+        if count == 0:
+            continue
+        cost = row["cost_estimate"] * count
+        total_cost += cost
+        resources.append(
+            {
+                "type": "human",
+                "id": row["id"],
+                "code": row["employee_id"],
+                "name": row["name"],
+                "role": row["role"],
+                "cost_estimate": row["cost_estimate"],
+                "confirmed_assignments": count,
+                "total_cost": cost,
+            }
+        )
+    for row in conn.execute(
+        "SELECT * FROM agent_pool WHERE status = 'active'"
+    ).fetchall():
+        count = _confirmed_count_for_task(conn, "agent", row["id"], task_id)
+        if count == 0:
+            continue
+        cost = row["cost_estimate"] * count
+        total_cost += cost
+        resources.append(
+            {
+                "type": "agent",
+                "id": row["id"],
+                "code": row["code"],
+                "name": row["name"],
+                "role": row["role_name"],
+                "cost_estimate": row["cost_estimate"],
+                "confirmed_assignments": count,
+                "total_cost": cost,
+            }
+        )
+
+    token_totals = {
+        "total_tokens": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "successful_requests": 0,
+    }
+    for row in conn.execute(
+        "SELECT token_usage FROM crew_runs WHERE task_id = ? AND token_usage IS NOT NULL",
+        (task_id,),
+    ).fetchall():
+        tu = json.loads(row["token_usage"])
+        for key in token_totals:
+            token_totals[key] += tu.get(key) or 0
+
+    return {
+        "resources": resources,
+        "estimated_cost": total_cost,
+        "token_usage": token_totals,
+    }
 
 
 def report(conn: sqlite3.Connection) -> dict:
