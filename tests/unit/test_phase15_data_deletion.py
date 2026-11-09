@@ -566,6 +566,7 @@ def test_gc_delete_brief_cascades_pipeline_runs_and_stages(client_and_conn):
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         return {
             "final_output": "x",
@@ -821,4 +822,6 @@ def test_reset_to_factory_state_then_bootstrap_admin_works(client_and_conn):
     new_admin_id = create_user(conn, "fresh-admin", "freshpass", Role.ADMIN)
     assert new_admin_id is not None
     assert conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"] == 1
-    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 22
+    # 2026-11-08 "콘텐츠 카피라이팅" 추가(사업/기획 업무 처리 파이프라인
+    # 신설, AGENT_SPECS 정규 목록에 포함)로 22 → 23.
+    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 23

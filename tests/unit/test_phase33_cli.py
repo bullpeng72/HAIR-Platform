@@ -175,7 +175,9 @@ def test_gc_reset_data_then_bootstrap_admin_end_to_end(tmp_path, capsys, monkeyp
 
     conn = db_module.get_connection(db_path)
     assert conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"] == 1
-    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 22
+    # 2026-11-08 "콘텐츠 카피라이팅" 추가(사업/기획 업무 처리 파이프라인
+    # 신설, AGENT_SPECS 정규 목록에 포함)로 22 → 23.
+    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 23
     conn.close()
 
 
@@ -228,8 +230,14 @@ def test_gc_serve_warns_when_non_loopback_host_without_secret_key(
     capsys, monkeypatch
 ):
     monkeypatch.delenv("HAIR_PLATFORM_SECRET_KEY", raising=False)
-    with patch("uvicorn.run"), patch("threading.Timer"):
-        cli.main(["serve", "--host", "0.0.0.0", "--no-browser"])
+    # 실측으로 발견한 버그(2026-11-03) — `_cmd_serve()`가 `create_app()`과
+    # 같은 시점에 `load_dotenv()`를 불러 `.env`를 읽는다(거짓 경고 방지).
+    # 이 저장소의 실제 `.env`에는 개발자가 지정해둔 키가 있을 수 있어,
+    # 패치 안 하면 이 테스트가 로컬 `.env` 내용에 좌우된다 — no-op으로
+    # 바꿔 격리한다.
+    with patch("hair_platform.cli.load_dotenv"):
+        with patch("uvicorn.run"), patch("threading.Timer"):
+            cli.main(["serve", "--host", "0.0.0.0", "--no-browser"])
     err = capsys.readouterr().err
     assert "HAIR_PLATFORM_SECRET_KEY" in err
     assert "0.0.0.0" in err
@@ -239,8 +247,9 @@ def test_gc_serve_no_warning_for_loopback_host_without_secret_key(
     capsys, monkeypatch
 ):
     monkeypatch.delenv("HAIR_PLATFORM_SECRET_KEY", raising=False)
-    with patch("uvicorn.run"), patch("threading.Timer"):
-        cli.main(["serve", "--host", "127.0.0.1", "--no-browser"])
+    with patch("hair_platform.cli.load_dotenv"):
+        with patch("uvicorn.run"), patch("threading.Timer"):
+            cli.main(["serve", "--host", "127.0.0.1", "--no-browser"])
     err = capsys.readouterr().err
     assert err == ""
 

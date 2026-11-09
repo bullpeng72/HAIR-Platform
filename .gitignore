@@ -11,5 +11,7 @@ results/
 *.db-shm
 *.db-wal
 *.db.bak-*
+hair.db.backup-*
+server.log
 .claude/.agent-evaluator/
 uv.lock

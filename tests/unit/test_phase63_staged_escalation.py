@@ -60,6 +60,7 @@ def _bad_run_crew_tracking(calls):
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         calls.append({"self_review": self_review, "description": task_descriptions[0]})
         return {

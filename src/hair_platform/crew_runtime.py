@@ -254,6 +254,17 @@ def _reset_crewai_local_task_output_storage() -> None:
 # 수준(2000초)으로 둔다.
 CREWAI_LLM_TIMEOUT_SECONDS = 2000.0
 
+# 실측(2026-11-08, park_member 로드러너 게임 Ollama 검증) — 로컬 Ollama
+# 모델(27B~35B급)은 복잡한 "구현" 단계 호출 하나가 2000초(33분)를 넘겨
+# `litellm.Timeout`으로 파이프라인 전체가 실패했다. 위 2000초는 클라우드
+# provider(OpenAI/Anthropic) 기준으로 "프런트 폴링 포기 시한(40분) 안에
+# 재시도 1회까지 들어오게" 튜닝된 값이라, 전역으로 올리면 그 클라우드
+# UX 전제가 깨진다 — provider별로 분리한다. Ollama는 로컬 연산이라
+# API 비용 걱정이 없고, 호출자가 애초에 실시간 폴링을 기대하지 않는
+# 상황(백그라운드 파이프라인 검증 등)에서 주로 쓰이므로 훨씬 넉넉하게
+# 잡는다.
+CREWAI_LLM_TIMEOUT_SECONDS_OLLAMA = 5400.0
+
 
 def _crewai_llm(provider: str, model: str, temperature: float | None = None):
     from crewai import LLM  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
@@ -263,7 +274,12 @@ def _crewai_llm(provider: str, model: str, temperature: float | None = None):
     # Agent 전용 LLM 인스턴스를 새로 만든다(없으면 호출자가 Crew 전체가
     # 공유하는 기존 LLM 인스턴스를 그대로 쓴다 — 매번 새로 안 만들어도
     # 되는 경우까지 쪼갤 이유가 없다).
-    kwargs: dict[str, Any] = {"timeout": CREWAI_LLM_TIMEOUT_SECONDS}
+    timeout_seconds = (
+        CREWAI_LLM_TIMEOUT_SECONDS_OLLAMA
+        if provider == "ollama"
+        else CREWAI_LLM_TIMEOUT_SECONDS
+    )
+    kwargs: dict[str, Any] = {"timeout": timeout_seconds}
     if temperature is not None:
         kwargs["temperature"] = temperature
     if provider == "ollama":

@@ -23,6 +23,8 @@ import argparse
 import os
 import sys
 
+from dotenv import load_dotenv
+
 _EPILOG_TOP = """\
 예시:
   hair serve                              서버 실행 + 브라우저 자동 열기(http://127.0.0.1:8000, hair.db)
@@ -216,6 +218,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # 값으로 다른 사용자(admin 포함)의 로그인 세션을 위조할 수 있다.
     # 막지는 않는다(로컬 1인 개발 흐름까지 깨면 안 됨) — 조용히 넘어가지
     # 않고 기동 시점에 경고만 한다.
+    #
+    # 실측으로 발견한 버그(2026-11-03, "외부 접속 가능한 구조로 서버
+    # 기동해줘" 직후) — `.env`에 키를 넣어뒀는데도 이 경고가 떴다.
+    # `create_app()`은 `load_dotenv()`를 자기 안에서 호출해 `.env`를
+    # 읽지만, 이 경고는 그보다 먼저(`uvicorn.run()` 호출 전) 평가돼
+    # `.env`가 아직 안 읽힌 `os.environ`만 보고 있었다 — 실제로는
+    # 안전한데 거짓 경고가 뜨는 상태. `create_app()`과 같은 시점에
+    # `load_dotenv()`를 먼저 호출해 같은 값을 보고 판단하게 한다.
+    load_dotenv()
     if args.host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get(
         "HAIR_PLATFORM_SECRET_KEY"
     ):

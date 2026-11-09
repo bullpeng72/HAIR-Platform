@@ -85,10 +85,12 @@ def test_init_schema_assigns_codes_to_all_reference_rows():
         r["code"] for r in conn.execute("SELECT code FROM skill_pool").fetchall()
     ]
 
-    assert len(agent_codes) == 22
+    # 2026-11-08 "콘텐츠 카피라이팅" 추가(사업/기획 업무 처리 파이프라인
+    # 신설, AGENT_SPECS 정규 목록에 포함)로 22 → 23.
+    assert len(agent_codes) == 23
     assert all(c is not None for c in agent_codes)
-    assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 22종 전원 레퍼런스
-    assert len(set(agent_codes)) == 22  # 전부 유일
+    assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 23종 전원 레퍼런스
+    assert len(set(agent_codes)) == 23  # 전부 유일
 
     assert len(tool_codes) == 11
     assert all(c is not None for c in tool_codes)
@@ -170,7 +172,7 @@ def test_reset_and_reassign_codes_wipes_then_reassigns_deterministically():
 
     counts = id_scheme.reset_and_reassign_codes(conn)
 
-    assert counts == {"agent_pool": 22, "tool_pool": 11, "skill_pool": 48}
+    assert counts == {"agent_pool": 23, "tool_pool": 11, "skill_pool": 48}
     after = {
         table: [
             r["code"]
@@ -241,7 +243,7 @@ def test_agent_pool_list_endpoint_exposes_code(client_and_conn):
     resp = client.get("/api/agent-pool")
     assert resp.status_code == 200, resp.text
     agents = resp.json()
-    assert len(agents) == 22
+    assert len(agents) == 23
     assert all(a["code"] and a["code"].startswith("AGT-REF-") for a in agents)
 
 

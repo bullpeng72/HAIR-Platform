@@ -126,6 +126,9 @@ def _stage_to_dict(conn: sqlite3.Connection, stage_row: sqlite3.Row) -> dict:
         "max_retry": stage_row["max_retry"],
         "requires_human_approval": bool(stage_row["requires_human_approval"]),
         "is_primary_deliverable": bool(stage_row["is_primary_deliverable"]),
+        "checks_requirements_traceability": bool(
+            stage_row["checks_requirements_traceability"]
+        ),
         "expected_output": stage_row["expected_output"],
         "agents": [
             {
@@ -262,6 +265,7 @@ def add_stage(
     max_retry: int = 2,
     requires_human_approval: bool = False,
     is_primary_deliverable: bool = False,
+    checks_requirements_traceability: bool = False,
     expected_output: str = "",
 ) -> int:
     """`agents`는 `(role_name, instructions)` 튜플 목록, 입력 순서가
@@ -302,8 +306,9 @@ def add_stage(
     cur = conn.execute(
         "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
         "lead_role_name, instructions, gate_ids, min_gate_pass_ratio, max_retry, "
-        "requires_human_approval, is_primary_deliverable, expected_output) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "requires_human_approval, is_primary_deliverable, "
+        "checks_requirements_traceability, expected_output) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             template_id,
             next_seq,
@@ -316,6 +321,7 @@ def add_stage(
             max_retry,
             1 if requires_human_approval else 0,
             1 if is_primary_deliverable else 0,
+            1 if checks_requirements_traceability else 0,
             expected_output,
         ),
     )
@@ -354,6 +360,7 @@ def update_stage(
         "max_retry",
         "requires_human_approval",
         "is_primary_deliverable",
+        "checks_requirements_traceability",
         "expected_output",
     }
     unknown = set(fields) - allowed
@@ -371,7 +378,11 @@ def update_stage(
     for key, value in fields.items():
         if key == "gate_ids":
             value = json.dumps(value, ensure_ascii=False)
-        elif key in ("requires_human_approval", "is_primary_deliverable"):
+        elif key in (
+            "requires_human_approval",
+            "is_primary_deliverable",
+            "checks_requirements_traceability",
+        ):
             value = 1 if value else 0
         set_clauses.append(f"{key} = ?")
         values.append(value)
@@ -464,6 +475,39 @@ def reorder_stage(
 # ---------- 실행 엔진 ----------
 
 
+def reap_orphaned_pipeline_runs(conn: sqlite3.Connection) -> int:
+    """실측(2026-11-06, park_member 로드러너 게임 데모) — CrewAI 매니저가
+    위임을 반복하다 LLM 컨텍스트 윈도우를 초과하면, 그 예외가 CrewAI/
+    LiteLLM 내부에서 로그만 남기고(`ERROR:root:...`) 재시도를 무한히
+    반복할 뿐 우리 코드까지 올라오지 않는다 — `run_pipeline_stage_job()`
+    의 기존 `try/except`(이 파일 상단)는 "예외가 올라오면" 잡는데, 이
+    경우는 예외가 아예 안 올라오고 그 자리에서 영원히 멈춘다(실측:
+    `pipeline_runs.status='running'`으로 2시간 넘게 방치, 에러 기록도
+    에스컬레이션도 전혀 없었다 — 직접 DB를 찾아 수동으로 'failed'로
+    고쳐야 했다).
+
+    `deliverables.reap_orphaned_execution_jobs()`와 같은 전제(이 앱은
+    단일 프로세스 — 기동 시점에 `running`으로 남은 행은 전부 이전
+    프로세스의 잔재로 확정할 수 있다)로, 서버 재기동 시 이런 멈춘 실행을
+    전부 정리한다. 프로세스가 살아있는 동안의 실시간 복구(타임아웃
+    워치독)는 이 앱 전체가 공유하는 단일 sqlite3 커넥션을 다른 스레드와
+    동시에 쓰게 만들어야 해 더 위험한 변경이라 범위 밖으로 둔다 — 재기동
+    (이 세션 전체가 이미 관례로 삼은 WAL-safe 백업 후 재기동)이 그 복구
+    지점이 된다."""
+    rows = conn.execute(
+        "SELECT id FROM pipeline_runs WHERE status = 'running'"
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "UPDATE pipeline_runs SET status = 'failed', finished_at = datetime('now') "
+            "WHERE id = ?",
+            (row["id"],),
+        )
+    if rows:
+        conn.commit()
+    return len(rows)
+
+
 def start_pipeline_run(
     conn: sqlite3.Connection, actor_id: int, template_id: int, task_id: int
 ) -> int:
@@ -529,11 +573,26 @@ def _gate_failure_summary(gate_scores: dict) -> str:
 def _stage_initial_input(conn: sqlite3.Connection, task_id: int) -> str:
     """1단계(이전 산출물이 없는 단계)의 입력 — `run_crew_for_team()`과
     같은 패턴: Task의 role_name/required_skills + 최신 사람 작성
-    deliverable."""
+    deliverable.
+
+    실측 버그(2026-11-08, park_member 로드러너 게임 데모) — 이 함수가
+    지금까지 Task를 낳은 Brief의 `raw_text`(사용자가 실제로 쓴 요청
+    원문, 예: "격자 기반 맵에서 플레이어가 금을 모으고... 바닥을
+    일시적으로 뚫어 적을 가두는 고전 아케이드 게임")를 **전혀 안
+    읽었다** — 1단계(요구사항 분석가)는 Task의 짧은 role_name만 보고
+    매번 그 이름을 제멋대로 해석했다("로드러너"를 "Road Runner" 점프
+    게임으로 오해하는 식). Brief 본문을 추가로 넘겨 이 공백을 메운다
+    — Task 1건이 Brief 1건에 N:1로 묶이므로(`tasks.brief_id`), 다른
+    Task와 같은 브리프를 공유해도 전혀 문제없다."""
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     required_skills = json.loads(task["required_skills"])
     skills_text = ", ".join(required_skills) if required_skills else "없음"
     parts = [f"'{task['role_name']}' 업무를 수행하세요(필요 스킬: {skills_text})."]
+    brief = conn.execute(
+        "SELECT raw_text FROM briefs WHERE id = ?", (task["brief_id"],)
+    ).fetchone()
+    if brief is not None and brief["raw_text"].strip():
+        parts.append(f"원 업무 요청(Brief) 전문:\n{brief['raw_text']}")
     latest_human = conn.execute(
         "SELECT content FROM deliverables WHERE task_id = ? AND author_type = 'human' "
         "ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -552,6 +611,50 @@ def _resolve_role_agent_id(conn: sqlite3.Connection, role_name: str) -> int:
     if row is None:
         raise ValueError(f"stage_role_not_active_or_missing:{role_name!r}")
     return row["id"]
+
+
+def _resolve_stage_llm(
+    conn: sqlite3.Connection, stage: sqlite3.Row
+) -> tuple[str | None, str | None]:
+    """실측(2026-11-06, park_member 로드러너 게임 데모) — `crew_runtime.
+    run_crew()`는 호출자가 넘긴 단 하나의 `provider`/`model`로 크루
+    전체의 LLM을 통일한다(함수 자체 설계 — Crew 하나에 LLM 하나).
+    그런데 이 모듈의 `_execute_stage_attempt()`는 지금까지 `provider`/
+    `model`을 전혀 안 넘겼다 — 그래서 매번 "지정 없음" → 자동판별
+    (Anthropic 키 없으면 OpenAI) 경로를 탔다. "AI 에이전트 관리" 화면
+    에서 각 역할별로 Ollama 모델을 지정해둬도(`agent_pool.llm_provider`/
+    `llm_model`) **파이프라인 경로에서는 그 설정이 전혀 적용되지 않고
+    있었다** — 설정과 실제 실행이 완전히 어긋나 있던 실제 버그.
+
+    이 단계의 "대표 Agent"(parallel_delegated면 리드, 아니면 첫 번째
+    참여 Agent — `run_crew()`가 크루 전체에 LLM 하나만 쓰는 설계이므로
+    여러 참여 Agent 중 하나를 대표로 고를 수밖에 없다) 저장된 provider/
+    model을 그대로 돌려준다. 그 Agent에 provider/model이 아직 설정 안
+    돼 있으면(`NULL`) `(None, None)`을 돌려줘 기존 동작(자동판별)을
+    그대로 유지한다 — 이 수정으로 "설정 안 한 기존 Task"가 갑자기
+    달라지지 않는다."""
+    representative_role = (
+        stage["lead_role_name"]
+        if stage["mode"] == "parallel_delegated" and stage["lead_role_name"]
+        else None
+    )
+    if representative_role is None:
+        first_agent = conn.execute(
+            "SELECT role_name FROM pipeline_stage_agents WHERE stage_id = ? "
+            "ORDER BY seq_order, id LIMIT 1",
+            (stage["id"],),
+        ).fetchone()
+        if first_agent is None:
+            return None, None
+        representative_role = first_agent["role_name"]
+    agent_row = conn.execute(
+        "SELECT llm_provider, llm_model FROM agent_pool WHERE role_name = ? "
+        "AND status = 'active'",
+        (representative_role,),
+    ).fetchone()
+    if agent_row is None:
+        return None, None
+    return agent_row["llm_provider"], agent_row["llm_model"]
 
 
 def run_pipeline_stage_job(
@@ -675,11 +778,26 @@ def _execute_stage_attempt(
                     "사유 입력 없음) — 내용을 다시 점검해 더 신중하게 작성하세요."
                 )
         elif last_attempt is not None and last_attempt["gate_scores"]:
-            summary = _gate_failure_summary(json.loads(last_attempt["gate_scores"]))
+            last_gate_scores = json.loads(last_attempt["gate_scores"])
+            summary = _gate_failure_summary(last_gate_scores)
             retry_feedback = (
                 f"\n\n[이전 시도({attempt - 1}차) Gate 결과] 다음 기준을 통과하지 "
                 f"못했습니다: {summary}. 이를 구체적으로 보완해 다시 작성하세요."
             )
+            # 실측(2026-11-06, park_member 로드러너 게임 데모) — "구현"
+            # 단계 매니저가 위임을 한 번도 안 하고 모듈 분해 문서만
+            # 다시 써서, 아래 delegation_check 가드가 걸려도 똑같은
+            # 실수를 반복했다. 일반 Gate 피드백만으로는 "무엇을 다르게
+            # 해야 하는지"가 분명하지 않아 — 이 경우에만 더 구체적으로
+            # 지시한다.
+            delegation_check = last_gate_scores.get("delegation_check")
+            if delegation_check is not None and not delegation_check.get("passed"):
+                retry_feedback += (
+                    "\n\n[중요] 이전 시도에서 'Delegate work to coworker' 도구를 "
+                    "한 번도 호출하지 않고 직접 계획 문서만 작성했습니다. 이번에는 "
+                    "절대 직접 코드를 작성하지 말고, 반드시 각 모듈을 코워커에게 "
+                    "'Delegate work to coworker' 도구로 위임해 실제 코드를 받아오세요."
+                )
 
     # 사용자 요청(2026-11-05, 로드맵 6번 "자동 단계적 에스컬레이션") —
     # 지금까지 에스컬레이션은 완전히 이진(재시도 N번 → 바로 사람)이었다.
@@ -751,6 +869,7 @@ def _execute_stage_attempt(
     # 전달한다. `run_crew()`가 빈 값이면 그 Agent 자신의 저장된 기본값 →
     # 플랫폼 공통 문구 순으로 추가 폴백한다.
     expected_outputs = [stage["expected_output"]] * len(run_agent_ids)
+    stage_provider, stage_model = _resolve_stage_llm(conn, stage)
 
     result = crew_runtime.run_crew(
         conn,
@@ -758,17 +877,54 @@ def _execute_stage_attempt(
         task_descriptions,
         actor_id,
         process=process,
+        # 실측(2026-11-06, park_member 로드러너 게임 데모, Ollama 검증
+        # 중) — `run_crew()`의 `memory=True`(기본값)는 provider와
+        # 무관하게 항상 OpenAI 임베딩 API를 쓴다(`run_crew()` 자체
+        # docstring에 이미 경고돼 있던 제약). "구현" 단계 출력처럼 긴
+        # 산출물을 임베딩하려 하면 OpenAI 임베딩 API의 입력 길이 한도
+        # (8192 토큰)를 넘겨 `BadRequestError`가 났다 — provider를
+        # Ollama로 고쳐도 이 메모리 레이어만은 몰래 OpenAI에 의존해
+        # 깨졌다. 이 모듈은 이미 단계 간 출력을 `base_input`으로 직접
+        # 체이닝하므로(위 "요구분석" 섹션 참고) CrewAI 자체 메모리가
+        # 따로 필요 없다 — 꺼서 이 숨은 OpenAI 의존을 완전히 없앤다.
+        memory=False,
+        provider=stage_provider,
+        model=stage_model,
         manager_agent_id=manager_agent_id,
         expected_outputs=expected_outputs,
         self_review=use_self_review_tier,
     )
     tcr = result["tcr"]
 
-    stage_output = (
-        result["agents"][-1]["output"] if result["agents"] else result["final_output"]
-    )
+    # 실측 발견(2026-11-07, "구현" 단계를 sequential_relay로 전환하며
+    # 드러남) — 기존엔 `sequential_relay`든 뭐든 항상 **마지막 참여자의
+    # 답변만** stage_output으로 캡처했다(`result["agents"][-1]`). "설계"
+    # (AA→DA)/"QA 기능테스트"(테스트계획→QA테스터)도 이미 이 버그를
+    # 안고 있었다 — 앞 참여자의 실제 산출물이 조용히 버려지고 있었는데,
+    # 그 단계들이 `is_primary_deliverable`이 아니라 아무도 눈치 못
+    # 챘을 뿐이다. "구현"이 sequential_relay가 되면서(5명이 각자 다른
+    # 모듈을 작성) 즉시 치명적으로 드러난다 — 4명분 코드가 사라지는
+    # 셈이라, 로드맵 3번(위임 결과 합성)과 같은 원칙으로 **참여자 전원의
+    # 최종 산출물을 순서대로 이어붙인다**. self_review로 draft/final이
+    # 섞여 있으면(`"stage"` 키) final만 남긴다 — draft는 중간 산물이라
+    # 최종 결과물에 포함하지 않는다(기존 adhoc/team crew 경로와 동일
+    # 원칙). 참여자가 1명뿐이면(single, 또는 hierarchical의 매니저 1건)
+    # 이어붙일 게 없으니 그 1건 그대로 — 기존 동작과 100% 동일하다.
+    final_stage_entries = [
+        a for a in result["agents"] if a.get("stage", "final") == "final"
+    ] or result["agents"]
+    if stage["mode"] == "sequential_relay" and len(final_stage_entries) > 1:
+        stage_output = "\n\n---\n\n".join(
+            f"### {a['role_name']}\n\n{a['output']}" for a in final_stage_entries
+        )
+    elif final_stage_entries:
+        stage_output = final_stage_entries[-1]["output"]
+    else:
+        stage_output = result["final_output"]
     author_agent_id = (
-        result["agents"][-1]["agent_id"] if result["agents"] else run_agent_ids[-1]
+        final_stage_entries[-1]["agent_id"]
+        if final_stage_entries
+        else run_agent_ids[-1]
     )
 
     # 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사 + 요구사항
@@ -779,23 +935,62 @@ def _execute_stage_attempt(
     # "QA 기능테스트"/"품질 관리 최종 판정" 단계에까지 이 점수를
     # 무심코 끼워 넣으면(그 단계들의 리포트성 산출물이 코드를 인용하는
     # 경우) 기존 통과/차단 동작이 조용히 바뀔 위험이 있다 — 그래서
-    # "구현" 단계(min_gate_pass_ratio=0.0, 절대 차단 안 됨)에만 한정해
+    # "이 단계의 산출물이 Task의 진짜 최종 결과물인 단계"에만 한정해
     # 실제 점수로 참여시킨다. 다른 단계는 아예 이 키를 추가하지 않는다.
+    #
+    # 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
+    # 원래는 `stage["name"] == "구현"` 문자열 매칭이었다. 다른 도메인
+    # 파이프라인(사업기획서 등)의 "작성" 단계가 이름을 다르게 지어도
+    # 똑같이 검사받도록, 이미 있던 `is_primary_deliverable` 플래그로
+    # 바꾼다 — "이 단계 산출물이 Task의 진짜 최종 결과물"이라는 뜻이
+    # 정확히 "실제로 뭔가를 만들어내는 단계"와 일치해 의미상으로도
+    # 더 맞다. 펜스 코드 블록이 없는 산출물(기획서 프로즈 등)은
+    # 기존처럼 `not_measured`로 떨어질 뿐이라 안전하다.
     gate_scores = dict(result["gate_scores"])
-    if stage["name"] == "구현":
+    if stage["is_primary_deliverable"]:
         gate_scores["code_syntax"] = agent_evaluation.compute_code_syntax_check(
             stage_output
         )
 
-    # "코드 검증" 단계는 바로 위 `prior` 조회처럼 이전 단계 출력만 보고
-    # 1단계(요구분석/계획 확정)의 요구사항 문서를 자동으로 보지 못한다
-    # — 별도로 직접 조회해 LLM judge로 요구사항 추적성을 채점한다.
-    # "코드 검증"은 이미 `min_gate_pass_ratio=0.5`인 실제 차단 임계값이
-    # 걸려 있는 단계라, 아직 임계값을 신뢰할 데이터가 없는 이 새 점수가
-    # 그 판정을 조용히 바꾸지 않도록 `not_measured`를 강제한다 —
-    # 정보 제공 전용(v1), 실제 점수/세부 내역은 그대로 저장돼 화면에는
-    # 보인다.
-    if stage["name"] == "코드 검증":
+    # 실측(2026-11-06, park_member 로드러너 게임 데모) — "구현" 단계
+    # 매니저가 'Delegate work to coworker'를 한 번도 호출하지 않고
+    # 자기 전문 분야(모듈 분해)대로 계획 문서만 다시 쓴 채 그대로
+    # 통과한 사례가 재현됨(crew_runtime.py의 hierarchical_description
+    # 안내문이 이미 위임을 강하게 유도하지만, LLM이 안 따를 수 있다는
+    # 건 2026-10-18에 이미 받아들인 리스크 — crew_runtime.py 주석
+    # 참고). 그 결과 빈 계획 문서가 "코드 검증" 단계로 넘어가서야
+    # `requirements_traceability`에 뒤늦게 걸려 재시도를 낭비했다.
+    # code_syntax와 달리 이건 "내용 품질"이 아니라 "이 단계의 핵심
+    # 메커니즘(위임) 자체가 작동했는지"를 보는 구조적 확인이라 —
+    # min_gate_pass_ratio=0.0(절대 차단 안 함, 위 code_syntax 주석과
+    # 같은 이유)을 그대로 두는 대신 `passed`를 직접 덮어써 "구현"
+    # 단계 안에서 바로 재시도시킨다.
+    if stage["mode"] == "parallel_delegated":
+        delegated_real_work = any(
+            d.get("tool") == "Delegate work to coworker"
+            for d in result.get("delegations", [])
+        )
+        gate_scores["delegation_check"] = {
+            "score": 1.0 if delegated_real_work else 0.0,
+            "status": "pass" if delegated_real_work else "fail",
+            "passed": delegated_real_work,
+            "not_measured": False,
+        }
+
+    # 이 단계는 바로 위 `prior` 조회처럼 이전 단계 출력만 보고 1단계
+    # (요구분석/계획 확정)의 요구사항 문서를 자동으로 보지 못한다 —
+    # 별도로 직접 조회해 LLM judge로 요구사항 추적성을 채점한다.
+    # 실제 차단 임계값이 걸려 있을 수 있는 단계라, 아직 임계값을
+    # 신뢰할 데이터가 없는 이 새 점수가 그 판정을 조용히 바꾸지 않도록
+    # `not_measured`를 강제한다 — 정보 제공 전용(v1), 실제 점수/세부
+    # 내역은 그대로 저장돼 화면에는 보인다.
+    #
+    # 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
+    # 원래는 `stage["name"] == "코드 검증"` 문자열 매칭이었다. 다른
+    # 도메인 파이프라인의 검증 단계가 이름을 다르게 지어도 똑같이
+    # 요구사항 추적성을 검사받도록, 단계명과 무관한 명시적 플래그
+    # (`checks_requirements_traceability`)로 바꾼다.
+    if stage["checks_requirements_traceability"]:
         requirements_row = conn.execute(
             "SELECT prs.output FROM pipeline_run_stages prs "
             "JOIN pipeline_stages ps ON ps.id = prs.stage_id "
@@ -813,6 +1008,8 @@ def _execute_stage_attempt(
 
     ratio = _gate_pass_ratio(gate_scores)
     passed = ratio >= stage["min_gate_pass_ratio"]
+    if stage["mode"] == "parallel_delegated" and not gate_scores["delegation_check"]["passed"]:
+        passed = False
 
     cur = conn.execute(
         "INSERT INTO pipeline_run_stages (pipeline_run_id, stage_id, attempt, status, "

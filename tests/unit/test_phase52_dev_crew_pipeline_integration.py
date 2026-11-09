@@ -46,6 +46,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         return {
             "final_output": "단계 산출물",
@@ -60,7 +61,14 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
             ],
             "gate_scores": gate_scores,
             "tcr": tcr,
-            "delegations": [],
+            # 로드맵 "구현 단계 위임 확인"(2026-11-06) — parallel_delegated
+            # 모드(매니저 지정)에서는 실제 위임이 있었던 것처럼 흉내내야
+            # delegation_check 가드가 "구현" 단계를 늘 실패시키지 않는다.
+            "delegations": (
+                [{"tool": "Delegate work to coworker", "to_agent_role": "role"}]
+                if manager_agent_id is not None
+                else []
+            ),
             "resolved_provider": "anthropic",
             "resolved_model": "claude-sonnet-5",
         }
@@ -147,6 +155,7 @@ def test_gc_dev_crew_mention_without_linked_task_creates_synthetic_task_and_paus
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         captured_descriptions.append(task_descriptions[0])
         return _good_run_crew()(

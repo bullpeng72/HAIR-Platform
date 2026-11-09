@@ -190,6 +190,7 @@ def _run_crew_with_output(output_text, gate_scores=None):
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         return {
             "final_output": output_text,
@@ -218,7 +219,15 @@ def test_impl_stage_adds_code_syntax_without_blocking_on_failure():
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p", "", "x")
-    pr.add_stage(conn, admin_id, tid, "구현", "single", [("백엔드 개발자", "")])
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "구현",
+        "single",
+        [("백엔드 개발자", "")],
+        is_primary_deliverable=True,  # 2026-11-08 — 단계명 대신 이 플래그로 code_syntax를 건다.
+    )
 
     broken_code = "설명\n```python\ndef f(:\n```\n"
     with patch(
@@ -253,6 +262,7 @@ def test_code_review_stage_requirements_traceability_forced_not_measured_does_no
         "single",
         [("코드 검증가", "")],
         min_gate_pass_ratio=0.5,
+        checks_requirements_traceability=True,  # 2026-11-08 — 단계명 대신 이 플래그로 건다.
     )
 
     gate_scores_stage2 = {"A": {"score": 0.9, "passed": True, "not_measured": False}}
@@ -317,6 +327,7 @@ def test_code_review_stage_without_seq1_prior_skips_requirements_traceability():
         "single",
         [("코드 검증가", "")],
         min_gate_pass_ratio=0.5,
+        checks_requirements_traceability=True,  # 2026-11-08 — 단계명 대신 이 플래그로 건다.
     )
 
     with patch(
@@ -331,6 +342,122 @@ def test_code_review_stage_without_seq1_prior_skips_requirements_traceability():
     ).fetchone()
     gate_scores = json.loads(stage_result["gate_scores"])
     assert "requirements_traceability" not in gate_scores
+
+
+# ---------- 2026-11-08: 단계명과 무관하게 플래그로 동작(일반화) ----------
+# 사용자 요청("게임이 아닌 일상 사무 업무도 일반화") — 두 Gate 모두
+# 예전엔 `stage["name"] == "구현"`/`"코드 검증"` 문자열 매칭이었다.
+# 다른 도메인(사업기획서 등) 파이프라인이 전혀 다른 이름을 써도 똑같이
+# 동작해야 한다는 걸 직접 증명한다 — "구현"/"코드 검증"이라는 이름을
+# 의도적으로 피해서 짓는다.
+
+
+def test_code_syntax_applies_to_any_primary_deliverable_stage_regardless_of_name():
+    conn = _conn()
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+    task_id = _make_task(conn)
+    tid = pr.create_pipeline_template(conn, admin_id, "p", "", "x")
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "기획서 초안 작성",  # "구현"이 아닌 이름 — SW 전용 가정이 없어야 함
+        "single",
+        [("기획서 작성자", "")],
+        is_primary_deliverable=True,
+    )
+
+    broken_code = "설명\n```python\ndef f(:\n```\n"
+    with patch(
+        "hair_platform.crew_runtime.run_crew",
+        side_effect=_run_crew_with_output(broken_code),
+    ):
+        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+
+    stage_result = conn.execute(
+        "SELECT * FROM pipeline_run_stages WHERE pipeline_run_id=?", (run_id,)
+    ).fetchone()
+    gate_scores = json.loads(stage_result["gate_scores"])
+    assert gate_scores["code_syntax"]["status"] == "fail"
+
+
+def test_code_syntax_skipped_when_stage_not_flagged_even_if_named_구현():
+    """반대 방향 회귀 — 이름이 "구현"이어도 `is_primary_deliverable`을
+    안 켜면 더 이상 자동으로 code_syntax가 안 붙어야 한다(플래그가
+    유일한 기준이라는 것 확인)."""
+    conn = _conn()
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+    task_id = _make_task(conn)
+    tid = pr.create_pipeline_template(conn, admin_id, "p", "", "x")
+    pr.add_stage(conn, admin_id, tid, "구현", "single", [("백엔드 개발자", "")])
+
+    with patch(
+        "hair_platform.crew_runtime.run_crew",
+        side_effect=_run_crew_with_output("```python\ndef f(:\n```\n"),
+    ):
+        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+
+    stage_result = conn.execute(
+        "SELECT * FROM pipeline_run_stages WHERE pipeline_run_id=?", (run_id,)
+    ).fetchone()
+    gate_scores = json.loads(stage_result["gate_scores"])
+    assert "code_syntax" not in gate_scores
+
+
+def test_requirements_traceability_applies_to_any_flagged_stage_regardless_of_name():
+    conn = _conn()
+    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
+    task_id = _make_task(conn)
+    tid = pr.create_pipeline_template(conn, admin_id, "p", "", "x")
+    pr.add_stage(conn, admin_id, tid, "요구분석", "single", [("요구사항 분석가", "")])
+    pr.add_stage(
+        conn,
+        admin_id,
+        tid,
+        "기획서 검토",  # "코드 검증"이 아닌 이름
+        "single",
+        [("품질 관리자", "")],
+        min_gate_pass_ratio=0.5,
+        checks_requirements_traceability=True,
+    )
+
+    gate_scores_stage2 = {"A": {"score": 0.9, "passed": True, "not_measured": False}}
+    traceability = {
+        "score": 0.8,
+        "status": "pass",
+        "not_measured": False,
+        "passed": True,
+        "total_requirements": 5,
+        "covered": 4,
+        "missing": ["항목 하나"],
+    }
+    with (
+        patch(
+            "hair_platform.crew_runtime.run_crew",
+            side_effect=[
+                _run_crew_with_output("요구사항 문서")(
+                    conn, [1], ["x"], admin_id, "single", None, None, None, None
+                ),
+                _run_crew_with_output("검토 결과", gate_scores_stage2)(
+                    conn, [1], ["x"], admin_id, "single", None, None, None, None
+                ),
+            ],
+        ),
+        patch.object(rtl, "assess_traceability", return_value=dict(traceability)),
+    ):
+        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+        pr.run_pipeline_stage_job(conn, run_id, admin_id)
+
+    stage_results = conn.execute(
+        "SELECT * FROM pipeline_run_stages WHERE pipeline_run_id=? ORDER BY id",
+        (run_id,),
+    ).fetchall()
+    gate_scores = json.loads(stage_results[1]["gate_scores"])
+    assert gate_scores["requirements_traceability"]["covered"] == 4
+    assert gate_scores["requirements_traceability"]["not_measured"] is True
 
 
 # ---------- deliverables.run_adhoc_crew_job() — 에이전트별 code_syntax ----------

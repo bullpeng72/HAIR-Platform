@@ -425,6 +425,17 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
         ],
         {"temperature": 0.2, "max_retry_limit": 3},
     ),
+    # 사용자 요청(2026-11-08, "사업/기획 업무 처리 파이프라인" 신설) —
+    # 라이브 DB에는 이미 수동으로 추가돼 있었지만(스킬 태그 1개짜리
+    # 최소 구성) 이 목록에는 없어서, 이 파이프라인을 새로 설치하는
+    # 환경에서는 "표현 검토" 단계 Agent가 하나도 안 생기는 문제가
+    # 있었다(실측 확인 — `:memory:` DB로 재현). 기존 라이브 DB의
+    # 스킬 태그 그대로 여기로 옮겨 정규 시드 목록에 포함시킨다.
+    (
+        "콘텐츠 카피라이팅",
+        ["카피라이팅"],
+        {"temperature": 0.5},
+    ),
 ]
 
 # 사용자 보고(2026-10-14, "위 Agent 그룹 확인이 안되") — 실측으로 발견한
@@ -548,6 +559,17 @@ def seed(conn: sqlite3.Connection) -> None:
     # 재생성 로직을 제거했다. `teams`/`team_members`는 더 이상 `seed()`가
     # 건드리지 않는다 — 필요하면 "팀 관리" UI에서 다시 만든다.
     _seed_dev_pipeline(conn)
+    # 사용자 요청(2026-11-08, "게임 개발이 아닌 일상 사무 업무를 포함한
+    # 다른 복잡한 업무 처리를 위해 일반화") — SW 개발 파이프라인과 같은
+    # 구조(sequential_relay 우선, 요구사항-섹션 매핑 계획, 참여자 전원
+    # 산출물 보존, 요구사항 추적성 검증)를 재사용해 비SW 도메인 파이프
+    # 라인을 신설한다. `기획서 작성자`/`사업전략 수립가`/`C-level 보고서
+    # 작성자`/`외부 자료 조사가`/`3C4P SWOT 분석가`/`프레젠테이션 자료
+    # 작성자`/`콘텐츠 카피라이팅`/`PM` — agent_pool에 이미 있었지만
+    # 자동 파이프라인에 전혀 연결 안 돼 있던 역할들(SW 역할들이 2026-
+    # 10-28 이전에 겪었던 것과 같은 공백)을 이번에 연결한다. 새 Agent는
+    # 전혀 만들지 않는다.
+    _seed_business_planning_pipeline(conn)
 
 
 # 사용자 요청(2026-10-18, "BMAD-METHOD(https://github.com/bmad-code-org/
@@ -591,8 +613,17 @@ DEV_PIPELINE_DESCRIPTION = (
 # 자동 approved로 쌓이고 항상 맨 마지막에 돌아 실제 산출물(구현 단계의
 # 코드)을 밀어냈다. "구현" 단계만 True로 표시해 그 단계의 산출물을
 # 최종 결과물로 고정한다(나머지는 검증/보고 성격이라 False).
+#
+# `checks_requirements_traceability`(2026-11-08 추가, "게임이 아닌
+# 일상 사무 업무도 일반화" 요청) — 기존엔 `pipeline_runtime.py`가
+# `stage["name"] == "코드 검증"` 문자열 매칭으로 요구사항 추적성 LLM
+# judge를 걸었다. 새 파이프라인 템플릿(사업기획서 등)이 이 단계를
+# 다른 이름으로 지어도 추적성 검증을 받을 수 있도록, 단계명과 무관한
+# 명시적 플래그로 뺀다 — "코드 검증" 역할의 단계만 True, 나머지는
+# False(품질관리/QA는 1단계 요구사항이 아니라 다른 입력을 보는
+# 단계라 그대로 제외).
 DEV_PIPELINE_STAGES: list[
-    tuple[str, str, str | None, str, bool, bool, list[tuple[str, str]]]
+    tuple[str, str, str | None, str, bool, bool, list[tuple[str, str]], bool]
 ] = [
     (
         "요구분석/계획 확정",
@@ -605,6 +636,7 @@ DEV_PIPELINE_STAGES: list[
         True,
         False,
         [("요구사항 분석가", "")],
+        False,
     ),
     (
         "설계",
@@ -617,31 +649,52 @@ DEV_PIPELINE_STAGES: list[
             ("AA", "모듈 경계와 모듈 간 인터페이스를 설계하세요."),
             ("DA", "앞서 나온 아키텍처를 바탕으로 데이터 모델(ERD)을 설계하세요."),
         ],
+        False,
     ),
     (
         "개발 계획 수립",
         "single",
         None,
-        "설계 산출물을 독립적으로 개발 가능한 모듈 단위로 쪼개고 선행조건·완료기준을 정하세요.",
+        (
+            "설계 산출물을 독립적으로 개발 가능한 모듈 단위로 쪼개세요. 1단계에서 "
+            "정리된 요구사항(EARS 문장) 각각이 어느 모듈에 배정되는지 명시적으로 "
+            "매핑하세요 — 모든 요구사항이 반드시 하나 이상의 모듈에 배정돼야 하며, "
+            "빠지는 요구사항이 있으면 안 됩니다. 모듈마다 '이 모듈이 커버하는 "
+            "요구사항 번호'와 '구체적 완료 기준(무엇이 실제로 동작해야 완료로 "
+            "보는지)'을 반드시 함께 적으세요 — 완료 기준 없이 모듈명만 나열하지 "
+            "마세요."
+        ),
         False,
         False,
         [("개발 계획 수립가", "")],
+        False,
     ),
     (
         "구현",
-        "parallel_delegated",
-        "개발 계획 수립가",
-        "앞 단계의 개발 계획에 따라 모듈을 구현하세요.",
+        "sequential_relay",
+        None,
+        (
+            "앞 단계의 개발 계획(요구사항-모듈 매핑)에서 당신에게 배정된 모듈을 "
+            "찾아, 그 모듈이 커버해야 할 요구사항을 전부 충족하는 실제로 동작하는 "
+            "완성된 코드를 작성하세요 — 설계 논의나 의사코드로 끝내지 마세요. "
+            "이전 개발자가 이미 작성한 코드는 그대로 유지하고(다시 쓰거나 지우지 "
+            "말 것), 당신이 맡은 부분만 이어서 작성하세요."
+        ),
         False,
         True,
         [
-            ("개발 계획 수립가", ""),
-            ("백엔드 개발자", "백엔드 모듈을 구현하세요."),
-            ("프론트엔드 개발자", "프론트엔드 모듈을 구현하세요."),
-            ("데이터/인프라 개발자", "데이터/인프라 모듈을 구현하세요."),
-            ("풀스택 개발자", "필요한 쪽을 유동적으로 구현하세요."),
-            ("UI 기획자", "구현에 필요한 화면 흐름/인터랙션을 정리해 전달하세요."),
+            ("UI 기획자", "구현에 필요한 화면 흐름/인터랙션을 먼저 정리해 다음 개발자들에게 전달하세요."),
+            ("데이터/인프라 개발자", "데이터 모델/상태 구조를 구현하세요."),
+            ("백엔드 개발자", "게임/업무 로직(규칙·판정·상태 전이)을 구현하세요."),
+            ("프론트엔드 개발자", "화면 렌더링과 입력 처리를 구현하세요."),
+            (
+                "풀스택 개발자",
+                "지금까지 작성된 모든 모듈(UI 흐름/데이터/로직/렌더링)을 검토해 "
+                "빠진 기능을 직접 채워 넣고, 하나의 실행 가능한 완성본으로 통합해 "
+                "제출하세요.",
+            ),
         ],
+        False,
     ),
     (
         "코드 검증",
@@ -651,6 +704,7 @@ DEV_PIPELINE_STAGES: list[
         False,
         False,
         [("코드 검증가", "")],
+        True,
     ),
     (
         "QA 기능테스트",
@@ -666,6 +720,7 @@ DEV_PIPELINE_STAGES: list[
             ),
             ("QA 기능테스터", "앞서 설계된 테스트 케이스로 실제 기능을 검증하세요."),
         ],
+        False,
     ),
     (
         "품질 관리 최종 판정",
@@ -678,6 +733,7 @@ DEV_PIPELINE_STAGES: list[
         False,
         False,
         [("품질 관리자", "")],
+        False,
     ),
 ]
 
@@ -722,12 +778,14 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
         requires_approval,
         is_primary,
         agents,
+        checks_traceability,
     ) in enumerate(DEV_PIPELINE_STAGES, start=1):
         gate_ratio = 0.5 if name in _DEV_PIPELINE_GATED_STAGE_NAMES else 0.0
         cur = conn.execute(
             "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
             "lead_role_name, instructions, requires_human_approval, is_primary_deliverable, "
-            "min_gate_pass_ratio) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "min_gate_pass_ratio, checks_requirements_traceability) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 template_id,
                 seq,
@@ -738,6 +796,7 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
                 1 if requires_approval else 0,
                 1 if is_primary else 0,
                 gate_ratio,
+                1 if checks_traceability else 0,
             ),
         )
         stage_id = cur.lastrowid
@@ -762,3 +821,210 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
         "WHERE name = ? AND pipeline_template_id IS NULL",
         (template_id, DEV_CREW_TEAM_NAME),
     )
+
+
+# ---------- 사업/기획 업무 처리 파이프라인(2026-11-08) ----------
+#
+# 사용자 요청("게임 개발이 아닌 일상 사무 업무를 포함한 다른 복잡한
+# 업무 처리를 위해 일반화") — SW 개발 파이프라인에서 실측으로 검증한
+# 구조를 그대로 재사용한다:
+# - 계획 수립 단계는 1단계 요구사항 각 항목을 어느 섹션이 커버하는지
+#   명시적으로 매핑하고 완료 기준을 적게 한다(모호한 지시문이 "논의만
+#   하고 끝" 문제를 일으켰던 실측 교훈 — "개발 계획 수립" 단계와 같은
+#   원칙).
+# - "작성" 단계는 `sequential_relay`를 쓴다(hierarchical/위임은 BMAD
+#   코어 자체도 서드파티 애드온일 뿐이고 CrewAI 커뮤니티에 신뢰성
+#   문제가 널리 보고돼 있다 — 외부 조사, 2026-11-07). 매니저도, 위임
+#   도구 호출도 없어 그 신뢰성 문제 자체가 구조적으로 발생하지 않는다.
+# - "작성" 단계는 `is_primary_deliverable=True`로 표시해 Task 최종
+#   결과물 자리를 지킨다. 검증 단계는 `checks_requirements_
+#   traceability=True`로 1단계 요구사항과 대조한다 — 둘 다 단계명과
+#   무관한 플래그라(이 파일 상단 "구현"/"코드 검증" 일반화 참고)
+#   "구현"/"코드 검증"이라는 이름을 전혀 안 써도 똑같이 동작한다.
+#
+# 새 Agent는 전혀 만들지 않는다 — `AGENT_SPECS`에 이미 있었지만
+# 자동 파이프라인에 연결 안 돼 있던 역할만 재사용한다.
+BUSINESS_PIPELINE_NAME = "사업/기획 업무 처리 파이프라인"
+BUSINESS_PIPELINE_DESCRIPTION = (
+    "브리프 → 요구사항 분석(계획 확정, 사람 승인 1회) → 자료 조사·분석 → "
+    "기획 계획 수립 → 작성(기획서 작성자→사업전략 수립가→C-level 보고서 "
+    "작성자→프레젠테이션 자료 작성자) → 내용 검증 → 표현 검토 → 최종 "
+    "승인 판정까지, Gate A-G 기준으로 자동 반복하며 진행하는 사업/기획 "
+    "업무 파이프라인(소프트웨어 개발 파이프라인과 같은 엔진·같은 구조를 "
+    "비SW 도메인에 재사용 — 계획 확정 시점에만 사람이 개입한다)."
+)
+
+BUSINESS_PIPELINE_STAGES: list[
+    tuple[str, str, str | None, str, bool, bool, list[tuple[str, str]], bool]
+] = [
+    (
+        "요구사항 분석/계획 확정",
+        "single",
+        None,
+        (
+            "브리프를 섹션/항목별 요구사항 문장(예: '사업 개요 섹션은 ...을 "
+            "포함해야 한다')으로 명확히 정리하고, 모호하거나 빠진 부분이 "
+            "없는지 스스로 점검하세요."
+        ),
+        True,
+        False,
+        [("요구사항 분석가", "")],
+        False,
+    ),
+    (
+        "자료 조사·분석",
+        "sequential_relay",
+        None,
+        "앞 단계의 요구사항을 바탕으로 필요한 자료를 조사하고 분석하세요.",
+        False,
+        False,
+        [
+            ("외부 자료 조사가", "요구사항과 관련된 외부 자료(시장·경쟁사·통계 등)를 조사하세요."),
+            (
+                "3C4P SWOT 분석가",
+                "앞서 조사된 자료를 바탕으로 3C/4P/SWOT 등 프레임워크로 분석하세요.",
+            ),
+        ],
+        False,
+    ),
+    (
+        "기획 계획 수립",
+        "single",
+        None,
+        (
+            "조사·분석 결과를 바탕으로 최종 문서를 섹션 단위로 쪼개세요. "
+            "1단계에서 정리된 요구사항 각각이 어느 섹션에 배정되는지 "
+            "명시적으로 매핑하세요 — 모든 요구사항이 반드시 하나 이상의 "
+            "섹션에 배정돼야 하며, 빠지는 요구사항이 있으면 안 됩니다. "
+            "섹션마다 '이 섹션이 커버하는 요구사항 번호'와 '구체적 완료 "
+            "기준(무엇이 담겨야 완료로 보는지)'을 반드시 함께 적으세요 — "
+            "완료 기준 없이 섹션명만 나열하지 마세요."
+        ),
+        False,
+        False,
+        [("PM", "")],
+        False,
+    ),
+    (
+        "작성",
+        "sequential_relay",
+        None,
+        (
+            "앞 단계의 기획 계획(요구사항-섹션 매핑)에서 당신에게 배정된 "
+            "섹션을 찾아, 그 섹션이 커버해야 할 요구사항을 전부 충족하는 "
+            "실제로 완성된 내용을 작성하세요 — 개요나 논의로 끝내지 "
+            "마세요. 이전 작성자가 이미 쓴 내용은 그대로 유지하고(다시 "
+            "쓰거나 지우지 말 것), 당신이 맡은 부분만 이어서 작성하세요."
+        ),
+        False,
+        True,
+        [
+            ("기획서 작성자", "배경·목표·실행계획 섹션을 작성하세요."),
+            ("사업전략 수립가", "사업전략·시장진입 섹션을 작성하세요."),
+            ("C-level 보고서 작성자", "경영진 요약(Executive Summary) 섹션을 작성하세요."),
+            (
+                "프레젠테이션 자료 작성자",
+                "지금까지 작성된 모든 섹션을 검토해 빠진 내용을 직접 채워 "
+                "넣고, 발표 가능한 하나의 완성된 문서로 통합해 제출하세요.",
+            ),
+        ],
+        False,
+    ),
+    (
+        "내용 검증",
+        "single",
+        None,
+        "작성 산출물이 1단계 요구사항을 실제로 충족하는지 검증하세요.",
+        False,
+        False,
+        [("품질 관리자", "")],
+        True,
+    ),
+    (
+        "표현 검토",
+        "sequential_relay",
+        None,
+        "작성 산출물의 문체·표현·논리적 일관성을 검토하고 다듬으세요.",
+        False,
+        False,
+        [("콘텐츠 카피라이팅", "문체와 표현을 다듬으세요.")],
+        False,
+    ),
+    (
+        "최종 승인 판정",
+        "single",
+        None,
+        (
+            "지금까지의 전체 산출물을 종합해 품질/인수 기준(치명적 누락 0건, "
+            "핵심 요구사항 커버리지 등)으로 최종 판정하세요."
+        ),
+        False,
+        False,
+        [("PM", "")],
+        False,
+    ),
+]
+
+# "코드 검증"/"QA 기능테스트"/"품질 관리 최종 판정"과 같은 이유로
+# "내용 검증"/"표현 검토"/"최종 승인 판정" 3단계만 0.5 — 나머지는
+# 0.0(아직 임계값을 신뢰할 데이터가 없어 초기부터 걸면 "최소 HITL"
+# 의도와 반대로 매번 에스컬레이션된다, `_seed_dev_pipeline()` 주석과
+# 같은 근거).
+_BUSINESS_PIPELINE_GATED_STAGE_NAMES = ("내용 검증", "표현 검토", "최종 승인 판정")
+
+
+def _seed_business_planning_pipeline(conn: sqlite3.Connection) -> None:
+    """`seed()`가 `_seed_dev_pipeline()` 다음으로 호출한다 — 같은
+    존재-확인 패턴(이름으로 중복 생성 방지)."""
+    existing = conn.execute(
+        "SELECT id FROM pipeline_templates WHERE name = ?",
+        (BUSINESS_PIPELINE_NAME,),
+    ).fetchone()
+    if existing is not None:
+        return
+    cur = conn.execute(
+        "INSERT INTO pipeline_templates (name, description, domain) VALUES (?, ?, ?)",
+        (BUSINESS_PIPELINE_NAME, BUSINESS_PIPELINE_DESCRIPTION, "business_planning"),
+    )
+    template_id = cur.lastrowid
+    for seq, (
+        name,
+        mode,
+        lead_role_name,
+        instructions,
+        requires_approval,
+        is_primary,
+        agents,
+        checks_traceability,
+    ) in enumerate(BUSINESS_PIPELINE_STAGES, start=1):
+        gate_ratio = 0.5 if name in _BUSINESS_PIPELINE_GATED_STAGE_NAMES else 0.0
+        cur = conn.execute(
+            "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
+            "lead_role_name, instructions, requires_human_approval, is_primary_deliverable, "
+            "min_gate_pass_ratio, checks_requirements_traceability) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                template_id,
+                seq,
+                name,
+                mode,
+                lead_role_name,
+                instructions,
+                1 if requires_approval else 0,
+                1 if is_primary else 0,
+                gate_ratio,
+                1 if checks_traceability else 0,
+            ),
+        )
+        stage_id = cur.lastrowid
+        for agent_seq, (role_name, agent_instructions) in enumerate(agents, start=1):
+            agent_row = conn.execute(
+                "SELECT 1 FROM agent_pool WHERE role_name = ?", (role_name,)
+            ).fetchone()
+            if agent_row is None:
+                continue  # 방어적 처리 — AGENT_SPECS에 이미 다 있어 정상 경로에선 안 탐.
+            conn.execute(
+                "INSERT INTO pipeline_stage_agents (stage_id, role_name, seq_order, "
+                "instructions) VALUES (?, ?, ?, ?)",
+                (stage_id, role_name, agent_seq, agent_instructions),
+            )

@@ -185,6 +185,7 @@ def _bad_run_crew_tracking(calls):
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         calls.append(1)
         return {

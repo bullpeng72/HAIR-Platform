@@ -22,7 +22,12 @@ def _login(client, username, password):
     return resp
 
 
-def _make_task_no_candidates(client, role_name="콘텐츠 카피라이팅"):
+def _make_task_no_candidates(client, role_name="존재하지-않는-역할-NC001"):
+    # 2026-11-08 — 원래 기본값 "콘텐츠 카피라이팅"이 "어떤 agent_pool
+    # 역할과도 안 겹친다"는 전제로 고른 placeholder였는데, 그 뒤 실제로
+    # 같은 이름의 Agent가 정규 시드에 추가돼(AGENT_SPECS, 사업/기획
+    # 업무 처리 파이프라인) 전제가 깨졌다 — 완전히 가상의 이름으로
+    # 바꿔 "후보 없음" 테스트 의도를 그대로 지킨다.
     _login(client, "manager1", "managerpass")
     brief_id = client.post("/api/briefs", json={"raw_text": role_name}).json()["id"]
     resp = client.post(
@@ -92,7 +97,11 @@ def test_generate_new_without_use_llm_judge_never_calls_judge(client_and_conn):
 def test_use_llm_judge_true_calls_judge_and_uses_result(client_and_conn, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     client, conn = client_and_conn
-    task_id = _make_task_no_candidates(client, "콘텐츠 카피라이팅")
+    # "콘텐츠 카피라이팅"이 이제 실제 seed된 역할이라(AGENT_SPECS) 그
+    # 이름을 그대로 쓰면 결정론적 매칭이 먼저 완전일치를 찾아버린다 —
+    # 의도(결정론적 매칭은 실패하고 LLM judge로 넘어가야 함)를 지키려고
+    # 다른 이름을 쓴다.
+    task_id = _make_task_no_candidates(client, "홍보물 작성 전문가")
     agent_id = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) "
         "VALUES ('카피라이팅 에이전트', '[]', 'active')"

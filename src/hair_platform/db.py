@@ -576,6 +576,12 @@ CREATE TABLE IF NOT EXISTS pipeline_stages (
     -- 알 수 있어(코드/기획서/보고서 등 도메인마다 다름) 단계별로
     -- 명시적으로 표시해둔다.
     is_primary_deliverable INTEGER NOT NULL DEFAULT 0,
+    -- 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
+    -- 기존엔 `pipeline_runtime.py`가 `stage["name"] == "코드 검증"`
+    -- 문자열 매칭으로 요구사항 추적성 LLM judge를 걸었다. 다른 도메인
+    -- 파이프라인(사업기획서 등)이 이 검증 단계를 다른 이름으로 지어도
+    -- 받을 수 있도록, 단계명과 무관한 명시적 플래그로 뺀다.
+    checks_requirements_traceability INTEGER NOT NULL DEFAULT 0,
     UNIQUE(pipeline_template_id, seq_order)
 );
 
@@ -1039,6 +1045,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(
         conn, "pipeline_stages", "is_primary_deliverable", "INTEGER NOT NULL DEFAULT 0"
     )
+    # 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
+    # `pipeline_stages` CREATE TABLE에 추가한 설명 참고. 단계명과 무관한
+    # 요구사항 추적성 검증 플래그.
+    _ensure_column(
+        conn,
+        "pipeline_stages",
+        "checks_requirements_traceability",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
     # 사용자 요청(2026-10-20, "CrewAI agent의 경우 에이전트 생성은 role,
     # goal, backstory, tool 등을 설정하고... HAIR-Platform에 crewai
     # 에이전트 및 에이전트 그룹을 상세조정하고 수정하기 위한 고급 에이전트
@@ -1195,6 +1210,37 @@ _DEV_PIPELINE_STALE_DESCRIPTION = (
     "개발 파이프라인(BMAD-METHOD 대응 — 계획 확정 시점에만 사람이 개입한다)."
 )
 
+# 실측 발견(2026-11-06, park_member 로드러너 게임 데모 — "소프트웨어
+# 개발 파이프라인"을 Task #3에 두 번 독립 실행했더니 둘 다 같은 지점에서
+# 같은 방식으로 실패) — "구현" 단계의 매니저("개발 계획 수립가")에게
+# 주는 지시문이 "앞 단계의 개발 계획에 따라 모듈을 구현하세요."처럼
+# 모호해서, 매니저가 코워커에게 위임(Delegate work to coworker)을 한
+# 번도 호출하지 않고 자신의 전문 분야(모듈 분해/업무 배정)대로 계획
+# 문서만 다시 써서 제출했다. 지시문을 명시적으로 고쳐도(2026-11-06
+# 1차 수정) 여전히 재현됐다 — 외부 조사 결과 CrewAI의 hierarchical
+# (위임) 프로세스 자체가 커뮤니티에 널리 보고된 신뢰성 문제이고, BMAD-
+# METHOD 공식 가이드도 "순차(sequential)로 하나씩 완성 후 다음으로"를
+# 기본·권장 패턴으로 삼는다(병렬 위임은 BMAD 코어가 아니라 서드파티
+# 애드온) — 그래서 이 단계 자체를 `parallel_delegated`(hierarchical)
+# 에서 이미 "설계"/"QA 기능테스트"에 쓰이고 있는 `sequential_relay`로
+# 전환한다. Delegate 도구 호출이 전혀 없어 위임 신뢰성 문제가 구조적
+# 으로 사라진다. 아래 문구들은 이 전환 전 상태를 식별하기 위한
+# 스테일(stale) 마커다 — 관리자가 이미 직접 수정했다면 더 이상 이
+# 문자열과 일치하지 않으므로 건드리지 않는다(기존 description 교체와
+# 같은 안전장치).
+_DEV_PIPELINE_STALE_IMPLEMENTATION_INSTRUCTIONS = "앞 단계의 개발 계획에 따라 모듈을 구현하세요."
+_DEV_PIPELINE_STALE_IMPLEMENTATION_INSTRUCTIONS_V2 = (
+    "당신(매니저)은 이 구현 단계를 지휘하는 역할이며, 직접 코드를 작성하지 "
+    "않습니다. 앞 단계의 개발 계획과 아래 [코워커별 참고 가이드]를 바탕으로, "
+    "반드시 'Delegate work to coworker' 도구를 사용해 각 코워커에게 맡을 "
+    "모듈을 구체적으로 지시하고 실제 코드를 작성하게 하세요. 모든 코워커에게 "
+    "위임을 마친 뒤에는 그들이 돌려준 산출물을 모아 하나의 결과로 제출하세요 "
+    "— 요약하거나 다시 쓰지 말고 받은 코드를 그대로 포함하세요."
+)
+_DEV_PIPELINE_STALE_PLANNING_INSTRUCTIONS = (
+    "설계 산출물을 독립적으로 개발 가능한 모듈 단위로 쪼개고 선행조건·완료기준을 정하세요."
+)
+
 
 def _sync_dev_pipeline_implementation_stage_agents(conn: sqlite3.Connection) -> None:
     """사용자 요청(2026-10-28, "파이프라인 관리 — '#1 소프트웨어 개발
@@ -1217,7 +1263,7 @@ def _sync_dev_pipeline_implementation_stage_agents(conn: sqlite3.Connection) -> 
     role_name은 건드리지 않는다."""
     stage_row = conn.execute(
         """
-        SELECT ps.id FROM pipeline_stages ps
+        SELECT ps.* FROM pipeline_stages ps
         JOIN pipeline_templates pt ON pt.id = ps.pipeline_template_id
         WHERE pt.name = ? AND ps.name = '구현'
         """,
@@ -1226,37 +1272,87 @@ def _sync_dev_pipeline_implementation_stage_agents(conn: sqlite3.Connection) -> 
     if stage_row is None:
         return
     stage_id = stage_row["id"]
-    placeholders = ",".join("?" for _ in _DEV_PIPELINE_STALE_IMPLEMENTATION_ROLES)
-    conn.execute(
-        "DELETE FROM pipeline_stage_agents WHERE stage_id = ? "
-        f"AND role_name IN ({placeholders})",
-        (stage_id, *_DEV_PIPELINE_STALE_IMPLEMENTATION_ROLES),
-    )
-    current_roles = {
-        r["role_name"]
-        for r in conn.execute(
-            "SELECT role_name FROM pipeline_stage_agents WHERE stage_id = ?",
-            (stage_id,),
-        ).fetchall()
-    }
     implementation_stage = next(
         s for s in reference_pipeline_seeds.DEV_PIPELINE_STAGES if s[0] == "구현"
     )
-    for seq, (role_name, instructions) in enumerate(implementation_stage[6], start=1):
-        if role_name in current_roles:
-            continue
-        if (
-            conn.execute(
-                "SELECT 1 FROM agent_pool WHERE role_name = ?", (role_name,)
-            ).fetchone()
-            is None
-        ):
-            continue
+
+    # 2026-11-07 — "구현" 단계를 parallel_delegated(hierarchical)에서
+    # sequential_relay로 전환(이 파일 상단 주석 참고). 이 단계가 아직
+    # 옛 hierarchical 형태(mode/lead_role_name이 전환 전 그대로)일
+    # 때만 안전하게 전체 교체한다 — 관리자가 이미 수동으로 손봤다면
+    # (mode가 다른 값으로 바뀌어 있는 등) 건드리지 않는다.
+    if (
+        stage_row["mode"] == "parallel_delegated"
+        and stage_row["lead_role_name"] == "개발 계획 수립가"
+    ):
         conn.execute(
-            "INSERT INTO pipeline_stage_agents (stage_id, role_name, seq_order, "
-            "instructions) VALUES (?, ?, ?, ?)",
-            (stage_id, role_name, seq, instructions),
+            "DELETE FROM pipeline_stage_agents WHERE stage_id = ?", (stage_id,)
         )
+        for seq, (role_name, instructions) in enumerate(
+            implementation_stage[6], start=1
+        ):
+            if (
+                conn.execute(
+                    "SELECT 1 FROM agent_pool WHERE role_name = ?", (role_name,)
+                ).fetchone()
+                is None
+            ):
+                continue
+            conn.execute(
+                "INSERT INTO pipeline_stage_agents (stage_id, role_name, seq_order, "
+                "instructions) VALUES (?, ?, ?, ?)",
+                (stage_id, role_name, seq, instructions),
+            )
+        conn.execute(
+            "UPDATE pipeline_stages SET mode = ?, lead_role_name = NULL, "
+            "instructions = ? WHERE id = ?",
+            (implementation_stage[1], implementation_stage[3], stage_id),
+        )
+    else:
+        # 고아 role_name만 지우고 빠진 role만 추가(기존 2026-10-28 로직,
+        # 관리자가 직접 손본 뒤에도 안전하게 유지) — 전체 교체(위)가
+        # 이미 일어났다면 이 분기는 멱등이라 아무 일도 안 한다.
+        placeholders = ",".join("?" for _ in _DEV_PIPELINE_STALE_IMPLEMENTATION_ROLES)
+        conn.execute(
+            "DELETE FROM pipeline_stage_agents WHERE stage_id = ? "
+            f"AND role_name IN ({placeholders})",
+            (stage_id, *_DEV_PIPELINE_STALE_IMPLEMENTATION_ROLES),
+        )
+        current_roles = {
+            r["role_name"]
+            for r in conn.execute(
+                "SELECT role_name FROM pipeline_stage_agents WHERE stage_id = ?",
+                (stage_id,),
+            ).fetchall()
+        }
+        for seq, (role_name, instructions) in enumerate(
+            implementation_stage[6], start=1
+        ):
+            if role_name in current_roles:
+                continue
+            if (
+                conn.execute(
+                    "SELECT 1 FROM agent_pool WHERE role_name = ?", (role_name,)
+                ).fetchone()
+                is None
+            ):
+                continue
+            conn.execute(
+                "INSERT INTO pipeline_stage_agents (stage_id, role_name, seq_order, "
+                "instructions) VALUES (?, ?, ?, ?)",
+                (stage_id, role_name, seq, instructions),
+            )
+        conn.execute(
+            "UPDATE pipeline_stages SET instructions = ? "
+            "WHERE id = ? AND instructions IN (?, ?)",
+            (
+                implementation_stage[3],
+                stage_id,
+                _DEV_PIPELINE_STALE_IMPLEMENTATION_INSTRUCTIONS,
+                _DEV_PIPELINE_STALE_IMPLEMENTATION_INSTRUCTIONS_V2,
+            ),
+        )
+
     conn.execute(
         "UPDATE pipeline_templates SET description = ? "
         "WHERE name = ? AND description = ?",
@@ -1265,6 +1361,46 @@ def _sync_dev_pipeline_implementation_stage_agents(conn: sqlite3.Connection) -> 
             reference_pipeline_seeds.DEV_PIPELINE_NAME,
             _DEV_PIPELINE_STALE_DESCRIPTION,
         ),
+    )
+
+    # "개발 계획 수립" 단계 지시문도 요구사항-모듈 매핑을 명시하도록
+    # 강화(이 파일 상단 주석 참고) — 같은 안전장치로 옛 문구가 그대로
+    # 남아 있을 때만 교체한다.
+    planning_stage = next(
+        s for s in reference_pipeline_seeds.DEV_PIPELINE_STAGES if s[0] == "개발 계획 수립"
+    )
+    conn.execute(
+        """
+        UPDATE pipeline_stages SET instructions = ?
+        WHERE id = (
+            SELECT ps.id FROM pipeline_stages ps
+            JOIN pipeline_templates pt ON pt.id = ps.pipeline_template_id
+            WHERE pt.name = ? AND ps.name = '개발 계획 수립'
+        ) AND instructions = ?
+        """,
+        (
+            planning_stage[3],
+            reference_pipeline_seeds.DEV_PIPELINE_NAME,
+            _DEV_PIPELINE_STALE_PLANNING_INSTRUCTIONS,
+        ),
+    )
+
+    # 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
+    # `checks_requirements_traceability` 컬럼은 이번에 처음 추가돼
+    # 모든 기존 단계가 기본값 0이다. "코드 검증" 단계만 1로 맞춘다
+    # (단계명과 무관한 플래그로 바꾼 이유는 pipeline_runtime.py 상단
+    # 주석 참고) — 아직 이 플래그를 손볼 UI가 없어 관리자 커스터마이즈
+    # 충돌 걱정 없이 매 기동마다 그냥 맞춰둔다.
+    conn.execute(
+        """
+        UPDATE pipeline_stages SET checks_requirements_traceability = 1
+        WHERE id = (
+            SELECT ps.id FROM pipeline_stages ps
+            JOIN pipeline_templates pt ON pt.id = ps.pipeline_template_id
+            WHERE pt.name = ? AND ps.name = '코드 검증'
+        )
+        """,
+        (reference_pipeline_seeds.DEV_PIPELINE_NAME,),
     )
 
 

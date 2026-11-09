@@ -648,6 +648,12 @@ class PipelineStageCreate(BaseModel):
     # 단계의 코드)을 밀어냈다. 어느 단계가 "진짜 최종 산출물"인지는
     # 템플릿 작성자만 판단할 수 있어 단계 생성 시 명시하게 한다.
     is_primary_deliverable: bool = False
+    # 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
+    # 전엔 `pipeline_runtime.py`가 `stage["name"] == "코드 검증"`
+    # 문자열 매칭으로 요구사항 추적성 LLM judge를 걸었다. 다른 도메인
+    # 파이프라인(사업기획서 등)의 검증 단계가 다른 이름을 써도 똑같이
+    # 받을 수 있도록, 단계명과 무관한 명시적 플래그로 뺐다.
+    checks_requirements_traceability: bool = False
     # 사용자 요청(2026-10-20, "고급 에이전트 관리") — 이 단계의
     # `Task.expected_output` 기본값. 빈 문자열(기본값)이면
     # `crew_runtime.run_crew()`의 플랫폼 공통 기본 문구를 그대로 쓴다.
@@ -666,6 +672,7 @@ class PipelineStageUpdate(BaseModel):
     max_retry: int | None = None
     requires_human_approval: bool | None = None
     is_primary_deliverable: bool | None = None
+    checks_requirements_traceability: bool | None = None
     expected_output: str | None = None
 
 

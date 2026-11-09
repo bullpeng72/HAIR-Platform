@@ -58,6 +58,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         return {
             "final_output": "최종산출물",
@@ -72,7 +73,14 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
             ],
             "gate_scores": gate_scores,
             "tcr": tcr,
-            "delegations": [],
+            # 로드맵 "구현 단계 위임 확인"(2026-11-06) — parallel_delegated
+            # 모드(매니저 지정)에서는 실제 위임이 있었던 것처럼 흉내내야
+            # delegation_check 가드가 "구현" 단계를 늘 실패시키지 않는다.
+            "delegations": (
+                [{"tool": "Delegate work to coworker", "to_agent_role": "role"}]
+                if manager_agent_id is not None
+                else []
+            ),
             "resolved_provider": "openai",
             "resolved_model": "gpt-4o-mini",
             "token_usage": {"total_tokens": 1},
@@ -178,7 +186,7 @@ def test_default_software_dev_pipeline_is_seeded_idempotently():
         "single",
         "sequential_relay",
         "single",
-        "parallel_delegated",
+        "sequential_relay",
         "single",
         "sequential_relay",
         "single",
@@ -186,11 +194,14 @@ def test_default_software_dev_pipeline_is_seeded_idempotently():
     assert tpl["stages"][0]["requires_human_approval"] is True
     assert all(not s["requires_human_approval"] for s in tpl["stages"][1:])
     impl_stage = tpl["stages"][3]
-    assert impl_stage["lead_role_name"] == "개발 계획 수립가"
-    # 2026-10-26 정리(사용자 분석 요청) — 영역별 중복 개발자를 1명으로
-    # 줄였다: 리드 1 + 개발자 4(백엔드/프론트엔드/데이터인프라/풀스택) +
-    # UI 기획자 1 = 6.
-    assert len(impl_stage["agents"]) == 6
+    # 2026-11-07 — CrewAI hierarchical(위임) 프로세스의 신뢰성 문제
+    # (실측 + 외부 조사, BMAD-METHOD 자체도 sequential이 기본) 때문에
+    # "구현" 단계를 parallel_delegated에서 sequential_relay로 전환 —
+    # 더 이상 매니저(lead_role_name)가 없다.
+    assert impl_stage["lead_role_name"] is None
+    # UI 기획자 → 데이터/인프라 개발자 → 백엔드 개발자 → 프론트엔드
+    # 개발자 → 풀스택 개발자(최종 통합) = 5명, 매니저 역할 없음.
+    assert len(impl_stage["agents"]) == 5
 
 
 # ---------- 실행 엔진: 3가지 mode ----------
@@ -269,6 +280,7 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         calls.append(
             {
@@ -496,6 +508,7 @@ def test_execute_stage_attempt_passes_stage_expected_output_to_run_crew():
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         calls.append(expected_outputs)
         return _good_run_crew()(
@@ -550,6 +563,7 @@ def test_gate_failure_retries_with_feedback_then_escalates():
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         descriptions_seen.append(task_descriptions[0])
         return _good_run_crew(gate_scores=bad_gate, tcr=10.0)(
@@ -718,6 +732,7 @@ def test_reject_reason_is_fed_into_the_retry_instructions():
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         descriptions_by_attempt.append(task_descriptions[0])
         return _good_run_crew()(
@@ -794,6 +809,7 @@ def test_reject_without_reason_still_retries_with_generic_notice():
         manager_agent_id=None,
         expected_outputs=None,
         self_review=False,
+        memory=True,
     ):
         descriptions_by_attempt.append(task_descriptions[0])
         return _good_run_crew()(

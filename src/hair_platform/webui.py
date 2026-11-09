@@ -3414,7 +3414,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 있다. 아래 렌더링은 원래 제네릭하게 모든 키를 순회하므로 자동으로
   // 배지가 뜨지만, 긴 영문 키를 그대로 배지 글자로 쓰면 어색해 짧은
   // 한글 라벨로 바꿔 보여준다(A-G는 그대로 글자 자체가 식별자).
-  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성" };
+  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인" };
   const pipelineTimelineHtml = (run) => {
     if (!run) return "";
     const rows = run.stage_results.map(sr => {

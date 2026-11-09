@@ -197,6 +197,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # task의 실행 버튼이 복구 불가능하게 막힌다. 단일 프로세스 전제이므로
     # 기동 시점의 'running'은 전부 이전 프로세스의 잔재로 확정하고 정리한다.
     deliverables.reap_orphaned_execution_jobs(conn)
+    # 실측(2026-11-06, park_member 로드러너 게임 데모) — CrewAI 매니저가
+    # 위임 반복 중 LLM 컨텍스트 윈도우를 초과하면 그 예외가 CrewAI/
+    # LiteLLM 내부에서 로그만 남기고 우리 코드까지 안 올라와,
+    # `pipeline_runs.status='running'`이 영원히 방치된다(위 agent_
+    # execution_jobs와 같은 "단일 프로세스 재기동 시 정리" 전제).
+    pipeline_runtime.reap_orphaned_pipeline_runs(conn)
     # 사용자 결정(2026-09-29, "assignment_history/audit_log 보관기간 1년") —
     # 오래 켜진 배포에서 기동 때마다 자연스럽게 정리되도록 여기서도 실행한다
     # (retention.py 참고, 지울 게 없으면 DB에 손도 대지 않는다).
@@ -3670,6 +3676,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 max_retry=payload.max_retry,
                 requires_human_approval=payload.requires_human_approval,
                 is_primary_deliverable=payload.is_primary_deliverable,
+                checks_requirements_traceability=payload.checks_requirements_traceability,
                 expected_output=payload.expected_output,
             )
         except ValueError as exc:
