@@ -14,7 +14,7 @@ Task 종속 대화 흡수 + Brief 승격 공존), 단계형 개발 파이프라�
 (Gate A-G 기준 자동 재시도/에스컬레이션, BMAD-METHOD식 계획 승인
 1회 + 최소 HITL), Agent별 LLM 모델/설정 최적화 추천(admin), **통합
 CLI**(`hair serve`/`bootstrap-admin`/`reset-data`/`eval`)까지 전부 구현돼 실제로
-쓸 수 있다. `pytest` 715건 통과, API 엔드포인트 169개. 개념·아키텍처
+쓸 수 있다. `pytest` 811건 통과, API 엔드포인트 168개. 개념·아키텍처
 전체 설명은
 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은 `git log`
 (커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를 참고.
@@ -91,7 +91,7 @@ CLI**(`hair serve`/`bootstrap-admin`/`reset-data`/`eval`)까지 전부 구현돼
 - **Agent/Tool/Skill 표시용 ID 체계**(`id_scheme.py`) — 정수 PK는 FK·
   URL 경로가 그대로 쓰므로 안 바꾸고, 종류를 바로 구분할 수 있는 코드를
   `code` 컬럼에 별도로 둔다(`AGT-REF-001`/`AGT-CUSTOM-001`, `TUL-NATIVE-
-  001`, `SKL-TOOL-001` 등 — Agent는 레퍼런스 22종 vs 커스텀, Tool/Skill은
+  001`, `SKL-TOOL-001` 등 — Agent는 레퍼런스 23종 vs 커스텀, Tool/Skill은
   각각 `kind`/`augmentation_mode` 그대로). 레퍼런스 데이터는 기동 시
   자동 배정(기존 DB도 마이그레이션), 신규 생성은 그 자리에서 즉시 배정,
   `id_scheme.reset_and_reassign_codes()`로 전체 초기화 후 재배정도
@@ -117,7 +117,7 @@ CLI**(`hair serve`/`bootstrap-admin`/`reset-data`/`eval`)까지 전부 구현돼
   있는 대상은 보호) + 보관기간 정책(`retention.py`, assignment_history
   1년 — audit_log는 append-only 트리거를 이 모듈만 통제된 방식으로 해제)
 - `hair reset-data` — 운영 데이터(사용자·업무·대화·실행 이력·모델
-  레지스트리·활동 기록 등) 전체를 공장 초기화. Agent(22종)/Tool·Skill
+  레지스트리·활동 기록 등) 전체를 공장 초기화. Agent(23종)/Tool·Skill
   Pool/팀/파이프라인 템플릿은 건드리지 않는다(`data_admin.py`) —
   pip 배포 전 깨끗한 상태로 준비할 때 사용
 - Web UI 26개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
@@ -140,7 +140,7 @@ pip install -e ".[dev,all]"
 # 발견 — `test_documents.py`만 `pytest.importorskip()`로 이 문제를
 # 스스로 막고 있었다). `all`(= crewai+mcp+llm+documents 묶음, pyproject.toml
 # 참고)까지 같이 설치해야 아래 골든셋이 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 715건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 811건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
@@ -158,7 +158,7 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 ```
 
 운영 중 쌓인 데이터만 초기화하고(사용자·업무·대화·실행 이력·모델
-레지스트리·활동 기록 등) Agent(22종)/Tool·Skill Pool/팀/파이프라인
+레지스트리·활동 기록 등) Agent(23종)/Tool·Skill Pool/팀/파이프라인
 템플릿은 그대로 둘 때(예: 배포 전 깨끗한 상태로 준비):
 
 ```bash
@@ -265,7 +265,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(169개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(168개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   approvals.py       # 다단계 결재라인(조직도 매니저 체인)
@@ -299,14 +299,14 @@ src/hair_platform/
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이)
   conversations.py   # 대화 중심 작업공간 — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩, Brief 승격
   pipeline_runtime.py # 단계형 개발 파이프라인 엔진(단독/순차 릴레이/병행 위임 단계, Gate A-G 기준 자동 재시도·에스컬레이션)
-  reference_pipeline_seeds.py # 레퍼런스 Agent 22종 + Skill/Tool Pool + 소프트웨어 개발 파이프라인 기본 시드
+  reference_pipeline_seeds.py # 레퍼런스 Agent 23종 + Skill/Tool Pool + 소프트웨어 개발/사업·기획 파이프라인 기본 시드
   agent_optimizer.py # Agent별 LLM provider/model/tuning_config 최적화 추천(규칙 기반 + 선택적 LLM 보정, admin)
   id_scheme.py       # Agent/Tool/Skill 표시용 코드 체계(`AGT-REF-001` 등, 종류 구분용) — 정수 PK는 그대로, `code`만 별도 배정
 docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # 신규 발굴 스킬(3회+ 반복 확인)
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 715건 통과
+tests/unit/                            # 골든셋 811건 통과
 ```
 
 ## 로드맵
@@ -319,6 +319,42 @@ tests/unit/                            # 골든셋 715건 통과
 
 버전별 핵심 변경만 요약한다 — 세부 배경·버그 재현 과정은 커밋 메시지
 (`git log --oneline --all`)에 날짜·사용자 요청 원문과 함께 남아 있다.
+
+### v0.1.2 (2026-11-09) — 파이프라인 Ollama 적용/구현 단계 버그 수정 + 복잡 업무 처리 로드맵 9건
+
+- 🐛 `crew_runtime.run_crew()`가 단계별 Agent의 `llm_provider`/
+  `llm_model`을 전혀 읽지 않아, Ollama로 설정한 파이프라인 단계도
+  항상 OpenAI로 조용히 폴백되던 문제 수정(`_resolve_stage_llm`) +
+  Ollama 전용 타임아웃 분리(5400s) + 로컬 모델 대용량 출력 시
+  OpenAI 임베딩 강제호출로 크래시하던 문제 수정(`memory=False`)
+- 🐛 "구현" 단계(`parallel_delegated`, 매니저 위임)가 실제 코드
+  대신 위임 계획만 산출물로 남기거나 위임 자체를 빠뜨리는 문제가
+  실측으로 반복 확인돼, `sequential_relay`(모듈별 사전 배정 +
+  순차 실행)로 전환
+- 🐛 `sequential_relay` 다단계에서 마지막 참여자 결과만 남고 앞
+  참여자들의 산출물이 조용히 사라지던 버그 수정(역할별 헤더로 전부
+  합성해 보존)
+- 🐛 파이프라인 1단계가 Brief 원문(`raw_text`) 없이 Task의 짧은
+  `role_name`만 보고 요구사항을 반복적으로 오해석하던 문제 수정
+- ✨ 파이프라인 중단 시 orphan `running` 실행을 서버 재기동 시
+  자동으로 `failed` 처리(`reap_orphaned_pipeline_runs`)
+- ✨ Gate `code_syntax`/`requirements_traceability` 주입 조건을
+  하드코딩된 한글 단계명 매칭에서 `is_primary_deliverable`/
+  `checks_requirements_traceability` 플래그로 전환해 개발 외
+  도메인에도 일반화
+- ✨ **사업/기획 업무 처리 파이프라인**(7단계) 신규 시드 — 소프트웨어
+  개발 외 도메인에도 같은 파이프라인 엔진이 적용됨을 보여주는 두
+  번째 템플릿, 레퍼런스 Agent 콘텐츠 카피라이팅 추가(23종)
+- ✨ 업무 분해 LLM 제안 + 생성 시점 의존관계 연결, Crew 빌더 Agent
+  자기검토(self_review), 자동 단계적 에스컬레이션(마지막 자동
+  재시도에 self_review 적용 + 승인자 실제 대화 초대/멘션), 콘텐츠
+  타입별(html 등) pluggable 구문 검증기, Crew 빌더 실행 결과 diff
+  모드, 셀프배정 결재 단순화(본인 배정은 결재 없이 즉시 확정),
+  Task 레벨 비용/재시도 예산 추적·상한 설정
+- `hair reset-data` 전용 Gate 통과 로직 불변 확인(기존 7개 Gate
+  A-G만으로 계산한 결과와 신규 측정 지표 추가 후 결과가 동일) —
+  정보성 지표 추가가 기존 통과/차단 기준을 바꾸지 않음을 회귀
+  테스트로 확인
 
 ### v0.1.1 (2026-11-03) — 리소스 매칭/RAG 품질 향상 + 결재·GraphDB 가독성 + 사내망 접속 준비
 
