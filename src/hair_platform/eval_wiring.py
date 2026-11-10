@@ -61,11 +61,13 @@ def _run_generation(
         (admin_id, role_name),
     )
     brief_id = brief_cur.lastrowid
+    assert brief_id is not None
     task_cur = conn.execute(
         "INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, ?, ?)",
         (brief_id, role_name, json.dumps(required_skills, ensure_ascii=False)),
     )
     task_id = task_cur.lastrowid
+    assert task_id is not None
 
     result = jobs.create_and_run_job(conn, brief_id, [task_id], admin_id)
     item = result["items"][0]

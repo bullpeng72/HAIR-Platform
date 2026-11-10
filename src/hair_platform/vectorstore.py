@@ -94,6 +94,38 @@ def set_embedding_config(
     conn.commit()
 
 
+def fetch_available_embedding_models(provider: str) -> list[str]:
+    """사용자 요청(2026-11-10, "ollama, openai 선택시 가용한 모델이
+    자동 표시되도록") — 임베딩 설정 화면의 모델 `<input>`에 후보를
+    채워 넣는 라이브 조회. `model_registry.fetch_available_models()`
+    와 정반대 방향으로 거른다 — 그쪽은 "채팅 모델 등록" 화면이라
+    `_OPENAI_NON_CHAT_KEYWORDS`로 임베딩 모델을 **제외**하는데, 여기는
+    임베딩 설정 전용이라 OpenAI는 "embedding" 포함 모델만 **포함**한다.
+    Ollama는 `/api/tags`가 채팅/임베딩 구분 메타데이터를 안 줘서
+    (model_registry 쪽과 같은 한계) 보유 모델 전부를 그대로 반환한다
+    — 어차피 저장 자체(`set_embedding_config`)는 자유 텍스트라 후보에
+    없는 이름도 그대로 입력할 수 있다(이 함수는 참고용 자동완성일
+    뿐, 목록을 강제하지 않는다). 접속 실패·키 미설정 시 예외를 그대로
+    던진다 — 호출자(app.py)가 사람이 읽을 메시지로 바꾼다(model_
+    registry.fetch_available_models()와 같은 관례)."""
+    if provider == "ollama":
+        import httpx  # 지연 import — model_registry.fetch_available_models()와 같은 경계
+
+        base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        resp = httpx.get(f"{base_url}/api/tags", timeout=10)
+        resp.raise_for_status()
+        return sorted(m["name"] for m in resp.json().get("models", []))
+
+    if provider == "openai":
+        import openai  # 지연 import — model_registry.fetch_available_models()와 같은 경계
+
+        client = openai.OpenAI()
+        names = [m.id for m in client.models.list()]
+        return sorted(n for n in names if "embedding" in n.lower())
+
+    raise ValueError(f"unsupported_provider:{provider!r}")
+
+
 def resolve_default_provider_and_model(conn: sqlite3.Connection) -> tuple[str, str]:
     """`search()`/`index_text()`가 `provider`/`model`을 안 받았을 때
     쓸 기본값을 고른다 — admin이 명시적으로 설정해둔 `embedding_config`

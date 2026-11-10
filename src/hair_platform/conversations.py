@@ -55,6 +55,7 @@ from hair_platform import (
     pipeline_runtime,
     pool_registry,
     teams,
+    vectorstore,
 )
 
 _DEFAULT_SYSTEM_PROMPT = (
@@ -1416,6 +1417,131 @@ _PIPELINE_RUN_STATUS_LABEL = {
 }
 
 
+def ensure_task_for_conversation(
+    conn: sqlite3.Connection,
+    conversation_id: int,
+    actor_id: int,
+    origin_note: str | None = None,
+) -> int:
+    """사용자 요청(2026-11-10, "대화... 등에서 생성한 최종결과물(필요시
+    지정한 결과물)이 갤러리에 가도록") — 대화에 결과물을 남기려는
+    모든 경로(파이프라인 자동 실행, 수동 "결과물로 저장")가 공유하는
+    "이 대화가 쓸 Task를 확보한다" 로직. 원래 `_run_team_mention_via_
+    pipeline()` 안에 있던 걸 분리했다.
+
+    대화가 이미 특정 Task에 연결(`linked_task_id`)돼 있으면 그대로
+    쓴다. 없으면 최소 synthetic Brief+Task를 만들고, **만든 뒤
+    `conversations.linked_task_id`를 그 Task로 갱신한다** — 예전엔
+    이 갱신이 없어서 같은 대화에서 파이프라인 연결 팀을 두 번째
+    멘션하면 Task/Brief가 매번 새로 생겨 결과물이 흩어졌다(실측으로
+    발견한 버그, 이번에 같이 고침). 새 스키마 컬럼은 추가하지 않는다
+    (최소 침습 원칙 유지)."""
+    conv = conn.execute(
+        "SELECT title, linked_task_id FROM conversations WHERE id = ?",
+        (conversation_id,),
+    ).fetchone()
+    if conv is None:
+        raise ValueError("conversation_not_found")
+    if conv["linked_task_id"] is not None:
+        return conv["linked_task_id"]
+
+    task_title = conv["title"] or f"대화 #{conversation_id}"
+    brief_cur = conn.execute(
+        "INSERT INTO briefs (submitted_by, raw_text, stub_roles) "
+        "VALUES (?, ?, '[]')",
+        (actor_id, f"[대화 '{task_title}']"),
+    )
+    brief_id = brief_cur.lastrowid
+    task_cur = conn.execute(
+        "INSERT INTO tasks (brief_id, role_name, notes) VALUES (?, ?, ?)",
+        (
+            brief_id,
+            task_title,
+            f"대화 '{task_title}'에서 {origin_note or '자동 생성됨.'}",
+        ),
+    )
+    task_id = task_cur.lastrowid
+    assert task_id is not None
+    conn.execute(
+        "UPDATE conversations SET linked_task_id = ? WHERE id = ?",
+        (task_id, conversation_id),
+    )
+    return task_id
+
+
+def save_message_as_deliverable(
+    conn: sqlite3.Connection, conversation_id: int, message_id: int, actor_id: int
+) -> int:
+    """사용자 요청(2026-11-10, "대화... 등에서 생성한 최종결과물(필요시
+    지정한 결과물)이 갤러리에 가도록") — 대화의 모든 메시지를 자동으로
+    결과물화하면 탐색적 잡담까지 다 쌓여 갤러리가 지저분해진다. 대신
+    사람이 "이건 남길 만하다"고 판단한 메시지 하나를 명시적으로
+    결과물로 승격한다 — 사람 메시지든 Agent 응답이든 동일하게
+    동작한다(원 메시지의 author_type/author_id를 그대로 물려받아
+    "누가/무엇이 실제로 작성했는지"가 결과물에도 정확히 남는다)."""
+    message = conn.execute(
+        "SELECT * FROM conversation_messages WHERE id = ? AND conversation_id = ?",
+        (message_id, conversation_id),
+    ).fetchone()
+    if message is None:
+        raise ValueError("message_not_found")
+
+    task_id = ensure_task_for_conversation(
+        conn, conversation_id, actor_id, origin_note="메시지를 결과물로 저장해 자동 생성됨."
+    )
+    cur = conn.execute(
+        "INSERT INTO deliverables (task_id, author_type, author_id, content, "
+        "content_type, status) VALUES (?, ?, ?, ?, 'text', 'approved')",
+        (task_id, message["author_type"], message["author_id"], message["content"]),
+    )
+    deliverable_id = cur.lastrowid
+    assert deliverable_id is not None
+    audit.record(
+        conn,
+        actor_id,
+        "conversation_message_saved_as_deliverable",
+        "deliverable",
+        deliverable_id,
+        after={
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "task_id": task_id,
+        },
+    )
+    conn.commit()
+    return deliverable_id
+
+
+def save_message_as_knowledge(
+    conn: sqlite3.Connection, conversation_id: int, message_id: int, actor_id: int
+) -> int:
+    """사용자 요청(2026-11-10, "대화에서 생성된 결과물을 지식으로 보내는
+    경로가 없음") — `save_message_as_deliverable()`과 같은 "사람이 남길
+    만하다고 판단한 메시지 하나만 명시적으로" 원칙을 그대로 따르되,
+    보내는 곳이 갤러리(deliverables) 대신 지식베이스(VectorDB,
+    `knowledge_chunks`)라는 점만 다르다. 임베딩 API를 실제로 호출하므로
+    비용이 발생한다(opt-in — 명시적으로 호출했을 때만, `agent_runtime.
+    index_knowledge()`와 동일한 전제)."""
+    message = conn.execute(
+        "SELECT * FROM conversation_messages WHERE id = ? AND conversation_id = ?",
+        (message_id, conversation_id),
+    ).fetchone()
+    if message is None:
+        raise ValueError("message_not_found")
+
+    chunk_id = vectorstore.index_text(conn, None, message["content"])
+    audit.record(
+        conn,
+        actor_id,
+        "conversation_message_indexed_as_knowledge",
+        "knowledge_chunks",
+        chunk_id,
+        after={"conversation_id": conversation_id, "message_id": message_id},
+    )
+    conn.commit()
+    return chunk_id
+
+
 def _run_team_mention_via_pipeline(
     conn: sqlite3.Connection,
     job_id: int,
@@ -1446,13 +1572,6 @@ def _run_team_mention_via_pipeline(
     `pipeline_runs.source_conversation_id`를 보고 `app.py`의
     `decide_approval()`이 같은 헬퍼를 한 번 더 호출한다."""
     try:
-        conv = conn.execute(
-            "SELECT title, linked_task_id FROM conversations WHERE id = ?",
-            (conversation_id,),
-        ).fetchone()
-        if conv is None:
-            raise ValueError("conversation_not_found")
-
         # 사용자 보고(2026-10-29, "브레이크 아웃 게임 생성 대화에서 마지막
         # 승인 처리했지만 생성된 코드가 제시안된 원인") 근본원인 수정 —
         # `pipeline_runtime._stage_initial_input()`은 1단계 프롬프트를
@@ -1469,34 +1588,16 @@ def _run_team_mention_via_pipeline(
         # "사람 작성 자료" 폴백이 그대로 집어가므로, 파이프라인 엔진은
         # 전혀 안 고치고 1단계가 받는 입력만 바로잡을 수 있다.
         transcript = _build_transcript(conn, conversation_id) or "대화를 시작합니다."
-
-        if conv["linked_task_id"] is not None:
-            task_id = conv["linked_task_id"]
-        else:
-            task_title = conv["title"] or f"대화 #{conversation_id}"
-            team_row = conn.execute(
-                "SELECT name FROM teams WHERE id = ?", (team_id,)
-            ).fetchone()
-            team_name = team_row["name"] if team_row else "팀"
-            brief_cur = conn.execute(
-                "INSERT INTO briefs (submitted_by, raw_text, stub_roles) "
-                "VALUES (?, ?, '[]')",
-                (actor_id, f"[대화 '{task_title}'] {transcript}"[:2000]),
-            )
-            brief_id = brief_cur.lastrowid
-            task_cur = conn.execute(
-                "INSERT INTO tasks (brief_id, role_name, notes) VALUES (?, ?, ?)",
-                (
-                    brief_id,
-                    task_title,
-                    (
-                        f"대화 '{task_title}'에서 @{team_name} 호출로 자동 생성됨"
-                        "(파이프라인 기반 실행)."
-                    ),
-                ),
-            )
-            task_id = task_cur.lastrowid
-            assert task_id is not None
+        team_row = conn.execute(
+            "SELECT name FROM teams WHERE id = ?", (team_id,)
+        ).fetchone()
+        team_name = team_row["name"] if team_row else "팀"
+        task_id = ensure_task_for_conversation(
+            conn,
+            conversation_id,
+            actor_id,
+            origin_note=f"@{team_name} 호출로 자동 생성됨(파이프라인 기반 실행).",
+        )
 
         conn.execute(
             "INSERT INTO deliverables (task_id, author_type, author_id, content, "

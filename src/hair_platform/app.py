@@ -1794,6 +1794,62 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         return {"id": result["id"], "triggered_jobs": triggered_jobs}
 
+    @app.post(
+        "/api/conversations/{conversation_id}/messages/{message_id}/save-as-deliverable",
+        status_code=201,
+    )
+    def save_conversation_message_as_deliverable_endpoint(
+        conversation_id: int,
+        message_id: int,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-11-10, "대화... 등에서 생성한 최종결과물
+        (필요시 지정한 결과물)이 갤러리에 가도록") — 대화 메시지(사람
+        또는 Agent) 하나를 명시적으로 결과물로 승격해 갤러리에 보낸다.
+        대화의 모든 메시지를 자동으로 결과물화하지 않는 이유는
+        `conversations.save_message_as_deliverable()` 참고."""
+        if not conversations.is_participant(conn, conversation_id, user["id"]):
+            raise HTTPException(
+                status_code=403, detail="이 대화의 참가자만 저장할 수 있습니다"
+            )
+        try:
+            deliverable_id = conversations.save_message_as_deliverable(
+                conn, conversation_id, message_id, user["id"]
+            )
+        except ValueError as exc:
+            detail = {
+                "conversation_not_found": "대화를 찾을 수 없습니다",
+                "message_not_found": "메시지를 찾을 수 없습니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=404, detail=detail) from None
+        return {"deliverable_id": deliverable_id}
+
+    @app.post(
+        "/api/conversations/{conversation_id}/messages/{message_id}/save-as-knowledge",
+        status_code=201,
+    )
+    def save_conversation_message_as_knowledge_endpoint(
+        conversation_id: int,
+        message_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-11-10, "대화에서 생성된 결과물을 지식으로
+        보내는 경로가 없음") — 대화 메시지 하나를 명시적으로 지식베이스
+        (VectorDB)에 색인한다. 실제 임베딩 API를 호출해 비용이 발생하므로
+        `POST /api/agent-pool/{id}/index-knowledge`와 동일하게 admin/
+        manager 전용으로 좁힌다(결과물로 저장은 참가자 전용이지만, 그건
+        비용이 없는 단순 텍스트 복사라 권한 범위가 다르다)."""
+        try:
+            chunk_id = conversations.save_message_as_knowledge(
+                conn, conversation_id, message_id, user["id"]
+            )
+        except ValueError as exc:
+            detail = {
+                "message_not_found": "메시지를 찾을 수 없습니다",
+            }.get(str(exc), str(exc))
+            raise HTTPException(status_code=404, detail=detail) from None
+        return {"chunk_id": chunk_id}
+
     @app.delete("/api/conversations/{conversation_id}/messages/{message_id}")
     def delete_conversation_message_endpoint(
         conversation_id: int,
@@ -1993,17 +2049,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def gallery_deliverables(
         content_type: str | None = None,
         task_id: int | None = None,
+        status: str | None = None,
+        sort: str = "created_desc",
         limit: int = 50,
         offset: int = 0,
         user: sqlite3.Row = Depends(get_current_user),
     ):
         """갤러리(사용자 요청, 2026-11-10, "최종 결과물을 모아보는 갤러리
-        기능") — admin/manager는 조직 전체, member는 본인이 참가한 Task의
+        기능" → "필터링, 소팅 기능 등을 좀 더 다양하게 강화") —
+        admin/manager는 조직 전체, member는 본인이 참가한 Task의
         결과물만. 캐시가 아니라 매번 실시간 조회라 결과물이 삭제되면
         다음 호출부터 자동으로 빠진다(별도 동기화 불필요)."""
-        return deliverables.list_deliverables_gallery(
-            conn, user["id"], user["role"], content_type, task_id, limit, offset
-        )
+        try:
+            return deliverables.list_deliverables_gallery(
+                conn,
+                user["id"],
+                user["role"],
+                content_type,
+                task_id,
+                status,
+                sort,
+                limit,
+                offset,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/deliverables/{deliverable_id}")
     def get_deliverable_endpoint(
@@ -3357,6 +3427,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # registry(여러 개 등록해두고 고르는 카탈로그)와 달리 이건 "지금
     # 시스템이 실제로 쓰는 단 하나의 설정값"이라 GET/PUT 단일 리소스로
     # 둔다(목록·삭제 없음).
+
+    @app.get("/api/embedding-config/fetch")
+    def fetch_embedding_config_candidates(
+        provider: str,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """임베딩 설정 폼이 provider 선택 시 자동으로 불러오는 모델
+        후보(`GET /api/model-registry/fetch`와 같은 관례) — 조회만으로는
+        아무것도 저장되지 않는다."""
+        if provider not in ("openai", "ollama"):
+            raise HTTPException(
+                status_code=400, detail=f"지원하지 않는 provider입니다: {provider}"
+            )
+        try:
+            models = vectorstore.fetch_available_embedding_models(provider)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{provider} 임베딩 모델 목록을 불러오지 못했습니다: {exc}",
+            ) from exc
+        return {"provider": provider, "models": models}
 
     @app.get("/api/embedding-config")
     def get_embedding_config_endpoint(

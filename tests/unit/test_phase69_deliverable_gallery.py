@@ -231,6 +231,47 @@ def test_delete_deliverable_admin_can_delete_any_status_and_cascades(client_and_
     assert audit_row is not None
 
 
+def test_delete_deliverable_referenced_by_agent_execution_job_does_not_500(
+    client_and_conn,
+):
+    """실측으로 발견한 버그(2026-11-10, "갤러리 삭제시 오류 발생") —
+    `agent_execution_jobs.deliverable_id`도 deliverables를 참조하는데
+    `delete_deliverable()`이 그 참조를 안 끊고 지우려다 sqlite3.
+    IntegrityError(FOREIGN KEY constraint failed)로 500이 났다. "AI
+    에이전트 실행"으로 만들어진 결과물을 지울 때 실제로 겪은 상황을
+    그대로 재현한다."""
+    client, conn = client_and_conn
+    _, task_id = _setup_member1_task(client, conn)
+    deliverable_id = _create_draft_deliverable(client, task_id)
+
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    job_cur = conn.execute(
+        "INSERT INTO agent_execution_jobs (task_id, requested_by, status, "
+        "deliverable_id) VALUES (?, ?, 'succeeded', ?)",
+        (task_id, admin_id, deliverable_id),
+    )
+    job_id = job_cur.lastrowid
+    conn.commit()
+
+    _login(client, "admin1", "adminpass")
+    resp = client.delete(f"/api/deliverables/{deliverable_id}")
+    assert resp.status_code == 200, resp.text
+
+    assert (
+        conn.execute(
+            "SELECT 1 FROM deliverables WHERE id = ?", (deliverable_id,)
+        ).fetchone()
+        is None
+    )
+    job_row = conn.execute(
+        "SELECT deliverable_id FROM agent_execution_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert job_row is not None  # 실행 이력 행 자체는 보존
+    assert job_row["deliverable_id"] is None  # 참조만 끊김
+
+
 # ---------- 갤러리 GET /api/deliverables ----------
 
 
@@ -242,7 +283,9 @@ def test_gallery_admin_sees_all_tasks_deliverables(client_and_conn):
     _login(client, "admin1", "adminpass")
     resp = client.get("/api/deliverables")
     assert resp.status_code == 200, resp.text
-    assert any(d["task_id"] == task_a for d in resp.json())
+    body = resp.json()
+    assert set(body.keys()) == {"items", "total", "limit", "offset"}
+    assert any(d["task_id"] == task_a for d in body["items"])
 
 
 def test_gallery_member_sees_only_own_task_deliverables(client_and_conn):
@@ -264,9 +307,10 @@ def test_gallery_member_sees_only_own_task_deliverables(client_and_conn):
     _login(client, "member1", "memberpass")
     resp = client.get("/api/deliverables")
     assert resp.status_code == 200, resp.text
-    ids = {d["id"] for d in resp.json()}
+    items = resp.json()["items"]
+    ids = {d["id"] for d in items}
     assert deliverable_mine in ids
-    assert all(d["task_id"] != task_other for d in resp.json())
+    assert all(d["task_id"] != task_other for d in items)
 
 
 def test_gallery_content_type_filter(client_and_conn):
@@ -283,8 +327,70 @@ def test_gallery_content_type_filter(client_and_conn):
     )
     resp = client.get("/api/deliverables?content_type=code")
     assert resp.status_code == 200, resp.text
-    assert all(d["content_type"] == "code" for d in resp.json())
-    assert len(resp.json()) == 1
+    body = resp.json()
+    assert all(d["content_type"] == "code" for d in body["items"])
+    assert len(body["items"]) == 1
+    assert body["total"] == 1
+
+
+def test_gallery_status_filter(client_and_conn):
+    client, conn = client_and_conn
+    _, task_id = _setup_member1_task(client, conn)
+    draft_id = _create_draft_deliverable(client, task_id, "초안")
+    _login(client, "member1", "memberpass")
+    submitted_id = _create_draft_deliverable(client, task_id, "제출용")
+    client.post(f"/api/deliverables/{submitted_id}/submit")
+
+    resp = client.get("/api/deliverables?status=draft")
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert any(d["id"] == draft_id for d in items)
+    assert all(d["id"] != submitted_id for d in items)
+
+    resp = client.get("/api/deliverables?status=pending_review")
+    items = resp.json()["items"]
+    assert any(d["id"] == submitted_id for d in items)
+    assert all(d["id"] != draft_id for d in items)
+
+
+def test_gallery_invalid_status_and_sort_rejected(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.get("/api/deliverables?status=not_a_status")
+    assert resp.status_code == 400
+    resp = client.get("/api/deliverables?sort=not_a_sort")
+    assert resp.status_code == 400
+
+
+def test_gallery_sort_created_asc_orders_oldest_first(client_and_conn):
+    client, conn = client_and_conn
+    _, task_id = _setup_member1_task(client, conn)
+    first_id = _create_draft_deliverable(client, task_id, "먼저")
+    second_id = _create_draft_deliverable(client, task_id, "나중")
+
+    resp = client.get("/api/deliverables?sort=created_asc")
+    ids_in_order = [d["id"] for d in resp.json()["items"]]
+    assert ids_in_order.index(first_id) < ids_in_order.index(second_id)
+
+    resp = client.get("/api/deliverables?sort=created_desc")
+    ids_in_order = [d["id"] for d in resp.json()["items"]]
+    assert ids_in_order.index(second_id) < ids_in_order.index(first_id)
+
+
+def test_gallery_pagination_limit_and_offset(client_and_conn):
+    client, conn = client_and_conn
+    _, task_id = _setup_member1_task(client, conn)
+    ids = [_create_draft_deliverable(client, task_id, f"항목{i}") for i in range(5)]
+
+    resp = client.get("/api/deliverables?limit=2&offset=0")
+    body = resp.json()
+    assert body["total"] == 5
+    assert len(body["items"]) == 2
+
+    resp = client.get("/api/deliverables?limit=2&offset=4")
+    body = resp.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["id"] == ids[0]  # created_desc 기본이라 가장 오래된 게 마지막 페이지
 
 
 def test_gallery_deleted_deliverable_disappears_without_extra_sync(client_and_conn):
@@ -296,14 +402,14 @@ def test_gallery_deleted_deliverable_disappears_without_extra_sync(client_and_co
 
     _login(client, "member1", "memberpass")
     resp = client.get("/api/deliverables")
-    assert any(d["id"] == deliverable_id for d in resp.json())
+    assert any(d["id"] == deliverable_id for d in resp.json()["items"])
 
     resp = client.delete(f"/api/deliverables/{deliverable_id}")
     assert resp.status_code == 200, resp.text
 
     resp = client.get("/api/deliverables")
     assert resp.status_code == 200, resp.text
-    assert all(d["id"] != deliverable_id for d in resp.json())
+    assert all(d["id"] != deliverable_id for d in resp.json()["items"])
 
 
 # ---------- 단독 뷰 페이지 GET /deliverables/{id}/view ----------
@@ -377,10 +483,12 @@ def test_list_deliverables_gallery_offset_and_limit():
             (task_id, admin_id, f"content-{i}"),
         )
     conn.commit()
-    all_rows = deliverables.list_deliverables_gallery(conn, admin_id, "admin")
-    assert len(all_rows) == 3
+    all_page = deliverables.list_deliverables_gallery(conn, admin_id, "admin")
+    assert len(all_page["items"]) == 3
+    assert all_page["total"] == 3
     limited = deliverables.list_deliverables_gallery(conn, admin_id, "admin", limit=1)
-    assert len(limited) == 1
+    assert len(limited["items"]) == 1
+    assert limited["total"] == 3
 
 
 # ---------- output_content_type (파이프라인 일반화) ----------

@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Sequence
 
 from hair_platform import audit
 
@@ -103,7 +104,7 @@ def set_optimization_tiers(
     conn: sqlite3.Connection,
     actor_id: int,
     model_id: int,
-    optimization_tiers: list[str],
+    optimization_tiers: Sequence[str],
 ) -> None:
     """이 모델이 "LLM 설정 최적화"의 어떤 tier(deep_reasoning/
     precision_fast/standard)에 직접 적용되는지 admin이 지정·변경·

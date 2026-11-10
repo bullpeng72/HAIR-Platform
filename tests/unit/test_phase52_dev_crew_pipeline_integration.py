@@ -406,3 +406,273 @@ def test_gc_team_without_pipeline_link_still_uses_legacy_single_shot_crew(
     agent_messages = [m for m in messages if m["author_type"] == "agent"]
     assert len(agent_messages) == 1
     assert agent_messages[0]["content"] == "답변"
+
+
+# ---------- 사용자 요청(2026-11-10, "대화... 등에서 생성한 최종결과물
+# (필요시 지정한 결과물)이 갤러리에 가도록") ----------
+
+
+def test_gc_second_team_mention_reuses_same_synthetic_task(client_and_conn):
+    """실측으로 발견한 버그 수정 — 이전엔 `conversations.linked_task_id`
+    를 갱신하지 않아, 같은 대화에서 파이프라인 연결 팀을 두 번째
+    멘션하면 Task/Brief가 매번 새로 생겨 결과물이 흩어졌다."""
+    client, conn = client_and_conn
+    team_id = _dev_crew_team_id(conn)
+    tasks_before = conn.execute("SELECT COUNT(*) AS c FROM tasks").fetchone()["c"]
+
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "재사용 확인방"}).json()[
+        "id"
+    ]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "team", "participant_id": team_id},
+    )
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@자율 개발 크루 1차 요청"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    tasks_after_first = conn.execute("SELECT COUNT(*) AS c FROM tasks").fetchone()["c"]
+    assert tasks_after_first == tasks_before + 1
+    conv = conn.execute(
+        "SELECT linked_task_id FROM conversations WHERE id = ?", (conv_id,)
+    ).fetchone()
+    assert conv["linked_task_id"] is not None
+    first_task_id = conv["linked_task_id"]
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@자율 개발 크루 2차 요청"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    # 두 번째 멘션도 같은 task를 재사용해야 한다 — 새 task가 또 생기면
+    # 안 됨(이게 이번에 고친 버그의 핵심). 다만 `pipeline_runtime.
+    # start_pipeline_run()`은 같은 task에 이미 진행 중(paused_for_
+    # approval 포함)인 실행이 있으면 새로 시작하지 않는 기존 가드가
+    # 있어(LookupError), 1차 실행이 아직 승인 대기 중이라 2차 실행
+    # 자체는 시작되지 않는다 — 그래도 Task/Brief가 재사용됐다는
+    # 사실(이번 수정의 목적)은 그대로 성립한다.
+    tasks_after_second = conn.execute("SELECT COUNT(*) AS c FROM tasks").fetchone()[
+        "c"
+    ]
+    assert tasks_after_second == tasks_after_first
+    run_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM pipeline_runs WHERE task_id = ?", (first_task_id,)
+    ).fetchone()["c"]
+    assert run_count == 1
+    jobs = client.get(f"/api/conversations/{conv_id}/jobs").json()
+    failed_jobs = [j for j in jobs if j["status"] == "failed"]
+    assert any("pipeline_already_running_for_task" in (j["error"] or "") for j in failed_jobs)
+
+
+def test_gc_member_sees_own_conversation_triggered_deliverable_in_gallery(
+    client_and_conn,
+):
+    """실측으로 발견한 갭 수정 — synthetic task엔 confirmed 배정이
+    전혀 안 걸려서, 본인이 대화로 직접 만든 결과물인데도 본인 갤러리
+    에서는 안 보이던 문제(admin/manager만 보임)."""
+    client, conn = client_and_conn
+    team_id = _dev_crew_team_id(conn)
+
+    _login(client, "member1", "memberpass")
+    conv_id = client.post(
+        "/api/conversations", json={"title": "갤러리 가시성 확인방"}
+    ).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "team", "participant_id": team_id},
+    )
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@자율 개발 크루 갤러리 확인용"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    conv = conn.execute(
+        "SELECT linked_task_id FROM conversations WHERE id = ?", (conv_id,)
+    ).fetchone()
+    task_id = conv["linked_task_id"]
+    seed_deliverable = conn.execute(
+        "SELECT id FROM deliverables WHERE task_id = ? AND author_type = 'human' "
+        "ORDER BY id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    assert seed_deliverable is not None
+
+    # 이 task엔 confirmed 배정이 없음을 먼저 확인(회귀 가드 — 전제 자체가
+    # 깨지면 이 테스트의 의미가 없어진다).
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM assignments WHERE task_id = ? "
+            "AND status = 'confirmed'",
+            (task_id,),
+        ).fetchone()["c"]
+        == 0
+    )
+
+    gallery = client.get("/api/deliverables").json()["items"]
+    assert any(d["id"] == seed_deliverable["id"] for d in gallery)
+
+
+def test_gc_save_message_as_deliverable_creates_approved_entry(client_and_conn):
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post(
+        "/api/conversations", json={"title": "메시지 저장 확인방"}
+    ).json()["id"]
+    msg = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "이건 남겨둘 만한 메모입니다"},
+    ).json()
+    message_id = msg["id"]
+
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages/{message_id}/save-as-deliverable"
+    )
+    assert resp.status_code == 201, resp.text
+    deliverable_id = resp.json()["deliverable_id"]
+
+    row = conn.execute(
+        "SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    assert row["author_type"] == "human"
+    assert row["content"] == "이건 남겨둘 만한 메모입니다"
+    assert row["status"] == "approved"
+
+    # 저장한 본인의 갤러리에도 바로 떠야 한다.
+    gallery = client.get("/api/deliverables").json()["items"]
+    assert any(d["id"] == deliverable_id for d in gallery)
+
+
+def test_gc_save_message_as_deliverable_second_call_reuses_linked_task(
+    client_and_conn,
+):
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post(
+        "/api/conversations", json={"title": "재사용 메시지 저장방"}
+    ).json()["id"]
+    msg1 = client.post(
+        f"/api/conversations/{conv_id}/messages", json={"content": "첫 번째 메모"}
+    ).json()
+    msg2 = client.post(
+        f"/api/conversations/{conv_id}/messages", json={"content": "두 번째 메모"}
+    ).json()
+
+    client.post(
+        f"/api/conversations/{conv_id}/messages/{msg1['id']}/save-as-deliverable"
+    )
+    client.post(
+        f"/api/conversations/{conv_id}/messages/{msg2['id']}/save-as-deliverable"
+    )
+
+    tasks = conn.execute(
+        "SELECT DISTINCT task_id FROM deliverables d "
+        "JOIN conversations c ON c.linked_task_id = d.task_id "
+        "WHERE c.id = ?",
+        (conv_id,),
+    ).fetchall()
+    assert len(tasks) == 1  # 같은 대화의 두 번째 저장도 같은 task를 재사용
+
+
+def test_gc_save_message_as_deliverable_rbac_blocks_non_participant(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post(
+        "/api/conversations", json={"title": "비참가자 확인방"}
+    ).json()["id"]
+    msg = client.post(
+        f"/api/conversations/{conv_id}/messages", json={"content": "메모"}
+    ).json()
+
+    _login(client, "viewer1", "viewerpass")
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages/{msg['id']}/save-as-deliverable"
+    )
+    assert resp.status_code == 403
+
+
+def test_gc_save_message_as_deliverable_404_for_missing_message(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post(
+        "/api/conversations", json={"title": "없는 메시지 확인방"}
+    ).json()["id"]
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages/999999/save-as-deliverable"
+    )
+    assert resp.status_code == 404
+
+
+def _fake_embed(text, provider=None, model=None):
+    return (provider or "openai", model or "text-embedding-3-small", [0.1, 0.2, 0.3])
+
+
+def test_gc_save_message_as_knowledge_creates_chunk(client_and_conn):
+    """사용자 요청(2026-11-10, "대화에서 생성된 결과물을 지식으로 보내는
+    경로가 없음") — admin/manager가 대화 메시지를 지식베이스(VectorDB)에
+    직접 색인할 수 있는지 확인."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    conv_id = client.post(
+        "/api/conversations", json={"title": "지식베이스 저장 확인방"}
+    ).json()["id"]
+    msg = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "이 내용은 지식베이스에 남길 만합니다"},
+    ).json()
+
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages/{msg['id']}/save-as-knowledge"
+        )
+    assert resp.status_code == 201, resp.text
+    chunk_id = resp.json()["chunk_id"]
+
+    row = conn.execute(
+        "SELECT * FROM knowledge_chunks WHERE id = ?", (chunk_id,)
+    ).fetchone()
+    assert row["text"] == "이 내용은 지식베이스에 남길 만합니다"
+    assert row["source_agent_id"] is None
+
+    audit_row = conn.execute(
+        "SELECT * FROM audit_log WHERE action = 'conversation_message_indexed_as_knowledge' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert audit_row is not None
+
+
+def test_gc_save_message_as_knowledge_rbac_blocks_member(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post(
+        "/api/conversations", json={"title": "member 지식베이스 시도방"}
+    ).json()["id"]
+    msg = client.post(
+        f"/api/conversations/{conv_id}/messages", json={"content": "메모"}
+    ).json()
+
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages/{msg['id']}/save-as-knowledge"
+    )
+    assert resp.status_code == 403
+
+
+def test_gc_save_message_as_knowledge_404_for_missing_message(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "manager1", "managerpass")
+    conv_id = client.post(
+        "/api/conversations", json={"title": "없는 메시지 지식베이스 확인방"}
+    ).json()["id"]
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages/999999/save-as-knowledge"
+    )
+    assert resp.status_code == 404

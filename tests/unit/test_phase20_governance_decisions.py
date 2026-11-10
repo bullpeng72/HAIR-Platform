@@ -545,6 +545,97 @@ def test_gc_set_embedding_config_rejects_bad_input():
         vectorstore.set_embedding_config(conn, 1, "openai", "  ")
 
 
+def test_gc_fetch_available_embedding_models_ollama_returns_sorted_names():
+    fake_resp = MagicMock()
+    fake_resp.json.return_value = {
+        "models": [{"name": "nomic-embed-text"}, {"name": "mxbai-embed-large:latest"}]
+    }
+    fake_resp.raise_for_status.return_value = None
+    with patch("httpx.get", return_value=fake_resp) as get_mock:
+        models = vectorstore.fetch_available_embedding_models("ollama")
+    assert models == ["mxbai-embed-large:latest", "nomic-embed-text"]
+    assert get_mock.call_args[0][0] == "http://localhost:11434/api/tags"
+
+
+def test_gc_fetch_available_embedding_models_openai_keeps_only_embedding_models():
+    """사용자 요청(2026-11-10, "ollama, openai 선택시 가용한 모델이 자동
+    표시되도록") — `model_registry.fetch_available_models()`는 정반대로
+    "embedding" 포함 모델을 **제외**하는데(채팅 모델 등록 화면이라),
+    여기는 임베딩 설정 화면이라 "embedding" 포함 모델만 **포함**해야
+    한다 — 두 함수가 서로 거울상 필터라는 핵심 동작을 직접 검증."""
+    fake_client = MagicMock()
+    fake_client.models.list.return_value = [
+        MagicMock(id="gpt-4o-mini"),
+        MagicMock(id="text-embedding-3-small"),
+        MagicMock(id="text-embedding-3-large"),
+        MagicMock(id="whisper-1"),
+    ]
+    with patch("openai.OpenAI", return_value=fake_client):
+        models = vectorstore.fetch_available_embedding_models("openai")
+    assert models == ["text-embedding-3-large", "text-embedding-3-small"]
+
+
+def test_gc_fetch_available_embedding_models_rejects_unsupported_provider():
+    with pytest.raises(ValueError):
+        vectorstore.fetch_available_embedding_models("anthropic")
+
+
+def test_gc_fetch_embedding_config_candidates_endpoint_does_not_persist(
+    client_and_conn,
+):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    with patch(
+        "hair_platform.vectorstore.fetch_available_embedding_models",
+        return_value=["text-embedding-3-small", "text-embedding-3-large"],
+    ) as m:
+        resp = client.get(
+            "/api/embedding-config/fetch", params={"provider": "openai"}
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "provider": "openai",
+        "models": ["text-embedding-3-small", "text-embedding-3-large"],
+    }
+    m.assert_called_once_with("openai")
+    # 조회만 했을 뿐 embedding_config는 그대로(미설정) — 자동완성일 뿐
+    # 저장을 트리거하지 않는다.
+    assert client.get("/api/embedding-config").json()["is_explicit"] is False
+
+
+def test_gc_fetch_embedding_config_candidates_wraps_provider_errors_as_400(
+    client_and_conn,
+):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    with patch(
+        "hair_platform.vectorstore.fetch_available_embedding_models",
+        side_effect=RuntimeError("connection refused"),
+    ):
+        resp = client.get(
+            "/api/embedding-config/fetch", params={"provider": "ollama"}
+        )
+    assert resp.status_code == 400
+    assert "connection refused" in resp.json()["detail"]
+
+    resp = client.get(
+        "/api/embedding-config/fetch", params={"provider": "anthropic"}
+    )
+    assert resp.status_code == 400
+
+
+def test_gc_fetch_embedding_config_candidates_rbac_blocks_member_and_viewer(
+    client_and_conn,
+):
+    client, _conn = client_and_conn
+    for username, password in (("member1", "memberpass"), ("viewer1", "viewerpass")):
+        _login(client, username, password)
+        resp = client.get(
+            "/api/embedding-config/fetch", params={"provider": "ollama"}
+        )
+        assert resp.status_code == 403, (username, resp.text)
+
+
 def test_gc_search_and_index_text_use_configured_embedding_without_explicit_args():
     """`provider`/`model`을 안 넘기면 `embedding_config`를 따라야 한다 —
     색인할 때와 검색할 때 서로 다른 기본값을 쓰면 매칭되는 청크가 하나도

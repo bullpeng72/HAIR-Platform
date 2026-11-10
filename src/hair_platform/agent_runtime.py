@@ -334,7 +334,10 @@ def set_model_config(
             "UPDATE agent_pool SET llm_provider = ?, llm_model = ? WHERE id = ?",
             (resolved_provider, resolved_model, agent_id),
         )
-    after = {"llm_provider": resolved_provider, "llm_model": resolved_model}
+    after: dict[str, object] = {
+        "llm_provider": resolved_provider,
+        "llm_model": resolved_model,
+    }
     if mcp_servers is not None:
         after["mcp_servers"] = mcp_servers
     audit.record(

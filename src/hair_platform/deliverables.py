@@ -470,6 +470,23 @@ def delete_deliverable(
         "UPDATE pipeline_run_stages SET deliverable_id = NULL WHERE deliverable_id = ?",
         (deliverable_id,),
     )
+    # 실측으로 발견한 버그(2026-11-10, "갤러리 삭제시 오류 발생", 500 —
+    # sqlite3.IntegrityError: FOREIGN KEY constraint failed) —
+    # `agent_execution_jobs.deliverable_id`도 deliverables를 참조하는데
+    # (db.py) 빠뜨렸었다. `pipeline_run_stages`와 같은 이유로 그 실행
+    # 이력 행 자체는 지우지 않고 참조만 끊는다.
+    conn.execute(
+        "UPDATE agent_execution_jobs SET deliverable_id = NULL WHERE deliverable_id = ?",
+        (deliverable_id,),
+    )
+    # `deliverables.revises_id`는 자기 참조 FK다 — 아직 이 컬럼에 쓰는
+    # 경로가 없어(Phase 2 스코프 밖으로 기록된 미구현 기능) 실무상
+    # 거의 안 걸리지만, 혹시 수동으로 채워진 행이 있으면 FK 위반을
+    # 막기 위해 방어적으로 같이 끊는다.
+    conn.execute(
+        "UPDATE deliverables SET revises_id = NULL WHERE revises_id = ?",
+        (deliverable_id,),
+    )
     conn.execute("DELETE FROM deliverables WHERE id = ?", (deliverable_id,))
     audit.record(
         conn,
@@ -486,15 +503,25 @@ def _preview_text(content: str, limit: int = 200) -> str:
     return collapsed[:limit] + ("…" if len(collapsed) > limit else "")
 
 
+_GALLERY_SORTS = {
+    "created_desc": "d.created_at DESC, d.id DESC",
+    "created_asc": "d.created_at ASC, d.id ASC",
+    "status": "d.status ASC, d.created_at DESC, d.id DESC",
+}
+_GALLERY_STATUSES = ("draft", "pending_review", "approved", "rejected")
+
+
 def list_deliverables_gallery(
     conn: sqlite3.Connection,
     user_id: int,
     role: str,
     content_type: str | None = None,
     task_id: int | None = None,
+    status: str | None = None,
+    sort: str = "created_desc",
     limit: int = 50,
     offset: int = 0,
-) -> list[dict]:
+) -> dict:
     """`GET /api/deliverables` — 여러 Task의 결과물을 한 화면에 모아
     보는 갤러리. admin/manager는 조직 전체, member는 `list_my_work()`와
     같은 "확정 배정으로 이 task에 연결돼 있는지" 조건으로 좁힌다(새
@@ -502,12 +529,34 @@ def list_deliverables_gallery(
 
     캐시·스냅샷이 아니라 매번 `deliverables` 테이블을 실시간 조회하므로
     결과물이 삭제되면 다음 조회부터 자동으로 목록에서 빠진다 — 갤러리
-    전용 동기화 코드가 필요 없다."""
+    전용 동기화 코드가 필요 없다.
+
+    사용자 요청(2026-11-10, "컨텐츠간 경계 구분, 필터링, 소팅 기능 등을
+    좀 더 다양하게 강화") — `status`/`sort`를 추가하고, `GET /api/
+    knowledge-chunks`(`vectorstore.list_chunks()`)와 같은
+    `{"items", "total", "limit", "offset"}` 페이지네이션 규약으로
+    응답 shape을 바꾼다(이전엔 평범한 리스트였다 — `GET /api/
+    deliverables`를 쓰는 유일한 소비처인 webui.py `renderGallery()`와
+    테스트들을 같이 갱신)."""
+    if sort not in _GALLERY_SORTS:
+        raise ValueError(f"invalid_sort:{sort!r}")
+    if status is not None and status not in _GALLERY_STATUSES:
+        raise ValueError(f"invalid_status:{status!r}")
     conditions = []
     params: list = []
     if role not in ("admin", "manager"):
+        # 사용자 요청(2026-11-10, "대화... 등에서 생성한 최종결과물이
+        # 갤러리에 가도록") — 실측으로 발견한 갭: 대화에서 파이프라인
+        # 연결 팀을 멘션(또는 "결과물로 저장")하면 synthetic Task가
+        # 생기는데, 거기엔 confirmed 배정이 전혀 안 걸린다(사람 시간을
+        # "배정"한 게 아니라 그냥 대화 트리거일 뿐이라서). 그래서 본인이
+        # 직접 만든 결과물인데도 본인 갤러리에선 안 보이는 버그가
+        # 있었다 — 두 번째 OR 절로, "이 Task를 만든 대화의 참가자인지"
+        # 도 참가자 판정에 추가한다(`conversations.ensure_task_for_
+        # conversation()`이 생성 직후 `conversations.linked_task_id`를
+        # 반드시 채워두므로 이 join이 항상 유효하다).
         conditions.append(
-            """d.task_id IN (
+            """(d.task_id IN (
                 SELECT a.task_id FROM assignments a
                 LEFT JOIN human_pool hp
                     ON hp.id = a.resource_id AND a.resource_type = 'human'
@@ -524,16 +573,28 @@ def list_deliverables_gallery(
                         )
                     ))
                 )
-            )"""
+            ) OR d.task_id IN (
+                SELECT c.linked_task_id FROM conversations c
+                JOIN conversation_participants cp
+                    ON cp.conversation_id = c.id AND cp.participant_type = 'human'
+                WHERE c.linked_task_id IS NOT NULL AND cp.participant_id = ?
+            ))"""
         )
-        params.extend([user_id, user_id, user_id, user_id])
+        params.extend([user_id, user_id, user_id, user_id, user_id])
     if content_type is not None:
         conditions.append("d.content_type = ?")
         params.append(content_type)
     if task_id is not None:
         conditions.append("d.task_id = ?")
         params.append(task_id)
+    if status is not None:
+        conditions.append("d.status = ?")
+        params.append(status)
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    total = conn.execute(
+        f"SELECT COUNT(*) AS c FROM deliverables d JOIN tasks t ON t.id = d.task_id {where}",
+        params,
+    ).fetchone()["c"]
     rows = conn.execute(
         f"""
         SELECT d.id, d.task_id, d.author_type, d.author_id, d.content,
@@ -542,12 +603,12 @@ def list_deliverables_gallery(
         FROM deliverables d
         JOIN tasks t ON t.id = d.task_id
         {where}
-        ORDER BY d.created_at DESC, d.id DESC
+        ORDER BY {_GALLERY_SORTS[sort]}
         LIMIT ? OFFSET ?
         """,
         (*params, limit, offset),
     ).fetchall()
-    return [
+    items = [
         {
             "id": row["id"],
             "task_id": row["task_id"],
@@ -562,6 +623,7 @@ def list_deliverables_gallery(
         }
         for row in rows
     ]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 def resolve_deliverable_decision(
@@ -1352,6 +1414,7 @@ def start_team_crew_execution(
             "VALUES (?, ?, 'running')",
             (task_id, actor_id),
         )
+        assert cur.lastrowid is not None
         job_by_agent_id[agent_id] = cur.lastrowid
     audit.record(
         conn,
@@ -1446,6 +1509,7 @@ def start_adhoc_crew_execution(
             "VALUES (?, ?, 'running')",
             (task_id, actor_id),
         )
+        assert cur.lastrowid is not None
         job_by_agent_id[agent_id] = cur.lastrowid
     audit.record(
         conn,

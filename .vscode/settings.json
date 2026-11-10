@@ -1,0 +1,4 @@
+{
+    "python.defaultInterpreterPath": "/opt/anaconda3/envs/HAIR/bin/python3",
+    "python.analysis.extraPaths": ["src"]
+}

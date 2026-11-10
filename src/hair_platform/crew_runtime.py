@@ -384,6 +384,7 @@ def crewai_agent_generator(
     `GeneratorFn` 계약 자체에 conn을 추가해 생성 시점부터 이 Agent가
     쓸 도구를 가지고 태어나게 했다)."""
     from crewai import Agent, Crew, Process, Task
+    from crewai.crews.crew_output import CrewOutput
 
     resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
     crew_llm = _crewai_llm(resolved_provider, resolved_model)
@@ -417,6 +418,10 @@ def crewai_agent_generator(
             agents=[agent], tasks=[task], process=Process.sequential, verbose=False
         )
         result = crew.kickoff()
+        # `kickoff()`의 선언 반환형은 `CrewOutput | CrewStreamingOutput`이지만
+        # `stream`을 켜지 않는 이 호출에서는 항상 `CrewOutput`이다 — 정적으로
+        # 그 사실을 알려줘 `.raw` 접근을 허용한다(런타임 동작 변화 없음).
+        assert isinstance(result, CrewOutput)
 
     return {
         "role_name": role_name,
@@ -705,6 +710,11 @@ def run_crew(
         worker_task_rows: list[sqlite3.Row] = []
         worker_task_stage: list[str] = []
         if hierarchical_with_manager:
+            # `hierarchical_with_manager`는 `manager_agent_id is not None`일
+            # 때만 참이고(위 683행), `manager_index`도 그 조건으로만
+            # None이 아니게 계산된다(위 654행) — 항상 함께 성립하지만
+            # 서로 다른 변수라 타입체커는 이 상관관계를 모른다.
+            assert manager_index is not None
             manager_row = rows[manager_index]
             coworker_roles = ", ".join(r["role_name"] for r in worker_rows)
             base_description = task_descriptions[0] if task_descriptions else ""
@@ -845,6 +855,7 @@ def run_crew(
             # 100% 동일하다.
             idx = len(task_completions)
             if hierarchical_with_manager:
+                assert manager_index is not None  # 위 712행과 같은 이유
                 agent_role = rows[manager_index]["role_name"]
                 agent_id = None  # 위임 통합 결과 — 특정 워커 한 명의 몫이 아니다
             else:
@@ -884,7 +895,7 @@ def run_crew(
                 except Exception:  # noqa: S110, BLE001 — 진행 상황 기록은 부가 기능
                     pass
 
-        crew_kwargs: dict[str, object] = {
+        crew_kwargs: dict[str, Any] = {
             "agents": worker_agents,
             "tasks": worker_tasks,
             "verbose": False,
@@ -901,6 +912,7 @@ def run_crew(
         if process == "hierarchical":
             crew_kwargs["process"] = Process.hierarchical
             if manager_agent_id is not None:
+                assert manager_index is not None  # 위 712행과 같은 이유
                 crew_kwargs["manager_agent"] = crewai_agents[manager_index]
             elif manager_provider or manager_model:
                 manager_resolved_provider, manager_resolved_model = (
@@ -976,6 +988,7 @@ def run_crew(
         # 무엇을 위임했는지가 별도로 남는다). 그래서 워커별 산출물이 아니라
         # 매니저 1건만 돌려준다 — 예전처럼 "매니저는 산출물 없음(None)"으로
         # 두면 안 된다, 이제는 매니저 자신이 통합한 진짜 결과물이 있다.
+        assert manager_index is not None  # 위 712행과 같은 이유
         manager_row = rows[manager_index]
         final_output_text = (
             result.tasks_output[0].raw if result.tasks_output else result.raw

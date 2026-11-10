@@ -60,7 +60,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from hair_platform import (
     agent_evaluation,
@@ -261,7 +261,7 @@ def add_stage(
     agents: list[tuple[str, str]],
     lead_role_name: str | None = None,
     instructions: str = "",
-    gate_ids: list[str] | None = None,
+    gate_ids: Sequence[str] | None = None,
     min_gate_pass_ratio: float = 0.0,
     max_retry: int = 2,
     requires_human_approval: bool = False,

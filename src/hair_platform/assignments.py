@@ -86,7 +86,11 @@ def create_assignment_request(
         if target["task_id"] != task_id:
             raise ValueError("replaces_assignment_task_mismatch")
 
-    approval_chain_subject = team_leader_id if resource_type == "team" else requested_by
+    approval_chain_subject = (
+        team_leader_id
+        if resource_type == "team" and team_leader_id is not None
+        else requested_by
+    )
 
     # 사용자 요청(2026-11-05, 로드맵 7번 "셀프배정 결재 단순화") — 요청자가
     # 곧 배정 대상 본인(resource_type='human'이고 그 human_pool 레코드의

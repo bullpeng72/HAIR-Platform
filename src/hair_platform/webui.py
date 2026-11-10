@@ -267,9 +267,20 @@ INDEX_HTML = """<!DOCTYPE html>
   .dashboard-grid { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
   .dashboard-grid .card { flex: 1; min-width: 200px; margin-bottom: 0; }
   .dashboard-grid .stat-row { display: flex; justify-content: space-between; padding: 0.15rem 0; border-bottom: 1px solid #eee; }
-  .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; }
-  .gallery-card { margin-bottom: 0; }
-  .gallery-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; }
+  .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.9rem; }
+  /* 사용자 보고(2026-11-10, 스크린샷 — "컨텐츠간 경계 구분"이 안 됨) —
+     `.gallery-card`는 `<div>`인데 카드 배경/테두리는 `section.card`
+     (태그+클래스 조합) 선택자로만 걸려 있어 전혀 안 먹었다. 여기서
+     독립적으로 테두리/배경/그림자를 준다. */
+  .gallery-card {
+    margin-bottom: 0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.75rem 0.9rem;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  }
+  .gallery-card-head { display: flex; justify-content: space-between; align-items: center; gap: 0.3rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
   .gallery-card p { margin: 0.25rem 0; overflow-wrap: anywhere; }
   .gallery-card-actions { margin-top: 0.5rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
@@ -416,8 +427,14 @@ INDEX_HTML = """<!DOCTYPE html>
      한 줄이 지나치게 길어져 읽기 어려웠다. 이 긴 글에만(`.manual-
      content`, renderManual() 참고) 읽기 좋은 줄 길이로 좁히고,
      9개 절을 한눈에 구분할 수 있게 h2마다 구분선+여백을 둔다 —
-     다른 `.md-content` 사용처는 전혀 영향받지 않는다. */
-  .manual-content { max-width: 760px; margin: 0 auto; font-size: 1.02rem; }
+     다른 `.md-content` 사용처는 전혀 영향받지 않는다.
+     사용자 보고(2026-11-10, 스크린샷 — "내용이 표시되는 영역이 중앙에
+     좁게 표시되고 있어") — 폭 제한을 글자(`.manual-content`)에만
+     걸었더니 카드 테두리(`.manual-card`, 최대 1400px)는 그대로 넓어서
+     카드 안에 글자를 둘러싼 큰 빈 여백이 생겼다. 폭 제한을 카드
+     자체로 옮겨 카드 크기 자체가 읽기 좋은 폭이 되게 한다. */
+  .manual-card { max-width: 900px; margin: 0 auto; }
+  .manual-content { font-size: 1.02rem; }
   .manual-content p, .manual-content li { line-height: 1.7; }
   .manual-content h2 { margin-top: 2.2rem; padding-top: 1.1rem; border-top: 1px solid #e2e4e8; }
   .manual-content h2:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
@@ -905,6 +922,35 @@ document.addEventListener("click", (ev) => {
       .catch((e) => showMsg("global-msg", e.message, "error"));
     return;
   }
+  const saveDeliverableBtn = ev.target.closest("[data-save-deliverable]");
+  if (saveDeliverableBtn) {
+    const [convId, msgId] = saveDeliverableBtn.dataset.saveDeliverable.split(":");
+    saveDeliverableBtn.disabled = true;
+    api("POST", "/api/conversations/" + convId + "/messages/" + msgId + "/save-as-deliverable")
+      .then(() => {
+        showMsg("global-msg", "갤러리로 보냈습니다 — '갤러리' 탭에서 확인할 수 있습니다.", "ok");
+        saveDeliverableBtn.textContent = "보냄";
+      })
+      .catch((e) => {
+        saveDeliverableBtn.disabled = false;
+        showMsg("global-msg", e.message, "error");
+      });
+    return;
+  }
+  const saveKnowledgeBtn = ev.target.closest("[data-save-knowledge]");
+  if (saveKnowledgeBtn) {
+    const [convId, msgId] = saveKnowledgeBtn.dataset.saveKnowledge.split(":");
+    withBusy(saveKnowledgeBtn, "보내는 중…", () =>
+      api("POST", "/api/conversations/" + convId + "/messages/" + msgId + "/save-as-knowledge")
+    )
+      .then(() => {
+        showMsg("global-msg", "지식베이스로 보냈습니다 — RAG 검색에서 바로 찾을 수 있습니다.", "ok");
+        saveKnowledgeBtn.textContent = "보냄";
+        saveKnowledgeBtn.disabled = true;
+      })
+      .catch((e) => showMsg("global-msg", e.message, "error"));
+    return;
+  }
   // 사용자 요청(2026-10-14, "각 메뉴의 목록 기능에 필터/소트 기능을
   // 추가해줘") — table()이 렌더되는 23곳 전부 이 전역 위임 하나로
   // 정렬 클릭을 받는다(호출부마다 따로 배선할 필요 없음).
@@ -1137,7 +1183,7 @@ function showMsg(elId, text, kind) {
 }
 
 /* 실제 LLM API를 호출해 오래 걸릴 수 있는 버튼(Crew 실행, AI 에이전트
-   생성, 개별 실행, 지식 색인)에 "처리 중" 표시를 준다 — 요청 중 버튼을
+   생성, 개별 실행, 지식베이스로 보내기)에 "처리 중" 표시를 준다 — 요청 중 버튼을
    비활성화해 중복 클릭도 막는다(사용자 요청, 2026-09-27, "실행 중임을
    알려주는 UI를 추가해줘"). */
 async function withBusy(btn, busyLabel, fn) {
@@ -2398,6 +2444,29 @@ function _renderConversationMessage(m, participants, conv) {
     ? ' <button type="button" class="small danger" data-delete-message="' +
       m.conversation_id + ':' + m.id + '">삭제</button>'
     : '';
+  // 사용자 요청(2026-11-10, "대화... 등에서 생성한 최종결과물(필요시
+  // 지정한 결과물)이 갤러리에 가도록") — 대화의 모든 메시지가 자동으로
+  // 결과물이 되지는 않는다(탐색적 잡담까지 쌓이면 갤러리가 지저분해짐)
+  // — 참가자가 "이건 남길 만하다" 고른 메시지만 명시적으로 저장한다.
+  // 사용자 요청(2026-11-10, "'결과물로 저장' 버튼을 '갤러리로 보내기'로
+  // 이름을 바꿔야 함 — 어디로 가는지 이름에서 바로 알 수 있어야 한다"
+  // — HAIR-Platform 전체에서 "OOO로 보내기" 명명을 통일한다: 갤러리
+  // 행선지는 "갤러리로 보내기", 지식베이스 행선지는 "지식베이스로
+  // 보내기"(아래), Agent 관리 화면의 "지식 색인"도 같은 라운드에서
+  // "지식베이스로 보내기"로 맞춘다).
+  const saveBtn = conv && ME
+    ? ' <button type="button" class="small" data-save-deliverable="' +
+      m.conversation_id + ':' + m.id + '">갤러리로 보내기</button>'
+    : '';
+  // 이 메시지를 지식베이스(VectorDB)에 색인 — 실제 임베딩 API를
+  // 호출해 비용이 발생하므로(agent_runtime.index_knowledge()/
+  // POST .../index-knowledge와 동일 전제) admin/manager 전용으로
+  // 좁힌다. 갤러리 저장(비용 없는 단순 텍스트 복사)과는 권한 범위가
+  // 다르다.
+  const knowledgeBtn = conv && ME && ["admin", "manager"].includes(ME.role)
+    ? ' <button type="button" class="small" data-save-knowledge="' +
+      m.conversation_id + ':' + m.id + '">지식베이스로 보내기</button>'
+    : '';
   const isFullHtmlDoc = _looksLikeFullHtmlDocument(m.content);
   const contentType = isFullHtmlDoc ? "html" : undefined;
   const bodyContent = isFullHtmlDoc ? m.content : _highlightMentions(m.content, participants);
@@ -2406,7 +2475,7 @@ function _renderConversationMessage(m, participants, conv) {
     esc(_conversationAuthorInitial(who)) + '</span>' +
     '<strong class="' + whoClass + '">' + who + '</strong>' + skillBadge +
     _conversationGateBadge(m) + _conversationDelegationBadge(m) + ' · ' + esc(m.created_at) +
-    deleteBtn + '</div>' +
+    saveBtn + knowledgeBtn + deleteBtn + '</div>' +
     '<div>' + renderContent(bodyContent, contentType) + '</div>' +
     '</div>';
 }
@@ -2895,20 +2964,52 @@ async function renderMyWork(content) {
 // 아니라 매번 실시간 조회라, 삭제하면 다음 새로고침부터 자동으로
 // 빠진다(별도 동기화 코드 없음).
 const CONTENT_TYPE_LABEL = { text: "텍스트", markdown: "마크다운", html: "HTML", code: "코드" };
+const GALLERY_STATUS_BADGE = {
+  draft: "gate-warn", pending_review: "gate-warn", approved: "gate-ok", rejected: "gate-warn",
+};
+const GALLERY_SORT_LABEL = { created_desc: "최신순", created_asc: "오래된순", status: "상태순" };
+let _galleryOffset = 0;
+const _GALLERY_LIMIT = 24;
 
 async function renderGallery(content) {
+  _galleryOffset = 0;
   await _renderGalleryFiltered(content, {});
 }
 
+// 사용자 요청(2026-11-10, "컨텐츠간 경계 구분, 필터링, 소팅 기능 등을
+// 좀 더 다양하게 강화") — 유형 필터에 상태 필터·정렬·페이지네이션을
+// 더한다("저장된 지식 조각" 화면의 {items,total,limit,offset} 규약을
+// 그대로 재사용 — 새 페이지네이션 패턴을 만들지 않음). 카드 경계가
+// 흐릿해 보인다는 보고의 실제 원인은 `.gallery-card`가 `<div>`인데
+// 카드 배경/테두리는 `section.card`(태그+클래스 조합) 선택자로만
+// 걸려 있어 전혀 안 먹고 있었다 — `.gallery-card` 자체에 명시적으로
+// 테두리/배경/그림자를 준다(아래 CSS).
 async function _renderGalleryFiltered(content, filters) {
   const canSeeAll = ["admin", "manager"].includes(ME.role);
+  const sort = filters.sort || "created_desc";
   const params = new URLSearchParams();
   if (filters.content_type) params.set("content_type", filters.content_type);
-  const rows = await api("GET", "/api/deliverables" + (params.toString() ? "?" + params.toString() : ""));
-  const filterOptions = ["", "text", "markdown", "html", "code"].map(ct =>
+  if (filters.status) params.set("status", filters.status);
+  params.set("sort", sort);
+  params.set("limit", _GALLERY_LIMIT);
+  params.set("offset", _galleryOffset);
+  const page = await api("GET", "/api/deliverables?" + params.toString());
+  const rows = page.items;
+
+  const typeOptions = ["", "text", "markdown", "html", "code"].map(ct =>
     '<option value="' + ct + '"' + (filters.content_type === ct ? " selected" : "") + '>' +
     (ct ? CONTENT_TYPE_LABEL[ct] : "전체 유형") + '</option>'
   ).join("");
+  const statusOptions = ["", "draft", "pending_review", "approved", "rejected"].map(st =>
+    '<option value="' + st + '"' + (filters.status === st ? " selected" : "") + '>' +
+    (st ? esc(label(st)) : "전체 상태") + '</option>'
+  ).join("");
+  const sortOptions = Object.keys(GALLERY_SORT_LABEL).map(s =>
+    '<option value="' + s + '"' + (sort === s ? " selected" : "") + '>' + GALLERY_SORT_LABEL[s] + '</option>'
+  ).join("");
+  const pageStart = page.total ? _galleryOffset + 1 : 0;
+  const pageEnd = Math.min(_galleryOffset + _GALLERY_LIMIT, page.total);
+
   content.innerHTML =
     '<section class="card"><h2>갤러리</h2>' +
     helpBox(
@@ -2917,27 +3018,53 @@ async function _renderGalleryFiltered(content, filters) {
       '<li>"새 탭에서 보기"는 그 결과물 하나만 담은 독립 페이지를 엽니다(로그인 세션 필요, 외부 비공개 공유는 아닙니다).</li>' +
       '</ul>'
     ) +
-    '<div style="margin-bottom:12px">유형: <select id="gallery-type-filter">' + filterOptions + '</select></div>' +
+    '<div class="inline" style="margin-bottom:12px;flex-wrap:wrap">' +
+    '유형: <select id="gallery-type-filter">' + typeOptions + '</select>' +
+    '상태: <select id="gallery-status-filter">' + statusOptions + '</select>' +
+    '정렬: <select id="gallery-sort-select">' + sortOptions + '</select>' +
+    '</div>' +
     (rows.length === 0 ? '<p class="muted">결과물이 없습니다.</p>' :
     '<div class="gallery-grid">' + rows.map(r => {
       const canDelete = canSeeAll || (r.author_type === "human" && r.author_id === ME.id && r.status === "draft");
       return '<div class="card gallery-card" data-gallery-id="' + r.id + '">' +
         '<div class="gallery-card-head">' +
         '<span class="gate-badge gate-ok">' + esc(CONTENT_TYPE_LABEL[r.content_type] || r.content_type) + '</span>' +
+        '<span class="gate-badge ' + (GALLERY_STATUS_BADGE[r.status] || "gate-warn") + '">' + esc(label(r.status)) + '</span>' +
         '<span class="muted">#' + r.id + '</span>' +
         '</div>' +
         '<p><b>' + esc(r.task_role_name) + '</b> (할 일 #' + r.task_id + ')</p>' +
-        '<p class="muted">' + esc(label(r.status)) + ' · ' + esc(r.created_at) + '</p>' +
+        '<p class="muted">' + esc(r.created_at) + '</p>' +
         '<p>' + esc(r.preview || "(내용 없음)") + '</p>' +
         '<div class="gallery-card-actions">' +
         '<a href="/deliverables/' + r.id + '/view" target="_blank" rel="noopener">새 탭에서 보기</a>' +
         (canDelete ? ' <button class="small danger" data-gallery-delete="' + r.id + '">삭제</button>' : '') +
         '</div>' +
         '</div>';
-    }).join("") + '</div>');
+    }).join("") + '</div>') +
+    (page.total > _GALLERY_LIMIT
+      ? '<div class="inline" style="margin-top:12px">' +
+        '<button type="button" class="small" id="gallery-prev"' + (_galleryOffset <= 0 ? " disabled" : "") + '>이전</button>' +
+        '<span class="muted">' + pageStart + '–' + pageEnd + ' / ' + page.total + '</span>' +
+        '<button type="button" class="small" id="gallery-next"' + (_galleryOffset + _GALLERY_LIMIT >= page.total ? " disabled" : "") + '>다음</button>' +
+        '</div>'
+      : '');
 
-  content.querySelector("#gallery-type-filter").onchange = (e) => {
-    _renderGalleryFiltered(content, { content_type: e.target.value || null });
+  const rerender = (next) => {
+    _galleryOffset = 0;
+    _renderGalleryFiltered(content, Object.assign({}, filters, next));
+  };
+  content.querySelector("#gallery-type-filter").onchange = (e) => rerender({ content_type: e.target.value || null });
+  content.querySelector("#gallery-status-filter").onchange = (e) => rerender({ status: e.target.value || null });
+  content.querySelector("#gallery-sort-select").onchange = (e) => rerender({ sort: e.target.value });
+  const prevBtn = content.querySelector("#gallery-prev");
+  if (prevBtn) prevBtn.onclick = () => {
+    _galleryOffset = Math.max(0, _galleryOffset - _GALLERY_LIMIT);
+    _renderGalleryFiltered(content, filters);
+  };
+  const nextBtn = content.querySelector("#gallery-next");
+  if (nextBtn) nextBtn.onclick = () => {
+    _galleryOffset += _GALLERY_LIMIT;
+    _renderGalleryFiltered(content, filters);
   };
   content.querySelectorAll("[data-gallery-delete]").forEach(btn => {
     btn.onclick = async () => {
@@ -5699,7 +5826,7 @@ async function renderAgentPool(content) {
     '<li><b>오프보딩</b>(active→deprecated)은 이 화면에서 되돌릴 버튼이 없습니다 — 다시 쓰려면 관리자가 API/DB를 직접 손대야 합니다.</li>' +
     '<li><b>모델 설정</b>은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음).</li>' +
     '<li><b>실행</b>은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다.</li>' +
-    '<li><b>지식 색인</b>은 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생).</li>' +
+    '<li><b>지식베이스로 보내기</b>는 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생).</li>' +
     '<li><b>MCP 서버(JSON)</b>에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다 — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다.</li>' +
     '<li><b>도구 연결</b>은 아래에서 "도구/스킬 Pool"에 등록된 도구를 골라 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다.</li>' +
     // 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... AI
@@ -5753,7 +5880,7 @@ async function renderAgentPool(content) {
         // 협업 워크스페이스의 "AI 에이전트 실행" 카드로 옮기고 여기서는
         // 없앴다(`renderCollabWorkspace()`의 `ws-execute-attach-btn`
         // 참고).
-        actions += '<button class="small" data-index-knowledge="' + a.id + '">지식 색인</button>';
+        actions += '<button class="small" data-index-knowledge="' + a.id + '">지식베이스로 보내기</button>';
       }
       let settings = "";
       if (canExecute) {
@@ -5978,8 +6105,8 @@ async function renderAgentPool(content) {
     btn.onclick = async () => {
       if (!window.confirm("이 에이전트의 최근 산출물을 임베딩해 색인합니다(실제 임베딩 API 호출 — 비용 발생). 계속할까요?")) return;
       try {
-        await withBusy(btn, "색인 중…", () => api("POST", "/api/agent-pool/" + btn.dataset.indexKnowledge + "/index-knowledge", {}));
-        showMsg("global-msg", "지식 색인을 완료했습니다.", "ok");
+        await withBusy(btn, "보내는 중…", () => api("POST", "/api/agent-pool/" + btn.dataset.indexKnowledge + "/index-knowledge", {}));
+        showMsg("global-msg", "지식베이스로 보냈습니다 — RAG 검색에서 바로 찾을 수 있습니다.", "ok");
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
@@ -7255,6 +7382,7 @@ async function renderKnowledgeBase(content) {
       '<li>"rag" 스킬을 가진 Agent가 과거 산출물을 검색할 때 쓰는 임베딩 provider/모델입니다 — 채팅용 모델과는 별개입니다.</li>' +
       '<li>서로 다른 모델로 만든 벡터는 비교하지 않으므로(의미 공간이 다름) 시스템 전체에 하나만 설정합니다. 바꾸면 그 이전에 다른 모델로 색인된 과거 산출물은 더 이상 검색되지 않습니다(다시 색인해야 함).</li>' +
       '<li>설정한 적이 없으면 자동판별(OPENAI_API_KEY가 있으면 openai, 없으면 로컬 ollama) 결과를 보여줍니다 — 아래 폼으로 저장하면 그걸 명시적으로 고정합니다.</li>' +
+      '<li>provider를 고르면 그 provider가 실제로 보유한 임베딩 모델 목록을 자동으로 불러와 "모델 선택" 드롭다운에 채워줍니다(Ollama는 로컬 서버, OpenAI는 API 키로 조회 — 과금 없는 카탈로그 조회입니다). 드롭다운에서 고르면 아래 모델명 칸에 그대로 채워집니다 — 목록에 없는 이름이 필요하면 그 칸에 직접 입력해도 됩니다.</li>' +
       '</ul>'
     ) +
     '<p>' + (embeddingConfig.is_explicit ? '<b>설정됨</b>' : '<span class="muted">자동판별 중(아직 명시적으로 설정 안 함)</span>') +
@@ -7264,8 +7392,10 @@ async function renderKnowledgeBase(content) {
     '<option value="openai"' + (embeddingConfig.provider === "openai" ? " selected" : "") + '>OpenAI</option>' +
     '<option value="ollama"' + (embeddingConfig.provider === "ollama" ? " selected" : "") + '>Ollama(로컬)</option>' +
     '</select>' +
+    '<select id="ec-model-pick" style="min-width:220px"><option value="">모델 목록 불러오는 중…</option></select>' +
     '<input id="ec-model" placeholder="모델명(예: mxbai-embed-large:latest)" value="' + escAttr(embeddingConfig.model) + '" style="flex:1;min-width:220px" required>' +
     '<button type="submit" class="small primary">저장</button>' +
+    '<span id="ec-fetch-status" class="muted"></span>' +
     '</form>' +
     "</section>" +
     // 사용자 요청(2026-11-03, "RAG 검색 품질 향상... 우선순위를 정해
@@ -7366,6 +7496,47 @@ async function renderKnowledgeBase(content) {
       refresh();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
+
+  // 사용자 요청(2026-11-10, "ollama, openai 선택시 가용한 모델이 자동
+  // 표시되도록") — provider를 고르는 순간(초기 렌더 포함) 그 provider가
+  // 실제로 보유한 모델을 조회해 <select id="ec-model-pick">에 채운다.
+  // <input list>+<datalist> 콤보박스로 먼저 만들었으나(사용자 보고,
+  // "openai, ollama 선택해도 임베딩 모델이 선택이 안됨") 브라우저마다
+  // 드롭다운 화살표가 아예 안 보이거나 클릭으로 못 고르는 경우가
+  // 있어 — 명확하게 클릭해서 고르는 <select>로 바꿨다. 고르면 그
+  // 값을 실제 저장 대상인 `#ec-model` 입력란에 그대로 채워 넣고,
+  // 그 입력란은 계속 자유 텍스트로 직접 고칠 수 있게 살려둔다(조회
+  // 실패해도 수동 입력으로 저장 가능 — model_registry "불러오기"와
+  // 같은 원칙, 핵심 기능은 절대 안 깨짐).
+  async function _refreshEmbeddingModelCandidates() {
+    const provider = document.getElementById("ec-provider").value;
+    const statusEl = document.getElementById("ec-fetch-status");
+    const pickEl = document.getElementById("ec-model-pick");
+    const currentModel = document.getElementById("ec-model").value;
+    pickEl.innerHTML = '<option value="">불러오는 중…</option>';
+    statusEl.textContent = "";
+    try {
+      const resp = await api("GET", qs("/api/embedding-config/fetch", { provider }));
+      if (!resp.models.length) {
+        pickEl.innerHTML = '<option value="">(불러올 모델 없음 — 아래에 직접 입력)</option>';
+        statusEl.textContent = "";
+        return;
+      }
+      pickEl.innerHTML = '<option value="">모델 선택…(' + resp.models.length + '개)</option>' +
+        resp.models.map(name =>
+          '<option value="' + escAttr(name) + '"' + (name === currentModel ? " selected" : "") + '>' + esc(name) + '</option>'
+        ).join("");
+      statusEl.textContent = "";
+    } catch (e) {
+      pickEl.innerHTML = '<option value="">(목록을 못 불러옴 — 아래에 직접 입력)</option>';
+      statusEl.textContent = e.message;
+    }
+  }
+  document.getElementById("ec-provider").addEventListener("change", _refreshEmbeddingModelCandidates);
+  document.getElementById("ec-model-pick").addEventListener("change", (ev) => {
+    if (ev.target.value) document.getElementById("ec-model").value = ev.target.value;
+  });
+  _refreshEmbeddingModelCandidates();
 
   document.getElementById("rag-search-config-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -9173,6 +9344,11 @@ const MANUAL_MARKDOWN = [
 '',
 '실행에는 실제 LLM API 호출이 들어가므로 **비용이 발생**합니다 — 결과는 잠시 뒤 메시지로 도착하고(비동기 처리, 화면에 "응답을 기다리는 중…" 표시), 실패하면 원인이 메시지로 안내됩니다.',
 '',
+'각 메시지 줄에는 두 가지 "보내기" 버튼이 있습니다(대화의 모든 메시지가 자동으로 쌓이지 않고, 남길 만하다고 직접 고른 메시지만 보냅니다):',
+'',
+'- **갤러리로 보내기**(모든 참가자) — 이 메시지 하나를 결과물로 승격해 "갤러리" 탭에서 모아볼 수 있게 합니다(비용 없는 단순 저장).',
+'- **지식베이스로 보내기**(admin/manager 전용) — 이 메시지를 임베딩해 VectorDB에 색인합니다(실제 임베딩 API 호출 — 비용 발생). 색인된 내용은 이후 대화에서 스킬 선택 드롭다운의 "**rag**"를 고르거나, "rag" 스킬을 가진 Agent를 실행하면 실시간으로 검색돼 답변에 반영됩니다.',
+'',
 '### 6단계 — (선택) 정식 절차로 넘기기',
 '',
 '대화와 업무 요청(Brief)은 서로 독립적인 두 처리 방식입니다(철학 재정립, 2026-10-29) — 결재·Gate 채점이 필요해지면 대화 내용을 복사해 업무 요청 작성란(3절)에 직접 옮겨 적으세요.',
@@ -9413,7 +9589,7 @@ const MANUAL_MARKDOWN = [
 ].join("\\n");
 
 async function renderManual(content) {
-  content.innerHTML = '<section class="card">' +
+  content.innerHTML = '<section class="card manual-card">' +
     '<div class="md-content manual-content">' + _renderMarkdown(MANUAL_MARKDOWN) + '</div>' +
     '</section>';
 }
