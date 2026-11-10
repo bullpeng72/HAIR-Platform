@@ -582,6 +582,19 @@ CREATE TABLE IF NOT EXISTS pipeline_stages (
     -- 파이프라인(사업기획서 등)이 이 검증 단계를 다른 이름으로 지어도
     -- 받을 수 있도록, 단계명과 무관한 명시적 플래그로 뺀다.
     checks_requirements_traceability INTEGER NOT NULL DEFAULT 0,
+    -- 사용자 요청(2026-11-10, "코드성격의 결과물과, 리포트, 프레젠테이션
+    -- 결과물 등 결과물 출력 유형 다양화") — 파이프라인 경로는 지금까지
+    -- `deliverables.content_type`을 항상 'text'로 하드코딩했다(단계가
+    -- 실제로 코드를 생성해도 코드 하이라이팅 없이 밋밋하게 렌더됨).
+    -- 어느 단계가 코드/마크다운/HTML을 만드는지는 템플릿 작성자만 알 수
+    -- 있어(도메인마다 다름) is_primary_deliverable과 같은 패턴으로
+    -- 단계별 플래그를 둔다. 'html'로 지정한 단계는 기존 html 렌더러
+    -- (sandbox iframe, 스크립트 실행 허용)가 이미 reveal.js 같은
+    -- 자체완결형 프레젠테이션 HTML도 그대로 렌더하므로, 새 content_type
+    -- 값("presentation" 등)이나 DB 마이그레이션 없이 "프레젠테이션"
+    -- 산출물까지 커버된다.
+    output_content_type TEXT NOT NULL DEFAULT 'text'
+        CHECK (output_content_type IN ('text', 'markdown', 'html', 'code')),
     UNIQUE(pipeline_template_id, seq_order)
 );
 
@@ -1054,6 +1067,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "checks_requirements_traceability",
         "INTEGER NOT NULL DEFAULT 0",
     )
+    # 사용자 요청(2026-11-10, "결과물 출력 유형 다양화") — `pipeline_stages`
+    # CREATE TABLE에 추가한 설명 참고.
+    _ensure_column(
+        conn,
+        "pipeline_stages",
+        "output_content_type",
+        "TEXT NOT NULL DEFAULT 'text' "
+        "CHECK (output_content_type IN ('text', 'markdown', 'html', 'code'))",
+    )
     # 사용자 요청(2026-10-20, "CrewAI agent의 경우 에이전트 생성은 role,
     # goal, backstory, tool 등을 설정하고... HAIR-Platform에 crewai
     # 에이전트 및 에이전트 그룹을 상세조정하고 수정하기 위한 고급 에이전트
@@ -1398,6 +1420,25 @@ def _sync_dev_pipeline_implementation_stage_agents(conn: sqlite3.Connection) -> 
             SELECT ps.id FROM pipeline_stages ps
             JOIN pipeline_templates pt ON pt.id = ps.pipeline_template_id
             WHERE pt.name = ? AND ps.name = '코드 검증'
+        )
+        """,
+        (reference_pipeline_seeds.DEV_PIPELINE_NAME,),
+    )
+
+    # 사용자 요청(2026-11-10, "결과물 출력 유형 다양화") —
+    # `output_content_type` 컬럼은 이번에 처음 추가돼 모든 기존 단계가
+    # 기본값 'text'다. "구현" 단계만 실제 코드 산출물이라 'code'로
+    # 맞춘다(나머지는 기본값 유지 — 아직 렌더링 차이가 없어 굳이
+    # 'markdown'으로 바꿀 이유가 없다). 아직 이 플래그를 손볼 UI가
+    # 없어 매 기동마다 그냥 맞춰둔다(위 `checks_requirements_
+    # traceability` 백필과 같은 관례).
+    conn.execute(
+        """
+        UPDATE pipeline_stages SET output_content_type = 'code'
+        WHERE id = (
+            SELECT ps.id FROM pipeline_stages ps
+            JOIN pipeline_templates pt ON pt.id = ps.pipeline_template_id
+            WHERE pt.name = ? AND ps.name = '구현'
         )
         """,
         (reference_pipeline_seeds.DEV_PIPELINE_NAME,),

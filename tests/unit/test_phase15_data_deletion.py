@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from hair_platform import data_admin, model_registry, pool_registry, teams
+from hair_platform import data_admin, db, model_registry, pool_registry, teams
 
 
 def _login(client, username, password):
@@ -666,6 +666,8 @@ _WIPED_TABLES = (
     "audit_log",
     "model_registry",
     "human_pool",
+    "teams",
+    "team_members",
 )
 
 
@@ -689,14 +691,19 @@ def test_reset_to_factory_state_keeps_reference_tables_untouched(client_and_conn
     assert after == before
 
 
-def test_reset_to_factory_state_keeps_teams_untouched(client_and_conn):
-    """2026-11-02 — `reference_pipeline_seeds.seed()`가 더는 "자율 개발
-    크루"를 자동 생성하지 않아(사용자 요청, "기존 대화, 업무 요청, 팀
-    관리 내용을 모두 초기화해줘" — 그 팀도 포함) 위
-    `_REFERENCE_TABLES`에서 `teams`/`team_members`를 뺐다 — 더는 미리
-    시드돼 있지 않기 때문. 그래도 `reset_to_factory_state()`가 팀 데이터
-    자체는 건드리지 않는 동작은 여전히 보장해야 하므로, 직접 만든 팀으로
-    확인한다."""
+def test_reset_to_factory_state_wipes_teams(client_and_conn):
+    """사용자 요청(2026-11-10, "팀 관리 데이터는 초기화 안되어 있음...
+    초기화시 삭제되고 이 후 자동 생성되지 않도록") — 이전엔(2026-11-02
+    이후) 이 테스트가 "팀은 보존된다"를 확인했지만, 조사 결과 팀은
+    Agent/Tool/Skill/파이프라인과 달리 **재시드되지 않는 데이터**임이
+    드러났다(`reference_pipeline_seeds`가 팀을 `INSERT`하는 경로는
+    `teams.create_team()` 하나뿐이고 그건 사용자가 직접 호출할 때만
+    실행됨 — 시드 코드는 이름이 일치하는 기존 팀을 찾아 UPDATE/멤버
+    보강만 한다). 실측으로도 이름이 바뀐 레퍼런스 팀이 멤버 0명인 채로
+    여러 번의 초기화를 그냥 통과해 누적돼 있었다. 그래서 설계를
+    뒤집는다 — 이제 `reset_to_factory_state()`가 teams/team_members를
+    지우고, 지운 뒤에도 다시 자동으로 안 생기는지(= `teams` 테이블이
+    아예 빈 상태로 재기동되는지)까지 확인한다."""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
@@ -711,14 +718,19 @@ def test_reset_to_factory_state_keeps_teams_untouched(client_and_conn):
         conn.execute(
             "SELECT COUNT(*) AS c FROM teams WHERE id = ?", (team_id,)
         ).fetchone()["c"]
-        == 1
+        == 0
     )
     assert (
         conn.execute(
             "SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?", (team_id,)
         ).fetchone()["c"]
-        == 1
+        == 0
     )
+
+    # 재시드(init_schema)를 다시 돌려도 팀이 자동으로 되살아나지 않는지
+    # — "이 후 자동 생성되지 않도록"의 핵심 요구사항.
+    db.init_schema(conn)
+    assert conn.execute("SELECT COUNT(*) AS c FROM teams").fetchone()["c"] == 0
 
 
 def test_reset_to_factory_state_wipes_operational_tables(client_and_conn):
@@ -732,6 +744,12 @@ def test_reset_to_factory_state_wipes_operational_tables(client_and_conn):
         "openai",
         "gpt-4o-mini",
     )
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    team_id = teams.create_team(conn, admin_id, "테스트 팀")
+    agent_id = conn.execute("SELECT id FROM agent_pool LIMIT 1").fetchone()["id"]
+    teams.add_team_member(conn, admin_id, team_id, "agent", agent_id)
     before = _table_counts(conn, _WIPED_TABLES)
     assert all(
         before[t] > 0 for t in _WIPED_TABLES

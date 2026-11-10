@@ -381,6 +381,27 @@ def list_my_work(
     return result
 
 
+def _deliverable_to_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    """`list_deliverables()`/`get_deliverable()` 공용 — 결재 건 id와
+    Gate 평가 결과를 같은 모양으로 붙인다(중복 로직 방지)."""
+    item = dict(row)
+    item["approval_id"] = None
+    if row["status"] == "pending_review":
+        approval = conn.execute(
+            "SELECT id FROM approvals WHERE subject_type = 'deliverable' "
+            "AND subject_id = ? AND status = 'pending'",
+            (row["id"],),
+        ).fetchone()
+        if approval is not None:
+            item["approval_id"] = approval["id"]
+    item["evaluation"] = (
+        agent_evaluation.latest_evaluation(conn, row["id"])
+        if row["author_type"] == "agent"
+        else None
+    )
+    return item
+
+
 def list_deliverables(conn: sqlite3.Connection, task_id: int) -> list[dict]:
     """`GET /api/tasks/{task_id}/deliverables` — 타임라인 순서(시간순).
 
@@ -399,25 +420,148 @@ def list_deliverables(conn: sqlite3.Connection, task_id: int) -> list[dict]:
         "SELECT * FROM deliverables WHERE task_id = ? ORDER BY created_at ASC, id ASC",
         (task_id,),
     ).fetchall()
-    result = []
-    for row in rows:
-        item = dict(row)
-        item["approval_id"] = None
-        if row["status"] == "pending_review":
-            approval = conn.execute(
-                "SELECT id FROM approvals WHERE subject_type = 'deliverable' "
-                "AND subject_id = ? AND status = 'pending'",
-                (row["id"],),
-            ).fetchone()
-            if approval is not None:
-                item["approval_id"] = approval["id"]
-        item["evaluation"] = (
-            agent_evaluation.latest_evaluation(conn, row["id"])
-            if row["author_type"] == "agent"
-            else None
+    return [_deliverable_to_dict(conn, row) for row in rows]
+
+
+def get_deliverable(conn: sqlite3.Connection, deliverable_id: int) -> dict | None:
+    """단독 조회(`GET /api/deliverables/{id}`) — 갤러리 카드 클릭, 단독
+    뷰 페이지(`GET /deliverables/{id}/view`) 양쪽에서 공용으로 쓴다.
+    RBAC 판정은 `list_deliverables()`와 같은 관례로 호출자(app.py) 책임."""
+    row = conn.execute(
+        "SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return _deliverable_to_dict(conn, row)
+
+
+def delete_deliverable(
+    conn: sqlite3.Connection, deliverable_id: int, actor_id: int, role: str
+) -> None:
+    """`DELETE /api/deliverables/{id}` — admin/manager는 항상 가능, 그
+    외엔 본인이 작성한 `draft` 상태 결과물만(제출 후에는 결재 이력이라
+    본인도 못 지운다). `data_admin._delete_deliverables_for_tasks()`와
+    같은 연쇄 삭제 순서를 단일 id 스코프로 재사용한다 — 다만
+    `pipeline_run_stages`는 Task/Brief 전체 삭제와 달리 그 단계의 실행
+    이력 자체를 지우지 않고 `deliverable_id` 참조만 끊는다(단건 결과물
+    삭제가 파이프라인 실행 기록까지 지울 이유는 없다)."""
+    row = conn.execute(
+        "SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("deliverable_not_found")
+    if role not in ("admin", "manager") and not (
+        row["author_type"] == "human"
+        and row["author_id"] == actor_id
+        and row["status"] == "draft"
+    ):
+        raise PermissionError("not_allowed")
+    conn.execute(
+        "DELETE FROM deliverable_comments WHERE deliverable_id = ?", (deliverable_id,)
+    )
+    conn.execute(
+        "DELETE FROM agent_evaluations WHERE deliverable_id = ?", (deliverable_id,)
+    )
+    conn.execute(
+        "DELETE FROM approvals WHERE subject_type = 'deliverable' AND subject_id = ?",
+        (deliverable_id,),
+    )
+    conn.execute(
+        "UPDATE pipeline_run_stages SET deliverable_id = NULL WHERE deliverable_id = ?",
+        (deliverable_id,),
+    )
+    conn.execute("DELETE FROM deliverables WHERE id = ?", (deliverable_id,))
+    audit.record(
+        conn,
+        actor_id,
+        "deliverable_deleted",
+        "deliverable",
+        deliverable_id,
+        before={"task_id": row["task_id"], "content_type": row["content_type"]},
+    )
+
+
+def _preview_text(content: str, limit: int = 200) -> str:
+    collapsed = " ".join(content.split())
+    return collapsed[:limit] + ("…" if len(collapsed) > limit else "")
+
+
+def list_deliverables_gallery(
+    conn: sqlite3.Connection,
+    user_id: int,
+    role: str,
+    content_type: str | None = None,
+    task_id: int | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """`GET /api/deliverables` — 여러 Task의 결과물을 한 화면에 모아
+    보는 갤러리. admin/manager는 조직 전체, member는 `list_my_work()`와
+    같은 "확정 배정으로 이 task에 연결돼 있는지" 조건으로 좁힌다(새
+    판정 로직을 만들지 않고 그 쿼리의 WHERE 절을 그대로 재사용).
+
+    캐시·스냅샷이 아니라 매번 `deliverables` 테이블을 실시간 조회하므로
+    결과물이 삭제되면 다음 조회부터 자동으로 목록에서 빠진다 — 갤러리
+    전용 동기화 코드가 필요 없다."""
+    conditions = []
+    params: list = []
+    if role not in ("admin", "manager"):
+        conditions.append(
+            """d.task_id IN (
+                SELECT a.task_id FROM assignments a
+                LEFT JOIN human_pool hp
+                    ON hp.id = a.resource_id AND a.resource_type = 'human'
+                WHERE a.status = 'confirmed' AND (
+                    (a.resource_type = 'human' AND hp.user_id = ?)
+                    OR (a.resource_type = 'agent' AND a.requested_by = ?)
+                    OR (a.resource_type = 'team' AND (
+                        a.team_leader_id = ?
+                        OR EXISTS (
+                            SELECT 1 FROM team_members tm
+                            JOIN human_pool hp2
+                                ON hp2.id = tm.member_id AND tm.member_type = 'human'
+                            WHERE tm.team_id = a.resource_id AND hp2.user_id = ?
+                        )
+                    ))
+                )
+            )"""
         )
-        result.append(item)
-    return result
+        params.extend([user_id, user_id, user_id, user_id])
+    if content_type is not None:
+        conditions.append("d.content_type = ?")
+        params.append(content_type)
+    if task_id is not None:
+        conditions.append("d.task_id = ?")
+        params.append(task_id)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    rows = conn.execute(
+        f"""
+        SELECT d.id, d.task_id, d.author_type, d.author_id, d.content,
+               d.content_type, d.status, d.created_at,
+               t.role_name AS task_role_name, t.brief_id
+        FROM deliverables d
+        JOIN tasks t ON t.id = d.task_id
+        {where}
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (*params, limit, offset),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "task_id": row["task_id"],
+            "task_role_name": row["task_role_name"],
+            "brief_id": row["brief_id"],
+            "author_type": row["author_type"],
+            "author_id": row["author_id"],
+            "content_type": row["content_type"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "preview": _preview_text(row["content"]),
+        }
+        for row in rows
+    ]
 
 
 def resolve_deliverable_decision(

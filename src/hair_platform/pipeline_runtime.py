@@ -129,6 +129,7 @@ def _stage_to_dict(conn: sqlite3.Connection, stage_row: sqlite3.Row) -> dict:
         "checks_requirements_traceability": bool(
             stage_row["checks_requirements_traceability"]
         ),
+        "output_content_type": stage_row["output_content_type"],
         "expected_output": stage_row["expected_output"],
         "agents": [
             {
@@ -266,6 +267,7 @@ def add_stage(
     requires_human_approval: bool = False,
     is_primary_deliverable: bool = False,
     checks_requirements_traceability: bool = False,
+    output_content_type: str = "text",
     expected_output: str = "",
 ) -> int:
     """`agents`는 `(role_name, instructions)` 튜플 목록, 입력 순서가
@@ -281,6 +283,8 @@ def add_stage(
         raise ValueError("empty_stage_name")
     if mode not in VALID_MODES:
         raise ValueError(f"invalid_mode:{mode!r}")
+    if output_content_type not in ("text", "markdown", "html", "code"):
+        raise ValueError(f"invalid_output_content_type:{output_content_type!r}")
     if not agents:
         raise ValueError("stage_needs_at_least_one_agent")
     if mode == "single" and len(agents) != 1:
@@ -307,8 +311,8 @@ def add_stage(
         "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
         "lead_role_name, instructions, gate_ids, min_gate_pass_ratio, max_retry, "
         "requires_human_approval, is_primary_deliverable, "
-        "checks_requirements_traceability, expected_output) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "checks_requirements_traceability, output_content_type, expected_output) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             template_id,
             next_seq,
@@ -322,6 +326,7 @@ def add_stage(
             1 if requires_human_approval else 0,
             1 if is_primary_deliverable else 0,
             1 if checks_requirements_traceability else 0,
+            output_content_type,
             expected_output,
         ),
     )
@@ -361,11 +366,21 @@ def update_stage(
         "requires_human_approval",
         "is_primary_deliverable",
         "checks_requirements_traceability",
+        "output_content_type",
         "expected_output",
     }
     unknown = set(fields) - allowed
     if unknown:
         raise ValueError(f"unsupported_fields:{sorted(unknown)}")
+    if "output_content_type" in fields and fields["output_content_type"] not in (
+        "text",
+        "markdown",
+        "html",
+        "code",
+    ):
+        raise ValueError(
+            f"invalid_output_content_type:{fields['output_content_type']!r}"
+        )
     row = conn.execute(
         "SELECT * FROM pipeline_stages WHERE id = ?", (stage_id,)
     ).fetchone()
@@ -1090,8 +1105,14 @@ def _execute_stage_attempt(
     )
     cur = conn.execute(
         "INSERT INTO deliverables (task_id, author_type, author_id, content, "
-        "content_type, status) VALUES (?, 'agent', ?, ?, 'text', ?)",
-        (run["task_id"], author_agent_id, stage_output, deliverable_status),
+        "content_type, status) VALUES (?, 'agent', ?, ?, ?, ?)",
+        (
+            run["task_id"],
+            author_agent_id,
+            stage_output,
+            stage["output_content_type"],
+            deliverable_status,
+        ),
     )
     deliverable_id = cur.lastrowid
     assert deliverable_id is not None

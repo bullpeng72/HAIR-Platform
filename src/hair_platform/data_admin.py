@@ -419,13 +419,28 @@ def seed_demo_data(conn: sqlite3.Connection, actor_id: int) -> dict:
 # 사용자 요청(2026-10-27, "pip 설치나 패키지 배포시 에이전트와 도구/스킬
 # 정보는 포함하고, 나머지 다른 정보들은 초기화 상태로 배포되도록") —
 # `db.init_schema()`가 매 기동 때 `_seed_default_pools()` +
-# `reference_pipeline_seeds.seed()`로 이미 채워 넣는 Agent(22종)/Tool
-# Pool(11개)/Skill Pool(48개)/팀("자율 개발 크루")/파이프라인 템플릿
-# ("소프트웨어 개발 파이프라인")은 그 두 함수가 `INSERT OR IGNORE`(또는
-# 존재 확인 후 INSERT)로 매번 알아서 채우므로, 이 함수는 그 테이블들에
-# **전혀 손대지 않는다**(관리자가 나중에 추가한 커스텀 Agent/Tool/Skill/
-# 팀도 마찬가지로 그대로 둔다 — "정확히 레퍼런스 세트만 남긴다"가
-# 아니라 "운영 중 쌓인 데이터만 지운다"는 보수적인 범위를 택했다).
+# `reference_pipeline_seeds.seed()`로 이미 채워 넣는 Agent(23종)/Tool
+# Pool(11개)/Skill Pool(48개)/파이프라인 템플릿("소프트웨어 개발
+# 파이프라인" 등)은 그 두 함수가 `INSERT OR IGNORE`(또는 존재 확인 후
+# INSERT)로 매번 알아서 채우므로, 이 함수는 그 테이블들에 **전혀 손대지
+# 않는다**(관리자가 나중에 추가한 커스텀 Agent/Tool/Skill도 마찬가지로
+# 그대로 둔다 — "정확히 레퍼런스 세트만 남긴다"가 아니라 "운영 중 쌓인
+# 데이터만 지운다"는 보수적인 범위를 택했다).
+#
+# `teams`/`team_members`는 2026-11-10까지는 이 보존 목록에 있었지만
+# 제외했다(사용자 요청, 2026-11-10, "팀 관리 데이터는 초기화 안되어
+# 있음... 초기화시 삭제되고 이 후 자동 생성되지 않도록") — 조사 결과
+# 팀은 Agent/Tool/Skill/파이프라인과 달리 **진짜로 재시드되지 않는다**:
+# `reference_pipeline_seeds._sync_dev_pipeline_implementation_stage_
+# agents()`(db.py)는 `WHERE name = '자율 개발 크루'`로 **이미 존재하는**
+# 팀 행을 찾아 파이프라인 연결/멤버만 보강하는 UPDATE/INSERT OR
+# IGNORE일 뿐, 팀 자체를 `INSERT`하는 코드는 이 코드베이스 어디에도
+# 없다(전수 검색으로 `INSERT INTO teams`는 `teams.create_team()` 1곳뿐
+# — 사용자가 직접 만들 때만 호출됨). 즉 "Agent 등은 재시드되니 지워도
+# 된다"는 근거가 teams에는 애초에 성립하지 않았다 — 실측으로도 이름이
+# 한 번 바뀐 팀("로드맵6 자율 개발 크루")이 멤버 0명인 빈 껍데기로
+# 리셋을 여러 번 건너뛰며 누적돼 있었다. 지우면 다시 자동으로 안
+# 생긴다(의도된 동작).
 #
 # 자식→부모 순서로 나열했지만 `PRAGMA foreign_keys=OFF`로 감싸 엄밀한
 # 순서를 강제하지 않는다(`db.py`의 `_migrate_tool_pool_custom_python_
@@ -442,6 +457,8 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "job_items",
     "jobs",
     "deliverables",
+    "team_members",
+    "teams",
     "conversation_jobs",
     "conversation_messages",
     "conversation_participants",
@@ -465,7 +482,9 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
 
 def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
     """ "공장 초기화" — 운영 중 쌓인 데이터를 전부 지우고, Agent/Tool/
-    Skill/팀/파이프라인 템플릿은 그대로 둔다(위 모듈 독스트링 참고).
+    Skill/파이프라인 템플릿은 그대로 둔다(위 모듈 독스트링 참고). 팀
+    (teams/team_members)은 2026-11-10부터 삭제 대상이다(재시드되지
+    않는 데이터라 Agent 등과 같은 보존 근거가 없음, 바로 위 주석 참고).
     Agent 자체는 남기되 실행하면서 쌓인 휘발성 필드(비용·성과점수·
     provider/model·마지막 산출물)는 초기값으로 되돌린다 — `source_
     job_item_id`는 `job_items`를 지우므로 먼저 NULL로 비운다(이 파일

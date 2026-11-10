@@ -117,9 +117,10 @@ CLI**(`hair serve`/`bootstrap-admin`/`reset-data`/`eval`)까지 전부 구현돼
   있는 대상은 보호) + 보관기간 정책(`retention.py`, assignment_history
   1년 — audit_log는 append-only 트리거를 이 모듈만 통제된 방식으로 해제)
 - `hair reset-data` — 운영 데이터(사용자·업무·대화·실행 이력·모델
-  레지스트리·활동 기록 등) 전체를 공장 초기화. Agent(23종)/Tool·Skill
-  Pool/팀/파이프라인 템플릿은 건드리지 않는다(`data_admin.py`) —
-  pip 배포 전 깨끗한 상태로 준비할 때 사용
+  레지스트리·팀·활동 기록 등) 전체를 공장 초기화. Agent(23종)/Tool·Skill
+  Pool/파이프라인 템플릿은 건드리지 않는다(`data_admin.py`) — 팀은
+  2026-11-10부터 초기화 대상(Agent 등과 달리 재시드되지 않는 데이터라
+  지워도 다시 자동으로 안 생김) — pip 배포 전 깨끗한 상태로 준비할 때 사용
 - Web UI 26개 탭을 RBAC 매트릭스 기준 "오늘 할 일"/"설정" 2구역으로
   분리(원래 "내 업무"/"공용 조회"/"운영 관리" 3구역이었으나 이후
   2구역으로 재편)
@@ -158,7 +159,7 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 ```
 
 운영 중 쌓인 데이터만 초기화하고(사용자·업무·대화·실행 이력·모델
-레지스트리·활동 기록 등) Agent(23종)/Tool·Skill Pool/팀/파이프라인
+레지스트리·팀·활동 기록 등) Agent(23종)/Tool·Skill Pool/파이프라인
 템플릿은 그대로 둘 때(예: 배포 전 깨끗한 상태로 준비):
 
 ```bash
@@ -293,7 +294,7 @@ src/hair_platform/
   websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(Crew 전용). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)
   documents.py       # 외부 자료(.md/.pdf/.html) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
   pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화, CrewAI Tool 조립
-  data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호) + 운영 데이터 공장 초기화(Agent/Tool/Skill/팀/파이프라인은 유지, `hair reset-data`)
+  data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호) + 운영 데이터 공장 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 초기화, `hair reset-data`)
   deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)
   inbox.py           # 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고)
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이)

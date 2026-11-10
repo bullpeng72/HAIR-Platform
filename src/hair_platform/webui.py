@@ -14,6 +14,9 @@ Web UI에서 조작 가능하게 하는 것이 AgentForge와의 핵심 차이다
 
 from __future__ import annotations
 
+import html
+import json
+
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -264,6 +267,11 @@ INDEX_HTML = """<!DOCTYPE html>
   .dashboard-grid { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
   .dashboard-grid .card { flex: 1; min-width: 200px; margin-bottom: 0; }
   .dashboard-grid .stat-row { display: flex; justify-content: space-between; padding: 0.15rem 0; border-bottom: 1px solid #eee; }
+  .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; }
+  .gallery-card { margin-bottom: 0; }
+  .gallery-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; }
+  .gallery-card p { margin: 0.25rem 0; overflow-wrap: anywhere; }
+  .gallery-card-actions { margin-top: 0.5rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #eee; vertical-align: top; }
   th { background: #f0f1f4; position: relative; }
@@ -402,6 +410,19 @@ INDEX_HTML = """<!DOCTYPE html>
   .md-content a { color: #2563eb; text-decoration: underline; }
   .md-content hr { border: none; border-top: 1px solid #e2e4e8; margin: 0.8rem 0; }
   .md-content .code-block { margin: 0.4rem 0; }
+  /* 사용자 요청(2026-11-10, "이용 가이드 가독성을 높여줘") — 이용
+     가이드는 다른 `.md-content` 사용처(결과물 미리보기 등, 보통
+     카드 폭이 좁음)와 달리 넓은 화면(`main`이 최대 1400px)에서
+     한 줄이 지나치게 길어져 읽기 어려웠다. 이 긴 글에만(`.manual-
+     content`, renderManual() 참고) 읽기 좋은 줄 길이로 좁히고,
+     9개 절을 한눈에 구분할 수 있게 h2마다 구분선+여백을 둔다 —
+     다른 `.md-content` 사용처는 전혀 영향받지 않는다. */
+  .manual-content { max-width: 760px; margin: 0 auto; font-size: 1.02rem; }
+  .manual-content p, .manual-content li { line-height: 1.7; }
+  .manual-content h2 { margin-top: 2.2rem; padding-top: 1.1rem; border-top: 1px solid #e2e4e8; }
+  .manual-content h2:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+  .manual-content h3 { margin-top: 1.3rem; color: #1f6feb; }
+  .manual-content blockquote { background: #fff8e6; border-left-color: #d9a406; }
   /* 사용자 보고(2026-10-19, 스크린샷 — HTML 결과 미리보기 영역이 너무
      좁아 게임 캔버스가 안 보이고 스크롤바까지 생김) — 기본 240px는
      이 플랫폼에서 실제로 자주 나오는 게임류 캔버스(480~800px 높이)
@@ -1602,6 +1623,7 @@ const TABS = [
   { id: "inbox", label: "인박스", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderInbox },
   { id: "mywork", label: "내 업무", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderMyWork },
   { id: "board", label: "할 일 보드", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBoard },
+  { id: "gallery", label: "갤러리", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderGallery },
   { id: "briefs", label: "업무 요청", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBriefs },
   { id: "approvals", label: "결재", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderApprovals },
   { id: "performance", label: "성과 리뷰", group: "user", roles: ["admin", "manager", "member"], render: renderPerformance },
@@ -2864,6 +2886,69 @@ async function renderMyWork(content) {
 
   content.querySelectorAll("[data-open-workspace]").forEach(btn => {
     btn.onclick = () => renderCollabWorkspace(Number(btn.dataset.openWorkspace));
+  });
+}
+
+// 사용자 요청(2026-11-10, "claude의 artifact 처럼... 최종 결과물을
+// 모아보는 갤러리 기능(결과물 삭제시 갤러리에서도 삭제)") — 여러
+// Task를 가로지르는 결과물 모아보기. `GET /api/deliverables`는 캐시가
+// 아니라 매번 실시간 조회라, 삭제하면 다음 새로고침부터 자동으로
+// 빠진다(별도 동기화 코드 없음).
+const CONTENT_TYPE_LABEL = { text: "텍스트", markdown: "마크다운", html: "HTML", code: "코드" };
+
+async function renderGallery(content) {
+  await _renderGalleryFiltered(content, {});
+}
+
+async function _renderGalleryFiltered(content, filters) {
+  const canSeeAll = ["admin", "manager"].includes(ME.role);
+  const params = new URLSearchParams();
+  if (filters.content_type) params.set("content_type", filters.content_type);
+  const rows = await api("GET", "/api/deliverables" + (params.toString() ? "?" + params.toString() : ""));
+  const filterOptions = ["", "text", "markdown", "html", "code"].map(ct =>
+    '<option value="' + ct + '"' + (filters.content_type === ct ? " selected" : "") + '>' +
+    (ct ? CONTENT_TYPE_LABEL[ct] : "전체 유형") + '</option>'
+  ).join("");
+  content.innerHTML =
+    '<section class="card"><h2>갤러리</h2>' +
+    helpBox(
+      '<ul class="muted help-list">' +
+      '<li>' + (canSeeAll ? "조직 전체" : "내가 참가한 업무") + '의 결과물을 모아 보여줍니다.</li>' +
+      '<li>"새 탭에서 보기"는 그 결과물 하나만 담은 독립 페이지를 엽니다(로그인 세션 필요, 외부 비공개 공유는 아닙니다).</li>' +
+      '</ul>'
+    ) +
+    '<div style="margin-bottom:12px">유형: <select id="gallery-type-filter">' + filterOptions + '</select></div>' +
+    (rows.length === 0 ? '<p class="muted">결과물이 없습니다.</p>' :
+    '<div class="gallery-grid">' + rows.map(r => {
+      const canDelete = canSeeAll || (r.author_type === "human" && r.author_id === ME.id && r.status === "draft");
+      return '<div class="card gallery-card" data-gallery-id="' + r.id + '">' +
+        '<div class="gallery-card-head">' +
+        '<span class="gate-badge gate-ok">' + esc(CONTENT_TYPE_LABEL[r.content_type] || r.content_type) + '</span>' +
+        '<span class="muted">#' + r.id + '</span>' +
+        '</div>' +
+        '<p><b>' + esc(r.task_role_name) + '</b> (할 일 #' + r.task_id + ')</p>' +
+        '<p class="muted">' + esc(label(r.status)) + ' · ' + esc(r.created_at) + '</p>' +
+        '<p>' + esc(r.preview || "(내용 없음)") + '</p>' +
+        '<div class="gallery-card-actions">' +
+        '<a href="/deliverables/' + r.id + '/view" target="_blank" rel="noopener">새 탭에서 보기</a>' +
+        (canDelete ? ' <button class="small danger" data-gallery-delete="' + r.id + '">삭제</button>' : '') +
+        '</div>' +
+        '</div>';
+    }).join("") + '</div>');
+
+  content.querySelector("#gallery-type-filter").onchange = (e) => {
+    _renderGalleryFiltered(content, { content_type: e.target.value || null });
+  };
+  content.querySelectorAll("[data-gallery-delete]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm("이 결과물을 삭제할까요? 되돌릴 수 없습니다.")) return;
+      try {
+        await api("DELETE", "/api/deliverables/" + btn.dataset.galleryDelete);
+        _renderGalleryFiltered(content, filters);
+      } catch (e) {
+        showMsg("global-msg", e.message, "error");
+      }
+    };
   });
 }
 
@@ -9054,14 +9139,14 @@ const MANUAL_MARKDOWN = [
 '결재 없이 즉시 답을 받고 싶을 때 씁니다.',
 '아래 순서를 그대로 따라 하면 바로 체험할 수 있습니다.',
 '',
-'**1단계 — 대화 열기**',
+'### 1단계 — 대화 열기',
 '',
 '왼쪽 메뉴에서 **"대화"** 탭을 엽니다.',
 '로그인 직후에도 독립 대화가 바로 시작됩니다(업무에 종속되지 않은 자유 대화).',
 '처음이면 **"새 대화 제목(선택)"** 입력란(비워도 됩니다)에 적고 "**새 대화 시작**"을 누르세요.',
 '기존 대화가 있으면 목록에서 "**열기**"를 누릅니다.',
 '',
-'**2단계 — 메시지 입력창의 세 가지 컨트롤 이해하기**',
+'### 2단계 — 메시지 입력창의 세 가지 컨트롤 이해하기',
 '',
 '화면 맨 아래 입력 영역에 왼쪽부터 순서대로:',
 '',
@@ -9071,24 +9156,24 @@ const MANUAL_MARKDOWN = [
 '- **메시지 입력창** — **`@`를 입력**하면 사람·Agent·Team 검색 자동완성이 뜹니다. 아직 이 대화에 초대 안 된 대상도 검색되고, 목록에서 고르면 **그 자리에서 자동으로 초대된 뒤** 멘션이 끼워 넣어집니다(따로 "참가자 초대" 화면을 거칠 필요가 없습니다).',
 '- **📎 자료 버튼** — 로컬 파일(`.md`/`.markdown`/`.txt`/`.html`/`.htm`/`.pdf`)을 즉시 첨부합니다. 파일을 고르는 순간(전송 버튼을 따로 안 눌러도) 바로 업로드·추출돼 메시지로 남습니다 — **이 대화에만 1회성으로 쓰이고 영구 저장되지 않습니다**(어디에도 파일 자체나 텍스트가 남지 않는 휘발성 설계 — 영구 보관하려는 자료는 8절 메뉴 지도의 "도구/스킬 Pool"이 아니라 admin/manager의 "지식 베이스" 관리 기능을 따로 써야 합니다).',
 '',
-'**3단계 — 멘션으로 누구를 부를지 정하고 메시지 전송**',
+'### 3단계 — 멘션으로 누구를 부를지 정하고 메시지 전송',
 '',
 '- **특정 Agent를 `@역할명` 또는 `@지정한이름`으로 멘션**하면 그 Agent만 실행됩니다(예: `@DA 이 기능의 데이터 모델을 설계해줘`).',
 '- **Team을 `@팀이름`으로 멘션**하면 그 팀의 Agent 멤버 전원이 실행됩니다(4절 "N:N 조합" 참고 — 매니저가 있으면 자동으로 위임 구조로 돕니다).',
 '- **사람을 `@아이디`로 멘션**하면 AI가 끼어들지 않고 그 사람이 직접 답해야 하는 대화로 남습니다.',
 '- **아무도 멘션하지 않으면** 대화의 **"AI 자동응답"** 체크박스 상태에 따라 기본 모델이 대신 답합니다(켜져 있으면 멘션 없는 모든 메시지마다 LLM이 호출돼 비용이 발생합니다 — 체크박스는 대화 상단에 있습니다).',
 '',
-'**4단계 — (선택) 기본 AI가 쓸 모델 직접 지정**',
+'### 4단계 — (선택) 기본 AI가 쓸 모델 직접 지정',
 '',
 '대화 상단의 provider/모델 select에서 고르고 "**모델 설정 저장**"을 눌러야 반영됩니다.',
 '',
 '> ⚠️ 흔히 헷갈리는 부분: 이 설정은 **멘션 없는 기본 AI 응답에만** 적용됩니다. `@Agent이름`으로 부르면 그 Agent 자신에게 저장된 모델이, `@Team이름`으로 부르면 서버가 자동 판별한 모델이 쓰입니다(이 설정과 무관). 각 메시지에 실제로 쓰인 모델은 메시지 작성자 줄에 표시됩니다.',
 '',
-'**5단계 — 결과 확인**',
+'### 5단계 — 결과 확인',
 '',
 '실행에는 실제 LLM API 호출이 들어가므로 **비용이 발생**합니다 — 결과는 잠시 뒤 메시지로 도착하고(비동기 처리, 화면에 "응답을 기다리는 중…" 표시), 실패하면 원인이 메시지로 안내됩니다.',
 '',
-'**6단계 — (선택) 정식 절차로 넘기기**',
+'### 6단계 — (선택) 정식 절차로 넘기기',
 '',
 '대화와 업무 요청(Brief)은 서로 독립적인 두 처리 방식입니다(철학 재정립, 2026-10-29) — 결재·Gate 채점이 필요해지면 대화 내용을 복사해 업무 요청 작성란(3절)에 직접 옮겨 적으세요.',
 '',
@@ -9099,13 +9184,13 @@ const MANUAL_MARKDOWN = [
 '승인 이력·Gate 채점·결과물 타임라인이 전부 필요한 "진짜 업무"는 이 경로를 씁니다.',
 '단계가 2절보다 많지만, 한 번 해두면 같은 할 일에 사람·Agent를 몇 명이든 더 투입할 수 있고 이력이 전부 남습니다.',
 '',
-'**1단계 — 업무 요청 제출(제안 단계, 비용 없음)**',
+'### 1단계 — 업무 요청 제출(제안 단계, 비용 없음)',
 '',
 '**"업무 요청"** 탭을 엽니다.',
 '**"한 줄에 역할 하나씩"** 입력하세요(예: 입력창 placeholder 그대로 "백엔드 개발자 1명" 다음 줄에 "UI/UX 디자이너 1명") → **"제출"**.',
 '이건 실제 AI 분석이 아니라 입력한 텍스트를 줄바꿈 단위로 그대로 나누는 **규칙 기반 처리**라 비용이 없고 즉시 끝납니다 — 아래 "제안된 역할" 칸에 채워질 뿐인 **참고용 제안**입니다(뷰어 role은 조회만 가능, 제출 불가).',
 '',
-'**2단계 — 할 일(Task)로 나누기(실제 배분 단위 만들기)**',
+'### 2단계 — 할 일(Task)로 나누기(실제 배분 단위 만들기)',
 '',
 '방금 제출한 업무 요청 행에서 "**할 일로 나누기**"를 누릅니다.',
 '제안된 역할 칩을 클릭하면 아래 입력란에 그대로 채워집니다(다듬어서 쓰세요). 직접 채울 항목:',
@@ -9116,14 +9201,16 @@ const MANUAL_MARKDOWN = [
 '',
 '"**할 일 추가**"를 누르면 즉시 할 일 목록에 반영됩니다. 이후 모든 배정·Agent 생성·실행은 이 할 일(Task) 단위로 이뤄집니다. 목록에서 "**상세**"를 누르면 배정 현황을 같은 화면에서 바로 볼 수 있습니다(아래 4단계).',
 '',
-'**3단계 — 사람/Agent/Team/파이프라인 연결하기**',
+'**업무가 복잡해서 여러 할 일로 한 번에 쪼개고 싶다면**(admin/manager 전용) — "**AI로 분해 제안 받기(복잡한 업무용)**" 버튼을 누르면 LLM이 업무 요청 원문을 읽고 여러 할 일(역할·필요 스킬)과 **선행 업무 관계**까지 한 번에 제안합니다(비용 발생). 제안된 표에서 역할·스킬·"선행 업무" 드롭다운을 직접 고쳐가며 다듬은 뒤 "**이 배치로 할 일 추가**"를 누르면, 할 일들이 한꺼번에 만들어지면서 지정한 선행 관계도 자동으로 연결됩니다(의존관계 그래프에 바로 반영 — 8절 "조직도"가 아니라 할 일 상세의 의존관계 시각화에서 확인). 순환 의존(A가 B의 선행, B가 다시 A의 선행)은 자동으로 거부됩니다.',
+'',
+'### 3단계 — 사람/Agent/Team/파이프라인 연결하기',
 '',
 '네 가지 중 필요한 만큼 씁니다 — **같은 할 일에 여러 건의 확정 배정이 공존**할 수 있습니다(사람 여러 명 + Agent 여러 개 + 팀까지 동시에 투입하는 게 기본값). 네 가지 전부 같은 결재 체인(4단계)을 거칩니다 — 리소스 종류가 달라도 "요청(requested) → 승인(confirmed)/반려(rejected)" 절차는 동일합니다.',
 '',
 '*(A) 후보를 찾아서 배정 요청(사람/Agent)*',
 '',
 '"할 일 보기" 목록에서 "**상세**"를 누르고 **"후보 매칭하기"**(또는 "리소스 매칭/배정" 탭에서 할 일을 고르고 **"찾기"**) — 역할명이 서로 포함 관계(부분일치)인 후보 중 필요 스킬까지 다 가진 후보가 있으면 그것부터, 없으면 **가용성 40%·적합도 35%·비용 25%** 가중치로(사람 후보가 아직 성과점수를 못 받았으면 적합도를 빼고 가용성 60%·비용 40%로) 점수 매긴 상위 3명을 보여줍니다. 부분일치로도 후보가 전혀 없으면 "**AI로 추천 받기**" 버튼으로 LLM이 전체 Pool에서 의미상 맞는 후보를 찾아줍니다(비용 발생 가능, 눌러야만 호출됨).',
-'원하는 후보 줄에서 "**배정 요청**"을 누르면 조직도 매니저 체인을 따라 결재 단계가 자동 생성됩니다 — 아직 승인 전(requested) 상태입니다.',
+'원하는 후보 줄에서 "**배정 요청**"을 누르면 조직도 매니저 체인을 따라 결재 단계가 자동 생성됩니다 — 아직 승인 전(requested) 상태입니다. **단, 본인 자신을 배정 요청하는 셀프배정은 예외입니다** — 본인 시간만 쓰는 배정이라 결재 체인 자체를 만들지 않고 그 자리에서 바로 확정(confirmed)됩니다(4단계를 거치지 않고 바로 5단계로 진행 가능).',
 '',
 '*(B) 아직 쓸 Agent가 없다면*',
 '',
@@ -9137,13 +9224,13 @@ const MANUAL_MARKDOWN = [
 '',
 '할 일 상세의 "**파이프라인에 배정 요청**" 펼침 영역에서 등록된 활성 파이프라인 템플릿을 골라 "**이 파이프라인에 배정 요청**"을 누릅니다. 사람/Agent/Team과 똑같이 결재를 거치고, **승인되는 순간 그 파이프라인 실행이 바로 시작됩니다**(이미 같은 할 일에서 실행 중인 파이프라인이 있으면 배정은 확정되지만 중복 실행은 안 됩니다). 5단계의 "파이프라인 실행" 버튼으로 직접 시작하는 것과 결과적으로 같은 엔진을 타지만, 이 경로는 결재 이력이 남는다는 점이 다릅니다.',
 '',
-'**4단계 — 결재 처리**',
+'### 4단계 — 결재 처리',
 '',
-'**"결재"** 탭 → "**내 승인 대기함**"에서 본인 차례의 요청을 처리합니다(자기 자신이 요청한 건 "내 승인 대기함"에 아예 뜨지 않습니다 — 자기 승인 방지).',
+'**"결재"** 탭 → "**내 승인 대기함**"에서 본인 차례의 요청을 처리합니다(자기 자신이 요청한 건 "내 승인 대기함"에 아예 뜨지 않습니다 — 자기 승인 방지. 단, 셀프배정은 애초에 이 단계 자체가 생략됩니다 — 위 3단계(A) 참고).',
 '사유를 적고(선택) "**승인**"하면 배정이 **확정**(confirmed)으로 바뀌어 조직도·비용·성과 리뷰에 실제로 반영됩니다. "**반려**"하면 그 요청은 거기서 끝나고, 다시 배정하려면 3단계부터 새로 요청해야 합니다.',
 '상사가 지정 안 돼 있으면(예: 관리자 본인 요청) 특정 승인자 없이 1단계만 생성돼 admin/manager 누구나 처리할 수 있습니다.',
 '',
-'**5단계 — 협업 워크스페이스에서 실행**',
+'### 5단계 — 협업 워크스페이스에서 실행',
 '',
 '배정이 확정되면 그 할 일의 **협업 워크스페이스**가 열립니다(할 일 상세 화면에 바로 임베드되거나 "내 업무"에서 접근). 여기서 고를 수 있는 것:',
 '',
@@ -9151,10 +9238,17 @@ const MANUAL_MARKDOWN = [
 '- **"팀 Agent 실행(Crew, 비용 발생)"**: 배정된 팀의 Agent 멤버 전원을 실제 CrewAI Crew로 함께 실행합니다(4절).',
 '- **"파이프라인 실행(비용 발생)"**: 등록된 파이프라인 템플릿을 골라 처음부터 끝까지 단계별로 자동 진행시킵니다(6절).',
 '- 사람이 직접 쓴 결과물도 "**검토 요청**"을 누르면 Agent 결과물과 같은 결재 체인을 거칩니다.',
+'- (admin/manager 전용) **"재시도 예산"** 입력 — 이 할 일이 파이프라인·Crew 재시도를 합쳐서 총 몇 번까지 시도할 수 있는지 상한을 걸어둘 수 있습니다(빈 값=무제한). 상한에 걸리면 그 단계의 자체 재시도 횟수가 남아 있어도 즉시 사람 승인으로 에스컬레이션됩니다 — 같은 할 일을 반복 재시도하며 비용만 계속 쓰는 걸 막는 안전장치입니다.',
 '',
-'**6단계 — 결과물 결재로 마무리**',
+'### 6단계 — 결과물 결재로 마무리',
 '',
 '결과물은 Gate A-G 자동 채점이 붙고, 4단계와 같은 **"결재"** 탭에서 승인/반려를 거쳐야 "확정된 결과"가 됩니다.',
+'',
+'### 7단계 — 결과물 모아보기 / 단독으로 열기 / 삭제',
+'',
+'- **"갤러리"** 탭(사람 메뉴)에서 여러 할 일을 가로질러 결과물을 한 화면에 모아 봅니다 — admin/manager는 조직 전체, 그 외엔 본인이 참가한 할 일의 결과물만 보입니다. 유형(텍스트/마크다운/HTML/코드)별로 걸러볼 수 있습니다.',
+'- 카드의 **"새 탭에서 보기"**를 누르면 그 결과물 하나만 담긴 독립 페이지가 새 탭에 열립니다(로그인 세션은 그대로 필요합니다 — 외부에 공개로 공유되는 링크가 아닙니다). 코드는 문법 강조, HTML은 그대로 렌더링, 나머지는 마크다운으로 보여줍니다.',
+'- **"삭제"** 버튼은 admin/manager는 항상, 그 외엔 본인이 작성하고 아직 제출 전(초안, draft)인 결과물에만 보입니다 — 제출 후에는 결재 이력이라 본인도 못 지웁니다. 삭제하면 갤러리·협업 워크스페이스 양쪽에서 즉시 사라집니다(별도 새로고침 없이 바로 반영).',
 '',
 '> 배정을 잘못 걸었거나 더 이상 필요 없어졌다면, 할 일 상세 화면(admin/manager 전용)의 **"배정 취소"** 버튼으로 confirmed/requested 상태를 되돌릴 수 있습니다 — 업무 요청·할 일 삭제가 "확정된 배정이 있어 삭제할 수 없다"로 막힐 때도 이 버튼으로 먼저 정리하세요.',
 '',
@@ -9177,16 +9271,16 @@ const MANUAL_MARKDOWN = [
 '5. 이 팀은 두 군데서 실행할 수 있습니다:',
 '   - 대화에서 **`@팀이름`** 멘션(2절) — 매니저가 있으면 위임형, 없으면 전원 실행 후 각자 결과를 메시지로 올립니다.',
 '   - 업무(Task)에 팀을 배정한 뒤 협업 워크스페이스의 **"팀 Agent 실행"** 버튼, 또는 3절의 (C) 방법대로 직접 "팀에 배정 요청" — 결과가 Agent별 결과물+결재 체인으로 그 업무에 그대로 쌓입니다.',
-'6. **파이프라인 연결**(누구나 설정 가능, 1개 팀 한정 아님) — 팀 카드의 "기본값 저장" 폼에서 "**연결 파이프라인**"을 고르면, 그 팀을 `@멘션`할 때 단발 실행 대신 그 파이프라인(6절)을 그대로 탑니다. 기본 제공 **"자율 개발 크루"** 팀(요구사항 분석가·AA·DA·개발 계획 수립가(매니저)·개발자 4명·UI 기획자·코드 검증가·테스트 계획 수립가·QA 기능테스터·품질 관리자, 총 13명)이 "소프트웨어 개발 파이프라인"에 이미 연결된 예시입니다 — `@자율 개발 크루` 멘션이 요구분석부터 품질 관리까지 7단계(코드 검증·QA·품질 관리 단계는 Gate 기준 자동 재시도/승인 대기)를 그대로 탑니다. 어떤 팀이든 같은 방식으로 다른 파이프라인에 연결할 수 있습니다 — 연결 안 된 팀은 기존처럼 한 번에 실행됩니다.',
+'6. **파이프라인 연결**(누구나 설정 가능, 1개 팀 한정 아님) — 팀 카드의 "기본값 저장" 폼에서 "**연결 파이프라인**"을 고르면, 그 팀을 `@멘션`할 때 단발 실행 대신 그 파이프라인(6절)을 그대로 탑니다. 예를 들어 팀에 "소프트웨어 개발 파이프라인"을 연결해두면, 그 팀을 `@멘션`하는 순간 요구분석부터 품질 관리까지 7단계(코드 검증·QA·품질 관리 단계는 Gate 기준 자동 재시도/승인 대기)가 그대로 진행됩니다. 연결 안 된 팀은 기존처럼 한 번에 실행됩니다. 기본 제공 팀은 `hair reset-data`로 함께 초기화되므로(9절 참고) 필요하면 이 방법으로 다시 만들면 됩니다 — Agent 자체(요구사항 분석가·AA·DA·개발 계획 수립가·개발자 4명·UI 기획자·코드 검증가·테스트 계획 수립가·QA 기능테스터·품질 관리자 등)는 초기화돼도 그대로 남아 있어 팀만 새로 묶으면 됩니다.',
 '7. **팀 관리 리포팅** — "성과 리뷰"·"비용" 탭에도 팀이 사람·Agent와 나란히 한 행으로 나옵니다(팀 자체의 성과점수·단가는 없어 "확정 배정 수"만 집계됩니다 — 비용은 멤버 Agent 쪽에 이미 개별로 잡힙니다). 팀 카드의 "**실행 이력 보기**" 버튼을 누르면 "Crew 빌더"의 실행 이력 목록이 그 팀의 실행 건으로 좁혀져 나옵니다.',
 '',
 '### 방법 B — Crew 빌더(즉석 1회성, 재사용 등록 없이)',
 '',
 '**"Crew 빌더"** 탭(admin/manager 전용)에서 매번 Agent를 직접 골라 그 자리에서 협업시킵니다 — 팀으로 등록해둘 필요가 없는 일회성 조합에 적합합니다. 세 가지 하위 모드가 있습니다:',
 '',
-'- **"업무에 바로 실행"**: 실제 할 일(Task)에 결과를 남기며 실행합니다(기본 모드) — 여러 Agent를 고르고, 처리 방식(sequential/hierarchical)과 hierarchical일 때의 매니저 Agent를 직접 선택합니다.',
+'- **"업무에 바로 실행"**: 실제 할 일(Task)에 결과를 남기며 실행합니다(기본 모드) — 여러 Agent를 고르고, 처리 방식(sequential/hierarchical)과 hierarchical일 때의 매니저 Agent를 직접 선택합니다. sequential이고 병행 실행이 아니면 **"자가검토(self_review)"** 체크박스도 켤 수 있습니다 — 각 Agent가 자기 초안을 원 요구사항과 대조해 스스로 한 번 더 검토·수정한 뒤에 제출합니다(member도 켤 수 있는 단순 품질 옵션, 결과물은 검토 후 최종본만 남고 초안은 실행 이력에서만 보임).',
 '- **"즉석 테스트(저장 안 됨)"**: 업무에 연결하지 않고 협업 구조만 가볍게 실험해봅니다 — 결과가 할 일에 남지 않습니다.',
-'- **"실행 이력"**(admin/manager 전용): 과거 Crew 실행의 협업 다이어그램·토큰 사용량·Gate 점수를 그대로 다시 볼 수 있습니다. "팀 관리" 탭의 각 팀 카드에서 "실행 이력 보기"를 누르면 이 목록이 그 팀의 실행만으로 좁혀져 나옵니다.',
+'- **"실행 이력"**(admin/manager 전용): 과거 Crew 실행의 협업 다이어그램·토큰 사용량·Gate 점수를 그대로 다시 볼 수 있습니다. "팀 관리" 탭의 각 팀 카드에서 "실행 이력 보기"를 누르면 이 목록이 그 팀의 실행만으로 좁혀져 나옵니다. 같은 할 일에 재실행한 이력이 있으면 결과 화면에 **"이전 실행과 비교"** 버튼이 떠 — 최종 산출물·Agent별 산출물 모두 추가분(녹색)/삭제분(빨간색) 줄 단위 diff로 바로 비교할 수 있습니다(재시도할 때마다 전에 되던 기능이 조용히 사라지는지 한눈에 확인하는 용도).',
 '',
 '**이 조합을 팀/파이프라인으로 저장**: "업무에 바로 실행"으로 한 번 실행하면 결과 아래에 "이 조합을 저장해 다음에 재사용" 패널이 나타납니다(admin/manager 전용) — 방금 쓴 Agent 구성(+처리 방식/매니저)을 그대로 **"팀으로 저장"**(이후 "팀 관리"에서 재사용·배정 가능)하거나, 기존 파이프라인에 **"파이프라인 단계로 저장"**할 수 있습니다(hierarchical이면 매니저를 직접 지정해 실행했을 때만 — 자동 배정으로 실행했으면 저장 버튼이 비활성화됩니다). 매번 즉석으로 Agent를 고르는 게 번거로워졌다면 이 버튼으로 바로 정식 팀/파이프라인으로 승격시키세요.',
 '',
@@ -9227,7 +9321,7 @@ const MANUAL_MARKDOWN = [
 '|---|---|---|',
 '| 단독(single) | Agent 1명이 혼자 처리 | 요구사항 분석가 1명 |',
 '| 순차 릴레이(sequential_relay) | N명이 순서대로 앞 사람 결과를 이어받음 | AA → DA |',
-'| 병행 위임(parallel_delegated) | 리드 1명이 코워커들에게 실제로 과업을 쪼개 위임 | 개발 계획 수립가 → 개발자 4명 |',
+'| 병행 위임(parallel_delegated) | 리드 1명이 코워커들에게 실제로 과업을 쪼개 위임 | (admin이 직접 구성) |',
 '',
 '단계마다 **Gate A-G 통과 기준·최대 재시도 횟수·"사람 승인 필요" 여부**를 정합니다.',
 '승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어가고(최소 HITL), 기준 미달이면 "어떤 Gate가 왜 부족한지" 피드백을 반영해 자동 재시도합니다.',
@@ -9242,42 +9336,58 @@ const MANUAL_MARKDOWN = [
 '| 1 | 요구분석/계획 확정 | 단독 | 요구사항 분석가 | **필요**(여기서만 사람이 1회 개입) |',
 '| 2 | 설계 | 순차 릴레이 | AA → DA | 불필요 |',
 '| 3 | 개발 계획 수립 | 단독 | 개발 계획 수립가 | 불필요 |',
-'| 4 | 구현 | 병행 위임 | 개발 계획 수립가(리드) → 개발자 4명+UI 기획자 | 불필요 |',
+'| 4 | 구현 | 순차 릴레이 | UI 기획자 → 데이터/인프라 개발자 → 백엔드 개발자 → 프론트엔드 개발자 → 풀스택 개발자(최종 통합) | 불필요 |',
 '| 5 | 코드 검증 | 단독 | 코드 검증가 | 불필요 |',
 '| 6 | QA 기능테스트 | 순차 릴레이 | 테스트 계획 수립가 → QA 기능테스터 | 불필요 |',
 '| 7 | 품질 관리 최종 판정 | 단독 | 품질 관리자 | 불필요(반복 실패 시에만 자동 에스컬레이션) |',
 '',
-'5·6·7단계(코드 검증/QA 기능테스트/품질 관리 최종 판정)는 Gate 통과 기준(min_gate_pass_ratio)이 0.5로 설정돼 있어 — 측정된 Gate 절반 이상을 통과해야 다음 단계로 넘어가고, 미달이면 사유를 반영해 자동 재시도(최대 재시도 소진 시 사람 승인으로 에스컬레이션)합니다. 나머지 단계는 0(Gate는 측정·기록만, 자동 통과)입니다.',
-'실행은 **업무(Task)의 협업 워크스페이스**에서 이 템플릿을 고르고 "파이프라인 실행(비용 발생)"을 누르면 시작되거나, 이 파이프라인에 연결된 팀(4절 참고 — 기본 제공 "자율 개발 크루")을 대화에서 `@팀이름`으로 멘션해도 똑같이 시작됩니다(3절 4단계).',
+'5·6·7단계(코드 검증/QA 기능테스트/품질 관리 최종 판정)는 Gate 통과 기준(min_gate_pass_ratio)이 0.5로 설정돼 있어 — 측정된 Gate 절반 이상을 통과해야 다음 단계로 넘어가고, 미달이면 사유를 반영해 자동 재시도합니다. 나머지 단계는 0(Gate는 측정·기록만, 자동 통과)입니다. **마지막 자동 재시도에서는 자가검토(self_review)가 자동으로 켜져** — Agent가 스스로 초안을 원 요구사항과 대조해 한 번 더 고친 뒤 제출합니다 — 그래도 기준을 못 넘기면 그때 사람 승인으로 에스컬레이션됩니다(최소 HOTL, 자동 반복이 완전히 실패했을 때만 사람에게 옵니다).',
+'실행은 **업무(Task)의 협업 워크스페이스**에서 이 템플릿을 고르고 "파이프라인 실행(비용 발생)"을 누르면 시작되거나, 이 파이프라인에 연결된 팀(4절 참고)을 대화에서 `@팀이름`으로 멘션해도 똑같이 시작됩니다(3절 4단계) — 기본 제공 팀은 없으므로 연결하려면 직접 팀을 만들어야 합니다.',
 '진행 상황은 같은 화면에서 단계별 배지(대기/진행중/통과/재시도N/승인대기/반려)로 실시간 확인합니다 — 대화에서 시작한 경우 같은 정보가 진행 메시지로 대화에도 올라옵니다.',
+'',
+'### 바로 써보기 — 기본 제공 "사업/기획 업무 처리 파이프라인"',
+'',
+'소프트웨어 개발 외 업무에도 같은 엔진을 그대로 쓸 수 있다는 걸 보여주는 두 번째 기본 제공 템플릿입니다.',
+'',
+'| # | 단계 | 모드 | 참여 | 사람 승인 |',
+'|---|---|---|---|---|',
+'| 1 | 요구사항 분석/계획 확정 | 단독 | 요구사항 분석가 | **필요** |',
+'| 2 | 자료 조사·분석 | 순차 릴레이 | 외부 자료 조사가 → 3C4P SWOT 분석가 | 불필요 |',
+'| 3 | 기획 계획 수립 | 단독 | PM | 불필요 |',
+'| 4 | 작성 | 순차 릴레이 | 기획서 작성자 → 사업전략 수립가 → C-level 보고서 작성자 → 프레젠테이션 자료 작성자(최종 통합) | 불필요 |',
+'| 5 | 내용 검증 | 단독 | 품질 관리자 | 불필요(Gate 0.5) |',
+'| 6 | 표현 검토 | 순차 릴레이 | 콘텐츠 카피라이팅 | 불필요(Gate 0.5) |',
+'| 7 | 최종 승인 판정 | 단독 | PM | 불필요(Gate 0.5, 반복 실패 시에만 에스컬레이션) |',
+'',
+'단계 구성·Gate 규칙·최소 HITL 원칙 전부 "소프트웨어 개발 파이프라인"과 완전히 동일한 엔진입니다 — 역할만 사업/기획 쪽으로 바뀐 것뿐입니다.',
 '',
 '### 새 파이프라인 만들기(admin/manager 전용, "파이프라인 관리" 탭)',
 '',
 '1. "파이프라인 등록"으로 이름·설명·도메인(예: software_dev, biz_strategy)을 정합니다.',
 '2. "단계 추가"로 단계를 하나씩 쌓습니다 — 이름, 모드(단독/순차 릴레이/병행 위임)를 고르면 그 모드에 맞는 역할 선택 UI가 바뀝니다(단독=1명, 순차 릴레이=N명+순서, 병행 위임=리드 1명+코워커 여러 명).',
-'   공통 지시문, Gate 통과 비율(%), 최대 재시도, "사람 승인 필요" 체크박스도 이때 정합니다.',
+'   공통 지시문, Gate 통과 비율(%), 최대 재시도, "사람 승인 필요" 체크박스, **산출물 형식**(텍스트/마크다운/HTML/코드 — 코드로 지정하면 결과 화면에 문법 강조가 자동 적용됩니다)도 이때 정합니다.',
+'   - ⚠️ **병행 위임(parallel_delegated) 모드는 신중하게 쓰세요** — 매니저가 "Delegate work to coworker" 도구로 그때그때 동적으로 위임하는 방식인데, 실측 결과 매니저가 실제 위임 대신 위임 계획만 요약하고 끝내는 경우가 반복 확인됐습니다. 여러 명이 순서대로 작업을 이어받으면 되는 경우라면 **순차 릴레이**가 더 안정적입니다(기본 제공 두 파이프라인의 다인원 단계가 전부 순차 릴레이인 이유).',
 '3. 단계 순서는 카드의 위/아래 이동 버튼으로 나중에도 바꿀 수 있습니다.',
-'4. 예시(시장조사-전략, 참고용): 자료조사 → 3C/SWOT 분석 → **사람 승인** → 사업전략 수립 → 기획서 작성 → 경영보고(순차 릴레이: C-level 보고서 작성자 → 프레젠테이션 자료 작성자) — 똑같은 빌더로 그대로 만들 수 있습니다(역할만 다를 뿐 엔진은 동일).',
 '',
 '<h2 id="scenario">7. 실전 시나리오 4가지</h2>',
 '',
-'**시나리오 A — 가벼운 질문 하나**',
+'### 시나리오 A — 가벼운 질문 하나',
 '"대화" 탭 → 독립 대화에서 `@코드 검증가 이 함수 리뷰해줘`처럼 바로 멘션.',
 '결재·Gate 없이 가장 빠르게 답을 받습니다.',
 '',
-'**시나리오 B — 작은 기능 하나 개발**',
+'### 시나리오 B — 작은 기능 하나 개발',
 '업무 요청 제출 → 할 일로 나누기 → "AI 에이전트 생성"(crewai 방식) → 온보딩 승인 → 협업 워크스페이스에서 "이 업무의 AI 에이전트 실행" → 결과물 결재.',
 '',
-'**시나리오 C — 복잡한 신규 기능/게임 개발(여러 역할 협업 필요)**',
-'둘 중 하나를 고릅니다 — (1) "자율 개발 크루" 팀을 대화에서 `@자율 개발 크루 ...`로 멘션해 매니저가 즉석에서 위임하게 하거나, (2) 정식 업무로 만들어 "소프트웨어 개발 파이프라인"을 실행해 요구분석부터 품질 판정까지 Gate 기준 자동 진행시킵니다.',
+'### 시나리오 C — 복잡한 신규 기능/게임 개발(여러 역할 협업 필요)',
+'둘 중 하나를 고릅니다 — (1) Crew 빌더로 개발자 여러 명을 즉석에 모아 바로 실행하거나, (2) 정식 업무로 만들어 "소프트웨어 개발 파이프라인"을 실행해 요구분석부터 품질 판정까지 Gate 기준 자동 진행시킵니다.',
 '품질·추적성이 중요하면 (2)를, 속도가 중요하면 (1)을 권장합니다.',
 '',
-'**시나리오 D — 시장조사·전략 보고서**',
+'### 시나리오 D — 시장조사·전략 보고서',
 '경영/사업전략 역할군(외부 자료 조사가·3C4P SWOT 분석가·사업전략 수립가 등, 이미 기본 등록됨)을 팀으로 묶거나, 6절의 시장조사-전략 파이프라인 예시대로 빌더에서 새 템플릿을 만들어 실행합니다.',
 '',
 '<h2 id="menu">8. 메뉴 전체 지도</h2>',
 '',
-'**오늘 할 일(user)**: 대화 · 인박스(결재 대기+실행 실패+낮은 Gate 경고 모음) · 내 업무 · 할 일 보드 · 업무 요청 · 결재 · 성과 리뷰',
+'**오늘 할 일(user)**: 대화 · 인박스(결재 대기+실행 실패+낮은 Gate 경고 모음) · 내 업무 · 할 일 보드 · 갤러리(여러 할 일의 결과물 모아보기) · 업무 요청 · 결재 · 성과 리뷰',
 '',
 '**조회(common, 전원 접근)**: 인력 검색 · 조직도 · 이용 가이드(이 화면)',
 '',
@@ -9293,21 +9403,101 @@ const MANUAL_MARKDOWN = [
 '- **"조직도"와 "팀 관리"의 "TF팀"이 같은 개념 아닌가?** → 다릅니다. "조직도" 메뉴는 확정된 배정만 모아 보여주는 **읽기 전용 스냅샷**(생성/삭제 불가)이고, "TF팀"은 "팀 관리"에서 **직접 만들고 온보딩·해체시키는 실제 조직**입니다. 헷갈리면 조직도 화면 상단 안내문을 참고하세요.',
 '- **"AI 에이전트 생성"에서 새 Agent가 안 만들어지고 재사용 배지만 뜬다** → 같은 할 일(역할)에 이미 Agent가 있으면 새로 안 만들고 기존 것을 재사용합니다 — 의도한 동작입니다.',
 '  새로 만들려면 다른 할 일을 고르세요.',
-'- **팀/파이프라인 실행이 너무 오래 걸리거나 실패한다** → 참여 인원이 많을수록(특히 병행 위임 단계) LLM 왕복 호출이 많아져 시간이 걸립니다.',
-'  "자율 개발 크루"처럼 구현 단계 Agent들은 이미 `reasoning`을 꺼둬 호출 수를 줄인 상태입니다 — "AI 에이전트 관리"의 파인튜닝에서 비슷하게 조정할 수 있습니다.',
-'  (또는 5절의 "⚡ 최적화 추천"을 먼저 써보세요.)',
+'- **팀/파이프라인 실행이 너무 오래 걸리거나 실패한다** → 참여 인원이 많을수록(특히 순차 릴레이·병행 위임 단계) LLM 왕복 호출이 많아져 시간이 걸립니다.',
+'  "AI 에이전트 관리"의 파인튜닝에서 `reasoning`을 꺼 호출 수를 줄일 수 있습니다(5절의 "⚡ 최적화 추천"을 먼저 써보세요).',
+'  로컬(Ollama) 모델을 쓰는 단계는 클라우드보다 타임아웃을 길게(5400초) 잡아두지만, 그래도 모델이 크면 수십 분 걸릴 수 있습니다 — "인박스"에서 실행 실패/장시간 대기를 확인하세요.',
 '- **실행 버튼을 눌렀는데 비용이 걱정된다** → "실행"이라는 이름이 붙은 버튼(AI 에이전트 실행 / 팀 Agent 실행 / 파이프라인 실행 / Crew 실행 / AI 의견 보기)은 전부 실제 LLM API를 호출해 비용이 발생합니다.',
 '  설정 저장(모델 설정·파인튜닝·팀/파이프라인 등록 자체)은 비용이 없습니다.',
-'- **자기 자신이 요청한 걸 자기가 승인하고 싶다** → 의도적으로 막혀 있습니다(self-approval 방지) — 다른 관리자가 대신 승인해야 합니다.',
+'- **자기 자신이 요청한 걸 자기가 승인하고 싶다** → **본인을 배정하는 셀프배정이라면 애초에 결재가 뜨지 않습니다** — 본인 시간만 쓰는 배정은 요청 즉시 자동 확정됩니다(approval_id 없음). 다른 사람·Agent·팀을 배정 요청한 경우에만 결재가 생기고, 그건 요청자 본인이 승인할 수 없게 의도적으로 막혀 있습니다(self-approval 방지) — 다른 관리자가 대신 승인해야 합니다.',
+'- **방금 만든 팀이 `hair reset-data` 이후 사라졌다** → 2026-11-10부터 팀(team)도 초기화 대상입니다(Agent/Tool/Skill/파이프라인 템플릿과 달리 팀은 재기동 시 자동으로 다시 채워지지 않는 데이터라서) — 다시 "팀 관리"에서 등록해야 합니다.',
 ].join("\\n");
 
 async function renderManual(content) {
   content.innerHTML = '<section class="card">' +
-    '<div class="md-content">' + _renderMarkdown(MANUAL_MARKDOWN) + '</div>' +
+    '<div class="md-content manual-content">' + _renderMarkdown(MANUAL_MARKDOWN) + '</div>' +
     '</section>';
 }
 
 boot();
+</script>
+</body>
+</html>
+"""
+
+
+def render_deliverable_view_page(deliverable: dict, task_role_name: str | None) -> str:
+    """단독 결과물 뷰 페이지(`GET /deliverables/{id}/view`) — SPA 전체(탭·
+    네비게이션)를 띄우지 않고 그 결과물 하나만 담은 가벼운 독립 페이지를
+    새 탭에서 연다. 로그인 세션은 그대로 필요하다(`app.py`가
+    `Depends(get_current_user)`를 유지 — 비인증 공개 URL이 아니다).
+
+    SPA 안의 `renderContent()`를 그대로 끌어오지 않고 최소한의 자체
+    렌더링만 둔다(의도적 — 수백 줄짜리 SPA 전용 함수를 여기로 끌어오면
+    결합도가 더 커진다): html은 sandbox iframe, code는 highlight.js,
+    markdown/text는 marked.js+DOMPurify, 전부 CDN 로드 실패 시
+    textContent로 안전하게 폴백한다(이 플랫폼의 기존 CDN 라이브러리
+    전부와 같은 원칙)."""
+    title = f"결과물 #{deliverable['id']}"
+    if task_role_name:
+        title += f" — {task_role_name}"
+    payload = json.dumps(
+        {"content": deliverable["content"], "content_type": deliverable["content_type"]},
+        ensure_ascii=False,
+    )
+    escaped_title = html.escape(title)
+    escaped_content_type = html.escape(deliverable["content_type"])
+    escaped_created_at = html.escape(deliverable["created_at"])
+    return f"""<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{escaped_title}</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 900px;
+    margin: 0 auto; padding: 24px 16px; background: #f7f7f9; color: #1a1a1a; }}
+  h1 {{ font-size: 18px; }}
+  .meta {{ color: #666; font-size: 13px; margin-bottom: 20px; }}
+  pre {{ overflow-x: auto; padding: 16px; border-radius: 6px; }}
+  .md-content table {{ border-collapse: collapse; }}
+  .md-content th, .md-content td {{ border: 1px solid #ccc; padding: 4px 8px; }}
+  iframe.html-view {{ width: 100%; height: 80vh; border: 1px solid #ccc; border-radius: 6px; }}
+</style>
+</head>
+<body>
+<h1>{escaped_title}</h1>
+<div class="meta">content_type: {escaped_content_type} · 작성: {escaped_created_at}</div>
+<div id="content"></div>
+<script>
+const DATA = {payload};
+const el = document.getElementById("content");
+if (DATA.content_type === "html") {{
+  const iframe = document.createElement("iframe");
+  iframe.className = "html-view";
+  iframe.sandbox = "allow-scripts";
+  iframe.srcdoc = DATA.content;
+  el.appendChild(iframe);
+}} else if (DATA.content_type === "code") {{
+  const pre = document.createElement("pre");
+  const code = document.createElement("code");
+  code.textContent = DATA.content;
+  pre.appendChild(code);
+  el.appendChild(pre);
+  if (window.hljs) {{ hljs.highlightElement(code); }}
+}} else if (window.marked && window.DOMPurify) {{
+  const div = document.createElement("div");
+  div.className = "md-content";
+  div.innerHTML = DOMPurify.sanitize(marked.parse(DATA.content));
+  el.appendChild(div);
+}} else {{
+  const pre = document.createElement("pre");
+  pre.textContent = DATA.content;
+  el.appendChild(pre);
+}}
 </script>
 </body>
 </html>

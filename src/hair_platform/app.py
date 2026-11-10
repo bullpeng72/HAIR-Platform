@@ -1989,6 +1989,65 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
         return deliverables.list_deliverables(conn, task_id)
 
+    @app.get("/api/deliverables")
+    def gallery_deliverables(
+        content_type: str | None = None,
+        task_id: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """갤러리(사용자 요청, 2026-11-10, "최종 결과물을 모아보는 갤러리
+        기능") — admin/manager는 조직 전체, member는 본인이 참가한 Task의
+        결과물만. 캐시가 아니라 매번 실시간 조회라 결과물이 삭제되면
+        다음 호출부터 자동으로 빠진다(별도 동기화 불필요)."""
+        return deliverables.list_deliverables_gallery(
+            conn, user["id"], user["role"], content_type, task_id, limit, offset
+        )
+
+    @app.get("/api/deliverables/{deliverable_id}")
+    def get_deliverable_endpoint(
+        deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """단독 조회 — 갤러리 카드 클릭, 단독 뷰 페이지 양쪽에서 쓴다.
+        RBAC은 `list_task_deliverables`와 동일(admin/manager 또는 그
+        Task의 참가자)."""
+        item = deliverables.get_deliverable(conn, deliverable_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="결과물을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(
+                conn, item["task_id"], user["id"]
+            )
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        return item
+
+    @app.delete("/api/deliverables/{deliverable_id}")
+    def delete_deliverable_endpoint(
+        deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """admin/manager는 항상, 그 외엔 본인이 작성한 draft 상태 결과물만
+        삭제 가능(`deliverables.delete_deliverable()` 참고)."""
+        try:
+            deliverables.delete_deliverable(
+                conn, deliverable_id, user["id"], user["role"]
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="결과물을 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 결과물을 삭제할 권한이 없습니다"
+            ) from None
+        conn.commit()
+        return {"status": "deleted"}
+
     @app.post("/api/tasks/{task_id}/deliverables", status_code=201)
     def create_task_deliverable(
         task_id: int,
@@ -3677,6 +3736,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 requires_human_approval=payload.requires_human_approval,
                 is_primary_deliverable=payload.is_primary_deliverable,
                 checks_requirements_traceability=payload.checks_requirements_traceability,
+                output_content_type=payload.output_content_type,
                 expected_output=payload.expected_output,
             )
         except ValueError as exc:
@@ -4647,5 +4707,34 @@ def create_app(db_path: str | None = None) -> FastAPI:
         """Web UI 셸(코드 재점검 R4). 위 JSON API를 그대로 호출하는 단일
         페이지 바닐라 JS 앱이다 — 새 비즈니스 로직은 없다(webui.py)."""
         return webui.INDEX_HTML
+
+    @app.get("/deliverables/{deliverable_id}/view", response_class=HTMLResponse)
+    def view_deliverable_page(
+        deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """결과물 단독 뷰(사용자 요청, 2026-11-10, "claude의 artifact
+        처럼 최종 결과물을 전체 웹으로 확인") — SPA 밖, 새 탭에서 열리는
+        독립 페이지지만 로그인 세션은 그대로 필요하다(비인증 공개 URL이
+        아님, `Depends(get_current_user)` 유지). RBAC은 단독 조회
+        엔드포인트와 동일."""
+        item = deliverables.get_deliverable(conn, deliverable_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="결과물을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(
+                conn, item["task_id"], user["id"]
+            )
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        task = conn.execute(
+            "SELECT role_name FROM tasks WHERE id = ?", (item["task_id"],)
+        ).fetchone()
+        return webui.render_deliverable_view_page(
+            item, task["role_name"] if task is not None else None
+        )
 
     return app

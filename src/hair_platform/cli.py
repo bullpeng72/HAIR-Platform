@@ -31,7 +31,7 @@ _EPILOG_TOP = """\
   hair serve --port 9000 --reload         개발 중 코드 변경 자동 반영
   hair serve --no-browser                 브라우저 자동 열기 끄기(서버만 실행)
   hair bootstrap-admin -u admin -p ***    최초 관리자 계정 생성(최초 1회만)
-  hair reset-data                         운영 데이터 전부 초기화(Agent/Tool/Skill/팀/파이프라인은 유지)
+  hair reset-data                         운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 초기화)
   hair eval                               Gate A/B/D/E/G 측정 1회 실행
 
 서브커맨드별 자세한 옵션: hair <subcommand> --help
@@ -48,7 +48,7 @@ HAIR-Platform 통합 CLI — 사람과 AI Agent를 하나의 조직도에서 관
 명령어:
   serve             Web UI + API 서버 실행
   bootstrap-admin   최초 ADMIN 계정 생성(콜드스타트 전용)
-  reset-data        운영 데이터 초기화(Agent/Tool/Skill/팀/파이프라인은 유지)
+  reset-data        운영 데이터 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 초기화)
   eval              Gate A/B/D/E/G 측정 1회 실행
 
 자세한 도움말:       hair --help
@@ -158,15 +158,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_reset = sub.add_parser(
         "reset-data",
-        help="운영 데이터 전부 초기화(Agent/Tool/Skill/팀/파이프라인 템플릿은 유지)",
+        help="운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인 템플릿은 유지, 팀은 초기화)",
         description=(
             "사용자 계정·사람 인력(human_pool)·업무 요청/할 일/배정/결재/\n"
             "결과물·대화·업로드 문서·VectorDB 지식 조각·Crew/파이프라인\n"
-            "실행 이력·모델 레지스트리·임베딩 설정·Tool-Agent 연결·\n"
-            "활동 기록(audit_log)을 전부 지운다. Agent(22종)/Tool·Skill\n"
-            "Pool/팀/파이프라인 템플릿은 손대지 않는다 — hair.db 재기동 시\n"
-            "항상 자동으로 다시 채워지는 레퍼런스 데이터이기 때문이다.\n"
-            "되돌릴 수 없다."
+            "실행 이력·모델 레지스트리·임베딩 설정·Tool-Agent 연결·팀/팀원·\n"
+            "활동 기록(audit_log)을 전부 지운다. Agent(23종)/Tool·Skill\n"
+            "Pool/파이프라인 템플릿은 손대지 않는다 — hair.db 재기동 시\n"
+            "항상 자동으로 다시 채워지는 레퍼런스 데이터이기 때문이다. 팀은\n"
+            "그렇게 재시드되지 않아(사용자가 직접 만든 데이터) 함께 지운다 —\n"
+            "지워도 다시 자동으로 생기지 않는다. 되돌릴 수 없다."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -283,9 +284,9 @@ def _cmd_reset_data(args: argparse.Namespace) -> int:
 
     if not args.yes:
         answer = input(
-            f"'{args.db_path}'의 운영 데이터(사용자·업무·대화·실행 이력 등)를 "
+            f"'{args.db_path}'의 운영 데이터(사용자·업무·대화·실행 이력·팀 등)를 "
             "전부 지웁니다 — 되돌릴 수 없습니다.\n"
-            "Agent/Tool/Skill/팀/파이프라인 템플릿은 그대로 유지됩니다. "
+            "Agent/Tool/Skill/파이프라인 템플릿은 그대로 유지됩니다(팀은 초기화됩니다). "
             "계속할까요? [y/N] "
         )
         if answer.strip().lower() != "y":
@@ -299,7 +300,7 @@ def _cmd_reset_data(args: argparse.Namespace) -> int:
 
     total = sum(counts.values())
     print(
-        f"초기화 완료 — {total}건 삭제. Agent/Tool/Skill/팀/파이프라인 템플릿은 그대로입니다."
+        f"초기화 완료 — {total}건 삭제. Agent/Tool/Skill/파이프라인 템플릿은 그대로입니다(팀은 초기화됨)."
     )
     print(
         f"다음 단계(필요하면): hair bootstrap-admin -u <계정명> -p <비밀번호> --db-path {args.db_path}"

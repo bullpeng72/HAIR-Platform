@@ -17,9 +17,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from hair_platform import db
+from hair_platform import db, reference_pipeline_seeds
 from hair_platform import pipeline_runtime as pr
-from hair_platform import reference_pipeline_seeds
 from hair_platform.auth import Role, create_user
 
 
@@ -114,7 +113,7 @@ def test_business_planning_agents_are_all_pre_existing_no_new_agents_created():
     db.init_schema(conn)
     expected_roles = {
         role_name
-        for _, _, _, _, _, _, agents, _ in reference_pipeline_seeds.BUSINESS_PIPELINE_STAGES
+        for _, _, _, _, _, _, agents, _, _ in reference_pipeline_seeds.BUSINESS_PIPELINE_STAGES
         for role_name, _ in agents
     }
     existing_roles = {

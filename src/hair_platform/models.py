@@ -654,6 +654,10 @@ class PipelineStageCreate(BaseModel):
     # 파이프라인(사업기획서 등)의 검증 단계가 다른 이름을 써도 똑같이
     # 받을 수 있도록, 단계명과 무관한 명시적 플래그로 뺐다.
     checks_requirements_traceability: bool = False
+    # 사용자 요청(2026-11-10, "결과물 출력 유형 다양화") — 파이프라인
+    # 경로가 지금까지 `deliverables.content_type`을 항상 'text'로
+    # 하드코딩했다(`db.py`의 `pipeline_stages` CREATE TABLE 설명 참고).
+    output_content_type: ContentType = "text"
     # 사용자 요청(2026-10-20, "고급 에이전트 관리") — 이 단계의
     # `Task.expected_output` 기본값. 빈 문자열(기본값)이면
     # `crew_runtime.run_crew()`의 플랫폼 공통 기본 문구를 그대로 쓴다.
@@ -673,6 +677,7 @@ class PipelineStageUpdate(BaseModel):
     requires_human_approval: bool | None = None
     is_primary_deliverable: bool | None = None
     checks_requirements_traceability: bool | None = None
+    output_content_type: ContentType | None = None
     expected_output: str | None = None
 
 

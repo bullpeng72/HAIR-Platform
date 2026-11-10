@@ -622,8 +622,15 @@ DEV_PIPELINE_DESCRIPTION = (
 # 명시적 플래그로 뺀다 — "코드 검증" 역할의 단계만 True, 나머지는
 # False(품질관리/QA는 1단계 요구사항이 아니라 다른 입력을 보는
 # 단계라 그대로 제외).
+#
+# `output_content_type`(2026-11-10 추가, "결과물 출력 유형 다양화"
+# 요청) — `db.py`의 `pipeline_stages` CREATE TABLE 설명 참고. "구현"
+# 단계만 'code'(실제 코드 산출물이라 syntax highlighting 렌더링
+# 혜택이 있음), 나머지는 전부 'text'(검증/보고 성격 텍스트 — 지금
+# 렌더러는 text/markdown을 동일하게 처리해 실질적 차이가 아직 없지만,
+# 틀린 값으로 표시하진 않는다).
 DEV_PIPELINE_STAGES: list[
-    tuple[str, str, str | None, str, bool, bool, list[tuple[str, str]], bool]
+    tuple[str, str, str | None, str, bool, bool, list[tuple[str, str]], bool, str]
 ] = [
     (
         "요구분석/계획 확정",
@@ -637,6 +644,7 @@ DEV_PIPELINE_STAGES: list[
         False,
         [("요구사항 분석가", "")],
         False,
+        "text",
     ),
     (
         "설계",
@@ -650,6 +658,7 @@ DEV_PIPELINE_STAGES: list[
             ("DA", "앞서 나온 아키텍처를 바탕으로 데이터 모델(ERD)을 설계하세요."),
         ],
         False,
+        "text",
     ),
     (
         "개발 계획 수립",
@@ -668,6 +677,7 @@ DEV_PIPELINE_STAGES: list[
         False,
         [("개발 계획 수립가", "")],
         False,
+        "text",
     ),
     (
         "구현",
@@ -695,6 +705,7 @@ DEV_PIPELINE_STAGES: list[
             ),
         ],
         False,
+        "code",
     ),
     (
         "코드 검증",
@@ -705,6 +716,7 @@ DEV_PIPELINE_STAGES: list[
         False,
         [("코드 검증가", "")],
         True,
+        "text",
     ),
     (
         "QA 기능테스트",
@@ -721,6 +733,7 @@ DEV_PIPELINE_STAGES: list[
             ("QA 기능테스터", "앞서 설계된 테스트 케이스로 실제 기능을 검증하세요."),
         ],
         False,
+        "text",
     ),
     (
         "품질 관리 최종 판정",
@@ -734,6 +747,7 @@ DEV_PIPELINE_STAGES: list[
         False,
         [("품질 관리자", "")],
         False,
+        "text",
     ),
 ]
 
@@ -779,13 +793,14 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
         is_primary,
         agents,
         checks_traceability,
+        output_content_type,
     ) in enumerate(DEV_PIPELINE_STAGES, start=1):
         gate_ratio = 0.5 if name in _DEV_PIPELINE_GATED_STAGE_NAMES else 0.0
         cur = conn.execute(
             "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
             "lead_role_name, instructions, requires_human_approval, is_primary_deliverable, "
-            "min_gate_pass_ratio, checks_requirements_traceability) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "min_gate_pass_ratio, checks_requirements_traceability, output_content_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 template_id,
                 seq,
@@ -797,6 +812,7 @@ def _seed_dev_pipeline(conn: sqlite3.Connection) -> None:
                 1 if is_primary else 0,
                 gate_ratio,
                 1 if checks_traceability else 0,
+                output_content_type,
             ),
         )
         stage_id = cur.lastrowid
@@ -855,7 +871,7 @@ BUSINESS_PIPELINE_DESCRIPTION = (
 )
 
 BUSINESS_PIPELINE_STAGES: list[
-    tuple[str, str, str | None, str, bool, bool, list[tuple[str, str]], bool]
+    tuple[str, str, str | None, str, bool, bool, list[tuple[str, str]], bool, str]
 ] = [
     (
         "요구사항 분석/계획 확정",
@@ -870,6 +886,7 @@ BUSINESS_PIPELINE_STAGES: list[
         False,
         [("요구사항 분석가", "")],
         False,
+        "text",
     ),
     (
         "자료 조사·분석",
@@ -886,6 +903,7 @@ BUSINESS_PIPELINE_STAGES: list[
             ),
         ],
         False,
+        "text",
     ),
     (
         "기획 계획 수립",
@@ -904,6 +922,7 @@ BUSINESS_PIPELINE_STAGES: list[
         False,
         [("PM", "")],
         False,
+        "text",
     ),
     (
         "작성",
@@ -914,7 +933,12 @@ BUSINESS_PIPELINE_STAGES: list[
             "섹션을 찾아, 그 섹션이 커버해야 할 요구사항을 전부 충족하는 "
             "실제로 완성된 내용을 작성하세요 — 개요나 논의로 끝내지 "
             "마세요. 이전 작성자가 이미 쓴 내용은 그대로 유지하고(다시 "
-            "쓰거나 지우지 말 것), 당신이 맡은 부분만 이어서 작성하세요."
+            "쓰거나 지우지 말 것), 당신이 맡은 부분만 이어서 작성하세요. "
+            "발표용 슬라이드가 필요하면 마크다운 수평선(---)으로 슬라이드를 "
+            "구분한 개요 형태로 작성하세요(슬라이드 1장당 제목 1개 + 핵심 "
+            "요점 목록) — 이 단계의 산출물은 여러 작성자의 섹션이 합쳐진 "
+            "하나의 텍스트 문서라, 별도 인터랙티브 HTML 파일로는 렌더링되지 "
+            "않습니다."
         ),
         False,
         True,
@@ -929,6 +953,7 @@ BUSINESS_PIPELINE_STAGES: list[
             ),
         ],
         False,
+        "text",
     ),
     (
         "내용 검증",
@@ -939,6 +964,7 @@ BUSINESS_PIPELINE_STAGES: list[
         False,
         [("품질 관리자", "")],
         True,
+        "text",
     ),
     (
         "표현 검토",
@@ -949,6 +975,7 @@ BUSINESS_PIPELINE_STAGES: list[
         False,
         [("콘텐츠 카피라이팅", "문체와 표현을 다듬으세요.")],
         False,
+        "text",
     ),
     (
         "최종 승인 판정",
@@ -962,6 +989,7 @@ BUSINESS_PIPELINE_STAGES: list[
         False,
         [("PM", "")],
         False,
+        "text",
     ),
 ]
 
@@ -996,13 +1024,14 @@ def _seed_business_planning_pipeline(conn: sqlite3.Connection) -> None:
         is_primary,
         agents,
         checks_traceability,
+        output_content_type,
     ) in enumerate(BUSINESS_PIPELINE_STAGES, start=1):
         gate_ratio = 0.5 if name in _BUSINESS_PIPELINE_GATED_STAGE_NAMES else 0.0
         cur = conn.execute(
             "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
             "lead_role_name, instructions, requires_human_approval, is_primary_deliverable, "
-            "min_gate_pass_ratio, checks_requirements_traceability) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "min_gate_pass_ratio, checks_requirements_traceability, output_content_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 template_id,
                 seq,
@@ -1014,6 +1043,7 @@ def _seed_business_planning_pipeline(conn: sqlite3.Connection) -> None:
                 1 if is_primary else 0,
                 gate_ratio,
                 1 if checks_traceability else 0,
+                output_content_type,
             ),
         )
         stage_id = cur.lastrowid
