@@ -20,10 +20,56 @@ bootstrap-admin` 콘솔 스크립트는 `hair bootstrap-admin`으로 대체돼
 from __future__ import annotations
 
 import argparse
+import copy
+import logging
 import os
+import re
 import sys
 
 from dotenv import load_dotenv
+
+# 사용자 보고(2026-11-12, "아무 동작없이도 메시지가 출력되는 원인을
+# 분석하고, 오류 등 꼭 필요한 메시지만 노출되도록 개선해줘") — 원인은
+# `webui.py`의 멘션 알림 폴링(`startMentionNotificationPolling()`,
+# 로그인하면 바로 시작해 20초마다 `/api/conversations/my-mentions`를
+# 호출 — 사람이 뭘 하든 안 하든 계속 돈다)과 대화 메시지 폴링(그
+# 대화를 보는 동안 6초마다 `/api/conversations/{id}/messages`)이다.
+# 둘 다 "새 멘션/메시지가 왔는지 조용히 확인"하는 배경 작업이라
+# 설계상 매번 성공(2xx)해야 정상이고, 실패(4xx/5xx)할 때만 사람이
+# 알아야 할 신호다 — 그래서 성공한 호출만 uvicorn 접속 로그에서
+# 걸러낸다(에러·그 외 모든 요청 로그는 그대로 남긴다).
+_QUIET_POLLING_GET_PATTERNS = (
+    re.compile(r"^/api/conversations/my-mentions(\?.*)?$"),
+    re.compile(r"^/api/conversations/\d+/messages(\?.*)?$"),
+)
+
+
+class _QuietPollingAccessFilter(logging.Filter):
+    """uvicorn access 로그 레코드의 `args`는 `(client_addr, method,
+    path, http_version, status)` 순서다(uvicorn의 h11_impl.py
+    `access_logger.info("%s - \"%s %s HTTP/%s\" %d", ...)` 호출과
+    동일한 순서로 직접 확인함) — 그 외 형태(uvicorn.error 로거 등)는
+    그대로 통과시킨다."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        method, path, status = args[1], args[2], args[4]
+        if method != "GET" or not isinstance(status, int) or status >= 400:
+            return True
+        return not any(p.match(str(path)) for p in _QUIET_POLLING_GET_PATTERNS)
+
+
+def _build_log_config() -> dict:
+    from uvicorn.config import LOGGING_CONFIG
+
+    config = copy.deepcopy(LOGGING_CONFIG)
+    config["filters"] = {
+        "quiet_polling": {"()": f"{__name__}._QuietPollingAccessFilter"},
+    }
+    config["handlers"]["access"]["filters"] = ["quiet_polling"]
+    return config
 
 _EPILOG_TOP = """\
 예시:
@@ -266,6 +312,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
         reload=args.reload,
+        log_config=_build_log_config(),
     )
     return 0
 
