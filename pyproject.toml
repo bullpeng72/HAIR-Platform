@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+# PEP 639(license as SPDX 문자열 + license-files)을 경고 없이 쓰려면
+# setuptools>=77.0 필요(2026-11-12 패키징 점검 발견 — `license = { text = "MIT" }`
+# 테이블 형식은 deprecated, 2027-02-18부터 빌드가 깨질 예정이라 SPDX 문자열로 전환).
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +11,18 @@ version = "0.1.3"
 description = "HAIR(Human-AI Resource Management) 협업 플랫폼 — 사람과 AI Agent를 하나의 조직도에서 배치·배분·승인·성과리뷰하는 도구. AgentForge의 자매 프로젝트."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: FastAPI",
+    "Operating System :: OS Independent",
+]
 
 dependencies = [
     "pydantic>=2.0,<3.0",
@@ -96,6 +110,11 @@ all = [
     "pypdf>=4.0.0",
     "beautifulsoup4>=4.12.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/bullpeng72/HAIR-Platform"
+Repository = "https://github.com/bullpeng72/HAIR-Platform"
+Issues = "https://github.com/bullpeng72/HAIR-Platform/issues"
 
 [project.scripts]
 # 통합 CLI(2026-10-10) — `hair serve`/`hair bootstrap-admin`/`hair eval`

@@ -419,9 +419,9 @@ def seed_demo_data(conn: sqlite3.Connection, actor_id: int) -> dict:
 # 사용자 요청(2026-10-27, "pip 설치나 패키지 배포시 에이전트와 도구/스킬
 # 정보는 포함하고, 나머지 다른 정보들은 초기화 상태로 배포되도록") —
 # `db.init_schema()`가 매 기동 때 `_seed_default_pools()` +
-# `reference_pipeline_seeds.seed()`로 이미 채워 넣는 Agent(23종)/Tool
-# Pool(11개)/Skill Pool(48개)/파이프라인 템플릿("소프트웨어 개발
-# 파이프라인" 등)은 그 두 함수가 `INSERT OR IGNORE`(또는 존재 확인 후
+# `reference_pipeline_seeds.seed()`로 이미 채워 넣는 Agent(26종)/Tool
+# Pool(12개)/Skill Pool(51개)/파이프라인 템플릿("소프트웨어 개발
+# 파이프라인" 등 4종)은 그 두 함수가 `INSERT OR IGNORE`(또는 존재 확인 후
 # INSERT)로 매번 알아서 채우므로, 이 함수는 그 테이블들에 **전혀 손대지
 # 않는다**(관리자가 나중에 추가한 커스텀 Agent/Tool/Skill도 마찬가지로
 # 그대로 둔다 — "정확히 레퍼런스 세트만 남긴다"가 아니라 "운영 중 쌓인

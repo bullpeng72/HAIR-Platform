@@ -161,13 +161,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인 템플릿은 유지, 팀은 초기화)",
         description=(
             "사용자 계정·사람 인력(human_pool)·업무 요청/할 일/배정/결재/\n"
-            "결과물·대화·업로드 문서·VectorDB 지식 조각·Crew/파이프라인\n"
-            "실행 이력·모델 레지스트리·임베딩 설정·Tool-Agent 연결·팀/팀원·\n"
-            "활동 기록(audit_log)을 전부 지운다. Agent(23종)/Tool·Skill\n"
-            "Pool/파이프라인 템플릿은 손대지 않는다 — hair.db 재기동 시\n"
-            "항상 자동으로 다시 채워지는 레퍼런스 데이터이기 때문이다. 팀은\n"
-            "그렇게 재시드되지 않아(사용자가 직접 만든 데이터) 함께 지운다 —\n"
-            "지워도 다시 자동으로 생기지 않는다. 되돌릴 수 없다."
+            "결과물(+댓글)·대화·업로드 문서·VectorDB 지식 조각·AI 에이전트\n"
+            "생성 Job·Crew/파이프라인 실행 이력·Gate 평가 기록·모델\n"
+            "레지스트리·임베딩 설정·Tool-Agent 연결·팀/팀원·활동 기록\n"
+            "(audit_log)을 전부 지운다. Agent(26종)/Tool·Skill Pool/\n"
+            "파이프라인 템플릿 자체는 삭제하지 않는다 — hair.db 재기동 시\n"
+            "항상 자동으로 다시 채워지는 레퍼런스 데이터이기 때문이다(단,\n"
+            "Agent가 실행되며 쌓인 비용·성과점수·LLM provider/model 설정·\n"
+            "마지막 산출물은 초기값으로 되돌아간다). 팀은 그렇게 재시드되지\n"
+            "않아(사용자가 직접 만든 데이터) 함께 지운다 — 지워도 다시\n"
+            "자동으로 생기지 않는다. 되돌릴 수 없다."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(

@@ -110,6 +110,31 @@ pip install -e ".[dev,all]"
 pytest tests/ -q        # 골든셋 917건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
+### 설치 옵션(extras) 한눈에 보기
+
+아직 PyPI에 배포되지 않아 지금은 GitHub 클론 후 `pip install -e ".[...]"`
+형태로만 설치할 수 있다(PyPI 배포 후에는 `pip install "hair-platform[...]"`
+로 동일하게 쓸 수 있다). 필요한 조합만 골라 쉼표로 묶어 한 번에 설치
+가능(예: `pip install -e ".[llm,documents]"`) — 아래 "빠른 시작"
+각 절이 extra별 상세 설정(환경변수·API 키 등)을 안내한다.
+
+| extra | 설치 명령 | 필요할 때 | 추가 설치되는 패키지 |
+|-------|-----------|-----------|----------------------|
+| *(기본)* | `pip install -e .` | 무료 스텁으로만 쓸 때 — LLM/CrewAI/MCP/문서 업로드 전부 불필요 | pydantic·fastapi·uvicorn 등 핵심 의존성만 |
+| `llm` | `pip install -e ".[llm]"` | 실제 Anthropic/OpenAI API로 Agent를 실행할 때(Ollama는 API 키 없이 기본 의존성만으로 동작) | anthropic, openai |
+| `crewai` | `pip install -e ".[crewai]"` | 여러 Agent를 실제 CrewAI Crew로 협업시킬 때("Crew 빌더"/파이프라인) | crewai, litellm |
+| `mcp` | `pip install -e ".[mcp]"` | Agent에 외부 MCP 도구 서버를 연결할 때 | crewai-tools[mcp], mcp(`<2.0` 고정 — 아래 참고) |
+| `documents` | `pip install -e ".[documents]"` | 대화창/지식 베이스에서 `.pdf`/`.html` 파일을 업로드할 때(`.md`/`.txt`는 추가 설치 불필요) | pypdf, beautifulsoup4 |
+| `dev` | `pip install -e ".[dev]"` | 테스트/린트/포맷터를 돌릴 때 | pytest, black, ruff |
+| `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents` 전부) | 위 extras 전부 |
+
+> `mcp`는 `mcp>=1.10.1,<2.0`으로 상한을 고정해둔다 — `crewai-tools`가
+> 쓰는 `mcpadapt==0.1.19`가 `mcp 2.x`의 API 이름 변경을 아직 못
+> 따라잡아서다(따라잡으면 상한을 올릴 것). `pip install -e ".[mcp]"`만
+> 따로 설치하면 이 상한이 자동으로 지켜지지만, `mcp`를 다른 이유로
+> 이미 더 최신 버전을 설치해둔 환경에 나중에 이 extra를 추가하면
+> pip가 `mcp`를 1.x로 다운그레이드한다는 점에 유의.
+
 실행 명령은 전부 `hair <subcommand>` 하나로 모여 있다 — 각 서브커맨드의
 옵션/예시는 `hair <subcommand> --help`로 확인(`src/hair_platform/cli.py`):
 
@@ -176,6 +201,52 @@ export ANTHROPIC_API_KEY=...               # 또는 OPENAI_API_KEY
 # 목록은 "모델 레지스트리" 탭에 등록해두면 전 화면에서 드롭다운으로 공유된다.
 ```
 
+### 권장 모델 & API 토큰(키) 발급
+
+**토큰(API 키) 발급처** — Ollama는 로컬 실행이라 키가 필요 없다.
+클라우드 provider는 먼저 가입해 키를 받아야 한다(가입 시 결제 수단
+등록 필요, 사용한 만큼 과금):
+
+| provider | 발급 위치 | 비용 |
+|----------|-----------|------|
+| Anthropic | https://console.anthropic.com/ (API Keys 메뉴) | 사용량 과금 |
+| OpenAI | https://platform.openai.com/api-keys | 사용량 과금 |
+| Ollama | https://ollama.com 에서 설치 후 로컬 실행 | 무료(로컬 컴퓨팅 자원만 소비) |
+| Tavily(실시간 웹검색) | https://tavily.com | 무료 티어 있음 |
+
+받은 키는 `.env`(`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`TAVILY_API_KEY`)
+에 넣거나 환경변수로 export — 위 "실제 LLM 연동을 쓰려면" 참고.
+
+**Agent별 LLM 설정 최적화**(admin, "LLM 설정 최적화" 탭)는 역할을
+`deep_reasoning`(깊은 추론)/`precision_fast`(정밀·신속, 구현/리뷰류)/
+`standard`(표준) 3단계 tier로 분류해 모델을 추천한다. provider별
+권장 기준:
+
+| tier | 클라우드 권장 | 로컬(Ollama) 권장 | 비고 |
+|------|---------------|---------------------|------|
+| `standard`(일반 응답) | Haiku/GPT-4o-mini급(코드 기본값: `gpt-4o-mini`) | `llama3.1`(코드 기본값) 등 7B~8B급 경량 모델 | 가장 빠른 응답이 필요한 티어 |
+| `precision_fast`(구현/코드리뷰) | Sonnet/GPT-4o급(코드 기본값: `claude-sonnet-5`) | 코드 특화 로컬 모델(예: `qwen3-coder` — 이 플랫폼이 실제로 "개발자" 계열 Agent에 쓰고 있는 모델) | "code" 태그가 붙은 모델을 추천 랭킹에서 우대 |
+| `deep_reasoning`(전략/깊은 추론) | Opus급 | 30B+ 대형 로컬 모델도 가능하지만 **느리다**(아래 실측 참고) | 응답을 실시간으로 봐야 하면 클라우드 권장 |
+
+**로컬(Ollama) 모델 쓸 때 실측으로 확인된 점**:
+- 모델은 미리 받아둬야 한다(`ollama pull <모델명>`) — 받지 않은 모델을
+  지정하면 그 자리에서 404로 실패한다(실제 사고 사례: 코드 기본값
+  `llama3.1`이 로컬에 없어서 발생).
+- **대형 모델일수록 느리다** — 실측 사례로 35B급 모델이 **단일 호출에
+  337.7초**(약 5.6분) 걸렸고, "자율 개발 크루"처럼 매니저가 여러 차례
+  위임까지 하는 멀티 Agent 실행은 **12분을 넘긴** 사례가 있다. 그래서
+  백엔드 타임아웃도 그에 맞춰 넉넉히 잡혀 있다(단일 호출 기본
+  600초, `deep_reasoning` tier Agent 최대 1800초, CrewAI 멀티 Agent
+  경로는 최대 5400초). 대화창에서 실시간 응답을 기다리는 용도라면
+  7B~14B급으로, 그보다 큰 모델은 파이프라인처럼 비동기로 도는
+  배치성 작업에 쓰는 걸 권장한다.
+- **임베딩(지식검색/VectorDB) 모델**: 코드 기본값은 `mxbai-embed-large:latest`
+  인데, 이는 "이미 받아져 있던 모델"이라서 고른 값일 뿐 성능상 최선은
+  아니다 — 컨텍스트 한도가 **512토큰뿐**이라 조금만 긴 문서도 많이
+  잘려나간다. `nomic-embed-text`(8192토큰, 16배 더 넓음)를 대신 받아서
+  (`ollama pull nomic-embed-text`) "모델 레지스트리"에서 임베딩 모델로
+  바꿔주면 장문 산출물 검색 품질이 더 좋다.
+
 대화창·협업 워크스페이스(업무 실행)·지식 베이스 세 곳 중 어디서든
 `.pdf`/`.html` 파일을 업로드하려면(`.md`/`.txt`는 추가 설치 없이 바로
 동작 — 셋 다 같은 `documents.extract_text()`를 공유한다):
@@ -199,22 +270,63 @@ hair serve --reload       # 개발 중 — 코드 변경 시 자동 재시작
 hair serve --no-browser   # 브라우저 자동 열기 끄기(서버만 실행)
 ```
 
-사내망을 통해 다른 PC에서도 접속하려면(같은 네트워크의 팀원 여러 명이
-함께 쓰는 경우) `--host 0.0.0.0`로 모든 인터페이스에 바인딩한다 —
-단, 띄우기 전에 **반드시** 랜덤 세션 서명 키를 지정해야 한다(안 하면
-소스에 공개된 고정값으로 세션이 서명돼, 같은 네트워크의 누구나 다른
-사용자의 로그인 세션을 위조할 수 있다 — `hair serve`가 기동 시점에
-이걸 감지하면 경고를 띄운다):
+### 사내망에서 여러 명이 함께 쓰기
 
-```bash
-export HAIR_PLATFORM_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-hair serve --host 0.0.0.0 --no-browser   # 다른 PC에서 http://<이 PC의 사내망 IP>:8000/
-```
+같은 네트워크(사내망)의 팀원 여러 명이 한 서버에 각자 PC 브라우저로
+접속해 쓰려면 아래 순서를 따른다. 서버를 띄우는 PC(관리자 PC) 1대만
+있으면 되고, 나머지는 브라우저만 열면 된다 — 팀원 PC에 따로 설치할
+필요 없음.
 
-`--reload`는 개발 전용이다 — 여러 명이 같이 쓰는 인스턴스에는 쓰지 않는다
-(파일 변경마다 재시작되며 접속이 전부 끊긴다). 로그인 비밀번호는 평문
-HTTP로 오가므로, 민감도가 높다면 앞단에 리버스 프록시로 TLS를 추가하는
-걸 권장한다.
+1. **(관리자 PC) 랜덤 세션 서명 키를 먼저 지정한다** — `--host
+   0.0.0.0`처럼 루프백이 아닌 주소로 띄우면서 이 키를 안 주면, 세션이
+   소스에 공개된 고정값으로 서명돼 같은 네트워크의 누구나 다른
+   사용자(admin 포함)의 로그인 세션을 위조할 수 있다(`hair serve`가
+   기동 시점에 이걸 감지하면 경고를 띄운다):
+
+   ```bash
+   export HAIR_PLATFORM_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+   hair serve --host 0.0.0.0 --no-browser
+   ```
+
+   `.env` 파일에 넣어두면(`HAIR_PLATFORM_SECRET_KEY=...`) 재기동할 때마다
+   새로 export할 필요가 없다. **`--reload`는 여기서 절대 쓰지 않는다** —
+   개발 전용 옵션이라 파일이 바뀔 때마다 서버가 재시작되며 접속 중인
+   팀원 전체가 끊긴다.
+
+2. **방화벽에서 포트를 연다** — 기본 포트는 `8000`(`--port`로 변경
+   가능). macOS는 "시스템 설정 → 네트워크 → 방화벽"에서, Windows는
+   "Windows Defender 방화벽 → 고급 설정"에서 해당 포트의 인바운드 연결을
+   허용해야 다른 PC에서 접속된다.
+
+3. **관리자 PC의 사내망 IP를 확인한다** — macOS/Linux는
+   `ifconfig`(또는 `ip addr`), Windows는 `ipconfig`로 확인(보통
+   `192.168.x.x`/`10.x.x.x` 형태).
+
+4. **(관리자) 팀원 계정을 만들어준다** — 로그인 후 "사용자 관리" 탭
+   (admin 전용)의 "사용자 생성" 폼에서 아이디/비밀번호/역할
+   (`admin`/`manager`/`member`/`viewer`)을 지정해 계정을 만든다(API를
+   직접 호출할 필요 없음). 생성 직후엔 조직도 상사가 지정돼 있지 않아
+   그 사용자가 배정을 요청하면 결재가 단일 단계(승인자 미지정)로
+   처리된다 — 필요하면 "조직도" 탭에서 상사를 지정해준다.
+
+5. **(각 팀원 PC) 브라우저로 접속해 로그인한다** — 주소창에
+   `http://<관리자 PC의 사내망 IP>:8000/`을 입력하고, 발급받은
+   아이디/비밀번호로 로그인한다. 로그인 세션은 브라우저별 쿠키 기반이라
+   팀원마다 독립적으로 유지된다(한 명이 로그아웃해도 다른 팀원 세션에
+   영향 없음).
+
+**동시 사용 시 알아둘 점**:
+- `hair serve`는 단일 프로세스로 뜬다(멀티 워커 미지원) — 동시 접속
+  자체는 문제없지만, 여러 명이 동시에 LLM 호출(Agent 실행/CrewAI/파이프라인)
+  을 겹쳐서 돌리면 응답이 순서대로 밀려서 늦게 나올 수 있다. 실시간
+  응답이 중요한 조직이면 인원 규모에 맞춰 여러 인스턴스(다른 포트·다른
+  `--db-path`)로 분산하는 것도 방법이다(단, 데이터가 분리된다는 점
+  유의).
+- SQLite(WAL 모드)라 읽기는 동시에 여러 건 처리되지만, 쓰기(결재 승인,
+  배정 확정 등)는 짧게 직렬화된다 — 일반적인 팀 사용 규모(수 명~수십 명)
+  에서는 체감되지 않는다.
+- 로그인 비밀번호는 평문 HTTP로 오간다 — 민감도가 높은 조직이라면
+  앞단에 리버스 프록시로 TLS(HTTPS)를 추가하는 걸 권장한다.
 
 Gate A–G 수동 실측(선택, 서비스 경로는 이미 상시 연결돼 있음 —
 `agent_evaluation.py`):
