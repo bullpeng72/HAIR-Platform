@@ -14,7 +14,7 @@ SQLite(`knowledge_chunks`)에 임베딩을 JSON으로 저장하고 검색은 애
 `@멘션`에서 "Error code: 401 - ... Missing credentials"로 크래시)** —
 `embed_text()`가 `provider` 생략 시 무조건 `"openai"`로 하드코딩돼
 있었다. 이 Agent의 LLM provider는 `ollama`(OPENAI_API_KEY 없음)인데,
-skill_tags에 "rag"가 있어 `agent_runtime.retrieve_context()`가 매
+skill_tags에 "지식검색"가 있어 `agent_runtime.retrieve_context()`가 매
 실행마다 `vectorstore.search()`(→`embed_text()`)를 호출했고, OpenAI
 키가 없는 이 환경에서는 Agent 자신의 provider와 무관하게 항상 즉시
 크래시했다(네트워크 호출 전, 클라이언트 생성 단계에서 실패해 0.2초

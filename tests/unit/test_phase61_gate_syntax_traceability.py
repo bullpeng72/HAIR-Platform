@@ -71,10 +71,12 @@ def test_code_syntax_check_js_block_checked_when_node_available(monkeypatch, tmp
 
 
 def test_code_syntax_check_js_block_skipped_when_node_unavailable():
-    with patch.object(agent_evaluation.shutil, "which", return_value=None):
-        with patch.object(agent_evaluation.subprocess, "run") as mock_run:
-            content = "```javascript\nfunction f( { broken\n```\n"
-            result = agent_evaluation.compute_code_syntax_check(content)
+    with (
+        patch.object(agent_evaluation.shutil, "which", return_value=None),
+        patch.object(agent_evaluation.subprocess, "run") as mock_run,
+    ):
+        content = "```javascript\nfunction f( { broken\n```\n"
+        result = agent_evaluation.compute_code_syntax_check(content)
     mock_run.assert_not_called()
     assert result["status"] == "not_measured"
     assert result["checked_blocks"] == 0

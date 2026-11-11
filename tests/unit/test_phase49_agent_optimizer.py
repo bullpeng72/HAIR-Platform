@@ -51,7 +51,7 @@ def test_known_role_uses_agent_specs_tuning_verbatim():
 
 
 def test_known_deep_reasoning_role():
-    tier, _tuning, source = opt.classify_role("DA", ["data-model-design-guide"])
+    tier, _tuning, source = opt.classify_role("DA", ["데이터모델설계가이드"])
     assert source == "known_role"
     assert tier == opt.TIER_DEEP_REASONING
 
@@ -357,7 +357,7 @@ def test_refine_with_llm_success_path(monkeypatch):
     agent_id = _make_agent(
         conn,
         "DA",
-        ["data-model-design-guide"],
+        ["데이터모델설계가이드"],
         provider="anthropic",
         model="claude-opus-4-1",
     )
@@ -383,7 +383,7 @@ def test_refine_with_llm_falls_back_on_malformed_json(monkeypatch):
     agent_id = _make_agent(
         conn,
         "DA",
-        ["data-model-design-guide"],
+        ["데이터모델설계가이드"],
         provider="anthropic",
         model="claude-opus-4-1",
     )
@@ -404,7 +404,7 @@ def test_refine_with_llm_rejects_hallucinated_model(monkeypatch):
     agent_id = _make_agent(
         conn,
         "DA",
-        ["data-model-design-guide"],
+        ["데이터모델설계가이드"],
         provider="anthropic",
         model="claude-opus-4-1",
     )
@@ -483,7 +483,7 @@ def test_optimize_recommendation_refine_endpoint_uses_patched_llm(
     agent_id = _make_agent(
         conn,
         "DA",
-        ["data-model-design-guide"],
+        ["데이터모델설계가이드"],
         provider="anthropic",
         model="claude-opus-4-1",
     )

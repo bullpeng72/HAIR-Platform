@@ -33,6 +33,11 @@ CrewProcess = Literal["sequential", "hierarchical"]
 McpTransport = Literal["sse", "streamable-http"]
 ToolPoolKind = Literal["mcp_stdio", "mcp_remote", "native", "custom_python"]
 AugmentationMode = Literal["tool", "always", "none"]
+# 사용자 요청(2026-11-11, "스킬과 도구를 SW개발업무와 일반업무로 구분하고
+# 필터링 되도록 개선") — `sw_dev`는 코드/아키텍처/테스트/Gate 채점 등
+# 개발 산출물 전용, `general`은 도메인 무관 지식업무(조사·전략·보고서
+# 등).
+PoolCategory = Literal["sw_dev", "general"]
 
 
 class LoginRequest(BaseModel):
@@ -187,7 +192,7 @@ class TaskDecomposition(BaseModel):
     tasks: list[TaskItem]
 
     @model_validator(mode="after")
-    def _validate_depends_on_index(self) -> "TaskDecomposition":
+    def _validate_depends_on_index(self) -> TaskDecomposition:
         n = len(self.tasks)
         for i, item in enumerate(self.tasks):
             if item.depends_on_index is None:
@@ -750,6 +755,7 @@ class ToolPoolCreate(BaseModel):
     kind: ToolPoolKind
     config: dict = {}
     tool_names: list[str] = []
+    category: PoolCategory = "general"
 
 
 class ToolPoolUpdate(BaseModel):
@@ -768,6 +774,7 @@ class ToolPoolUpdate(BaseModel):
     description: str | None = None
     config: dict | None = None
     tool_names: list[str] | None = None
+    category: PoolCategory | None = None
 
 
 class ToolActiveUpdate(BaseModel):
@@ -798,6 +805,7 @@ class SkillPoolCreate(BaseModel):
     # unsupported_realtime_skill_names()`) 기본값 True를 admin이 직접
     # False로 끌 수 있게 한다.
     show_in_conversation: bool = True
+    category: PoolCategory = "general"
 
 
 class SkillPoolUpdate(BaseModel):
@@ -810,6 +818,7 @@ class SkillPoolUpdate(BaseModel):
     default_tool_pool_ids: list[int] | None = None
     augmentation_mode: AugmentationMode | None = None
     show_in_conversation: bool | None = None
+    category: PoolCategory | None = None
 
 
 class ModelRegistryCreate(BaseModel):

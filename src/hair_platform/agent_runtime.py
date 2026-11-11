@@ -5,8 +5,8 @@
 배치된 Agent에게 구체적인 업무를 맡기고 결과를 받는 경로다. 이게 있어야
 "생성만 되고 일은 안 하는 레코드"가 아니라 실제로 호출해 쓸 수 있는 Agent가 된다.
 
-사용자 요청(2026-09-26, 3차) — `skill_tags`에 "rag"
-또는 "graphdb"가 있으면 LLM을 부르기 전에 각각 `vectorstore.search()`(임베딩
+사용자 요청(2026-09-26, 3차) — `skill_tags`에 "지식검색"
+또는 "관계조회"가 있으면 LLM을 부르기 전에 각각 `vectorstore.search()`(임베딩
 검색, 추가 비용 발생)·`graphquery.context_for_prompt()`(SQL 조회, 비용 없음)로
 검색 결과를 프롬프트에 덧붙인다(RAG) — 이게 "지식검색 Agent"·"관계분석
 Agent"의 실제 동작이다. 관계분석 쪽은 경계를 지키기 위해 `graphquery.py`
@@ -17,7 +17,7 @@ API(가능한 무료)를... 추가해줘")로 "외부검색" skill_tags도
 같은 방식으로 지원했다 — `websearch.context_for_prompt()`(Wikipedia
 검색, API 키 불필요·무료)로 VectorDB/GraphDB가 못 다루는 "조직 밖
 일반 지식"을 보강했다. ("websearch"/"vectordb"/"관계질의"는 각각
-"외부검색"/"rag"/"graphdb"와 완전히 같은 뜻의 별칭이었으나 자동완성
+"외부검색"/"지식검색"/"관계조회"와 완전히 같은 뜻의 별칭이었으나 자동완성
 중복 리포트로 2026-10-06에 한쪽으로 통합됨.) **이후(2026-10-26, "도구/
 skill에서 동작하지 않는 검색은 삭제해줘")** Wikimedia가 이 배포 환경의
 IP를 지속 차단해 "외부검색"은 시드에서 빠졌고, 같은 역할을 "실시간
@@ -41,8 +41,8 @@ from hair_platform import (
     websearch,
 )
 
-VECTORDB_SKILL_TAGS = {"rag"}
-GRAPHDB_SKILL_TAGS = {"graphdb"}
+VECTORDB_SKILL_TAGS = {"지식검색"}
+GRAPHDB_SKILL_TAGS = {"관계조회"}
 
 
 def augment_with_retrieval(
@@ -106,9 +106,9 @@ def retrieve_context(
     ...return` 순서의 if-체인이라, native 스킬을 2개 이상 가진 Agent는
     먼저 매칭되는 **하나만** 쓰고 나머지는 전혀 조회하지 않았다
     (vectordb 결과가 있든 없든 동일 — 매칭되면 그 분기에서 무조건
-    return). 실제로 skill_tags에 "rag"+"외부검색"을 같이 가진 "외부
+    return). 실제로 skill_tags에 "지식검색"+"외부검색"을 같이 가진 "외부
     자료 조사가" Agent가 대화창 `@멘션`(도구 호출 루프가 없는
-    `execute_agent()` 경로)에서 "rag"에 가려 Wikipedia 검색이 한 번도
+    `execute_agent()` 경로)에서 "지식검색"에 가려 Wikipedia 검색이 한 번도
     안 불리는 걸 재현 확인했다. CrewAI 실제 Tool 루프(`resolve_pool_
     tools()`)는 애초에 매칭되는 도구를 전부 리스트로 붙여 Agent가
     스스로 고르므로 이 문제가 없다 — 이 단발 호출 경로만 if-체인

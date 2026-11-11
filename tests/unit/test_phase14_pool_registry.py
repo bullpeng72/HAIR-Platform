@@ -23,9 +23,9 @@ def test_gc108_init_schema_seeds_default_vectordb_graphdb_pools():
     매핑이 데이터로도 그대로 살아있어야 기존 동작이 안 깨진다.
     `init_schema()`를 두 번 불러도 중복 생성되지 않아야 한다(멱등성).
 
-    **정정(2026-10-06)**: 원래 "vectordb"/"rag", "graphdb"/"관계질의" 두
+    **정정(2026-10-06)**: 원래 "vectordb"/"지식검색", "관계조회"/"관계질의" 두
     쌍 다 별칭으로 있었으나, "필요 스킬" 자동완성 중복 리포트로 각각
-    "rag"/"graphdb" 하나로 통합했다."""
+    "지식검색"/"관계조회" 하나로 통합했다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     db.init_schema(conn)  # 멱등성 확인
@@ -41,7 +41,7 @@ def test_gc108_init_schema_seeds_default_vectordb_graphdb_pools():
 
     skills = pool_registry.list_skills(conn)
     skill_names = {s["name"] for s in skills}
-    vectordb_graphdb_names = {"rag", "graphdb"}
+    vectordb_graphdb_names = {"지식검색", "관계조회"}
     assert vectordb_graphdb_names <= skill_names
     assert "vectordb" not in skill_names
     assert "관계질의" not in skill_names
@@ -288,7 +288,7 @@ def test_gc112_link_and_unlink_agent_tool(client_and_conn):
 def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     client_and_conn,
 ):
-    """`resolve_pool_tools()`가 (1) skill_pool 매칭(예: "graphdb" 스킬 →
+    """`resolve_pool_tools()`가 (1) skill_pool 매칭(예: "관계조회" 스킬 →
     GraphDB 도구)과 (2) 명시적 `agent_tool_links`(스킬과 무관하게 추가한
     도구)를 합쳐서 돌려주는지 확인한다. 비활성화된 도구는 매칭돼도
     빠져야 한다."""
@@ -300,7 +300,7 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('관계분석 Agent', '[\"graphdb\"]', 'active')"
+        "('관계분석 Agent', '[\"관계조회\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -312,7 +312,7 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     # graphdb 스킬 매칭만으로 GraphDB 도구가 나온다(명시적 연결 없이도).
     with ExitStack() as stack:
         tools = pool_registry.resolve_pool_tools(
-            conn, stack, ["graphdb"], agent_id=agent_id
+            conn, stack, ["관계조회"], agent_id=agent_id
         )
     assert [t.name for t in tools] == ["org_relationship_query"]
 
@@ -320,7 +320,7 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     pool_registry.link_agent_tool(conn, admin_id, agent_id, vectordb_tool_id)
     with ExitStack() as stack:
         tools = pool_registry.resolve_pool_tools(
-            conn, stack, ["graphdb"], agent_id=agent_id
+            conn, stack, ["관계조회"], agent_id=agent_id
         )
     tool_names = {t.name for t in tools}
     assert tool_names == {"org_relationship_query", "knowledge_base_search"}
@@ -329,7 +329,7 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     pool_registry.set_tool_active(conn, admin_id, graphdb_tool_id, False)
     with ExitStack() as stack:
         tools = pool_registry.resolve_pool_tools(
-            conn, stack, ["graphdb"], agent_id=agent_id
+            conn, stack, ["관계조회"], agent_id=agent_id
         )
     assert [t.name for t in tools] == ["knowledge_base_search"]
 
@@ -474,8 +474,10 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     # 파이프라인 custom_python 도구 5개(Spec EARS 린터·실패모드 기계적
     # 도출·골든셋 커버리지 체커·분석 프레임워크 템플릿 생성기·발표자료
     # 아웃라인 생성기) + 2026-10-14(PM/AA/DA 등 기획→개발 팀 구성)로
-    # 추가된 "테스트 케이스 기계적 도출" 1개(= 10 + 1 = 11).
-    assert len(resp.json()) == 11
+    # 추가된 "테스트 케이스 기계적 도출" 1개(= 10 + 1 = 11) + 2026-11-11
+    # (데이터 분석/제안서/실적서 작성 개선)로 추가된 "수치 데이터
+    # 분석기" 1개(= 11 + 1 = 12).
+    assert len(resp.json()) == 12
 
     # 사용자 결정(2026-09-29, "(a) MCP 종류만 admin 전용으로 좁히기") —
     # 매니저는 mcp_remote/mcp_stdio 등록이 이제 403이다. native는
@@ -529,7 +531,7 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 48
+        len(resp.json()) == 51
     )  # 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 일반웹검색 1 +
     # 실시간웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복
     # 통합으로 제거됨. 2026-10-26 "대화에서 외부 검색이 가능한 방법을
@@ -590,18 +592,18 @@ def test_gc_show_in_conversation_defaults_true_but_backfill_hides_non_native_too
     db.init_schema(conn)
     skills = {s["name"]: s for s in pool_registry.list_skills(conn)}
 
-    for name in ("rag", "graphdb", "실시간웹검색"):
+    for name in ("지식검색", "관계조회", "실시간웹검색"):
         assert skills[name]["show_in_conversation"] is True
 
     hidden = {
         "일반웹검색",
         "recommend-fix-workflow",
-        "spec-ears-lint",
-        "failure-mode-derivation",
-        "golden-set-coverage-check",
-        "framework-template-generator",
-        "presentation-outline-builder",
-        "test-case-mechanical-derivation",
+        "요구사항검증",
+        "실패모드도출",
+        "커버리지체크",
+        "프레임워크템플릿생성",
+        "발표자료구성",
+        "테스트케이스도출",
     }
     for name in hidden:
         assert skills[name]["show_in_conversation"] is False, name
@@ -624,9 +626,21 @@ def test_gc_skill_pool_names_conversation_filter(client_and_conn):
     assert resp.status_code == 200
     conv_names = resp.json()
     assert "일반웹검색" not in conv_names  # 대화창 드롭다운은 숨김 스킬을 뺀다.
-    assert "rag" in conv_names
-    assert "tdd-ai-workflow-checklist" in conv_names
+    assert "지식검색" in conv_names
+    # 2026-11-11 "스킬과 도구를 SW개발업무와 일반업무로 구분하고 필터링"
+    # → "개발업무 Skill의 경우 Default로 대화창에 보이지 않도록 설정
+    # 하고, 필요시 노출하도록" — tdd-ai-workflow-checklist는
+    # show_in_conversation=1이지만 category='sw_dev'라 기본값(category
+    # 필터 미포함)에서는 안 보여야 한다. include_dev=true를 줘야 다시
+    # 보인다(완전히 숨기는 게 아니라 default-off).
+    assert "tdd-ai-workflow-checklist" not in conv_names
     assert len(conv_names) < len(all_names)
+
+    resp_dev = client.get("/api/skill-pool/names?conversation=true&include_dev=true")
+    assert resp_dev.status_code == 200
+    conv_names_with_dev = resp_dev.json()
+    assert "tdd-ai-workflow-checklist" in conv_names_with_dev
+    assert "일반웹검색" not in conv_names_with_dev  # show_in_conversation=0은 include_dev와 무관하게 계속 빠짐
 
 
 def test_gc_create_and_update_skill_show_in_conversation(client_and_conn):
@@ -669,7 +683,7 @@ def test_gc115_run_crew_resolves_tools_from_data_driven_skill_pool_not_hardcoded
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('관계분석 Agent', '[\"graphdb\"]', 'active')"
+        "('관계분석 Agent', '[\"관계조회\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()

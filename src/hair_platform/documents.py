@@ -14,7 +14,7 @@ mxbai-embed-large는 350자)를 넘는 텍스트는 `_truncate_for_embedding()`�
 한도 이내 청크로 미리 쪼갠 뒤에야 `index_text()`를 호출한다.
 
 VectorDB 검색(`vectorstore.search()`)은 전역이다(`source_agent_id`로
-필터링하지 않는다) — 한 번 색인되면 `rag` 스킬이 있는 어떤 Agent든
+필터링하지 않는다) — 한 번 색인되면 `지식검색` 스킬이 있는 어떤 Agent든
 대화창 단발 호출 경로(`agent_runtime.retrieve_context()`)와 실제 Crew
 실행 경로(`vectordb_search` CrewAI Tool) 양쪽에서 그대로 찾아낸다. 이
 모듈은 그 전역 색인기에 "파일에서 뽑은 텍스트"를 넣어주는 입구일

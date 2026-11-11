@@ -76,10 +76,10 @@ def test_gc_module_decomposition_skill_matches_dev_plan_agent():
     row = conn.execute(
         "SELECT skill_tags FROM agent_pool WHERE role_name = '개발 계획 수립가'"
     ).fetchone()
-    assert "module-decomposition-and-task-assignment" in json.loads(row["skill_tags"])
+    assert "모듈분해업무배분" in json.loads(row["skill_tags"])
 
     skill = conn.execute(
-        "SELECT description FROM skill_pool WHERE name = 'module-decomposition-and-task-assignment'"
+        "SELECT description FROM skill_pool WHERE name = '모듈분해업무배분'"
     ).fetchone()
     assert "모듈" in skill["description"]
     assert "배분" in skill["description"] or "배정" in skill["description"]
@@ -156,7 +156,7 @@ def test_gc_pm_tracks_delivery_stages_not_hitl_skipping():
     row = conn.execute(
         "SELECT skill_tags FROM agent_pool WHERE role_name = 'PM'"
     ).fetchone()
-    assert "human-approval-loop" in json.loads(row["skill_tags"])
+    assert "승인루프" in json.loads(row["skill_tags"])
 
 
 def test_gc_seeding_is_idempotent_for_new_team():

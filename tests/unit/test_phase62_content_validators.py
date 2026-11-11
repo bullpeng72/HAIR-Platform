@@ -114,9 +114,11 @@ def test_raw_html_check_no_script_is_not_measured():
 
 
 def test_raw_html_check_node_unavailable_is_not_measured_without_subprocess_call():
-    with patch.object(agent_evaluation.shutil, "which", return_value=None):
-        with patch.object(agent_evaluation.subprocess, "run") as mock_run:
-            result = agent_evaluation.compute_raw_html_syntax_check(_VALID_SCRIPT_HTML)
+    with (
+        patch.object(agent_evaluation.shutil, "which", return_value=None),
+        patch.object(agent_evaluation.subprocess, "run") as mock_run,
+    ):
+        result = agent_evaluation.compute_raw_html_syntax_check(_VALID_SCRIPT_HTML)
     mock_run.assert_not_called()
     assert result["status"] == "not_measured"
 

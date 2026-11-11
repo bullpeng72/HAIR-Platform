@@ -1914,6 +1914,11 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
    업무를 수행"). TABS 배열 맨 앞(로그인 직후 첫 화면)에 둔다. ---------- */
 
 let _conversationPollTimer = null;
+// 사용자 요청(2026-11-11, "개발업무 Skill의 경우 Default로 대화창에
+// 보이지 않도록 설정하고, 필요시 노출하도록") — 대화 화면을 나갔다
+// 다시 들어와도 유지되도록 모듈 스코프에 둔다(기본값 false — 개발업무
+// 스킬은 default-off, 체크박스로 켜면 그 세션 동안 유지).
+let _convShowDevSkills = false;
 
 function _stopConversationPolling() {
   if (_conversationPollTimer) {
@@ -2493,7 +2498,10 @@ async function renderConversationDetail(conversationId, containerId) {
     conv = await api("GET", "/api/conversations/" + conversationId);
     participants = await api("GET", "/api/conversations/" + conversationId + "/participants");
     messages = await api("GET", "/api/conversations/" + conversationId + "/messages");
-    skillNames = await api("GET", "/api/skill-pool/names?conversation=true");
+    skillNames = await api(
+      "GET",
+      "/api/skill-pool/names?conversation=true" + (_convShowDevSkills ? "&include_dev=true" : "")
+    );
     // 사용자 요청(2026-10-19, "대화를 닫고 다시 연 상태에서 아직 결과
     // 완료 전인 상황에서 작업 중임을 알려주는 메시지가 출력되는지") —
     // 이 대화를 열 때마다 아직 안 끝난 Job이 있는지 직접 확인한다
@@ -2586,6 +2594,13 @@ async function renderConversationDetail(conversationId, containerId) {
     // 바로 아래, 입력창 바로 위에 똑같은 역할의 인라인 표시를 추가한다.
     '<div id="conv-pending-indicator" style="display:none"></div>' +
     '<form class="inline" id="conv-message-form" style="margin-top:0.5rem;flex-wrap:wrap">' +
+    // 사용자 요청(2026-11-11, "개발업무 Skill의 경우 Default로 대화창에
+    // 보이지 않도록 설정하고, 필요시 노출하도록") — 완전히 숨기지 않고
+    // default-off 체크박스로 켜면 보이게 한다. 켜면 즉시 목록을 다시
+    // 불러온다(대화 자체를 다시 열지 않아도 바로 반영 —
+    // `renderConversationDetail` 재호출).
+    '<label class="muted" style="font-size:0.85rem;white-space:nowrap">' +
+    '<input type="checkbox" id="conv-show-dev-skills"' + (_convShowDevSkills ? " checked" : "") + '> 개발업무 스킬도 보기</label>' +
     '<select id="conv-skill-select"><option value="">스킬 선택 안 함</option>' +
     skillNames.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join("") +
     '</select>' +
@@ -2631,6 +2646,11 @@ async function renderConversationDetail(conversationId, containerId) {
       if (skillSelect) skillSelect.value = "";
       mentionMirror.sync();
     },
+  });
+
+  document.getElementById("conv-show-dev-skills").addEventListener("change", (ev) => {
+    _convShowDevSkills = ev.target.checked;
+    renderConversationDetail(conversationId, containerId);
   });
 
   // 삭제/나가기 뒤의 새로고침은 `refresh()`(전역, 현재 탭을 다시
@@ -5321,7 +5341,7 @@ async function renderJobs(content) {
       '<ul class="muted help-list">' +
       '<li><b>stub</b>(무료): LLM을 전혀 호출하지 않는 규칙 기반 스텁입니다 — 역할명·스킬로 자리표시자 산출물만 만들고 즉시 끝납니다. 조직도/배정 흐름만 비용 없이 채워보고 싶을 때 씁니다.</li>' +
       '<li><b>simple_llm</b>(비용 발생): 실제 LLM API를 딱 한 번만 호출해 "이 역할이 처음 맡을 산출물 하나"를 받아옵니다. CrewAI 같은 프레임워크 오버헤드 없이 가장 가벼운 실제 호출입니다.</li>' +
-      '<li><b>crewai</b>(비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 vectordb/graphdb 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 실행" 탭에서 바로 협업시킬 Agent를 만들 때 씁니다.</li>' +
+      '<li><b>crewai</b>(비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 지식검색/관계조회 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 실행" 탭에서 바로 협업시킬 Agent를 만들 때 씁니다.</li>' +
       '<li>만든 Agent는 이 탭이 아니라 "AI 에이전트 관리" 탭에서 온보딩 승인(pending_onboarding → active) 후에야 실제 업무 배정·실행에 쓸 수 있습니다.</li>' +
       '<li><b>중복 방지</b>: 같은 할 일(역할)에 이미 생성된 Agent가 있으면 새 Agent를 만들지 않고 기존 것을 재사용합니다 — 이 경우 "AI 에이전트 관리"에 새 행이 안 생기는데, 결과에 "재사용" 배지와 안내가 표시됩니다. 새 Agent를 만들려면 다른 할 일을 고르세요.</li>' +
       '</ul>'
@@ -5825,7 +5845,7 @@ async function renderAgentPool(content) {
     '<li>신규 Agent는 전부 pending_onboarding 상태로 생기고, <b>온보딩 승인</b>을 눌러야 active가 돼 "인력 검색"·매칭 후보로 노출됩니다.</li>' +
     '<li><b>오프보딩</b>(active→deprecated)은 이 화면에서 되돌릴 버튼이 없습니다 — 다시 쓰려면 관리자가 API/DB를 직접 손대야 합니다.</li>' +
     '<li><b>모델 설정</b>은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음).</li>' +
-    '<li><b>실행</b>은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 vectordb/rag가 있으면 지식검색(RAG), graphdb가 있으면 관계분석 방식으로 자동 동작합니다.</li>' +
+    '<li><b>실행</b>은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 지식검색이 있으면 지식검색(RAG), 관계조회가 있으면 관계분석 방식으로 자동 동작합니다.</li>' +
     '<li><b>지식베이스로 보내기</b>는 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생).</li>' +
     '<li><b>MCP 서버(JSON)</b>에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다 — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다.</li>' +
     '<li><b>도구 연결</b>은 아래에서 "도구/스킬 Pool"에 등록된 도구를 골라 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다.</li>' +
@@ -6300,18 +6320,34 @@ async function renderAgentOptimization(content) {
 
 /* ---------- 도구/스킬 Pool ---------- */
 
+let _poolCategoryFilter = "all";
+
+// 사용자 요청(2026-11-11, "스킬과 도구를 SW개발업무와 일반업무로 구분하고
+// 필터링 되도록 개선") — 분류 값을 한글 배지로 통일해 표시한다(대화창
+// 쪽 라벨과 같은 문구를 써서 두 화면의 용어가 어긋나지 않게 한다).
+const POOL_CATEGORY_LABEL = { sw_dev: "개발업무", general: "일반업무" };
+
 async function renderPoolRegistry(content) {
-  const [tools, skills] = await Promise.all([
+  const [allTools, allSkills] = await Promise.all([
     api("GET", "/api/tool-pool"),
     api("GET", "/api/skill-pool"),
   ]);
+  const tools = _poolCategoryFilter === "all"
+    ? allTools
+    : allTools.filter(t => t.category === _poolCategoryFilter);
+  const skills = _poolCategoryFilter === "all"
+    ? allSkills
+    : allSkills.filter(s => s.category === _poolCategoryFilter);
   const isAdmin = ME.role === "admin";
   // 사용자 요청(2026-10-27, "기본 도구 ID의 경우도 코드로 선택 가능하도록
   // 수정 필요(ID 노출 안됨)") — 테이블 표시·폼 선택 모두 정수 id 대신
   // tool_pool.code를 쓴다. id는 체크박스 value(실제 API 페이로드)로만
   // 남고 화면에는 안 보인다.
   const toolCodeById = {};
-  tools.forEach(t => { toolCodeById[t.id] = t.code || ("#" + t.id); });
+  // 분류 필터가 걸려 있어도 코드 조회·도구 선택 체크박스는 전체
+  // 목록(allTools) 기준이어야 한다 — 필터는 "목록에 보일 행"만 좁히는
+  // 용도이고, 다른 분류의 도구를 스킬에 연결하는 것 자체는 막지 않는다.
+  allTools.forEach(t => { toolCodeById[t.id] = t.code || ("#" + t.id); });
   // 사용자 요청(2026-10-27, "신규 도구, 스킬 생성의 경우 AI 에이전트
   // 생성 화면처럼 박스를 분리해줘") — 지금까지는 목록 카드 맨 아래에
   // 생성 폼을 그대로 이어붙였다. "AI 에이전트 생성" 화면(renderJobs)이
@@ -6322,6 +6358,17 @@ async function renderPoolRegistry(content) {
   // 넓은 입력칸" 구조로 맞춘다(기존 한 줄 inline 입력은 필드 수가
   // 늘면서 이미 비좁았다).
   content.innerHTML =
+    // 사용자 요청(2026-11-11, "스킬과 도구를 SW개발업무와 일반업무로
+    // 구분하고 필터링 되도록 개선") — Tool/Skill 두 표 공용 필터
+    // 하나(목록만 좁힌다 — 아래 도구 선택 체크박스들은 분류와 무관하게
+    // 항상 전체를 보여준다).
+    '<section class="card" style="padding-bottom:0.6rem">' +
+    '<label>분류 필터 <select id="pool-category-filter" style="margin-left:0.4rem">' +
+    '<option value="all"' + (_poolCategoryFilter === "all" ? " selected" : "") + '>전체</option>' +
+    '<option value="general"' + (_poolCategoryFilter === "general" ? " selected" : "") + '>일반업무</option>' +
+    '<option value="sw_dev"' + (_poolCategoryFilter === "sw_dev" ? " selected" : "") + '>개발업무</option>' +
+    '</select></label>' +
+    '</section>' +
     '<section class="card"><h2>Tool Pool — 재사용 가능한 도구</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
@@ -6337,8 +6384,8 @@ async function renderPoolRegistry(content) {
     '<li><b>삭제</b>(관리자 전용)는 이 도구를 참조하던 Agent 개별 연결도 함께 지웁니다.</li>' +
     '</ul>'
     ) +
-    table(["코드", "이름", "종류", "설명", "활성", "동작"], tools.map(t => [
-      esc(t.code || "-"), esc(t.name), esc(t.kind), esc(t.description), t.is_active ? "활성" : "비활성",
+    table(["코드", "이름", "종류", "분류", "설명", "활성", "동작"], tools.map(t => [
+      esc(t.code || "-"), esc(t.name), esc(t.kind), esc(POOL_CATEGORY_LABEL[t.category] || t.category), esc(t.description), t.is_active ? "활성" : "비활성",
       (isAdmin || !["mcp_stdio", "mcp_remote", "custom_python"].includes(t.kind))
         ? '<div class="actions"><button class="small" data-edit-tool="' + t.id + '">수정</button>' +
           (isAdmin ? '<button class="small danger" data-delete-tool="' + t.id + '">삭제</button>' : "") +
@@ -6362,6 +6409,9 @@ async function renderPoolRegistry(content) {
     '<option value="mcp_stdio">mcp_stdio</option><option value="custom_python">custom_python</option>' +
     '</select></label>' +
     '<label style="display:block;margin-top:0.5rem">설명<br><textarea id="tp-description" rows="2" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem"></textarea></label>' +
+    '<label style="display:block;margin-top:0.5rem">분류<br>' +
+    '<select id="tp-category" style="width:100%;box-sizing:border-box;margin-top:0.2rem"><option value="general">일반업무</option><option value="sw_dev">개발업무</option></select>' +
+    '</label>' +
     '<label id="tp-config-wrap" style="display:block;margin-top:0.5rem">config JSON<br><input id="tp-config" placeholder="예: {&#39;native_id&#39;:&#39;vectordb_search&#39;}" style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
     '<div id="tp-custom-python-fields" style="display:none">' +
     '<label style="display:block;margin-top:0.5rem">Python 함수<br><textarea id="tp-custom-source" placeholder="def tool_fn(query: str) -> str:&#10;    return &#34;...&#34;" rows="18" style="width:100%;box-sizing:border-box;font-family:monospace;resize:vertical;min-height:320px;margin-top:0.2rem"></textarea></label>' +
@@ -6376,14 +6426,26 @@ async function renderPoolRegistry(content) {
     '<li>모드 "none"은 도구 연결 없이 이름표만 붙이는 용도입니다 — 하니스 방법론/agent-evaluator 절차 스킬 17개가 여기 해당합니다(사람 판단이 필요한 절차라 자동 도구화가 안 됨).</li>' +
     '<li>"recommend-fix-workflow" 하나만 예외로 실제 MCP 도구(정적 Gate 조치 지식 조회)가 붙어 있습니다.</li>' +
     '<li><b>대화창 표시</b>를 꺼두면 대화창의 스킬 선택 드롭다운에는 안 보이지만(선택해서 고를 수 없음), Agent의 skill_tags로는 그대로 쓸 수 있습니다 — mcp_remote/mcp_stdio/custom_python 도구가 붙은 스킬은 대화창 기본 AI(단발 호출, 실행 루프 없음)에서는 실제로 호출이 안 돼 기본값이 꺼짐으로 돼 있습니다(실제 CrewAI Agent 실행에서는 똑같이 동작합니다).</li>' +
+    '<li><b>분류</b>(사용자 요청, 2026-11-11, "SW개발업무와 일반업무로 구분, 개발업무는 Default로 대화창에 안 보이고 필요시 노출") — "개발업무"로 분류된 스킬/도구는 대화창 드롭다운에 default로 안 보이지만 완전히 숨겨진 건 아닙니다 — 대화창의 "개발업무 스킬도 보기" 체크박스를 켠 사용자에게는 보입니다("대화창 표시"가 꺼진 스킬과는 다른 축으로, 둘 다 적용됩니다 — show_in_conversation이 꺼져 있으면 체크박스를 켜도 안 보입니다). Agent/Task의 skill_tags 자동완성에는 분류와 무관하게 항상 둘 다 뜹니다(그 경로는 CrewAI 실행이라 개발업무 스킬도 실제로 동작하기 때문). 위쪽 "분류 필터"로 목록을 좁혀볼 수 있고, 수정 화면에서 바로 바꿀 수 있습니다.</li>' +
     '<li><b>삭제</b>(관리자 전용)는 이 스킬 레코드만 지웁니다 — 같은 이름의 skill_tags를 가진 Agent/사람은 그대로 남고, 다음 실행부터 자동 도구 연결만 안 됩니다.</li>' +
     '</ul>'
     ) +
-    table(["코드", "이름", "설명", "기본 도구", "모드", "대화창 표시", "동작"], skills.map(s => [
+    table(["코드", "이름", "설명", "기본 도구", "모드", "분류", "대화창 표시", "동작"], skills.map(s => [
       esc(s.code || "-"), esc(s.name), esc(s.description),
       esc(s.default_tool_pool_ids.map(id => toolCodeById[id] || ("#" + id)).join(", ") || "-"),
       esc(s.augmentation_mode),
-      s.show_in_conversation ? "표시" : "숨김",
+      esc(POOL_CATEGORY_LABEL[s.category] || s.category),
+      // 사용자 보고(2026-11-11, 스크린샷 — "대화창 표시"가 "표시"인데도
+      // 실제 대화창에는 안 보임) — `show_in_conversation`과 `category`는
+      // 독립된 두 조건이고, 대화창 API는 show_in_conversation=1이 아니면
+      // 무조건 빠지고, category='sw_dev'면 "개발업무 스킬도 보기"
+      // 체크박스를 켠 사용자에게만 보인다(완전히 숨기는 게 아니라
+      // default-off). 이 칸은 지금까지 show_in_conversation 하나만
+      // 보여줘 "표시"인데 실제로는 (기본값으로는) 안 뜨는 모순된
+      // 화면이었다 — 두 조건을 합친 실제 결과를 보여주도록 고친다.
+      !s.show_in_conversation
+        ? "숨김"
+        : (s.category === "sw_dev" ? "기본 숨김(개발업무)" : "표시"),
       '<div class="actions"><button class="small" data-edit-skill="' + s.id + '">수정</button>' +
         (isAdmin ? '<button class="small danger" data-delete-skill="' + s.id + '">삭제</button>' : "") +
         "</div>",
@@ -6396,9 +6458,12 @@ async function renderPoolRegistry(content) {
     '<label style="display:block;margin-top:0.5rem">모드<br>' +
     '<select id="sp-mode" style="margin-top:0.2rem"><option value="tool">tool(자동 호출)</option><option value="always">always</option><option value="none">none</option></select>' +
     '</label>' +
+    '<label style="display:block;margin-top:0.5rem">분류<br>' +
+    '<select id="sp-category" style="margin-top:0.2rem"><option value="general">일반업무(대화창에 기본 표시)</option><option value="sw_dev">개발업무(대화창에 기본 숨김)</option></select>' +
+    '</label>' +
     '<div id="sp-tool-picker" style="margin-top:0.5rem">' +
     '<div class="muted" style="margin-bottom:0.2rem">기본 도구(코드로 선택, 복수 가능 — 모드가 tool/always일 때만)</div>' +
-    tools.map(t =>
+    allTools.map(t =>
       '<label style="margin-right:0.8rem;display:inline-block"><input type="checkbox" class="sp-tool-chk" value="' + t.id + '"> ' + esc(t.code || ("#" + t.id)) + '</label>'
     ).join("") +
     '</div>' +
@@ -6406,6 +6471,10 @@ async function renderPoolRegistry(content) {
     '<button class="primary" type="submit" style="margin-top:0.6rem">스킬 등록</button></form>' +
     "</section>";
 
+  document.getElementById("pool-category-filter").addEventListener("change", (ev) => {
+    _poolCategoryFilter = ev.target.value;
+    renderPoolRegistry(content);
+  });
   const tpKindSelect = document.getElementById("tp-kind");
   const tpConfigInput = document.getElementById("tp-config");
   const tpConfigWrap = document.getElementById("tp-config-wrap");
@@ -6443,6 +6512,7 @@ async function renderPoolRegistry(content) {
         kind,
         description: document.getElementById("tp-description").value,
         config,
+        category: document.getElementById("tp-category").value,
       });
       showMsg("global-msg", "도구를 등록했습니다.", "ok");
       refresh();
@@ -6473,6 +6543,7 @@ async function renderPoolRegistry(content) {
         default_tool_pool_ids,
         augmentation_mode: spModeSelect.value,
         show_in_conversation: document.getElementById("sp-show-in-conv").checked,
+        category: document.getElementById("sp-category").value,
       });
       showMsg("global-msg", "스킬을 등록했습니다.", "ok");
       refresh();
@@ -6505,6 +6576,11 @@ async function renderPoolRegistry(content) {
         '<span class="muted">— 이름·종류는 변경 불가(이름은 Skill 매칭·Agent 연결이 참조해 바꾸면 그 연결이 끊어집니다. 종류를 바꾸려면 삭제 후 새로 등록하세요).</span></p>' +
         '<label style="display:block;margin-top:0.4rem">설명<br>' +
         '<input id="tpe-description" value="' + escAttr(t.description) + '" style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
+        '<label style="display:block;margin-top:0.4rem">분류<br>' +
+        '<select id="tpe-category" style="margin-top:0.2rem">' +
+        '<option value="general"' + (t.category === "general" ? " selected" : "") + '>일반업무</option>' +
+        '<option value="sw_dev"' + (t.category === "sw_dev" ? " selected" : "") + '>개발업무</option>' +
+        '</select></label>' +
         (isCustom
           ? '<label style="display:block;margin-top:0.6rem">Python 함수<br>' +
             '<textarea id="tpe-custom-source" rows="24" style="width:100%;box-sizing:border-box;font-family:monospace;resize:vertical;min-height:420px;margin-top:0.2rem">' + esc(t.config.function_source || "") + '</textarea></label>' +
@@ -6515,7 +6591,7 @@ async function renderPoolRegistry(content) {
         '<button class="small" type="button" id="tool-edit-cancel">취소</button></div>';
       btn.closest("tr").insertAdjacentHTML(
         "afterend",
-        '<tr><td colspan="6"><form id="tool-edit-form" style="padding:0.6rem 0">' + formHtml + "</form></td></tr>"
+        '<tr><td colspan="7"><form id="tool-edit-form" style="padding:0.6rem 0">' + formHtml + "</form></td></tr>"
       );
       const tr = btn.closest("tr").nextElementSibling;
       openToolEditRow = tr;
@@ -6539,6 +6615,7 @@ async function renderPoolRegistry(content) {
           await api("PATCH", "/api/tool-pool/" + t.id, {
             description: tr.querySelector("#tpe-description").value,
             config,
+            category: tr.querySelector("#tpe-category").value,
           });
           showMsg("global-msg", "도구를 수정했습니다.", "ok");
           refresh();
@@ -6566,18 +6643,26 @@ async function renderPoolRegistry(content) {
         '<p class="muted">모드: <b>' + esc(s.augmentation_mode) + '</b>(수정 불가 — 코드(' + esc(s.code || "-") + ')에 모드가 세그먼트로 박혀 있어, 모드를 바꾸려면 삭제 후 새로 등록해야 합니다).</p>' +
         '<label style="display:block;margin-top:0.4rem">설명<br>' +
         '<textarea id="spe-description" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem">' + esc(s.description) + '</textarea></label>' +
+        '<label style="display:block;margin-top:0.4rem">분류<br>' +
+        '<select id="spe-category" style="margin-top:0.2rem">' +
+        '<option value="general"' + (s.category === "general" ? " selected" : "") + '>일반업무(대화창에 기본 표시)</option>' +
+        '<option value="sw_dev"' + (s.category === "sw_dev" ? " selected" : "") + '>개발업무(대화창에 기본 숨김)</option>' +
+        '</select></label>' +
         '<div style="margin-top:0.6rem' + (modeAllowsTools ? "" : ";opacity:0.45") + '">기본 도구(코드로 선택, 복수 가능' + (modeAllowsTools ? "" : " — 이 스킬은 모드가 none이라 비활성") + ')<br>' +
-        tools.map(t =>
+        allTools.map(t =>
           '<label style="margin-right:0.8rem;display:inline-block"><input type="checkbox" class="spe-tool-chk" value="' + t.id + '"' +
           (checkedToolIds.has(t.id) ? " checked" : "") + (modeAllowsTools ? "" : " disabled") + '> ' + esc(t.code || ("#" + t.id)) + '</label>'
         ).join("") +
         '</div>' +
         '<label style="display:block;margin-top:0.6rem"><input type="checkbox" id="spe-show-in-conv"' + (s.show_in_conversation ? " checked" : "") + '> 대화창에 표시</label>' +
+        (s.category === "sw_dev"
+          ? '<p class="muted" style="margin-top:0.2rem">⚠ 분류가 "개발업무"라 이 체크박스를 켜도 대화창 드롭다운에는 default로 안 뜹니다 — 대화창의 "개발업무 스킬도 보기" 체크박스를 켠 사용자에게만 보입니다.</p>'
+          : "") +
         '<div class="actions" style="margin-top:0.6rem"><button class="primary" type="submit">저장</button>' +
         '<button class="small" type="button" id="skill-edit-cancel">취소</button></div>';
       btn.closest("tr").insertAdjacentHTML(
         "afterend",
-        '<tr><td colspan="7"><form id="skill-edit-form" style="padding:0.6rem 0">' + formHtml + "</form></td></tr>"
+        '<tr><td colspan="8"><form id="skill-edit-form" style="padding:0.6rem 0">' + formHtml + "</form></td></tr>"
       );
       const tr = btn.closest("tr").nextElementSibling;
       openSkillEditRow = tr;
@@ -6592,6 +6677,7 @@ async function renderPoolRegistry(content) {
             description: tr.querySelector("#spe-description").value,
             default_tool_pool_ids,
             show_in_conversation: tr.querySelector("#spe-show-in-conv").checked,
+            category: tr.querySelector("#spe-category").value,
           });
           showMsg("global-msg", "스킬을 수정했습니다.", "ok");
           refresh();
@@ -7379,7 +7465,7 @@ async function renderKnowledgeBase(content) {
     '<section class="card"><h2>임베딩 모델 설정(VectorDB 검색용)</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>"rag" 스킬을 가진 Agent가 과거 산출물을 검색할 때 쓰는 임베딩 provider/모델입니다 — 채팅용 모델과는 별개입니다.</li>' +
+      '<li>"지식검색" 스킬을 가진 Agent가 과거 산출물을 검색할 때 쓰는 임베딩 provider/모델입니다 — 채팅용 모델과는 별개입니다.</li>' +
       '<li>서로 다른 모델로 만든 벡터는 비교하지 않으므로(의미 공간이 다름) 시스템 전체에 하나만 설정합니다. 바꾸면 그 이전에 다른 모델로 색인된 과거 산출물은 더 이상 검색되지 않습니다(다시 색인해야 함).</li>' +
       '<li>설정한 적이 없으면 자동판별(OPENAI_API_KEY가 있으면 openai, 없으면 로컬 ollama) 결과를 보여줍니다 — 아래 폼으로 저장하면 그걸 명시적으로 고정합니다.</li>' +
       '<li>provider를 고르면 그 provider가 실제로 보유한 임베딩 모델 목록을 자동으로 불러와 "모델 선택" 드롭다운에 채워줍니다(Ollama는 로컬 서버, OpenAI는 API 키로 조회 — 과금 없는 카탈로그 조회입니다). 드롭다운에서 고르면 아래 모델명 칸에 그대로 채워집니다 — 목록에 없는 이름이 필요하면 그 칸에 직접 입력해도 됩니다.</li>' +
@@ -7422,7 +7508,7 @@ async function renderKnowledgeBase(content) {
     '<section class="card"><h2>지식 자료실(RAG 참고 자료 — 파일 업로드)</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>여기 올린 자료는 대화와 무관하게 전체 시스템에서 공유됩니다 — "rag" 스킬을 가진 모든 Agent가 검색할 수 있습니다(대화창·AI 에이전트 관리에서 올린 파일도 똑같은 곳에 쌓입니다).</li>' +
+      '<li>여기 올린 자료는 대화와 무관하게 전체 시스템에서 공유됩니다 — "지식검색" 스킬을 가진 모든 Agent가 검색할 수 있습니다(대화창·AI 에이전트 관리에서 올린 파일도 똑같은 곳에 쌓입니다).</li>' +
       '<li>지원 형식: .md / .markdown / .txt / .html / .htm / .pdf (최대 10MB).</li>' +
       '</ul>'
     ) +
@@ -9317,10 +9403,11 @@ const MANUAL_MARKDOWN = [
 '처음이면 **"새 대화 제목(선택)"** 입력란(비워도 됩니다)에 적고 "**새 대화 시작**"을 누르세요.',
 '기존 대화가 있으면 목록에서 "**열기**"를 누릅니다.',
 '',
-'### 2단계 — 메시지 입력창의 세 가지 컨트롤 이해하기',
+'### 2단계 — 메시지 입력창의 컨트롤 이해하기',
 '',
 '화면 맨 아래 입력 영역에 왼쪽부터 순서대로:',
 '',
+'- **"개발업무 스킬도 보기" 체크박스**(기본값 꺼짐, 사용자 요청 2026-11-11) — 바로 옆 스킬 선택 드롭다운에는 기본적으로 **일반업무**(기획·전략·자료조사·보고서·데이터분석·제안서·실적서 등) 스킬만 보입니다. Harness Methodology/Gate 채점 같은 **개발업무** 스킬은 완전히 숨겨진 게 아니라 default-off일 뿐 — 이 체크박스를 켜면 바로 보입니다(어느 스킬이 어느 분류인지는 8절 "도구/스킬 Pool" 관리 화면에서 확인·변경할 수 있습니다, admin/manager 전용).',
 '- **스킬 선택 드롭다운**(기본값 "스킬 선택 안 함") — 비워두고 질문만 보내도 되지만, 멘션 없이 보내는 응답을 특정 스킬로 "그라운딩"하고 싶을 때 씁니다.',
 '  예를 들어 실시간 정보가 필요한 질문이면 "**실시간웹검색**"을 골라두세요 — Tavily로 실제 웹 검색을 한 뒤 그 결과를 참고해 답합니다(서버에 `TAVILY_API_KEY` 설정이 먼저 돼 있어야 합니다 — 관리자에게 문의).',
 '  **멘션을 하나라도 넣으면 이 선택은 자동으로 비워집니다** — 멘션이 있으면 그 호출이 우선이고, 스킬 선택은 "아무도 안 불렀을 때(기본 AI가 답할 때) 어떤 지식/도구로 그라운딩할지"를 고르는 용도이기 때문입니다.',
@@ -9347,7 +9434,7 @@ const MANUAL_MARKDOWN = [
 '각 메시지 줄에는 두 가지 "보내기" 버튼이 있습니다(대화의 모든 메시지가 자동으로 쌓이지 않고, 남길 만하다고 직접 고른 메시지만 보냅니다):',
 '',
 '- **갤러리로 보내기**(모든 참가자) — 이 메시지 하나를 결과물로 승격해 "갤러리" 탭에서 모아볼 수 있게 합니다(비용 없는 단순 저장).',
-'- **지식베이스로 보내기**(admin/manager 전용) — 이 메시지를 임베딩해 VectorDB에 색인합니다(실제 임베딩 API 호출 — 비용 발생). 색인된 내용은 이후 대화에서 스킬 선택 드롭다운의 "**rag**"를 고르거나, "rag" 스킬을 가진 Agent를 실행하면 실시간으로 검색돼 답변에 반영됩니다.',
+'- **지식베이스로 보내기**(admin/manager 전용) — 이 메시지를 임베딩해 VectorDB에 색인합니다(실제 임베딩 API 호출 — 비용 발생). 색인된 내용은 이후 대화에서 스킬 선택 드롭다운의 "**지식검색**"를 고르거나, "지식검색" 스킬을 가진 Agent를 실행하면 실시간으로 검색돼 답변에 반영됩니다.',
 '',
 '### 6단계 — (선택) 정식 절차로 넘기기',
 '',
@@ -9469,7 +9556,7 @@ const MANUAL_MARKDOWN = [
 '   - **stub**(무료): LLM 호출 없는 규칙 기반 자리표시자 — 흐름만 비용 없이 채워볼 때.',
 '   - **simple_llm**(비용 발생): 실제 LLM을 한 번만 호출하는 가장 가벼운 실제 Agent.',
 '   - **crewai**(비용 발생): 실제 CrewAI Agent로 만듭니다 — 이후 "Crew 빌더"/"팀 Agent 실행"/파이프라인에서 다른 Agent와 실제로 협업·위임할 수 있는 건 이 방식뿐입니다.',
-'     필요 스킬에 vectordb/graphdb 등이 있으면 관련 Tool이 생성 시점부터 자동으로 붙습니다.',
+'     필요 스킬에 지식검색/관계조회 등이 있으면 관련 Tool이 생성 시점부터 자동으로 붙습니다.',
 '3. 만든 Agent는 "**AI 에이전트 관리**"에서 **온보딩 승인**(pending_onboarding → active)을 눌러야 실제 배정·실행·대화 호출에 쓸 수 있습니다.',
 '4. 같은 탭에서 Agent별로:',
 '   - **모델 설정**: 기본 LLM provider/model(비용 없음, 설정만 저장).',
@@ -9528,7 +9615,7 @@ const MANUAL_MARKDOWN = [
 '| # | 단계 | 모드 | 참여 | 사람 승인 |',
 '|---|---|---|---|---|',
 '| 1 | 요구사항 분석/계획 확정 | 단독 | 요구사항 분석가 | **필요** |',
-'| 2 | 자료 조사·분석 | 순차 릴레이 | 외부 자료 조사가 → 3C4P SWOT 분석가 | 불필요 |',
+'| 2 | 자료 조사·분석 | 순차 릴레이 | 외부 자료 조사가 → 데이터 분석가 → 3C4P SWOT 분석가 | 불필요 |',
 '| 3 | 기획 계획 수립 | 단독 | PM | 불필요 |',
 '| 4 | 작성 | 순차 릴레이 | 기획서 작성자 → 사업전략 수립가 → C-level 보고서 작성자 → 프레젠테이션 자료 작성자(최종 통합) | 불필요 |',
 '| 5 | 내용 검증 | 단독 | 품질 관리자 | 불필요(Gate 0.5) |',
@@ -9536,13 +9623,29 @@ const MANUAL_MARKDOWN = [
 '| 7 | 최종 승인 판정 | 단독 | PM | 불필요(Gate 0.5, 반복 실패 시에만 에스컬레이션) |',
 '',
 '단계 구성·Gate 규칙·최소 HITL 원칙 전부 "소프트웨어 개발 파이프라인"과 완전히 동일한 엔진입니다 — 역할만 사업/기획 쪽으로 바뀐 것뿐입니다.',
+'**"데이터 분석가"**는 `데이터분석가이드` 스킬(실제 CrewAI Tool "수치 데이터 분석기" 연결)로 합계·평균·증감률·표준편차를 코드로 직접 계산합니다 — LLM이 숫자를 서술로 지어내지 않도록, 값이 부족하면(표준편차는 2개 미만, 증감률은 기준값 0) 추측 대신 계산 불가를 그대로 알립니다.',
+'',
+'### 기본 제공 "제안서 작성 파이프라인"·"실적 보고 파이프라인"',
+'',
+'"사업/기획 업무 처리 파이프라인"의 "작성" 단계는 매번 기획서·전략·경영진 요약·발표자료 4종을 한꺼번에 만듭니다 — 제안서나 실적서 하나만 필요할 때 이 4종이 같이 나오는 낭비를 막기 위해 두 업무는 독립 템플릿으로 분리했습니다.',
+'',
+'| # | 제안서 작성 파이프라인 | 실적 보고 파이프라인 |',
+'|---|---|---|',
+'| 1 | 요구사항 분석/계획 확정(사람 승인 필요) | 요구사항 분석/계획 확정(사람 승인 필요) |',
+'| 2 | 자료 조사·분석(외부 자료 조사가 → 데이터 분석가) | 데이터 분석(데이터 분석가) |',
+'| 3 | 작성(제안서 작성자) | 작성(실적 보고서 작성자) |',
+'| 4 | 내용 검증(품질 관리자, Gate 0.5) | 최종 승인 판정(PM, 검증+요구사항 추적성 겸임, Gate 0.5) |',
+'| 5 | 표현 검토(콘텐츠 카피라이팅, Gate 0.5) | — |',
+'| 6 | 최종 승인 판정(PM, Gate 0.5) | — |',
+'',
+'제안서는 발주처 평가 기준(배점표) 대응과 경쟁사 대비 차별화가 핵심이라 "표현 검토" 단계까지 그대로 두었고, 실적서는 정기·정형 문서라 그 단계를 생략해 더 가볍게 구성했습니다.',
 '',
 '### 새 파이프라인 만들기(admin/manager 전용, "파이프라인 관리" 탭)',
 '',
 '1. "파이프라인 등록"으로 이름·설명·도메인(예: software_dev, biz_strategy)을 정합니다.',
 '2. "단계 추가"로 단계를 하나씩 쌓습니다 — 이름, 모드(단독/순차 릴레이/병행 위임)를 고르면 그 모드에 맞는 역할 선택 UI가 바뀝니다(단독=1명, 순차 릴레이=N명+순서, 병행 위임=리드 1명+코워커 여러 명).',
 '   공통 지시문, Gate 통과 비율(%), 최대 재시도, "사람 승인 필요" 체크박스, **산출물 형식**(텍스트/마크다운/HTML/코드 — 코드로 지정하면 결과 화면에 문법 강조가 자동 적용됩니다)도 이때 정합니다.',
-'   - ⚠️ **병행 위임(parallel_delegated) 모드는 신중하게 쓰세요** — 매니저가 "Delegate work to coworker" 도구로 그때그때 동적으로 위임하는 방식인데, 실측 결과 매니저가 실제 위임 대신 위임 계획만 요약하고 끝내는 경우가 반복 확인됐습니다. 여러 명이 순서대로 작업을 이어받으면 되는 경우라면 **순차 릴레이**가 더 안정적입니다(기본 제공 두 파이프라인의 다인원 단계가 전부 순차 릴레이인 이유).',
+'   - ⚠️ **병행 위임(parallel_delegated) 모드는 신중하게 쓰세요** — 매니저가 "Delegate work to coworker" 도구로 그때그때 동적으로 위임하는 방식인데, 실측 결과 매니저가 실제 위임 대신 위임 계획만 요약하고 끝내는 경우가 반복 확인됐습니다. 여러 명이 순서대로 작업을 이어받으면 되는 경우라면 **순차 릴레이**가 더 안정적입니다(기본 제공 파이프라인 4개 전부, 다인원 단계가 전부 순차 릴레이인 이유).',
 '3. 단계 순서는 카드의 위/아래 이동 버튼으로 나중에도 바꿀 수 있습니다.',
 '',
 '<h2 id="scenario">7. 실전 시나리오 4가지</h2>',

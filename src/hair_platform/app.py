@@ -3073,11 +3073,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/tool-pool")
     def list_tool_pool(
+        category: str | None = None,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         """재사용 가능한 도구(MCP 서버 또는 native Tool)
-        레지스트리 조회."""
-        return pool_registry.list_tools(conn)
+        레지스트리 조회. `category`(사용자 요청, 2026-11-11, "스킬과
+        도구를 SW개발업무와 일반업무로 구분하고 필터링 되도록 개선")를
+        주면 `'sw_dev'`/`'general'` 중 하나로만 좁힌다."""
+        try:
+            return pool_registry.list_tools(conn, category)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/tool-pool", status_code=201)
     def create_tool_pool_entry(
@@ -3115,6 +3121,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 payload.kind,
                 payload.config,
                 payload.tool_names,
+                payload.category,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3192,16 +3199,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/skill-pool")
     def list_skill_pool(
+        category: str | None = None,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         """`skill_tags`를 정식 엔티티로 승격한 Skill Pool
         조회. `augmentation_mode="tool"`인 스킬은 `default_tool_pool_ids`가
-        가리키는 도구를 이 스킬을 가진 모든 Agent에 자동으로 붙인다."""
-        return pool_registry.list_skills(conn)
+        가리키는 도구를 이 스킬을 가진 모든 Agent에 자동으로 붙인다.
+        `category`(사용자 요청, 2026-11-11, "스킬과 도구를 SW개발업무와
+        일반업무로 구분하고 필터링 되도록 개선")를 주면 `'sw_dev'`/
+        `'general'` 중 하나로만 좁힌다."""
+        try:
+            return pool_registry.list_skills(conn, category)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/skill-pool/names")
     def list_skill_pool_names(
         conversation: bool = False,
+        include_dev: bool = False,
         user: sqlite3.Row = Depends(get_current_user),
     ):
         """Phase 5 — Skill 자동완성(사용자 요청, "협업 워크스페이스 UX
@@ -3217,10 +3232,21 @@ def create_app(db_path: str | None = None) -> FastAPI:
         단발 호출 경로에서 구조적으로 실행이 안 되는 것들)을 뺀다.
         Agent/Task의 `skill_tags` 자동완성(`skill-datalist`)은 이
         파라미터 없이 그대로 호출해 전체 목록을 계속 받는다 — 그
-        경로(CrewAI 실행)는 이 스킬들도 실제로 동작하기 때문이다."""
+        경로(CrewAI 실행)는 이 스킬들도 실제로 동작하기 때문이다.
+
+        `include_dev=true`(사용자 요청, 2026-11-11, "개발업무 Skill의
+        경우 Default로 대화창에 보이지 않도록 설정하고, 필요시
+        노출하도록" — 한 번 "예외 없이 항상 제외"로 단순화했다가, 이
+        요청으로 "기본은 숨김, 필요하면 노출"로 되돌렸다) —
+        `conversation=true`일 때만 의미가 있다: 기본값은 `category=
+        'general'`만 보여주고, 이 플래그를 켜야 `'sw_dev'` 스킬도 함께
+        보인다(완전히 숨기는 게 아니라 default-off). `conversation=false`
+        (Agent/Task 자동완성)는 이 플래그와 무관하게 항상 전체 목록이다."""
         skills = pool_registry.list_skills(conn)
         if conversation:
             skills = [s for s in skills if s["show_in_conversation"]]
+            if not include_dev:
+                skills = [s for s in skills if s["category"] != "sw_dev"]
         return [s["name"] for s in skills]
 
     @app.post("/api/skill-pool", status_code=201)
@@ -3237,6 +3263,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 payload.default_tool_pool_ids,
                 payload.augmentation_mode,
                 payload.show_in_conversation,
+                payload.category,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4706,7 +4733,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                         conn, subject_id, False
                     )
                 elif subject_type == "pipeline_run_stage":
-                    # 반려 = "다시 해와"(human-approval-loop 스킬 안내와
+                    # 반려 = "다시 해와"(승인루프 스킬 안내와
                     # 일치) — 재시도 여력이 남아 있으면 파이프라인은
                     # 'running'으로 돌아가 같은 단계를 재시도한다.
                     pipeline_run_id = pipeline_runtime.resolve_stage_decision(

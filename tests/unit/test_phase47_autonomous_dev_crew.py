@@ -151,4 +151,4 @@ def test_gc_autonomous_dev_crew_developers_carry_tdd_and_commit_skills():
         ).fetchone()
         skills = json.loads(row["skill_tags"])
         assert "tdd-ai-workflow-checklist" in skills
-        assert "commit-pr-message-rules" in skills
+        assert "커밋메시지작성" in skills

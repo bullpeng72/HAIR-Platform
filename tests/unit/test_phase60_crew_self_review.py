@@ -160,7 +160,7 @@ def test_run_crew_self_review_chains_next_worker_from_reviewed_output_not_draft(
             process="sequential", self_review=True,
         )
     tasks = captured["tasks"]
-    draft0, review0, draft1, review1 = tasks
+    _draft0, review0, draft1, _review1 = tasks
     assert draft1.context == [review0]  # review0(최종본)에서 이어받음 — draft0 아님
 
 

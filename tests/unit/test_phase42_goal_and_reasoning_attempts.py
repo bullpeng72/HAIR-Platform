@@ -54,10 +54,10 @@ def _crew_output(raw, task_raws):
 
 def test_agent_goal_mentions_skills_and_completion_discipline():
     goal = crew_runtime._agent_goal(
-        "스펙 작성자", ["spec-driven-artifacts", "docs-style-guide"]
+        "스펙 작성자", ["spec-driven-artifacts", "문서작성가이드"]
     )
     assert "spec-driven-artifacts" in goal
-    assert "docs-style-guide" in goal
+    assert "문서작성가이드" in goal
     assert "완료 기준" in goal
     assert "생략하지 않는다" in goal
 

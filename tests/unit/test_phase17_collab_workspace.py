@@ -249,7 +249,7 @@ def test_gc132_admin_manager_can_view_but_not_write_deliverable(client_and_conn)
 def test_gc133_assist_injects_matching_skill_pool_description(client_and_conn):
     client, conn = client_and_conn
     _brief_id, task_id, _human_id = _setup_human_assignee_task(
-        client, conn, skills=["graphdb"]
+        client, conn, skills=["관계조회"]
     )
 
     _login(client, "member1", "memberpass")
@@ -1239,10 +1239,10 @@ def test_gc189_execute_agent_records_and_exposes_retrieved_context(client_and_co
     `agent_execution_jobs.retrieved_context`에 남기고 job 조회 응답으로
     노출해야 한다."""
     client, conn = client_and_conn
-    _brief_id, task_id = _make_brief_and_task(client, "정책 문의 응답", ["rag"])
+    _brief_id, task_id = _make_brief_and_task(client, "정책 문의 응답", ["지식검색"])
     _login(client, "admin1", "adminpass")
     cur = conn.execute(
-        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[\"rag\"]', 'active')",
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[\"지식검색\"]', 'active')",
         ("정책 문의 응답",),
     )
     conn.commit()
@@ -1264,7 +1264,7 @@ def test_gc189_execute_agent_records_and_exposes_retrieved_context(client_and_co
     fake_client = _fake_openai_embeddings(
         {
             "원격근무는 3개월 수습 기간 중 사용할 수 없다": [1.0, 0.0],
-            "'정책 문의 응답' 업무를 수행하세요(필요 스킬: rag).": [0.95, 0.05],
+            "'정책 문의 응답' 업무를 수행하세요(필요 스킬: 지식검색).": [0.95, 0.05],
         }
     )
     with patch("openai.OpenAI", return_value=fake_client):

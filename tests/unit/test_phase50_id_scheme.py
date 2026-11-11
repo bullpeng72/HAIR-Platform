@@ -56,9 +56,10 @@ def test_assign_code_different_segments_number_independently():
     pyexec_code = id_scheme.assign_code(
         conn, "tool_pool", cur.lastrowid, id_scheme.TOOL_KIND_SEGMENT["custom_python"]
     )
-    # 기존 레퍼런스 PYEXEC 6개(Spec EARS 린터 등) 다음 번호라 007이어야
-    # 한다 — NATIVE/MCPSTDIO/MCPRMT 세그먼트 번호와는 무관.
-    assert pyexec_code == "TUL-PYEXEC-007"
+    # 기존 레퍼런스 PYEXEC 7개(Spec EARS 린터~수치 데이터 분석기, 2026-
+    # 11-11 추가) 다음 번호라 008이어야 한다 — NATIVE/MCPSTDIO/MCPRMT
+    # 세그먼트 번호와는 무관.
+    assert pyexec_code == "TUL-PYEXEC-008"
 
 
 def test_assign_code_unknown_tool_kind_or_skill_mode_raises():
@@ -86,19 +87,23 @@ def test_init_schema_assigns_codes_to_all_reference_rows():
     ]
 
     # 2026-11-08 "콘텐츠 카피라이팅" 추가(사업/기획 업무 처리 파이프라인
-    # 신설, AGENT_SPECS 정규 목록에 포함)로 22 → 23.
-    assert len(agent_codes) == 23
+    # 신설, AGENT_SPECS 정규 목록에 포함)로 22 → 23. 2026-11-11 "데이터
+    # 분석가"/"제안서 작성자"/"실적 보고서 작성자" 추가(제안서/실적서
+    # 작성 파이프라인 신설)로 23 → 26, Tool "수치 데이터 분석기" 추가로
+    # 11 → 12, Skill 3종(data-analysis-guide/proposal-writing-guide/
+    # performance-report-writing-guide) 추가로 48 → 51.
+    assert len(agent_codes) == 26
     assert all(c is not None for c in agent_codes)
-    assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 23종 전원 레퍼런스
-    assert len(set(agent_codes)) == 23  # 전부 유일
+    assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 26종 전원 레퍼런스
+    assert len(set(agent_codes)) == 26  # 전부 유일
 
-    assert len(tool_codes) == 11
+    assert len(tool_codes) == 12
     assert all(c is not None for c in tool_codes)
-    assert len(set(tool_codes)) == 11
+    assert len(set(tool_codes)) == 12
 
-    assert len(skill_codes) == 48
+    assert len(skill_codes) == 51
     assert all(c is not None for c in skill_codes)
-    assert len(set(skill_codes)) == 48
+    assert len(set(skill_codes)) == 51
 
 
 def test_init_schema_tool_codes_reflect_kind():
@@ -172,7 +177,7 @@ def test_reset_and_reassign_codes_wipes_then_reassigns_deterministically():
 
     counts = id_scheme.reset_and_reassign_codes(conn)
 
-    assert counts == {"agent_pool": 23, "tool_pool": 11, "skill_pool": 48}
+    assert counts == {"agent_pool": 26, "tool_pool": 12, "skill_pool": 51}
     after = {
         table: [
             r["code"]
@@ -243,7 +248,7 @@ def test_agent_pool_list_endpoint_exposes_code(client_and_conn):
     resp = client.get("/api/agent-pool")
     assert resp.status_code == 200, resp.text
     agents = resp.json()
-    assert len(agents) == 23
+    assert len(agents) == 26
     assert all(a["code"] and a["code"].startswith("AGT-REF-") for a in agents)
 
 

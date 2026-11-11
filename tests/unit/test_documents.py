@@ -16,6 +16,7 @@ html) 등을 입력받을 수 있도록 개선해줘 — 대화에 바로 로컬
 
 from __future__ import annotations
 
+import itertools
 from unittest.mock import patch
 
 import pytest
@@ -110,7 +111,7 @@ def test_chunk_text_splits_a_single_huge_paragraph():
     assert len(chunks) == 4
     assert all(len(c) <= 300 for c in chunks)
     overlap = documents._CHUNK_OVERLAP_CHARS
-    for prev, nxt in zip(chunks, chunks[1:]):
+    for prev, nxt in itertools.pairwise(chunks):
         assert prev[-overlap:] == nxt[:overlap]
     rebuilt = chunks[0] + "".join(c[overlap:] for c in chunks[1:])
     assert rebuilt == text

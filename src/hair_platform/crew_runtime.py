@@ -378,7 +378,7 @@ def crewai_agent_generator(
     """생성 시점에 실제 CrewAI Agent+Task+Crew(단일, sequential)를 구성해
     kickoff한다. `jobs.GeneratorFn`과 같은 시그니처라 그대로 갈아끼울 수 있다.
 
-    `conn`은 이 Agent가 vectordb/graphdb 스킬을 가졌을 때 실제 CrewAI
+    `conn`은 이 Agent가 지식검색/관계조회 스킬을 가졌을 때 실제 CrewAI
     Tool(`_skill_based_tools()`)을 붙이기 위해 필요하다(사용자 요청,
     2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘" —
     `GeneratorFn` 계약 자체에 conn을 추가해 생성 시점부터 이 Agent가
@@ -639,7 +639,7 @@ def run_crew(
         # 정정(2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘"):
         # 예전에는 여기서 `agent_runtime.augment_with_retrieval()`로 검색
         # 결과를 Task description에 무조건 끼워 넣었다(정적 주입). 이제는
-        # 위에서 vectordb/graphdb 스킬을 가진 Agent에게 진짜 CrewAI Tool을
+        # 위에서 지식검색/관계조회 스킬을 가진 Agent에게 진짜 CrewAI Tool을
         # 붙였으므로(augmentation_mode='tool'), description은 원문 그대로
         # 두고 **Agent가 스스로 도구 호출 여부를 판단**하게 한다 — 정적
         # 주입과 Tool 호출을 동시에 하면 검색 결과가 중복으로 들어가거나

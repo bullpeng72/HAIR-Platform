@@ -72,6 +72,32 @@ def test_business_planning_pipeline_all_stages_have_at_least_one_resolvable_agen
         assert len(stage["agents"]) >= 1, f"{stage['name']} 단계에 Agent가 없음"
 
 
+def test_business_planning_pipeline_research_stage_includes_data_analyst():
+    """사용자 요청(2026-11-11, "데이터 분석... 개선 방안을 기획해줘" →
+    "바로 구현해줘") — "자료 조사·분석" 단계가 정성 분석(3C4P/SWOT)만
+    하고 실제 숫자 계산이 전혀 없던 공백을 "데이터 분석가" 추가로
+    메운다. 외부 자료 조사가 → 데이터 분석가 → 3C4P SWOT 분석가 순서를
+    확인한다."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    template = conn.execute(
+        "SELECT id FROM pipeline_templates WHERE name = '사업/기획 업무 처리 파이프라인'"
+    ).fetchone()
+    stage = conn.execute(
+        "SELECT id FROM pipeline_stages WHERE pipeline_template_id = ? AND name = '자료 조사·분석'",
+        (template["id"],),
+    ).fetchone()
+    agents = conn.execute(
+        "SELECT role_name FROM pipeline_stage_agents WHERE stage_id = ? ORDER BY seq_order",
+        (stage["id"],),
+    ).fetchall()
+    assert [a["role_name"] for a in agents] == [
+        "외부 자료 조사가",
+        "데이터 분석가",
+        "3C4P SWOT 분석가",
+    ]
+
+
 def test_business_planning_pipeline_uses_sequential_relay_for_writing_stage():
     """"구현" 단계와 같은 이유로 — hierarchical 위임의 신뢰성 문제를
     피하려고 "작성" 단계도 sequential_relay를 쓴다."""

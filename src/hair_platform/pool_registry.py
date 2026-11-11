@@ -146,22 +146,26 @@ def create_tool(
     kind: str,
     config: dict,
     tool_names: list[str] | None = None,
+    category: str = "general",
 ) -> int:
     if kind not in ("mcp_stdio", "mcp_remote", "native", "custom_python"):
         raise ValueError(f"unsupported_kind:{kind}")
+    if category not in ("sw_dev", "general"):
+        raise ValueError(f"unsupported_category:{category}")
     if kind == "native" and config.get("native_id") not in NATIVE_TOOL_FACTORIES:
         raise ValueError(f"unknown_native_id:{config.get('native_id')}")
     if kind == "custom_python":
         _validate_custom_python_source(config.get("function_source", ""))
     cur = conn.execute(
-        "INSERT INTO tool_pool (name, description, kind, config, tool_names) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO tool_pool (name, description, kind, config, tool_names, category) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (
             name,
             description,
             kind,
             json.dumps(config, ensure_ascii=False),
             json.dumps(tool_names or []),
+            category,
         ),
     )
     tool_id = cur.lastrowid
@@ -194,11 +198,22 @@ def _tool_row_to_dict(row: sqlite3.Row) -> dict:
         "config": json.loads(row["config"]),
         "tool_names": json.loads(row["tool_names"]),
         "is_active": bool(row["is_active"]),
+        "category": row["category"],
     }
 
 
-def list_tools(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute("SELECT * FROM tool_pool ORDER BY id").fetchall()
+def list_tools(conn: sqlite3.Connection, category: str | None = None) -> list[dict]:
+    """사용자 요청(2026-11-11, "스킬과 도구를 SW개발업무와 일반업무로
+    구분하고 필터링 되도록 개선") — `category`를 주면 그 값으로만
+    좁힌다(생략하면 기존처럼 전체)."""
+    if category is not None and category not in ("sw_dev", "general"):
+        raise ValueError(f"unsupported_category:{category}")
+    if category is None:
+        rows = conn.execute("SELECT * FROM tool_pool ORDER BY id").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM tool_pool WHERE category = ? ORDER BY id", (category,)
+        ).fetchall()
     return [_tool_row_to_dict(r) for r in rows]
 
 
@@ -239,7 +254,7 @@ def update_tool(
     똑같은 검증(native_id가 실제 native 도구를 가리키는지,
     custom_python 소스가 안전한 모양인지)을 다시 돌린다 — 수정 경로로
     검증을 우회해 등록 시점보다 느슨해지면 안 된다."""
-    allowed = {"description", "config", "tool_names"}
+    allowed = {"description", "config", "tool_names", "category"}
     unknown = set(fields) - allowed
     if unknown:
         raise ValueError(f"unsupported_fields:{sorted(unknown)}")
@@ -248,6 +263,8 @@ def update_tool(
         raise ValueError("tool_not_found")
     if not fields:
         return
+    if "category" in fields and fields["category"] not in ("sw_dev", "general"):
+        raise ValueError(f"unsupported_category:{fields['category']}")
     if "config" in fields:
         config = fields["config"]
         kind = row["kind"]
@@ -311,19 +328,23 @@ def create_skill(
     default_tool_pool_ids: list[int] | None = None,
     augmentation_mode: str = "tool",
     show_in_conversation: bool = True,
+    category: str = "general",
 ) -> int:
     if augmentation_mode not in ("tool", "always", "none"):
         raise ValueError(f"unsupported_augmentation_mode:{augmentation_mode}")
+    if category not in ("sw_dev", "general"):
+        raise ValueError(f"unsupported_category:{category}")
     cur = conn.execute(
         "INSERT INTO skill_pool "
         "(name, description, default_tool_pool_ids, augmentation_mode, "
-        "show_in_conversation) VALUES (?, ?, ?, ?, ?)",
+        "show_in_conversation, category) VALUES (?, ?, ?, ?, ?, ?)",
         (
             name,
             description,
             json.dumps(default_tool_pool_ids or []),
             augmentation_mode,
             show_in_conversation,
+            category,
         ),
     )
     skill_id = cur.lastrowid
@@ -343,8 +364,18 @@ def create_skill(
     return skill_id
 
 
-def list_skills(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute("SELECT * FROM skill_pool ORDER BY id").fetchall()
+def list_skills(conn: sqlite3.Connection, category: str | None = None) -> list[dict]:
+    """사용자 요청(2026-11-11, "스킬과 도구를 SW개발업무와 일반업무로
+    구분하고 필터링 되도록 개선") — `category`를 주면 그 값으로만
+    좁힌다(생략하면 기존처럼 전체)."""
+    if category is not None and category not in ("sw_dev", "general"):
+        raise ValueError(f"unsupported_category:{category}")
+    if category is None:
+        rows = conn.execute("SELECT * FROM skill_pool ORDER BY id").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM skill_pool WHERE category = ? ORDER BY id", (category,)
+        ).fetchall()
     return [
         {
             "id": r["id"],
@@ -354,6 +385,7 @@ def list_skills(conn: sqlite3.Connection) -> list[dict]:
             "default_tool_pool_ids": json.loads(r["default_tool_pool_ids"]),
             "augmentation_mode": r["augmentation_mode"],
             "show_in_conversation": bool(r["show_in_conversation"]),
+            "category": r["category"],
         }
         for r in rows
     ]
@@ -380,6 +412,7 @@ def update_skill(
         "description",
         "default_tool_pool_ids",
         "show_in_conversation",
+        "category",
     }
     unknown = set(fields) - allowed
     if unknown:
@@ -389,6 +422,8 @@ def update_skill(
         raise ValueError("skill_not_found")
     if not fields:
         return
+    if "category" in fields and fields["category"] not in ("sw_dev", "general"):
+        raise ValueError(f"unsupported_category:{fields['category']}")
     set_clauses = []
     values: list[object] = []
     for key, value in fields.items():

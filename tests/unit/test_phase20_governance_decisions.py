@@ -342,14 +342,14 @@ def test_gc205_always_mode_forces_static_injection_in_run_crew(client_and_conn):
 def test_gc206_tool_mode_skill_still_unaugmented_in_run_crew(client_and_conn):
     """`'always'` 구현이 기존 `'tool'` 모드 스킬(기본 시드된 rag 등)의
     동작을 바꾸지 않는지 확인한다 — 회귀 방지 버전. (원래 "vectordb"
-    별칭으로도 됐으나 자동완성 중복 정리로 2026-10-06에 "rag"로 통합됨.)"""
+    별칭으로도 됐으나 자동완성 중복 정리로 2026-10-06에 "지식검색"로 통합됨.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('지식검색 Agent', '[\"rag\"]', 'active')"
+        "('지식검색 Agent', '[\"지식검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()

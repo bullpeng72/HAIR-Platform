@@ -264,7 +264,8 @@ CREATE TABLE IF NOT EXISTS tool_pool (
     kind TEXT NOT NULL CHECK (kind IN ('mcp_stdio', 'mcp_remote', 'native', 'custom_python')),
     config TEXT NOT NULL DEFAULT '{}',
     tool_names TEXT NOT NULL DEFAULT '[]',
-    is_active INTEGER NOT NULL DEFAULT 1
+    is_active INTEGER NOT NULL DEFAULT 1,
+    category TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('sw_dev', 'general'))
 );
 
 CREATE TABLE IF NOT EXISTS skill_pool (
@@ -275,7 +276,8 @@ CREATE TABLE IF NOT EXISTS skill_pool (
     default_tool_pool_ids TEXT NOT NULL DEFAULT '[]',
     augmentation_mode TEXT NOT NULL DEFAULT 'tool'
         CHECK (augmentation_mode IN ('tool', 'always', 'none')),
-    show_in_conversation INTEGER NOT NULL DEFAULT 1
+    show_in_conversation INTEGER NOT NULL DEFAULT 1,
+    category TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('sw_dev', 'general'))
 );
 
 -- `code` 컬럼의 UNIQUE 인덱스는 여기(정적 SCHEMA)가 아니라
@@ -870,8 +872,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 완전히 같은 뜻(둘 다 web_search native 도구)인데 둘 다 떠 중복으로
     # 보인다는 리포트 → "하나만 표시되도록 개선") — 두 별칭 중 "외부검색"을
     # 정식 이름으로 남기고 "websearch"는 skill_pool에서 제거한다. 같은
-    # 요청으로 "vectordb"/"rag"(둘 다 vectordb_search), "graphdb"/"관계질의"
-    # (둘 다 graphdb_query)도 같은 방식으로 통합한다 — "rag"/"graphdb"는
+    # 요청으로 "vectordb"/"지식검색"(둘 다 vectordb_search), "관계조회"/"관계질의"
+    # (둘 다 graphdb_query)도 같은 방식으로 통합한다 — "지식검색"/"관계조회"는
     # 실제 테스트·데이터에서 더 많이 쓰이던 쪽. 이미
     # 만들어진 DB에 남아있는 제거 대상 행과, 그 이름을 쓰던
     # tasks.required_skills/agent_pool.skill_tags의 값도 남기는 쪽 이름으로
@@ -880,8 +882,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 정리한다(멱등 — 제거 대상 행이 없으면 조용히 0건).
     for removed_name, kept_name in (
         ("websearch", "외부검색"),
-        ("vectordb", "rag"),
-        ("관계질의", "graphdb"),
+        ("vectordb", "지식검색"),
+        ("관계질의", "관계조회"),
     ):
         removed_row = conn.execute(
             "SELECT id FROM skill_pool WHERE name = ?", (removed_name,)
@@ -901,6 +903,70 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
                         (json.dumps(tags, ensure_ascii=False), row["id"]),
                     )
         conn.execute("DELETE FROM skill_pool WHERE id = ?", (removed_row["id"],))
+
+    # 사용자 요청(2026-11-11, "가능하면 Skill 이름은 한국어로 해줘") —
+    # HAIR-Platform이 직접 지은 영어 스킬 이름 30개를 한글로 바꾼다.
+    # agent-evaluator/Harness Methodology 생태계를 그대로 미러링한 18개
+    # (harness-gate-ci 등, `_SW_DEV_CATEGORY_SKILL_NAMES` 중 일부)는
+    # 실제 외부 Claude Skills 이름과 1:1 대응이 깨지면 안 돼 제외한다
+    # (사용자 확인 완료). 위 "vectordb"/"관계질의" 통합과 같은 이유로
+    # `skill_pool.name`은 `tasks.required_skills`/`agent_pool.
+    # skill_tags`가 문자열로 그대로 참조하므로, 이름만 바꾸고 그 두
+    # 컬럼을 같이 안 바꾸면 이미 만들어진 Task/Agent의 연결이 조용히
+    # 끊어진다 — 같은 트랜잭션에서 함께 바꾼다. `UPDATE ... WHERE name
+    # = ?`는 대상이 없으면 0행이라 매 기동마다 불러도 안전하다(멱등).
+    for old_name, new_name in (
+        ("rag", "지식검색"),
+        ("graphdb", "관계조회"),
+        ("spec-ears-lint", "요구사항검증"),
+        ("failure-mode-derivation", "실패모드도출"),
+        ("golden-set-coverage-check", "커버리지체크"),
+        ("adr-template", "설계결정기록"),
+        ("code-review-checklist", "코드리뷰체크리스트"),
+        ("commit-pr-message-rules", "커밋메시지작성"),
+        ("docs-style-guide", "문서작성가이드"),
+        ("incident-postmortem", "장애회고"),
+        ("human-approval-loop", "승인루프"),
+        ("3c-4p-swot-framework", "전략분석프레임워크"),
+        ("business-plan-writing-guide", "기획서작성가이드"),
+        ("business-strategy-formulation", "사업전략수립"),
+        ("executive-report-writing-style", "경영보고서작성"),
+        ("presentation-outline-builder", "발표자료구성"),
+        ("test-case-mechanical-derivation", "테스트케이스도출"),
+        ("pm-delivery-coordination", "진행관리조율"),
+        ("application-architecture-design-guide", "아키텍처설계가이드"),
+        ("data-model-design-guide", "데이터모델설계가이드"),
+        ("module-decomposition-and-task-assignment", "모듈분해업무배분"),
+        ("frontend-ui-implementation-guide", "프론트엔드구현가이드"),
+        ("ui-ux-planning-guide", "UIUX기획가이드"),
+        ("test-plan-and-case-design-guide", "테스트계획설계가이드"),
+        ("quality-acceptance-criteria-guide", "품질인수기준가이드"),
+        ("data-infra-implementation-guide", "데이터인프라구현가이드"),
+        ("data-analysis-guide", "데이터분석가이드"),
+        ("proposal-writing-guide", "제안서작성가이드"),
+        ("performance-report-writing-guide", "실적서작성가이드"),
+        ("framework-template-generator", "프레임워크템플릿생성"),
+    ):
+        old_row = conn.execute(
+            "SELECT id FROM skill_pool WHERE name = ?", (old_name,)
+        ).fetchone()
+        if old_row is None:
+            continue
+        conn.execute(
+            "UPDATE skill_pool SET name = ? WHERE id = ?", (new_name, old_row["id"])
+        )
+        for table, column in (
+            ("tasks", "required_skills"),
+            ("agent_pool", "skill_tags"),
+        ):
+            for row in conn.execute(f"SELECT id, {column} FROM {table}").fetchall():
+                tags = json.loads(row[column] or "[]")
+                if old_name in tags:
+                    tags = [new_name if t == old_name else t for t in tags]
+                    conn.execute(
+                        f"UPDATE {table} SET {column} = ? WHERE id = ?",
+                        (json.dumps(tags, ensure_ascii=False), row["id"]),
+                    )
 
     # 사용자 요청(2026-10-06, 다자간 팀 협업 기획 Phase 1+2) —
     # `team_leader_id`는
@@ -1120,6 +1186,23 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "team_members", "sequence_order", "INTEGER")
     _ensure_column(
         conn, "skill_pool", "show_in_conversation", "INTEGER NOT NULL DEFAULT 1"
+    )
+    # 사용자 요청(2026-11-11, "스킬과 도구를 SW개발업무와 일반업무로
+    # 구분하고 필터링 되도록 개선") — 기존 DB(이 컬럼 없이 만들어진)에도
+    # 추가. 기본값 'general'은 구조적 안전망일 뿐이고, 실제 레퍼런스
+    # 스킬/도구의 분류는 `_backfill_skill_tool_category()`가 컬럼이
+    # 막 추가된 시점에 한 번만 적용한다(아래 `init_schema()` 참고).
+    _ensure_column(
+        conn,
+        "skill_pool",
+        "category",
+        "TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('sw_dev', 'general'))",
+    )
+    _ensure_column(
+        conn,
+        "tool_pool",
+        "category",
+        "TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('sw_dev', 'general'))",
     )
     _ensure_column(
         conn,
@@ -1599,6 +1682,86 @@ def _backfill_show_in_conversation(conn: sqlite3.Connection) -> None:
             )
 
 
+# 사용자 요청(2026-11-11, "스킬과 도구를 SW개발업무와 일반업무로 구분하고
+# 필터링 되도록 개선. 대화창에서는 일반업무가 표시되고, 개발업무는
+# default로 표시되지 않도록 개선") — 레퍼런스 스킬/도구 51개+12개 전수를
+# 직접 읽어 분류했다. 기준은 Agent가 아니라 스킬/도구 자체의 실제 내용
+# (소프트웨어 코드/아키텍처/테스트/Gate 채점에 한정되는지, 조사·전략·
+# 보고서·데이터분석처럼 도메인 무관 지식업무인지)이다 — PM/코드베이스
+# 분석가처럼 일부 Agent가 두 도메인 파이프라인에 동시에 재사용되더라도
+# 분류는 바뀌지 않는다. 예를 들어 "커버리지체크"/"문서작성가이드"는
+# 원래 개발 파이프라인에서 나왔지만 내용 자체가 도메인 무관이고 실제로
+# 기획서/C-level 보고서 작성자가 이미 재사용 중이라 'general'로
+# 분류했다. 반면 "승인루프"(HITL 승인 루프)는 사용자 재검토(2026-11-11,
+# "SKL-NONE-023은 개발업무 Skill로 변경") 후 'sw_dev'로 옮겼다 — PM이
+# 사업/제안서/실적보고 파이프라인에서도 이 스킬을 skill_tags로
+# 들고 있지만, category는 "그 Agent가 어디서 쓰이는지"가 아니라
+# "스킬 자체의 내용"으로 정한다는 원칙(본문 설명)은 그대로다.
+_SW_DEV_CATEGORY_SKILL_NAMES = (
+    # agent-evaluator/Harness Methodology 생태계 절차 스킬(18개) — 전부
+    # CI/Gate/실험 로그 등 AI 에이전트 개발·평가 전용.
+    "abtest-decision-workflow",
+    "checklist-confidence-audit",
+    "claims-audit-ci",
+    "config-silent-noop-check",
+    "eval-run-directory-hygiene",
+    "gate-improvement-loop",
+    "harness-autopilot",
+    "harness-gate-ci",
+    "liveguardrail-standard-config",
+    "spec-driven-artifacts",
+    "sync-drift-check",
+    "tdd-ai-workflow-checklist",
+    "threshold-realism-review",
+    "unattended-session-recovery",
+    "background-real-verification",
+    "evidence-based-gate-fix",
+    "honest-refuted-experiment-logging",
+    "recommend-fix-workflow",
+    # "소프트웨어 개발 파이프라인"/"자율 개발 크루" 전용(Spec·코드·아키텍처).
+    "요구사항검증",
+    "실패모드도출",
+    "설계결정기록",
+    "코드리뷰체크리스트",
+    "커밋메시지작성",
+    "장애회고",
+    "승인루프",
+    "진행관리조율",
+    "아키텍처설계가이드",
+    "데이터모델설계가이드",
+    "모듈분해업무배분",
+    "프론트엔드구현가이드",
+    "UIUX기획가이드",
+    "테스트계획설계가이드",
+    "품질인수기준가이드",
+    "데이터인프라구현가이드",
+    "테스트케이스도출",
+)
+_SW_DEV_CATEGORY_TOOL_NAMES = (
+    "Gate 조치 지식 조회(recommend_fix)",
+    "Spec EARS 린터",
+    "실패모드 기계적 도출",
+    "테스트 케이스 기계적 도출",
+)
+
+
+def _backfill_skill_tool_category(conn: sqlite3.Connection) -> None:
+    """`category` 컬럼이 막 추가된 직후 1회만 실행(`init_schema()`가
+    `show_in_conversation` 백필과 같은 패턴으로 호출) — 나머지(rag·
+    graphdb·웹검색류·3C4P SWOT·기획서/보고서/제안서/실적서 작성 가이드·
+    데이터 분석기 등)는 컬럼 기본값 'general'을 그대로 둔다."""
+    placeholders = ",".join("?" * len(_SW_DEV_CATEGORY_SKILL_NAMES))
+    conn.execute(
+        f"UPDATE skill_pool SET category = 'sw_dev' WHERE name IN ({placeholders})",
+        _SW_DEV_CATEGORY_SKILL_NAMES,
+    )
+    placeholders = ",".join("?" * len(_SW_DEV_CATEGORY_TOOL_NAMES))
+    conn.execute(
+        f"UPDATE tool_pool SET category = 'sw_dev' WHERE name IN ({placeholders})",
+        _SW_DEV_CATEGORY_TOOL_NAMES,
+    )
+
+
 def _seed_default_pools(conn: sqlite3.Connection) -> None:
     """사용자 요청, 2026-09-27, "tool_pool·skill_pool 테이블도
     실제로 구현해줘" — VectorDB/GraphDB를 감싼 native Tool과, 이걸 쓰는
@@ -1672,8 +1835,8 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
         tool_ids[native_id] = row["id"]
 
     skills = [
-        ("rag", "VectorDB 기반 지식검색 역량", "vectordb_search", "tool"),
-        ("graphdb", "GraphDB 기반 관계분석 역량", "graphdb_query", "tool"),
+        ("지식검색", "VectorDB 기반 지식검색 역량", "vectordb_search", "tool"),
+        ("관계조회", "GraphDB 기반 관계분석 역량", "graphdb_query", "tool"),
         (
             "실시간웹검색",
             "실시간 일반 웹 검색 역량(Tavily, API 키 필요) — 대화창에서도 동작",
@@ -1984,6 +2147,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
     is_new_show_in_conversation_column = not _column_exists(
         conn, "skill_pool", "show_in_conversation"
     )
+    # 사용자 요청(2026-11-11, "스킬과 도구를 SW개발업무와 일반업무로
+    # 구분... 개선") — 위 show_in_conversation과 같은 이유로 시드 전에
+    # 미리 기록해둔다(skill_pool/tool_pool 둘 다 같은 시점에 추가되는
+    # 쌍이라 하나만 확인해도 충분 — `_migrate_schema()`가 둘을 항상
+    # 같이 `_ensure_column()`한다).
+    is_new_category_column = not _column_exists(conn, "skill_pool", "category")
     conn.executescript(SCHEMA)
     _migrate_schema(conn)
     _seed_default_pools(conn)
@@ -1994,6 +2163,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
     reference_pipeline_seeds.seed(conn)
     if is_new_show_in_conversation_column:
         _backfill_show_in_conversation(conn)
+    if is_new_category_column:
+        _backfill_skill_tool_category(conn)
     # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
     # (종류 구분 가능) 초기화하여 정리") — 시드가 전부 끝난 뒤에만
     # 돌려야 한다(위 show_in_conversation 백필과 같은 이유 — 레퍼런스

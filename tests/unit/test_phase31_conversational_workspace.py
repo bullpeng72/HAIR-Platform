@@ -721,7 +721,7 @@ def test_business_plan_writing_guide_forbids_full_source_code():
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     desc = conn.execute(
-        "SELECT description FROM skill_pool WHERE name = 'business-plan-writing-guide'"
+        "SELECT description FROM skill_pool WHERE name = '기획서작성가이드'"
     ).fetchone()["description"]
     assert "전체 소스 코드를 작성하지 않는다" in desc
     assert "구현은 개발 역할의 몫" in desc

@@ -71,8 +71,8 @@ def test_gc96_init_schema_is_idempotent_on_fresh_db():
         # 제거했다 — 이 테스트는 "별칭 통합" 메커니즘 자체를 검증하는
         # 것이라, 여전히 시드되는 vectordb/graphdb 두 케이스만으로도
         # 충분히 검증된다.
-        ("vectordb", "rag", "VectorDB 지식검색"),
-        ("관계질의", "graphdb", "GraphDB 관계조회"),
+        ("vectordb", "지식검색", "VectorDB 지식검색"),
+        ("관계질의", "관계조회", "GraphDB 관계조회"),
     ],
 )
 def test_gc210_init_schema_merges_duplicate_skill_alias(
@@ -80,8 +80,8 @@ def test_gc210_init_schema_merges_duplicate_skill_alias(
 ):
     """사용자 요청(2026-10-06, "할일로 나누기"의 "필요 스킬" 자동완성에
     "websearch"/"외부검색"이 완전히 같은 뜻으로 중복 표시된다는 리포트 →
-    "외부검색" 하나만 남기도록 개선, 이어서 같은 패턴인 "vectordb"/"rag"·
-    "graphdb"/"관계질의"도 동일하게 통합) — 이미 제거 대상 skill_pool 행과
+    "외부검색" 하나만 남기도록 개선, 이어서 같은 패턴인 "vectordb"/"지식검색"·
+    "관계조회"/"관계질의"도 동일하게 통합) — 이미 제거 대상 skill_pool 행과
     그 이름을 쓰는 할 일/Agent가 있던 기존 DB에서도, init_schema()를 다시
     돌리면 그 행이 지워지고 그걸 쓰던 데이터가 남기는 쪽 이름으로
     안전하게 옮겨가야 한다."""

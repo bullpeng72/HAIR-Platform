@@ -988,7 +988,7 @@ def test_gc106_run_crew_attaches_real_crewai_tool_for_graphdb_agent(client_and_c
     normal_agent = cur.lastrowid
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('관계분석 Agent', '[\"graphdb\"]', 'active')"
+        "('관계분석 Agent', '[\"관계조회\"]', 'active')"
     )
     graphdb_agent = cur.lastrowid
     conn.commit()
@@ -1024,7 +1024,7 @@ def test_gc107_crewai_agent_generator_attaches_vectordb_tool(client_and_conn):
     실제 CrewAI Tool이 붙는지 확인한다(사용자 요청, 2026-09-27 — "이미
     생성된 또는 생성하는 AI Agent"에서 둘 다 동작해야 한다는 요구).
     (원래 "vectordb" 별칭으로도 됐으나 자동완성 중복 정리로 2026-10-06에
-    "rag"로 통합됨.)"""
+    "지식검색"로 통합됨.)"""
     _client, conn = client_and_conn
     captured = {}
 
@@ -1034,7 +1034,7 @@ def test_gc107_crewai_agent_generator_attaches_vectordb_tool(client_and_conn):
 
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         crew_runtime.crewai_agent_generator(
-            conn, "지식검색 Agent", ["rag"], provider="openai"
+            conn, "지식검색 Agent", ["지식검색"], provider="openai"
         )
 
     crew = captured["crew"]
@@ -1238,8 +1238,8 @@ def test_gc89_context_for_prompt_handles_empty_org(client_and_conn):
 
 
 def test_gc90_execute_agent_augments_prompt_for_vectordb_role(client_and_conn):
-    """(원래 "vectordb"/"rag" 두 별칭을 같이 넣어 테스트했으나, 자동완성
-    중복 정리로 2026-10-06에 "vectordb"가 "rag"로 통합돼 "rag" 하나만
+    """(원래 "vectordb"/"지식검색" 두 별칭을 같이 넣어 테스트했으나, 자동완성
+    중복 정리로 2026-10-06에 "vectordb"가 "지식검색"로 통합돼 "지식검색" 하나만
     남음.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
@@ -1247,7 +1247,7 @@ def test_gc90_execute_agent_augments_prompt_for_vectordb_role(client_and_conn):
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('지식검색 Agent', '[\"rag\"]', 'active')"
+        "('지식검색 Agent', '[\"지식검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1286,7 +1286,7 @@ def test_gc91_execute_agent_augments_prompt_for_graphdb_role(client_and_conn):
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('관계분석 Agent', '[\"graphdb\"]', 'active')"
+        "('관계분석 Agent', '[\"관계조회\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1381,7 +1381,7 @@ def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부 자료 조사가', '[\"실시간웹검색\", \"rag\"]', 'active')"
+        "('외부 자료 조사가', '[\"실시간웹검색\", \"지식검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1421,7 +1421,7 @@ def test_gc_retrieve_context_survives_vectordb_embedding_failure(client_and_conn
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부 자료 조사가', '[\"실시간웹검색\", \"rag\"]', 'active')"
+        "('외부 자료 조사가', '[\"실시간웹검색\", \"지식검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()

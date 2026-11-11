@@ -1250,7 +1250,7 @@ def resolve_stage_decision(
             after={"reason": reason},
         )
     else:
-        # 반려 = "다시 해와"(기존 human-approval-loop 스킬 안내와 일치) —
+        # 반려 = "다시 해와"(기존 승인루프 스킬 안내와 일치) —
         # max_retry를 아직 안 넘었으면 사유를 피드백으로 반영해 같은
         # 단계를 재시도시킨다. 이미 다 썼으면 파이프라인을 종료한다.
         # `reason`을 `decision_reason`에 저장해두면(2026-10-28, 사용자

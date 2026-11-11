@@ -71,7 +71,7 @@ def test_gc125_init_schema_seeds_agent_eval_procedural_skills():
     skill_names = {s["name"] for s in skills}
     assert _EXPECTED_AGENT_EVAL_SKILL_NAMES <= skill_names
     assert (
-        len(skills) == 5 + len(_EXPECTED_AGENT_EVAL_SKILL_NAMES) + 25
+        len(skills) == 5 + len(_EXPECTED_AGENT_EVAL_SKILL_NAMES) + 28
     )  # rag/graphdb 2(원래 vectordb/rag/graphdb/관계질의 4였으나 2026-10-06
     # 자동완성 중복 통합으로 2로 줄어듦) + 일반웹검색 1 + 실시간웹검색 1
     # (Tavily, 2026-10-26 "대화에서 외부 검색이 가능한 방법을 제안해줘"로
@@ -92,6 +92,10 @@ def test_gc125_init_schema_seeds_agent_eval_procedural_skills():
     # = 15 + 9 = 24).
     # + 2026-10-14("자율 개발 크루" 10인 개발자 풀)로 추가된 Skill 1개
     # (data-infra-implementation-guide = 24 + 1 = 25).
+    # + 2026-11-11(기획/전략/자료조사/보고서작성/데이터분석/제안서작성/
+    # 실적서작성 개선)로 추가된 Skill 3개(data-analysis-guide 'tool'
+    # 모드 1 + proposal-writing-guide/performance-report-writing-guide
+    # 'none' 모드 2 = 25 + 3 = 28).
 
     by_name = {s["name"]: s for s in skills}
     for name in _UNTOOLED_AGENT_EVAL_SKILL_NAMES:
