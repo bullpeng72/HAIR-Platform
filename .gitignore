@@ -14,4 +14,5 @@ results/
 hair.db.backup-*
 server.log
 .claude/.agent-evaluator/
+.vscode/
 uv.lock
