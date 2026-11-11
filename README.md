@@ -67,8 +67,10 @@ Agent라고 다른 대우를 받지 않는다.
   "개발업무 스킬도 보기"를 켜야 보이고, 평소엔 일반 업무용 스킬
   (51개 중 다수)·도구(12개)만 노출된다. (Agent/Task에 미리 등록해둔
   스킬 태그나 CrewAI 실행 자체는 이 필터와 무관하게 전부 동작한다.)
-- 특정 업무(Task)에 종속된 대화는 그 업무로 자동 흡수되고, 대화가
-  커지면 업무 요청(Brief)으로 승격할 수 있다.
+- 특정 업무(Task)에 종속된 대화는 그 업무로 자동 흡수된다. 독립
+  대화는 결재·Gate 채점이 필요해지면 내용을 복사해 업무 요청(Brief)
+  작성란에 직접 옮겨 적으면 된다(대화 크기로 자동 전환되는 기능은
+  없음 — 대화와 업무 요청은 서로 독립된 두 트랙이다).
 
 ### 3. Agent 만들고 실제로 실행하기
 - Anthropic/OpenAI/Ollama 중 하나로 실제 LLM Agent를 돌릴 수 있다
@@ -220,7 +222,7 @@ pip install -e ".[crewai]"
 
 # MCP(외부 검색 등 도구) 연동을 쓰려면 추가로:
 pip install -e ".[mcp]"
-# Web UI "AI 에이전트" 탭의 "MCP 서버(JSON)" 칸에
+# Web UI "AI 에이전트 관리" 탭의 "MCP 서버(JSON)" 칸에
 # [{"url": "http://localhost:8000/mcp", "transport": "streamable-http"}]
 # 형태로 넣고 "모델 설정" 저장 — 이후 "Crew 빌더"에서 그 Agent에 실제
 # MCP 도구가 붙는다. MCPServerAdapter는 생성 시점에 실제로 접속을
@@ -246,7 +248,7 @@ export ANTHROPIC_API_KEY=...               # 또는 OPENAI_API_KEY
 
 # API 요청에 "use_llm": true 를 넣거나, Web UI "AI 에이전트 생성" 탭의
 # 체크박스를 켜면 실제 API가 호출된다(비용 발생) — 안 켜면 무료 스텁 그대로.
-# "AI 에이전트" 탭의 "모델 설정"으로 Agent별 기본 provider/model을 저장해두면
+# "AI 에이전트 관리" 탭의 "모델 설정"으로 Agent별 기본 provider/model을 저장해두면
 # (비용 없음), 이후 "실행"이 매번 지정 안 해도 그 설정을 따른다. provider/model
 # 목록은 "모델 레지스트리" 탭에 등록해두면 전 화면에서 드롭다운으로 공유된다.
 ```
@@ -430,7 +432,7 @@ src/hair_platform/
   deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)
   inbox.py           # 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고)
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이) + Task 재시도 합산
-  conversations.py   # 대화 중심 작업공간 — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩, Brief 승격
+  conversations.py   # 대화 중심 작업공간 — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩
   pipeline_runtime.py # 단계형 업무 파이프라인 엔진(단독/순차 릴레이/병행 위임 단계, Gate A-G 기준 자동 재시도·에스컬레이션, Task 재시도 예산)
   reference_pipeline_seeds.py # 레퍼런스 Agent 26종 + Skill/Tool Pool + 파이프라인 템플릿 4종(소프트웨어 개발/사업·기획/제안서 작성/실적 보고) 기본 시드
   agent_optimizer.py # Agent별 LLM provider/model/tuning_config 최적화 추천(규칙 기반 + 선택적 LLM 보정, admin)
