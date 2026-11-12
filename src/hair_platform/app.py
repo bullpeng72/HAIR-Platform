@@ -446,6 +446,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
             require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)
         ),
     ):
+        if not payload.raw_text.strip():
+            raise HTTPException(
+                status_code=422, detail="업무 요청 내용을 입력하세요"
+            )
         stub_roles = parse_brief_stub(payload.raw_text)
         cur = conn.execute(
             "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, ?, ?)",
@@ -4185,17 +4189,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 detail="확정된(confirmed) 배정이 있어 삭제할 수 없습니다 — 먼저 정리하세요",
             ) from exc
         return {"id": agent_id, "deleted": True}
-
-    @app.post("/api/demo/seed", status_code=201)
-    def seed_demo_data_endpoint(
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
-    ):
-        """2026-10-08, Phase 5 — "샘플로
-        체험하기". 기존 데이터 삭제 기능과 대칭되는 admin 전용 생성
-        기능이다. 몇 번을 눌러도 매번 새 샘플 Brief/Task/Human/Agent가
-        추가로 생긴다(중복 방지 로직 없음 — "초기화"가 아니라 "체험용
-        데이터 추가"가 목적이라 멱등일 필요가 없다)."""
-        return data_admin.seed_demo_data(conn, user["id"])
 
     @app.get("/api/audit-log")
     def get_audit_log(

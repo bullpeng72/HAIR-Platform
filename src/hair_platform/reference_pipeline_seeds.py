@@ -14,8 +14,8 @@ Skill들을 일회성 스크립트로 이 세션의 `hair.db`에만 직접 심�
 `db.py`가 이 모듈을 import하는 방향만 있고 반대 방향은 없어 순환
 임포트가 생기지 않는다(이 모듈은 `sqlite3.Connection`만 받는 순수
 함수라 `jobs.py`/`pool_registry.py` 같은 상위 비즈니스 모듈을 전혀
-참조하지 않는다 — Agent는 Job Queue를 거치지 않고 `data_admin.
-seed_demo_data()`의 직접 INSERT 관례를 그대로 따른다)."""
+참조하지 않는다 — Agent는 Job Queue를 거치지 않고 `agent_pool`에
+직접 INSERT한다)."""
 
 from __future__ import annotations
 

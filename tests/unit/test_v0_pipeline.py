@@ -41,6 +41,25 @@ def test_gc2_f1_brief_submission_pipeline(client_and_conn):
     assert row["status"] == "submitted"
 
 
+def test_gc2b_blank_raw_text_rejected(client_and_conn):
+    """사용자 보고(2026-11-12, 스크린샷) — 내용 없이 제출해도 업무
+    요청 목록에 빈 행이 그대로 올라가던 버그. 공백만 있는 입력도
+    "내용 없음"으로 본다."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+
+    before_count = conn.execute("SELECT COUNT(*) AS c FROM briefs").fetchone()["c"]
+
+    resp = client.post("/api/briefs", json={"raw_text": ""})
+    assert resp.status_code == 422, resp.text
+
+    resp = client.post("/api/briefs", json={"raw_text": "   \n  "})
+    assert resp.status_code == 422, resp.text
+
+    after_count = conn.execute("SELECT COUNT(*) AS c FROM briefs").fetchone()["c"]
+    assert after_count == before_count
+
+
 def test_gc3_f12_human_pool_onboarding_pipeline(client_and_conn):
     client, conn = client_and_conn
 

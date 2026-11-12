@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from hair_platform import data_admin, db, id_scheme, pool_registry
+from hair_platform import db, id_scheme, pool_registry
 
 
 def _login(client, username, password):
@@ -224,19 +224,6 @@ def test_pool_registry_create_skill_gets_code_immediately(client_and_conn):
     ).fetchone()
     assert row["code"] is not None
     assert row["code"].startswith("SKL-NONE-")
-
-
-def test_seed_demo_data_agent_gets_custom_code(client_and_conn):
-    client, conn = client_and_conn
-    _login(client, "admin1", "adminpass")
-    admin_id = conn.execute("SELECT id FROM users WHERE username='admin1'").fetchone()[
-        "id"
-    ]
-    result = data_admin.seed_demo_data(conn, admin_id)
-    row = conn.execute(
-        "SELECT code FROM agent_pool WHERE id = ?", (result["agent_id"],)
-    ).fetchone()
-    assert row["code"] == "AGT-CUSTOM-001"
 
 
 # ---------- API 응답에 code 노출 ----------

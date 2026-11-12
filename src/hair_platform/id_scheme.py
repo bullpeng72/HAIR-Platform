@@ -26,9 +26,9 @@ URL 경로가 그대로 쓰고 있어 바꾸지 않는다(사용자 확인, 2026
 않는다(빈 번호가 재사용되지 않을 뿐).
 
 **새로 생성될 때**: `pool_registry.create_tool()`/`create_skill()`,
-Agent 생성 경로(`jobs.py`/`agent_runtime.py`/`data_admin.
-seed_demo_data()`)가 INSERT 직후 바로 `assign_code()`를 불러 그
-자리에서 코드를 배정한다 — API 응답에 생성 직후부터 코드가 보인다.
+Agent 생성 경로(`jobs.py`/`agent_runtime.py`)가 INSERT 직후 바로
+`assign_code()`를 불러 그 자리에서 코드를 배정한다 — API 응답에
+생성 직후부터 코드가 보인다.
 **기존/레퍼런스 데이터**: `backfill_missing_codes()`가
 `db.init_schema()`에서 시드가 전부 끝난 뒤 한 번 돌아, 아직 `code`가
 없는 행에만 배정한다(이미 코드가 있으면 손대지 않음 — 몇 번을 다시

@@ -33,7 +33,7 @@ Agent라고 다른 대우를 받지 않는다.
   있다.
 
 **지금 상태**: 위 기능 전부 실제로 동작하는 코드로 구현돼 있고(스텁이나
-목업이 아니다), 테스트 924건이 통과하는 상태로 유지된다. 개념·아키텍처
+목업이 아니다), 테스트 919건이 통과하는 상태로 유지된다. 개념·아키텍처
 전체 설명은 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은
 `git log`(커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를
 참고.
@@ -159,7 +159,7 @@ pip install -e ".[dev,all]"
 # 실행 시점에 `ModuleNotFoundError`로 깨진다. `all`(= crewai+mcp+llm+
 # documents 묶음, pyproject.toml 참고)까지 같이 설치해야 아래 골든셋이
 # 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 924건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 919건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 ### 설치 옵션(extras) 한눈에 보기
@@ -441,7 +441,7 @@ docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # RBAC 권한 설정을 테스트로 감사하는 Claude Code 스킬
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 924건 통과
+tests/unit/                            # 골든셋 919건 통과
 ```
 
 ## 로드맵
