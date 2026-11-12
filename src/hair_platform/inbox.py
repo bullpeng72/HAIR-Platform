@@ -4,7 +4,7 @@ Phase 5 — "결재 대기·내 업무
 (`agent_execution_jobs`, `agent_evaluations`, `approvals`)를 그대로
 조회해 조합할 뿐, 새 상태를 만들지 않는다.
 
-**3종 항목**:
+**4종 항목**:
 - `approval_pending` — `approvals.list_inbox()` 그대로(Admin/매니저 전용,
   자기승인 방지 포함).
 - `execution_failed` — 내 "내 업무" task 중 가장 최근 Agent 실행이
@@ -14,19 +14,32 @@ Phase 5 — "결재 대기·내 업무
   deliverable 중 Gate A-G 하나라도 `passed: false`인 것(`agent_evaluations`를
   그대로 재사용). 이미 승인/반려된 건 "조치가 끝난
   일"이라 제외한다.
+- `completed`(사용자 요청, 2026-11-12, "업무를 요청하고... 진행과정과
+  결과물 확인이 어려워") — 결재가 필요 없는 성공 완료는 지금까지
+  인박스 어디에도 안 뜨고 조용히 묻혔다(승인 대기함은 결재권자에게만,
+  요청한 사람 본인은 알 길이 없었음). `deliverables.task_completion_
+  summary()`가 이미 내려주는 `has_final_result`/`latest_deliverable_at`
+  을 그대로 재사용한다(새 쿼리 없음) — `execution_failed`/`low_gate_
+  score`와 달리 "승인됨" 상태는 번복될 일이 없어 시간 조건 없이
+  두면 한 번 끝난 업무가 영원히 인박스에 남는다. 그래서 유일하게 이
+  항목만 최근 24시간 이내로 좁힌다(완전한 "읽음" 추적 기능이 없는
+  현재 구조에서 가장 단순하게 "새로 끝난 것"을 흉내내는 방법).
 
 **정직한 한계**: `approvals` 테이블엔 `created_at`이 없어(설계 당시
-부터) 3종을 하나의 타임스탬프로 완전히 통합 정렬할 수 없다 — 타입별로
-묶어서 반환하고(결재 → 실행 실패 → 낮은 Gate 순), 각 타입 내부는 최신
-순으로 정렬한다. 완전한 시간순 통합이 필요해지면 `approvals`에
+부터) 4종을 하나의 타임스탬프로 완전히 통합 정렬할 수 없다 — 타입별로
+묶어서 반환하고(결재 → 실행 실패 → 낮은 Gate → 완료 순), 각 타입 내부는
+최신순으로 정렬한다. 완전한 시간순 통합이 필요해지면 `approvals`에
 `created_at` 컬럼을 추가하는 마이그레이션이 먼저 필요하다."""
 
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 from hair_platform import approvals as approvals_mod
 from hair_platform import deliverables
+
+_COMPLETED_WINDOW_HOURS = 24
 
 
 def _has_failing_gate(evaluation: dict) -> bool:
@@ -59,9 +72,14 @@ def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
             }
         )
 
+    completed_cutoff = (
+        datetime.now(UTC) - timedelta(hours=_COMPLETED_WINDOW_HOURS)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
     my_work = deliverables.list_my_work(conn, user_id, limit=200)
     execution_failed: list[dict] = []
     low_gate_score: list[dict] = []
+    completed: list[dict] = []
     for w in my_work:
         task_id = w["task_id"]
         jobs = deliverables.list_execution_jobs(conn, task_id)
@@ -89,10 +107,30 @@ def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
                         "deliverable_id": d["id"],
                     }
                 )
+        # 사용자 요청(2026-11-12) — 결재가 필요 없는 성공 완료를 요청한
+        # 사람 본인도 알 수 있게 한다. `has_final_result`/`latest_
+        # deliverable_at`은 `list_my_work()`가 `task_completion_summary()`
+        # 로 이미 계산해 내려준 값이라 추가 쿼리가 없다. 24시간이 지난
+        # 완료는 "새로 끝난 것"이 아니라고 보고 뺀다(위 모듈 docstring
+        # 참고 — 번복될 일이 없는 상태라 시간 조건 없이는 영원히 남는다).
+        if (
+            w["has_final_result"]
+            and w["latest_deliverable_at"]
+            and w["latest_deliverable_at"] > completed_cutoff
+        ):
+            completed.append(
+                {
+                    "type": "completed",
+                    "task_id": task_id,
+                    "role_name": w["role_name"],
+                    "completed_at": w["latest_deliverable_at"],
+                }
+            )
 
     # list_my_work()가 이미 최근 배정순(id DESC)으로 주므로 그 순서를
     # 그대로 따른다 — 뒤집지 않는다(실측으로 발견한 버그: 처음엔
     # reversed()를 잘못 넣어 오래된 task가 먼저 나왔었다).
     items.extend(execution_failed)
     items.extend(low_gate_score)
+    items.extend(completed)
     return items

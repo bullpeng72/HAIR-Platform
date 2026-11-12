@@ -17,8 +17,8 @@ Agent라고 다른 대우를 받지 않는다.
   기준을 통과하면 그 자체가 승인이라 사람 개입이 최소화되지만, 완전
   무인 운영은 아니다.
 - 📊 **"잘했다"는 말 대신 7개 기준으로 채점한다** — 모든 Agent 결과물은
-  Gate A-G(목표달성·행동무결성·신뢰성·성능계약·보안경계·멀티에이전트
-  조율·관찰가능성)로 자동 측정되어 기록에 남는다.
+  Gate A-G(목표달성·행동무결성·신뢰성·성능계약·보안경계·다중에이전트
+  협업·관측성)로 자동 측정되어 기록에 남는다.
 - 🔁 **복잡한 업무는 사람이 한 번만 승인하면 그 뒤로 알아서 돈다** —
   소프트웨어 개발·사업기획·제안서·실적보고 같은 다단계 업무를 파이프
   라인으로 등록해두면, 계획 확정 뒤로는 기준 통과까지 자동 재시도하고
@@ -33,7 +33,7 @@ Agent라고 다른 대우를 받지 않는다.
   있다.
 
 **지금 상태**: 위 기능 전부 실제로 동작하는 코드로 구현돼 있고(스텁이나
-목업이 아니다), 테스트 917건이 통과하는 상태로 유지된다. 개념·아키텍처
+목업이 아니다), 테스트 924건이 통과하는 상태로 유지된다. 개념·아키텍처
 전체 설명은 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은
 `git log`(커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를
 참고.
@@ -159,7 +159,7 @@ pip install -e ".[dev,all]"
 # 실행 시점에 `ModuleNotFoundError`로 깨진다. `all`(= crewai+mcp+llm+
 # documents 묶음, pyproject.toml 참고)까지 같이 설치해야 아래 골든셋이
 # 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 917건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 924건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 ### 설치 옵션(extras) 한눈에 보기
@@ -417,7 +417,7 @@ src/hair_platform/
   brief_decompose_llm.py # 업무 분해 LLM 제안(역할·필요 스킬·선행 업무 의존관계)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
   cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/reset-data/eval
-  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 26개 탭)
+  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 27개 탭)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
   model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용") + 모델별 LLM 설정 최적화 tier(deep_reasoning/precision_fast/standard) 직접 매핑
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
@@ -441,7 +441,7 @@ docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # RBAC 권한 설정을 테스트로 감사하는 Claude Code 스킬
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 917건 통과
+tests/unit/                            # 골든셋 924건 통과
 ```
 
 ## 로드맵
@@ -458,6 +458,7 @@ tests/unit/                            # 골든셋 917건 통과
 
 | 버전 | 날짜 | 핵심 변경 |
 |------|------|-----------|
+| v0.1.5 | 2026-11-12 | `hair serve` 접속 로그 노이즈 제거 · 내 업무 실행 중 상태 표시, 업무 제출 후 진행상황 연결, 인박스 완료됨 섹션, 전역 완료/실패 배지, 할 일 보드 진행 배지 추가 · 피드백 메시지 sticky 토스트화, 확인 다이얼로그 커스텀 모달 통일, 대화/정식 업무 트랙 구분 배지 추가 |
 | v0.1.4 | 2026-11-12 | PyPI 첫 배포 준비(라이선스 SPDX 전환, LICENSE/프로젝트 URL 추가) + 실제 배포 · pending_onboarding 팀이 활성화 토글로 온보딩 절차를 우회할 수 있던 버그 수정 |
 | v0.1.3 | 2026-11-11 | Skill/Tool "개발업무/일반업무" 분류(대화창 기본 숨김+필요시 노출) · HAIR 자체 Skill 이름 30개 한글화 · 제안서 작성/실적 보고 파이프라인 추가(템플릿 4종) |
 | v0.1.2 | 2026-11-09 | 파이프라인 Ollama 실제 적용 + "구현" 단계 합성 버그 수정(위임 계획만 남던 문제) · 사업/기획 파이프라인 추가 · 자동 단계적 에스컬레이션·셀프배정 즉시확정·Task 재시도 예산 등 로드맵 9건 |

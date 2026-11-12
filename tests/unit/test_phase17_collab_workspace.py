@@ -695,6 +695,118 @@ def test_gc180_brief_task_list_exposes_completion_summary(client_and_conn):
     assert row["has_final_result"] is False
 
 
+# ---------- active_job(진행 중 표시) — 사용자 요청(2026-11-12, "업무를
+# 요청하고, 협업공간에서 진행과정과 결과물 확인이 어려워(숨겨져 있는
+# 느낌)") ----------
+
+
+def test_gc181_my_work_shows_active_job_running_for_agent_execution_job(
+    client_and_conn,
+):
+    """결과물이 아직 없어도(latest_status=None) agent_execution_jobs에
+    running 행이 있으면 "아직 없음"이 아니라 "실행 중"으로 구분돼야
+    한다 — 요청만 하고 방치된 것과 지금 돌고 있는 것을 구분하는 핵심
+    신호."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    conn.execute(
+        "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
+        "VALUES (?, 1, 'running')",
+        (task_id,),
+    )
+    conn.commit()
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get("/api/my-work")
+    row = next(r for r in resp.json() if r["task_id"] == task_id)
+    assert row["latest_status"] is None
+    assert row["active_job"] == "running"
+
+
+def test_gc182_my_work_shows_active_job_running_for_crew_run(client_and_conn):
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    conn.execute(
+        "INSERT INTO crew_runs (task_id, kind, requested_by, agent_ids, process) "
+        "VALUES (?, 'adhoc', 1, '[]', 'sequential')",
+        (task_id,),
+    )
+    conn.commit()
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get("/api/my-work")
+    row = next(r for r in resp.json() if r["task_id"] == task_id)
+    assert row["active_job"] == "running"
+
+
+def test_gc183_my_work_shows_active_job_paused_for_approval_for_pipeline_run(
+    client_and_conn,
+):
+    """파이프라인이 사람 승인을 기다리는 중(paused_for_approval)이면
+    "실행 중"과는 구분되는 "승인 대기 중"으로 보여야 한다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    conn.execute(
+        "INSERT INTO pipeline_runs (pipeline_template_id, task_id, actor_id, status) "
+        "VALUES (1, ?, 1, 'paused_for_approval')",
+        (task_id,),
+    )
+    conn.commit()
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get("/api/my-work")
+    row = next(r for r in resp.json() if r["task_id"] == task_id)
+    assert row["active_job"] == "paused_for_approval"
+
+
+def test_gc184_my_work_active_job_is_none_once_job_finished(client_and_conn):
+    """끝난 job(succeeded/completed)은 "실행 중"으로 잘못 뜨면 안 된다
+    — 회귀 가드."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    conn.execute(
+        "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
+        "VALUES (?, 1, 'succeeded')",
+        (task_id,),
+    )
+    conn.execute(
+        "INSERT INTO pipeline_runs (pipeline_template_id, task_id, actor_id, status) "
+        "VALUES (1, ?, 1, 'completed')",
+        (task_id,),
+    )
+    conn.commit()
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get("/api/my-work")
+    row = next(r for r in resp.json() if r["task_id"] == task_id)
+    assert row["active_job"] is None
+
+
+def test_gc185_brief_task_list_also_exposes_active_job(client_and_conn):
+    """업무 요청 탭의 할 일 목록(`GET /api/briefs/{id}/tasks`)도 같은
+    `task_completion_summary()`를 쓰므로 "내 업무"와 똑같이 active_job이
+    보여야 한다 — 요청을 제출한 그 화면에서 바로 진행 상황을 볼 수
+    있어야 한다는 게 이번 개선의 핵심."""
+    client, conn = client_and_conn
+    brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    conn.execute(
+        "INSERT INTO agent_execution_jobs (task_id, requested_by, status) "
+        "VALUES (?, 1, 'running')",
+        (task_id,),
+    )
+    conn.commit()
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get(f"/api/briefs/{brief_id}/tasks")
+    row = next(t for t in resp.json() if t["id"] == task_id)
+    assert row["active_job"] == "running"
+
+
 # ---------- Phase 3 — Agent 평가 인라인 연결(사용자 요청, 2026-09-28, "Phase 3 진행해줘") ----------
 
 

@@ -114,3 +114,58 @@ def test_gc160_member_without_admin_role_gets_no_approval_items(client_and_conn)
     resp = client.get("/api/inbox")
     assert resp.status_code == 200
     assert [i for i in resp.json() if i["type"] == "approval_pending"] == []
+
+
+# ---------- completed(결재 불필요 성공 완료) — 사용자 요청(2026-11-12,
+# "업무를 요청하고, 협업공간에서 진행과정과 결과물 확인이 어려워") ----------
+
+
+def test_gc161_completed_appears_for_requester_after_approval(client_and_conn):
+    """결재가 필요 없는 성공 완료도 요청한 사람이 알 수 있어야 한다 —
+    지금까지 승인되면 조용히 묻혔다."""
+    client, _conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    _deliverable_id, row = _execute_agent_and_get_deliverable(client, task_id)
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        f"/api/approvals/{row['approval_id']}/decide", json={"approve": True}
+    )
+    assert resp.status_code == 200, resp.text
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get("/api/inbox")
+    assert resp.status_code == 200
+    matches = [
+        i for i in resp.json() if i["type"] == "completed" and i["task_id"] == task_id
+    ]
+    assert len(matches) == 1
+
+
+def test_gc162_completed_excluded_once_older_than_24_hours(client_and_conn):
+    """번복될 일이 없는 "승인됨" 상태를 시간 조건 없이 두면 한 번 끝난
+    업무가 영원히 인박스에 남는다 — 24시간이 지나면 "새로 끝난 것"이
+    아니라고 보고 빠져야 한다."""
+    client, conn = client_and_conn
+    _brief_id, task_id, _agent_id = _setup_agent_requester_task(client)
+
+    deliverable_id, row = _execute_agent_and_get_deliverable(client, task_id)
+    _login(client, "admin1", "adminpass")
+    resp = client.post(
+        f"/api/approvals/{row['approval_id']}/decide", json={"approve": True}
+    )
+    assert resp.status_code == 200, resp.text
+
+    conn.execute(
+        "UPDATE deliverables SET created_at = datetime('now', '-25 hours') "
+        "WHERE id = ?",
+        (deliverable_id,),
+    )
+    conn.commit()
+
+    _login(client, "manager1", "managerpass")
+    resp = client.get("/api/inbox")
+    matches = [
+        i for i in resp.json() if i["type"] == "completed" and i["task_id"] == task_id
+    ]
+    assert matches == []

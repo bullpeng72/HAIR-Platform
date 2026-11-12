@@ -254,7 +254,18 @@ def task_completion_summary(conn: sqlite3.Connection, task_id: int) -> dict:
     뿐 "지금 상태가 뭔지"·"최종 결과물(승인됨)이 나왔는지"는 업무마다
     협업 워크스페이스를 직접 열어 전체 타임라인을 끝까지 스캔해야만
     알 수 있었다. `list_my_work()`·브리프 할 일 목록(`app.py`) 양쪽에서
-    재사용한다(같은 집계 로직을 두 번 만들지 않는다)."""
+    재사용한다(같은 집계 로직을 두 번 만들지 않는다).
+
+    사용자 요청(2026-11-12, "업무를 요청하고, 협업공간에서 진행과정과
+    결과물 확인이 어려워(숨겨져 있는 느낌)") — 위 집계는 전부
+    `deliverables` 테이블만 봐서, "아직 실행 안 함"과 "방금 실행시켰는데
+    아직 안 끝남"이 똑같이 `latest_status: None`으로 보였다(둘 다
+    deliverable이 아직 없으니까). 지금 이 Task에 돌고 있는 작업이
+    있는지(`agent_execution_jobs`/`pipeline_runs`/`crew_runs` 중
+    `status='running'`, 파이프라인은 사람 승인을 기다리는
+    `paused_for_approval`도 포함)를 추가로 확인해 `active_job`에 담는다
+    — 이것도 세 테이블을 또 따로 조회하는 대신 한 번의 `UNION` 쿼리로
+    끝낸다."""
     count_row = conn.execute(
         "SELECT COUNT(*) AS c FROM deliverables WHERE task_id = ?", (task_id,)
     ).fetchone()
@@ -267,11 +278,25 @@ def task_completion_summary(conn: sqlite3.Connection, task_id: int) -> dict:
         "SELECT 1 FROM deliverables WHERE task_id = ? AND status = 'approved' LIMIT 1",
         (task_id,),
     ).fetchone()
+    active_job_row = conn.execute(
+        "SELECT 'running' AS kind FROM agent_execution_jobs "
+        "WHERE task_id = ? AND status = 'running' "
+        "UNION ALL "
+        "SELECT 'running' AS kind FROM crew_runs "
+        "WHERE task_id = ? AND status = 'running' "
+        "UNION ALL "
+        "SELECT CASE status WHEN 'paused_for_approval' THEN 'paused_for_approval' "
+        "ELSE 'running' END AS kind FROM pipeline_runs "
+        "WHERE task_id = ? AND status IN ('running', 'paused_for_approval') "
+        "LIMIT 1",
+        (task_id, task_id, task_id),
+    ).fetchone()
     return {
         "deliverable_count": count_row["c"],
         "latest_deliverable_at": latest_row["created_at"] if latest_row else None,
         "latest_status": latest_row["status"] if latest_row else None,
         "has_final_result": approved_row is not None,
+        "active_job": active_job_row["kind"] if active_job_row else None,
     }
 
 

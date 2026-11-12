@@ -86,6 +86,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .nav-group.admin-group button { border-color: var(--color-admin-border); }
   .nav-group.admin-group button.active { background: var(--color-admin); border-color: var(--color-admin); }
   .badge-adminonly { font-size: 0.65rem; background: var(--color-admin); color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
+  .badge-inbox-count { font-size: 0.7rem; font-weight: 700; background: var(--status-danger-fg); color: #fff; border-radius: 10px; padding: 0.05rem 0.4rem; margin-left: 0.3rem; }
   /* 사용자 요청(2026-11-02, "설정 메뉴 배치를... 4개 그룹으로 조정") —
      "설정" 한 묶음을 4개 그룹(리소스/그라운딩/모델/운영 관리)으로
      나눈다. 그룹 간 구분은 기존 `.nav-group + .nav-group` 점선이
@@ -329,6 +330,20 @@ INDEX_HTML = """<!DOCTYPE html>
    .msg.error { background: var(--status-danger-bg); color: var(--status-danger-fg); }
    .msg.ok { background: var(--status-success-bg); color: var(--status-success-fg); }
    .msg.warn { background: var(--status-warn-bg); color: var(--status-warn-fg); }
+  /* 사용자 요청(2026-11-12, "협업공간에서 진행과정과 결과물 확인이
+     어려워(숨겨져 있는 느낌)") — 지금까지 #global-msg가 <main> 맨
+     위 일반 플로우에 있어, 긴 목록 아래쪽에서 액션을 하면 결과
+     메시지가 화면 밖(스크롤 위)에 떠서 안 보였다. 뷰포트에 고정해
+     스크롤 위치와 무관하게 항상 보이게 한다 — z-index는 이 파일에서
+     가장 큰 기존 값(.artifact-fullscreen-overlay의 100)보다 위로
+     둔다(알림이 전체화면 미리보기보다 더 급한 신호라고 판단).
+     비어 있을 때 클릭을 가로채면 안 되므로 바깥 래퍼는 pointer-events:
+     none, 실제 메시지 박스만 auto로 되돌린다. */
+  #global-msg { position: fixed; top: 1rem; right: 1rem; z-index: 200;
+    max-width: min(420px, 90vw); pointer-events: none; }
+  #global-msg .msg { pointer-events: auto; box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+    animation: global-msg-in 0.15s ease-out; }
+  @keyframes global-msg-in { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
    .badge-reused { font-size: 0.65rem; background: var(--color-admin); color: #fff; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; }
   .muted { color: var(--color-muted); font-size: 0.8rem; }
   .help-list { margin: 0.3rem 0 0.75rem; padding-left: 1.1rem; }
@@ -464,6 +479,13 @@ INDEX_HTML = """<!DOCTYPE html>
   .artifact-fullscreen-panel { position: relative; background: #fff; border-radius: 10px; width: 100%; max-width: 900px; max-height: 90vh; overflow: auto; padding: 2.5rem 1.5rem 1.5rem; box-sizing: border-box; }
   .artifact-fullscreen-close { position: absolute; top: 0.6rem; right: 0.6rem; }
   .artifact-fullscreen-body .html-preview { min-height: 60vh; }
+  /* 커스텀 확인 모달(2026-11-12) — 네이티브 confirm() 대체. z-index는
+     전체화면 오버레이(100)보다 위, 전역 메시지 토스트(200)보다도
+     위에 둔다(사용자가 반드시 응답해야 하는 모달이 가장 급하다). */
+  .confirm-modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 1rem; box-sizing: border-box; }
+  .confirm-modal-box { background: var(--color-surface); color: var(--color-text); border-radius: 8px; width: 100%; max-width: 420px; padding: 1.25rem; box-sizing: border-box; box-shadow: 0 8px 28px rgba(0,0,0,0.3); }
+  .confirm-modal-text { margin: 0 0 1rem; font-size: 0.9rem; white-space: pre-wrap; }
+  .confirm-modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
 
   /* Phase 5(사용자 요청, 2026-09-28, "반응형만 포함(내 업무/알림 확인용)")
      — 이 앱은 고정 1100px 레이아웃(과거 다크모드 회귀 회피와 같은 이유로
@@ -854,7 +876,7 @@ function renderContent(raw, contentType) {
 // 전역 위임(한 번만 등록) — renderContent()가 어디서 호출되든(Task
 // 워크스페이스/Crew 실행 결과/대화 등) 매번 버튼을 다시 연결할 필요가
 // 없다.
-document.addEventListener("click", (ev) => {
+document.addEventListener("click", async (ev) => {
   // 컬럼 폭 조정 핸들은 정렬 가능한 th 안에 들어있어, 드래그가 끝난 뒤
   // 발생하는 네이티브 click이 그대로 버블되면 정렬(data-sort-col)까지
   // 같이 트리거된다 — 여기서 먼저 걸러낸다.
@@ -916,7 +938,7 @@ document.addEventListener("click", (ev) => {
   const deleteMsgBtn = ev.target.closest("[data-delete-message]");
   if (deleteMsgBtn) {
     const [convId, msgId] = deleteMsgBtn.dataset.deleteMessage.split(":");
-    if (!window.confirm("이 메시지를 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+    if (!(await confirmModal("이 메시지를 지웁니다(되돌릴 수 없음). 계속할까요?"))) return;
     api("DELETE", "/api/conversations/" + convId + "/messages/" + msgId)
       .then(() => _reloadConversationMessagesInPlace(convId))
       .catch((e) => showMsg("global-msg", e.message, "error"));
@@ -977,7 +999,7 @@ document.addEventListener("click", (ev) => {
     const id = refineOptBtn.dataset.refineOptimize;
     const resultEl = document.getElementById("optimize-result-" + id);
     if (!resultEl) return;
-    if (!window.confirm("AI에게 추천을 보정받습니다 — 실제 LLM API 호출로 비용이 발생합니다. 계속할까요?")) return;
+    if (!(await confirmModal("AI에게 추천을 보정받습니다 — 실제 LLM API 호출로 비용이 발생합니다. 계속할까요?"))) return;
     resultEl.innerHTML = '<p class="muted">AI 의견 요청 중…(실제 LLM 호출)</p>';
     api("POST", "/api/agent-pool/" + id + "/optimize-recommendation/refine", {})
       .then(rec => {
@@ -1176,10 +1198,23 @@ function qs(path, params) {
   return s ? (path + "?" + s) : path;
 }
 
+// 사용자 요청(2026-11-12, "꼭 필요한 메시지만 노출되도록") — #global-msg는
+// 뷰포트에 고정된 토스트라(위 CSS 참고) 다음 메시지가 올 때까지 안 사라지면
+// 화면에 계속 떠서 오히려 방해가 된다. 성공은 짧게, 오류는 좀 더 오래 보여준
+// 뒤 자동으로 지운다 — 호출부(274곳)는 아무것도 안 바꿔도 된다. "login-msg"
+// (로그인 폼 전용, 뷰포트 고정 아님)는 기존처럼 자동 소멸 없이 그대로 둔다.
+let _globalMsgTimer = null;
 function showMsg(elId, text, kind) {
   const el = document.getElementById(elId);
+  if (elId === "global-msg" && _globalMsgTimer) {
+    clearTimeout(_globalMsgTimer);
+    _globalMsgTimer = null;
+  }
   if (!text) { el.innerHTML = ""; return; }
   el.innerHTML = '<div class="msg ' + (kind || "ok") + '">' + esc(text) + "</div>";
+  if (elId === "global-msg") {
+    _globalMsgTimer = setTimeout(() => { el.innerHTML = ""; }, kind === "error" ? 8000 : 4000);
+  }
 }
 
 /* 실제 LLM API를 호출해 오래 걸릴 수 있는 버튼(Crew 실행, AI 에이전트
@@ -1198,6 +1233,39 @@ async function withBusy(btn, busyLabel, fn) {
   }
 }
 
+// 사용자 요청(2026-11-12, "UI/UX 개선") — 지금까지 파괴적/비용 발생
+// 액션 확인을 전부 브라우저 네이티브 `confirm()`으로 했다(스타일링
+// 불가·앱 전체를 막는 모달·나머지 UI와 톤이 다름). 커스텀 오버레이로
+// 교체한다 — `.artifact-fullscreen-overlay`(이미 있는 유일한 fixed
+// 오버레이)와 같은 시각 톤을 맞춘다. 반환값은 네이티브 confirm()과
+// 동일하게 Promise<boolean>이라, 호출부는 `if (!window.confirm(msg))
+// return;`을 `if (!(await confirmModal(msg))) return;`로만 바꾸면
+// 된다(그 함수가 async가 아니었다면 그 함수 자체도 async로 바꿔야
+// 함 — 호출부별로 직접 확인함).
+function confirmModal(message, { danger = false } = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-modal-overlay";
+    overlay.innerHTML =
+      '<div class="confirm-modal-box">' +
+      '<p class="confirm-modal-text">' + esc(message) + '</p>' +
+      '<div class="confirm-modal-actions">' +
+      '<button type="button" class="small" data-confirm-cancel>취소</button>' +
+      '<button type="button" class="small' + (danger ? " danger" : " primary") + '" data-confirm-ok>확인</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    const settle = (result) => { overlay.remove(); resolve(result); };
+    overlay.querySelector("[data-confirm-ok]").onclick = () => settle(true);
+    overlay.querySelector("[data-confirm-cancel]").onclick = () => settle(false);
+    overlay.onclick = (ev) => { if (ev.target === overlay) settle(false); };
+    const onKey = (ev) => {
+      if (ev.key === "Escape") { settle(false); document.removeEventListener("keydown", onKey); }
+    };
+    document.addEventListener("keydown", onKey);
+    overlay.querySelector("[data-confirm-ok]").focus();
+  });
+}
+
 const LABELS = {
   human: "사람", agent: "AI 에이전트", team: "팀", pipeline: "파이프라인",
   brief: "업무 요청", assignment: "배정", deliverable: "결과물", human_pool: "사람 인력", agent_pool: "AI 에이전트",
@@ -1210,6 +1278,7 @@ const LABELS = {
   available: "가능", unavailable: "불가", offboarded: "오프보딩됨",
   active: "활성", pending_onboarding: "온보딩 대기", deprecated: "비활성화됨",
   draft: "초안", pending_review: "리뷰 대기", revised: "수정됨",
+  paused_for_approval: "승인 대기 중",
   // (2026-10-08, Phase 4) — 할 일 보드 상태/우선순위.
   backlog: "백로그", queued: "대기", in_progress: "진행중", done: "완료",
   low: "낮음", medium: "보통", high: "높음", urgent: "긴급",
@@ -1798,6 +1867,18 @@ function buildNav() {
       badge.textContent = "관리자 전용";
       btn.appendChild(badge);
     }
+    // 사용자 요청(2026-11-12, "업무를 요청하고, 협업공간에서 진행과정과
+    // 결과물 확인이 어려워") — "인박스" 탭 밖에 있으면 결재 대기/실행
+    // 실패/완료 소식을 전혀 알 길이 없었다. 기존 멘션 알림 폴링(20초)을
+    // `_pollInboxBadge()`로 확장해 이 탭 버튼에 미읽은 건수를 직접
+    // 띄운다 — 기본은 숨김(hidden), 폴링이 처음 돌면 바로 갱신된다.
+    if (t.id === "inbox") {
+      const badge = document.createElement("span");
+      badge.className = "badge-inbox-count";
+      badge.id = "inbox-badge-count";
+      badge.hidden = true;
+      btn.appendChild(badge);
+    }
     btn.dataset.tab = t.id;
     btn.onclick = () => selectTab(t.id);
     return btn;
@@ -2155,11 +2236,35 @@ async function _pollMyMentions() {
   }
 }
 
+// 사용자 요청(2026-11-12, "업무를 요청하고, 협업공간에서 진행과정과
+// 결과물 확인이 어려워(숨겨져 있는 느낌)") — "인박스" 탭을 직접 열어야만
+// 결재 대기/실행 실패/완료 소식을 알 수 있었다(다른 탭에 있으면 전혀
+// 모름). 기존 멘션 폴링과 같은 주기(20초)로 `GET /api/inbox`를 같이
+// 불러 탭 버튼에 건수 배지를 띄운다 — 새 폴링 체계를 따로 만들지 않고
+// 같은 타이머에 얹는다.
+async function _pollInboxBadge() {
+  const badge = document.getElementById("inbox-badge-count");
+  if (!badge) return; // 아직 로그인 전/로그아웃 뒤 — nav가 없음
+  let items;
+  try {
+    items = await api("GET", "/api/inbox");
+  } catch (e) {
+    return; // 네트워크 일시 단절 등 — 다음 주기에 다시 시도
+  }
+  if (items.length) {
+    badge.textContent = items.length > 99 ? "99+" : String(items.length);
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
 function startMentionNotificationPolling() {
   if (_mentionNotifyTimer) return; // 이미 돌고 있으면 중복 시작하지 않음
   _requestNotificationPermissionIfNeeded();
   _pollMyMentions();
-  _mentionNotifyTimer = setInterval(_pollMyMentions, 20000);
+  _pollInboxBadge();
+  _mentionNotifyTimer = setInterval(() => { _pollMyMentions(); _pollInboxBadge(); }, 20000);
 }
 
 function stopMentionNotificationPolling() {
@@ -2174,7 +2279,9 @@ async function renderConversations(content) {
   _stopConversationPolling();
   const list = await api("GET", "/api/conversations");
   content.innerHTML =
-    '<section class="card"><h2>대화</h2>' +
+    '<section class="card"><h2>대화 ' +
+    '<span class="gate-badge gate-na" title="정식 업무(Brief/Task) 승인 체인·Gate 평가를 거치지 않는 비정식 공간입니다">💬 비정식</span>' +
+    '</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
       '<li>로그인하면 바로 쓸 수 있는 대화 공간입니다 — 사람·Agent·Agent 그룹(Team)을 불러 대화하듯 업무를 처리하세요.</li>' +
@@ -2214,7 +2321,7 @@ async function renderConversations(content) {
   });
   content.querySelectorAll("[data-delete-conversation]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 대화를 메시지·참가자까지 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      if (!(await confirmModal("이 대화를 메시지·참가자까지 전부 지웁니다(되돌릴 수 없음). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/conversations/" + btn.dataset.deleteConversation);
         showMsg("global-msg", "대화를 삭제했습니다.", "ok");
@@ -2224,7 +2331,7 @@ async function renderConversations(content) {
   });
   content.querySelectorAll("[data-leave-conversation]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 대화에서 나갑니다. 계속할까요?")) return;
+      if (!(await confirmModal("이 대화에서 나갑니다. 계속할까요?"))) return;
       try {
         const result = await api("POST", "/api/conversations/" + btn.dataset.leaveConversation + "/leave");
         showMsg(
@@ -2524,8 +2631,10 @@ async function renderConversationDetail(conversationId, containerId) {
 
   detail.innerHTML =
     '<section class="card">' +
-    '<h3>' + esc(conv.title || "(제목 없음)") +
-    (conv.linked_task_id ? ' <span class="muted">업무 #' + conv.linked_task_id + ' 전용 대화</span>' : '') +
+    '<h3>' + esc(conv.title || "(제목 없음)") + ' ' +
+    (conv.linked_task_id
+      ? '<span class="gate-badge gate-na" title="정식 업무(Brief/Task #' + conv.linked_task_id + ')에 연결된 대화지만, 이 창 자체는 승인 체인·Gate 평가를 거치지 않는 비정식 대화입니다">💬 업무 #' + conv.linked_task_id + ' 전용 대화</span>'
+      : '<span class="gate-badge gate-na" title="정식 업무(Brief/Task) 승인 체인·Gate 평가를 거치지 않는 비정식 대화입니다">💬 비정식 대화</span>') +
     // 사용자 요청(2026-10-10, "대화 세션 삭제/나가기 기능을 구현해줘")
     // — "삭제"(연쇄 삭제, 되돌릴 수 없음)는 만든 사람(created_by)만
     // 쓸 수 있다(`conversations.delete_conversation()`과 같은 권한
@@ -2660,7 +2769,7 @@ async function renderConversationDetail(conversationId, containerId) {
   const deleteBtn = document.getElementById("conv-delete-btn");
   if (deleteBtn) {
     deleteBtn.addEventListener("click", async () => {
-      if (!window.confirm("이 대화를 메시지·참가자까지 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      if (!(await confirmModal("이 대화를 메시지·참가자까지 전부 지웁니다(되돌릴 수 없음). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/conversations/" + conversationId);
         showMsg("global-msg", "대화를 삭제했습니다.", "ok");
@@ -2671,7 +2780,7 @@ async function renderConversationDetail(conversationId, containerId) {
   const leaveBtn = document.getElementById("conv-leave-btn");
   if (leaveBtn) {
     leaveBtn.addEventListener("click", async () => {
-      if (!window.confirm("이 대화에서 나갑니다. 계속할까요?")) return;
+      if (!(await confirmModal("이 대화에서 나갑니다. 계속할까요?"))) return;
       try {
         const result = await api("POST", "/api/conversations/" + conversationId + "/leave");
         showMsg(
@@ -2869,6 +2978,7 @@ async function renderInbox(content) {
     approval_pending: "결재 대기",
     execution_failed: "AI 에이전트 실행 실패",
     low_gate_score: "낮은 Gate 점수 경고",
+    completed: "✅ 완료됨",
   };
   const cards = items.map(item => {
     if (item.type === "approval_pending") {
@@ -2887,6 +2997,15 @@ async function renderInbox(content) {
     if (item.type === "execution_failed") {
       return '<div class="deliverable-card"><div class="muted">' + labelOf[item.type] + " · " + esc(item.role_name) + '</div>' +
         '<div>' + esc(item.error || "") + '</div>' +
+        '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
+    }
+    if (item.type === "completed") {
+      // 사용자 요청(2026-11-12) — 결재가 필요 없는 성공 완료도 요청한
+      // 사람이 알 수 있게 한다(지금까지 조용히 묻혔음, 위 inbox.py
+      // docstring 참고). 다른 경고성 카드와 톤이 다르다는 걸 보여주려고
+      // gate-ok 배지를 쓴다(나머지는 muted 텍스트뿐).
+      return '<div class="deliverable-card"><div><span class="gate-badge gate-ok">' + labelOf[item.type] + '</span> · ' + esc(item.role_name) + '</div>' +
+        '<div class="muted">' + esc(item.completed_at || "") + '</div>' +
         '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
     }
     return '<div class="deliverable-card"><div class="muted">' + labelOf[item.type] + " · " + esc(item.role_name) + '</div>' +
@@ -2908,7 +3027,7 @@ async function renderInbox(content) {
     '<section class="card"><h2>내게 필요한 조치</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>결재 대기·AI 에이전트 실행 실패·낮은 Gate 점수 경고(승인/반려 전인 것만)를 한 곳에 모았습니다.</li>' +
+      '<li>결재 대기·AI 에이전트 실행 실패·낮은 Gate 점수 경고(승인/반려 전인 것만)·✅ 완료됨(결재가 필요 없는 성공, 최근 24시간 이내만)을 한 곳에 모았습니다.</li>' +
       '<li>완전한 시간순 통합은 아니고 종류별로 묶여 있습니다 — 처리는 각 항목의 원래 화면(결재/내 업무)에서 합니다.</li>' +
       '</ul>'
     ) +
@@ -2965,7 +3084,16 @@ async function renderMyWork(content) {
         team_leader: "내 팀이 할 일(팀 리더)",
         team_member: "내 팀이 할 일(팀원)",
       })[r.my_relationship] || "내가 맡긴 일",
-      r.latest_status ? esc(label(r.latest_status)) : '<span class="muted">아직 없음</span>',
+      // 사용자 요청(2026-11-12, "진행과정과 결과물 확인이 어려워(숨겨져
+      // 있는 느낌)") — 기존엔 이 컬럼이 deliverable 상태만 봐서 "아직
+      // 실행 안 함"과 "방금 실행시켰는데 아직 안 끝남"이 똑같이 "아직
+      // 없음"으로 보였다. `task_completion_summary()`가 내려주는
+      // `active_job`(agent_execution_jobs/crew_runs/pipeline_runs 중
+      // running·paused_for_approval)을 deliverable 상태보다 먼저
+      // 보여준다 — 지금 뭔가 돌고 있다는 신호가 최우선.
+      r.active_job === "running" ? '<span class="gate-badge gate-warn">⏳ 실행 중</span>'
+        : r.active_job === "paused_for_approval" ? '<span class="gate-badge gate-warn">🕐 승인 대기 중</span>'
+        : r.latest_status ? esc(label(r.latest_status)) : '<span class="muted">아직 없음</span>',
       r.has_final_result ? '<span class="gate-badge gate-ok">✓ 승인됨</span>' : '<span class="muted">-</span>',
       r.deliverable_count,
       r.latest_deliverable_at ? esc(r.latest_deliverable_at) : "-",
@@ -3088,7 +3216,7 @@ async function _renderGalleryFiltered(content, filters) {
   };
   content.querySelectorAll("[data-gallery-delete]").forEach(btn => {
     btn.onclick = async () => {
-      if (!confirm("이 결과물을 삭제할까요? 되돌릴 수 없습니다.")) return;
+      if (!(await confirmModal("이 결과물을 삭제할까요? 되돌릴 수 없습니다."))) return;
       try {
         await api("DELETE", "/api/deliverables/" + btn.dataset.galleryDelete);
         _renderGalleryFiltered(content, filters);
@@ -3140,10 +3268,22 @@ async function _renderBoardScope(content, scope, canSeeAll) {
 
   const columnsHtml = STATUS_COLUMNS.map(col => {
     const colTasks = tasks.filter(t => t.status === col.key);
+    // 사용자 요청(2026-11-12, "업무를 요청하고, 협업공간에서 진행과정과
+    // 결과물 확인이 어려워") — 카드에 역할명·우선순위뿐이라 실행 중인지
+    // 결과물이 나왔는지 전혀 안 보여, 칸반을 보고도 열어봐야만 알 수
+    // 있었다. "내 업무"와 같은 active_job/has_final_result(`/api/my-
+    // work`·`/api/all-work`가 이미 내려줌)를 그대로 재사용한다.
+    const progressBadgeHtml = (t) => t.active_job === "running"
+      ? '<span class="gate-badge gate-warn">⏳ 실행 중</span>'
+      : t.active_job === "paused_for_approval"
+      ? '<span class="gate-badge gate-warn">🕐 승인 대기 중</span>'
+      : t.has_final_result
+      ? '<span class="gate-badge gate-ok">✓ 승인됨</span>'
+      : "";
     const cards = colTasks.map(t =>
       '<div class="deliverable-card">' +
       '<div><strong>' + esc(t.role_name) + '</strong></div>' +
-      '<div><span class="gate-badge ' + (BOARD_PRIORITY_BADGE[t.priority] || "") + '">' + esc(label(t.priority)) + '</span></div>' +
+      '<div><span class="gate-badge ' + (BOARD_PRIORITY_BADGE[t.priority] || "") + '">' + esc(label(t.priority)) + '</span> ' + progressBadgeHtml(t) + '</div>' +
       '<div class="actions"><button class="small" data-board-open="' + t.task_id + '">열기</button></div>' +
       '</div>'
     ).join("");
@@ -3826,7 +3966,9 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // textarea를 독립된 줄로 분리하고, "결과물 작성"과 "AI 에이전트 실행"을
   // 서로 다른 카드로 나눠 두 행동의 성격이 다르다는 걸 시각적으로 구분한다.
   detail.innerHTML =
-    '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
+    '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + ' ' +
+    '<span class="gate-badge gate-ok" title="승인 체인·Gate A-G 평가를 거치는 정식 업무입니다 — 대화(비정식)와는 다른 트랙입니다">📋 정식 업무</span>' +
+    '</h3>' +
     statusPriorityBar +
     budgetCardHtml +
     finalResultCard +
@@ -3900,6 +4042,13 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   if (executePipelineBtn) {
     executePipelineBtn.onclick = async () => {
       const templateId = Number(document.getElementById("ws-pipeline-template-picker").value);
+      // 사용자 요청(2026-11-12, "UI/UX 개선") — 단일 Agent 실행/Crew
+      // 실행에는 이미 비용 확인이 있었는데, 가장 비용이 커질 수 있는
+      // (여러 단계 × 참여자 수만큼 LLM 호출이 누적되는) 파이프라인
+      // 실행에는 확인이 전혀 없었다 — 실측으로 발견한 비대칭 수정.
+      if (!(await confirmModal(
+        "이 파이프라인을 처음부터 끝까지 실행합니다 — 단계마다 실제 LLM API를 호출해 비용이 발생하고, 참여자·재시도가 많을수록 누적 비용이 커질 수 있습니다. 계속할까요?"
+      ))) return;
       try {
         await api("POST", "/api/tasks/" + taskId + "/execute-pipeline", {
           pipeline_template_id: templateId,
@@ -4064,7 +4213,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
 
   const executeBtn = document.getElementById("ws-execute-agent-btn");
   executeBtn.onclick = async () => {
-    if (!window.confirm("이 업무에 배정된 AI 에이전트를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
+    if (!(await confirmModal("이 업무에 배정된 AI 에이전트를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?"))) return;
     const formData = new FormData();
     formData.append("content_type", document.getElementById("ws-execute-content-type").value);
     const agentPicker = document.getElementById("ws-agent-picker");
@@ -4106,7 +4255,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     executeTeamCrewBtn.onclick = async () => {
       const teamPicker = document.getElementById("ws-team-picker");
       const teamId = teamPicker ? Number(teamPicker.value) : confirmedTeams[0].resource_id;
-      if (!window.confirm("이 팀의 Agent 멤버 전원을 Crew로 실행합니다(실제 LLM API 호출, 비용은 참여 Agent 수만큼 커질 수 있습니다). 계속할까요?")) return;
+      if (!(await confirmModal("이 팀의 Agent 멤버 전원을 Crew로 실행합니다(실제 LLM API 호출, 비용은 참여 Agent 수만큼 커질 수 있습니다). 계속할까요?"))) return;
       const processVal = document.getElementById("ws-team-crew-process").value;
       const payload = Object.assign({
         team_id: teamId,
@@ -4588,7 +4737,7 @@ async function renderBriefs(content) {
   });
   content.querySelectorAll("[data-delete-brief]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 업무 요청과 그 아래 할 일·배정·결과물(산출물 평가 이력 포함)을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      if (!(await confirmModal("이 업무 요청과 그 아래 할 일·배정·결과물(산출물 평가 이력 포함)을 전부 지웁니다(되돌릴 수 없음). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/briefs/" + btn.dataset.deleteBrief);
         showMsg("global-msg", "업무 요청을 삭제했습니다.", "ok");
@@ -4751,7 +4900,12 @@ async function renderTaskList(briefId) {
     // "내 업무"에서 찾거나 배정·워크스페이스를 따로 추적해야 했다.
     table(["할 일 ID", "역할", "필요 스킬", "인원", "상태", "최종 결과물", "동작"], tasks.map(t => [
       t.id, esc(t.role_name), esc(t.required_skills.join(", ")), t.headcount,
-      t.latest_status ? esc(label(t.latest_status)) : '<span class="muted">아직 없음</span>',
+      // 사용자 요청(2026-11-12) — 요청을 막 제출한 바로 이 화면에서도
+      // "실행 중"을 바로 볼 수 있어야 "내 업무" 탭까지 따로 찾아가지
+      // 않아도 된다(renderMyWork()의 같은 로직, 백엔드 집계도 공유).
+      t.active_job === "running" ? '<span class="gate-badge gate-warn">⏳ 실행 중</span>'
+        : t.active_job === "paused_for_approval" ? '<span class="gate-badge gate-warn">🕐 승인 대기 중</span>'
+        : t.latest_status ? esc(label(t.latest_status)) : '<span class="muted">아직 없음</span>',
       t.has_final_result ? '<span class="gate-badge gate-ok">✓ 승인됨</span>' : '<span class="muted">-</span>',
       '<div class="actions"><button class="small" data-task-detail="' + t.id + '">상세</button>' +
         (isAdmin ? '<button class="small danger" data-delete-task="' + t.id + '">삭제</button>' : "") +
@@ -4772,7 +4926,7 @@ async function renderTaskList(briefId) {
     '<div id="task-detail"></div>';
   detail.querySelectorAll("[data-delete-task]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 할 일과 그 배정·결과물(산출물 평가 이력 포함)을 전부 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      if (!(await confirmModal("이 할 일과 그 배정·결과물(산출물 평가 이력 포함)을 전부 지웁니다(되돌릴 수 없음). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/briefs/" + briefId + "/tasks/" + btn.dataset.deleteTask);
         showMsg("global-msg", "할 일을 삭제했습니다.", "ok");
@@ -4797,7 +4951,7 @@ async function renderTaskList(briefId) {
    (403) 있어, 그 둘은 감독 권한이 있는 role에만 안전하게 임베드할 수
    있다. member/viewer는 배정 현황만 읽기 전용으로 본다(자기 업무
    처리는 기존처럼 "내 업무" 탭에서). */
-async function renderTaskDetailPanel(task) {
+async function renderTaskDetailPanel(task, forceWorkspace = false) {
   const container = document.getElementById("task-detail");
   const isSupervisor = ["admin", "manager"].includes(ME.role);
   container.innerHTML = '<p class="muted">불러오는 중...</p>';
@@ -4900,7 +5054,7 @@ async function renderTaskDetailPanel(task) {
   });
   container.querySelectorAll("[data-cancel-assignment]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 배정을 취소합니다 — 되돌릴 수 없고, 다시 배정하려면 새로 요청해야 합니다. 계속할까요?")) return;
+      if (!(await confirmModal("이 배정을 취소합니다 — 되돌릴 수 없고, 다시 배정하려면 새로 요청해야 합니다. 계속할까요?"))) return;
       try {
         await api("POST", "/api/assignments/" + btn.dataset.cancelAssignment + "/cancel", {});
         showMsg("global-msg", "배정을 취소했습니다.", "ok");
@@ -4927,7 +5081,8 @@ async function renderTaskDetailPanel(task) {
     document.getElementById("task-detail-match-btn").onclick = async () => {
       try {
         const result = await api("POST", "/api/tasks/" + task.id + "/match");
-        renderMatchResult(task.id, result, "task-detail-match", () => renderTaskDetailPanel(task));
+        renderMatchResult(task.id, result, "task-detail-match",
+          (assignResult) => renderTaskDetailPanel(task, !!(assignResult && assignResult.status === "confirmed")));
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
     const teamAssignForm = document.getElementById("task-detail-team-assign-form");
@@ -4959,7 +5114,16 @@ async function renderTaskDetailPanel(task) {
       });
     }
   }
-  if (isSupervisor && confirmedList.length) {
+  // 사용자 요청(2026-11-12, "업무를 요청하고, 협업공간에서 진행과정과
+  // 결과물 확인이 어려워(숨겨져 있는 느낌)") — admin/manager는 확정된
+  // 배정이 하나라도 있으면 항상 워크스페이스를 바로 보여줬지만, member가
+  // 셀프배정으로 그 자리에서 즉시 confirmed가 될 때는(`forceWorkspace`)
+  // 보여주지 않았다 — "결재" 탭조차 안 거치고 확정됐는데 "바로
+  // 협업 워크스페이스에서 작업을 시작할 수 있습니다"라는 안내만 뜨고
+  // 실제로는 "내 업무" 탭을 따로 찾아가야 했다. member가 참가자가 아닌
+  // 남의 할 일까지 무조건 열면(권한 없음 에러만 뜸) 오히려 혼란이라,
+  // "방금 내가 확정시킨 배정"일 때만 좁혀서 연다.
+  if ((isSupervisor || forceWorkspace) && confirmedList.length) {
     renderCollabWorkspace(task.id, "task-detail-workspace");
   }
 }
@@ -5046,9 +5210,9 @@ async function renderMatch(content) {
 function _wireMatchAssignButtons(container, taskId, onAssigned) {
   container.querySelectorAll("[data-assign-id]").forEach(btn => {
     btn.onclick = async () => {
-      if (btn.dataset.unlinked === "1" && !window.confirm(
+      if (btn.dataset.unlinked === "1" && !(await confirmModal(
         "이 사람은 로그인 계정이 연결돼 있지 않습니다 — 배정이 승인돼도 본인이 \\"내 업무\\"에서 확인할 방법이 없습니다. \\"사람 인력 관리\\"에서 계정을 먼저 연결하는 걸 권장합니다. 그래도 배정 요청하시겠습니까?"
-      )) return;
+      ))) return;
       try {
         const result = await api("POST", "/api/tasks/" + taskId + "/assignments", {
           resource_type: btn.dataset.assignType, resource_id: Number(btn.dataset.assignId),
@@ -5060,7 +5224,11 @@ function _wireMatchAssignButtons(container, taskId, onAssigned) {
             ? "셀프배정이 결재 없이 바로 확정됐습니다 — 바로 협업 워크스페이스에서 작업을 시작할 수 있습니다."
             : "배정 요청을 보냈습니다 — \\"결재\\" 탭에서 처리하세요.",
           "ok");
-        if (onAssigned) onAssigned();
+        // 사용자 요청(2026-11-12, "업무를 요청하고, 협업공간에서
+        // 진행과정과 결과물 확인이 어려워") — 결과(특히 셀프배정
+        // 즉시확정 여부)를 콜백에 넘겨, 호출부가 "방금 확정됐으면
+        // 바로 워크스페이스를 보여준다" 같은 판단을 할 수 있게 한다.
+        if (onAssigned) onAssigned(result);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
@@ -5152,9 +5320,9 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
   _wireMatchAssignButtons(box, taskId, onAssigned);
   box.querySelectorAll("[data-delegate-agent-id]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm(
+      if (!(await confirmModal(
         "결재 없이 이 Agent를 바로 이 업무에 연결합니다(즉시 실행 가능) — 계속하시겠습니까?"
-      )) return;
+      ))) return;
       try {
         await api("POST", "/api/tasks/" + taskId + "/delegate", {
           agent_id: Number(btn.dataset.delegateAgentId),
@@ -5691,7 +5859,7 @@ async function renderHumanPool(content) {
   });
   content.querySelectorAll("[data-offboard]").forEach(btn => {
     btn.onclick = async () => {
-      if (!confirm("정말 오프보딩하시겠습니까?")) return;
+      if (!(await confirmModal("정말 오프보딩하시겠습니까?"))) return;
       try {
         await api("POST", "/api/human-pool/" + btn.dataset.offboard + "/offboard");
         refresh();
@@ -5700,7 +5868,7 @@ async function renderHumanPool(content) {
   });
   content.querySelectorAll("[data-delete-human]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 사람 인력 레코드를 완전히 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      if (!(await confirmModal("이 사람 인력 레코드를 완전히 지웁니다(되돌릴 수 없음). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/human-pool/" + btn.dataset.deleteHuman);
         showMsg("global-msg", "삭제했습니다.", "ok");
@@ -6004,7 +6172,7 @@ async function renderAgentPool(content) {
     // 이 화면 안내문 자체가 "되돌릴 버튼이 없다"고 명시하는 되돌리기
     // 어려운 동작인데도 한 번의 클릭만으로 실행됐다.
     btn.onclick = async () => {
-      if (!window.confirm("이 Agent를 오프보딩합니다(active→deprecated, 이 화면엔 되돌리는 버튼이 없습니다). 계속할까요?")) return;
+      if (!(await confirmModal("이 Agent를 오프보딩합니다(active→deprecated, 이 화면엔 되돌리는 버튼이 없습니다). 계속할까요?"))) return;
       try {
         await api("POST", "/api/agent-pool/" + btn.dataset.deprecate + "/deprecate");
         refresh();
@@ -6013,7 +6181,7 @@ async function renderAgentPool(content) {
   });
   content.querySelectorAll("[data-delete-agent]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 AI 에이전트 레코드를 완전히 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      if (!(await confirmModal("이 AI 에이전트 레코드를 완전히 지웁니다(되돌릴 수 없음). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/agent-pool/" + btn.dataset.deleteAgent);
         showMsg("global-msg", "삭제했습니다.", "ok");
@@ -6123,7 +6291,7 @@ async function renderAgentPool(content) {
   });
   content.querySelectorAll("[data-index-knowledge]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 에이전트의 최근 산출물을 임베딩해 색인합니다(실제 임베딩 API 호출 — 비용 발생). 계속할까요?")) return;
+      if (!(await confirmModal("이 에이전트의 최근 산출물을 임베딩해 색인합니다(실제 임베딩 API 호출 — 비용 발생). 계속할까요?"))) return;
       try {
         await withBusy(btn, "보내는 중…", () => api("POST", "/api/agent-pool/" + btn.dataset.indexKnowledge + "/index-knowledge", {}));
         showMsg("global-msg", "지식베이스로 보냈습니다 — RAG 검색에서 바로 찾을 수 있습니다.", "ok");
@@ -6287,7 +6455,7 @@ async function renderAgentOptimization(content) {
   document.getElementById("apply-selected-optimize").onclick = async () => {
     const checks = Array.from(content.querySelectorAll(".optimize-apply-check:checked"));
     if (!checks.length) { showMsg("global-msg", "적용할 Agent를 선택하세요.", "error"); return; }
-    if (!window.confirm(checks.length + "개 Agent에 추천 설정을 적용합니다. 계속할까요?")) return;
+    if (!(await confirmModal(checks.length + "개 Agent에 추천 설정을 적용합니다. 계속할까요?"))) return;
     let ok = 0, fail = 0;
     for (const chk of checks) {
       const id = chk.dataset.agentId;
@@ -6687,7 +6855,7 @@ async function renderPoolRegistry(content) {
   });
   content.querySelectorAll("[data-delete-tool]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 도구를 완전히 지웁니다(연결된 Agent 연결도 함께 지워집니다, 되돌릴 수 없음). 계속할까요?")) return;
+      if (!(await confirmModal("이 도구를 완전히 지웁니다(연결된 Agent 연결도 함께 지워집니다, 되돌릴 수 없음). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/tool-pool/" + btn.dataset.deleteTool);
         showMsg("global-msg", "삭제했습니다.", "ok");
@@ -6697,7 +6865,7 @@ async function renderPoolRegistry(content) {
   });
   content.querySelectorAll("[data-delete-skill]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 스킬을 완전히 지웁니다(되돌릴 수 없음). 계속할까요?")) return;
+      if (!(await confirmModal("이 스킬을 완전히 지웁니다(되돌릴 수 없음). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/skill-pool/" + btn.dataset.deleteSkill);
         showMsg("global-msg", "삭제했습니다.", "ok");
@@ -6974,7 +7142,7 @@ async function renderTeams(content) {
 
   content.querySelectorAll("[data-complete-mission]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 팀의 미션을 완료로 표시합니다 — 이후 @멘션/배정 후보에서 제외됩니다. 계속할까요?")) return;
+      if (!(await confirmModal("이 팀의 미션을 완료로 표시합니다 — 이후 @멘션/배정 후보에서 제외됩니다. 계속할까요?"))) return;
       try {
         await api("POST", "/api/teams/" + btn.dataset.completeMission + "/complete-mission");
         showMsg("global-msg", "미션 완료로 표시했습니다.", "ok");
@@ -6995,7 +7163,7 @@ async function renderTeams(content) {
 
   content.querySelectorAll("[data-delete-team]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 팀을 완전히 지웁니다(되돌릴 수 없음). 과거 배정 이력은 남습니다. 계속할까요?")) return;
+      if (!(await confirmModal("이 팀을 완전히 지웁니다(되돌릴 수 없음). 과거 배정 이력은 남습니다. 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/teams/" + btn.dataset.deleteTeam);
         showMsg("global-msg", "삭제했습니다.", "ok");
@@ -7236,7 +7404,7 @@ async function renderPipelines(content) {
 
   content.querySelectorAll("[data-delete-stage]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 단계를 지웁니다. 계속할까요?")) return;
+      if (!(await confirmModal("이 단계를 지웁니다. 계속할까요?"))) return;
       const stageId = btn.dataset.deleteStage;
       const templateId = btn.closest("[data-pipeline-template-card]").dataset.pipelineTemplateCard;
       try {
@@ -7261,7 +7429,7 @@ async function renderPipelines(content) {
 
   content.querySelectorAll("[data-delete-pipeline-template]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 파이프라인 템플릿을 완전히 지웁니다(실행 이력이 있으면 지울 수 없습니다). 계속할까요?")) return;
+      if (!(await confirmModal("이 파이프라인 템플릿을 완전히 지웁니다(실행 이력이 있으면 지울 수 없습니다). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/pipeline-templates/" + btn.dataset.deletePipelineTemplate);
         showMsg("global-msg", "삭제했습니다.", "ok");
@@ -7407,7 +7575,7 @@ async function renderModelRegistry(content) {
   });
   content.querySelectorAll("[data-delete-model]").forEach(btn => {
     btn.onclick = async () => {
-      if (!window.confirm("이 모델을 레지스트리에서 지웁니다(되돌릴 수 없음, 이미 저장된 Agent의 모델 설정 자체는 안 바뀝니다). 계속할까요?")) return;
+      if (!(await confirmModal("이 모델을 레지스트리에서 지웁니다(되돌릴 수 없음, 이미 저장된 Agent의 모델 설정 자체는 안 바뀝니다). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/model-registry/" + btn.dataset.deleteModel);
         showMsg("global-msg", "삭제했습니다.", "ok");
@@ -7663,7 +7831,7 @@ async function renderKnowledgeBase(content) {
 
   content.querySelectorAll("[data-delete-document]").forEach(btn => {
     btn.addEventListener("click", async () => {
-      if (!window.confirm("이 자료를 삭제합니다(색인된 조각도 함께 지워집니다). 계속할까요?")) return;
+      if (!(await confirmModal("이 자료를 삭제합니다(색인된 조각도 함께 지워집니다). 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/documents/" + btn.getAttribute("data-delete-document"));
         showMsg("global-msg", "삭제했습니다.", "ok");
@@ -7687,7 +7855,7 @@ async function renderKnowledgeBase(content) {
 
   content.querySelectorAll("[data-delete-chunk]").forEach(btn => {
     btn.addEventListener("click", async () => {
-      if (!window.confirm("이 조각을 삭제합니다. 계속할까요?")) return;
+      if (!(await confirmModal("이 조각을 삭제합니다. 계속할까요?"))) return;
       try {
         await api("DELETE", "/api/knowledge-chunks/" + btn.getAttribute("data-delete-chunk"));
         showMsg("global-msg", "삭제했습니다.", "ok");
@@ -7987,7 +8155,7 @@ async function _renderAdhocCrewForm(formBox, taskId) {
       if (row.querySelector(".crew-row-parallel").checked) parallelAgentIds.push(agentId);
     }
     if (!agentIds.length) { showMsg("global-msg", "최소 한 Agent는 선택해야 합니다.", "error"); return; }
-    if (!window.confirm(agentIds.length + "개 Agent로 이 업무에 바로 Crew를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
+    if (!(await confirmModal(agentIds.length + "개 Agent로 이 업무에 바로 Crew를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?"))) return;
     const managerVal = document.getElementById("crewbuilder-adhoc-manager").value;
     const payload = Object.assign({
       agent_ids: agentIds,
@@ -8346,7 +8514,7 @@ async function renderCrew(content) {
     }
     if (!agentIds.length) { showMsg("global-msg", "최소 한 Agent는 선택해야 합니다.", "error"); return; }
     const managerVal = document.getElementById("crew-manager").value;
-    if (!window.confirm(agentIds.length + "개 Agent로 Crew를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?")) return;
+    if (!(await confirmModal(agentIds.length + "개 Agent로 Crew를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?"))) return;
 
     const submitBtn = ev.submitter || document.querySelector("#crew-form button[type=submit]");
     try {
@@ -9318,7 +9486,7 @@ async function renderAdmin(content) {
       const input = document.getElementById("pw-" + btn.dataset.resetPassword);
       const newPassword = input.value;
       if (!newPassword) { showMsg("global-msg", "새 비밀번호를 입력해야 합니다.", "error"); return; }
-      if (!window.confirm("이 계정의 비밀번호를 초기화합니다. 새 비밀번호를 본인에게 안전하게 전달해야 합니다. 계속할까요?")) return;
+      if (!(await confirmModal("이 계정의 비밀번호를 초기화합니다. 새 비밀번호를 본인에게 안전하게 전달해야 합니다. 계속할까요?"))) return;
       try {
         await api("PATCH", "/api/users/" + btn.dataset.resetPassword + "/password", {
           password: newPassword,
@@ -9348,7 +9516,7 @@ async function renderAdmin(content) {
       const msg = activate
         ? "이 계정을 다시 활성화합니다. 계속할까요?"
         : "이 계정을 비활성화합니다 — 즉시 로그인이 막히고 기존 세션도 끊깁니다(계정과 이력은 삭제되지 않음). 계속할까요?";
-      if (!window.confirm(msg)) return;
+      if (!(await confirmModal(msg))) return;
       try {
         await api("PATCH", "/api/users/" + btn.dataset.setStatus + "/status", {
           is_active: activate,
@@ -9480,12 +9648,12 @@ const MANUAL_MARKDOWN = [
 '',
 '### 3단계 — 사람/Agent/Team/파이프라인 연결하기',
 '',
-'네 가지 중 필요한 만큼 씁니다 — **같은 할 일에 여러 건의 확정 배정이 공존**할 수 있습니다(사람 여러 명 + Agent 여러 개 + 팀까지 동시에 투입하는 게 기본값). 네 가지 전부 같은 결재 체인(4단계)을 거칩니다 — 리소스 종류가 달라도 "요청(requested) → 승인(confirmed)/반려(rejected)" 절차는 동일합니다.',
+'네 가지 중 필요한 만큼 씁니다 — **같은 할 일에 여러 건의 확정 배정이 공존**할 수 있습니다(사람 여러 명 + Agent 여러 개 + 팀까지 동시에 투입하는 게 기본값). 네 가지 전부 같은 결재 체인(4단계)을 거칩니다 — 리소스 종류가 달라도 "요청 → 승인/반려" 절차는 동일합니다.',
 '',
 '*(A) 후보를 찾아서 배정 요청(사람/Agent)*',
 '',
 '"할 일 보기" 목록에서 "**상세**"를 누르고 **"후보 매칭하기"**(또는 "리소스 매칭/배정" 탭에서 할 일을 고르고 **"찾기"**) — 역할명이 서로 포함 관계(부분일치)인 후보 중 필요 스킬까지 다 가진 후보가 있으면 그것부터, 없으면 **가용성 40%·적합도 35%·비용 25%** 가중치로(사람 후보가 아직 성과점수를 못 받았으면 적합도를 빼고 가용성 60%·비용 40%로) 점수 매긴 상위 3명을 보여줍니다. 부분일치로도 후보가 전혀 없으면 "**AI로 추천 받기**" 버튼으로 LLM이 전체 Pool에서 의미상 맞는 후보를 찾아줍니다(비용 발생 가능, 눌러야만 호출됨).',
-'원하는 후보 줄에서 "**배정 요청**"을 누르면 조직도 매니저 체인을 따라 결재 단계가 자동 생성됩니다 — 아직 승인 전(requested) 상태입니다. **단, 본인 자신을 배정 요청하는 셀프배정은 예외입니다** — 본인 시간만 쓰는 배정이라 결재 체인 자체를 만들지 않고 그 자리에서 바로 확정(confirmed)됩니다(4단계를 거치지 않고 바로 5단계로 진행 가능).',
+'원하는 후보 줄에서 "**배정 요청**"을 누르면 조직도 매니저 체인을 따라 결재 단계가 자동 생성됩니다 — 아직 승인 전 상태입니다. **단, 본인 자신을 배정 요청하는 셀프배정은 예외입니다** — 본인 시간만 쓰는 배정이라 결재 체인 자체를 만들지 않고 그 자리에서 바로 확정됩니다(4단계를 거치지 않고 바로 5단계로 진행 가능).',
 '',
 '*(B) 아직 쓸 Agent가 없다면*',
 '',
@@ -9502,7 +9670,7 @@ const MANUAL_MARKDOWN = [
 '### 4단계 — 결재 처리',
 '',
 '**"결재"** 탭 → "**내 승인 대기함**"에서 본인 차례의 요청을 처리합니다(자기 자신이 요청한 건 "내 승인 대기함"에 아예 뜨지 않습니다 — 자기 승인 방지. 단, 셀프배정은 애초에 이 단계 자체가 생략됩니다 — 위 3단계(A) 참고).',
-'사유를 적고(선택) "**승인**"하면 배정이 **확정**(confirmed)으로 바뀌어 조직도·비용·성과 리뷰에 실제로 반영됩니다. "**반려**"하면 그 요청은 거기서 끝나고, 다시 배정하려면 3단계부터 새로 요청해야 합니다.',
+'사유를 적고(선택) "**승인**"하면 배정이 **확정**으로 바뀌어 조직도·비용·성과 리뷰에 실제로 반영됩니다. "**반려**"하면 그 요청은 거기서 끝나고, 다시 배정하려면 3단계부터 새로 요청해야 합니다.',
 '상사가 지정 안 돼 있으면(예: 관리자 본인 요청) 특정 승인자 없이 1단계만 생성돼 admin/manager 누구나 처리할 수 있습니다.',
 '',
 '### 5단계 — 협업 워크스페이스에서 실행',
@@ -9539,10 +9707,10 @@ const MANUAL_MARKDOWN = [
 '   그러면 이 팀을 실행할 때 그 Agent가 자동으로 매니저로 지정돼, 나머지 팀원에게 하위 과업을 실제로 쪼개 위임합니다.',
 '   역할 라벨에 "매니저"가 없으면 전원이 순차(sequential)로 각자 수행합니다. 팀 카드의 "**기본값 저장**" 폼에서 기본 process/매니저를 미리 지정해두면 실행할 때마다 다시 고르지 않아도 됩니다.',
 '4. **팀의 상태(생명주기)** — Agent 1명과 똑같은 3단계를 팀도 따릅니다(팀 카드 제목 옆 배지로 표시):',
-'   - **온보딩 대기**(pending_onboarding): Task ID/Brief ID를 지정해 만든 TF팀은 이 상태로 시작합니다 — 검증 전까지는 **대화 @멘션이나 할 일 배정 후보 목록에 뜨지 않습니다**. Task ID/Brief ID 없이 만든 범용 팀은 바로 "활성"으로 시작합니다.',
-'   - **활성**(active): "**온보딩 시작**" 버튼을 누르면 이 상태가 되고, 그 순간부터 @멘션·배정이 가능해집니다.',
-'   - **비활성화됨**(deprecated): "비활성화" 버튼(기존 활성화/비활성화 토글) 또는 TF팀의 경우 "**미션 완료**" 버튼(연결된 업무가 끝났을 때, completed_at 시각이 함께 기록됩니다)으로 전환합니다. 이후로는 다시 @멘션·배정 후보에 뜨지 않습니다.',
-'   - **팀 삭제**는 그 팀에 확정(confirmed)된 배정이 남아 있으면 막힙니다(409 오류) — 할 일 상세의 "배정 취소"로 먼저 정리하세요(사람/Agent/할 일 삭제와 같은 보호 규칙입니다).',
+'   - **온보딩 대기**: Task ID/Brief ID를 지정해 만든 TF팀은 이 상태로 시작합니다 — 검증 전까지는 **대화 @멘션이나 할 일 배정 후보 목록에 뜨지 않습니다**. Task ID/Brief ID 없이 만든 범용 팀은 바로 "활성"으로 시작합니다.',
+'   - **활성**: "**온보딩 시작**" 버튼을 누르면 이 상태가 되고, 그 순간부터 @멘션·배정이 가능해집니다.',
+'   - **비활성화됨**: "비활성화" 버튼(기존 활성화/비활성화 토글) 또는 TF팀의 경우 "**미션 완료**" 버튼(연결된 업무가 끝났을 때, 완료 시각이 함께 기록됩니다)으로 전환합니다. 이후로는 다시 @멘션·배정 후보에 뜨지 않습니다.',
+'   - **팀 삭제**는 그 팀에 확정된 배정이 남아 있으면 막힙니다(오류 메시지로 안내) — 할 일 상세의 "배정 취소"로 먼저 정리하세요(사람/Agent/할 일 삭제와 같은 보호 규칙입니다).',
 '5. 이 팀은 두 군데서 실행할 수 있습니다:',
 '   - 대화에서 **`@팀이름`** 멘션(2절) — 매니저가 있으면 위임형, 없으면 전원 실행 후 각자 결과를 메시지로 올립니다.',
 '   - 업무(Task)에 팀을 배정한 뒤 협업 워크스페이스의 **"팀 Agent 실행"** 버튼, 또는 3절의 (C) 방법대로 직접 "팀에 배정 요청" — 결과가 Agent별 결과물+결재 체인으로 그 업무에 그대로 쌓입니다.',
@@ -9553,7 +9721,7 @@ const MANUAL_MARKDOWN = [
 '',
 '**"Crew 빌더"** 탭(admin/manager 전용)에서 매번 Agent를 직접 골라 그 자리에서 협업시킵니다 — 팀으로 등록해둘 필요가 없는 일회성 조합에 적합합니다. 세 가지 하위 모드가 있습니다:',
 '',
-'- **"업무에 바로 실행"**: 실제 할 일(Task)에 결과를 남기며 실행합니다(기본 모드) — 여러 Agent를 고르고, 처리 방식(sequential/hierarchical)과 hierarchical일 때의 매니저 Agent를 직접 선택합니다. sequential이고 병행 실행이 아니면 **"자가검토(self_review)"** 체크박스도 켤 수 있습니다 — 각 Agent가 자기 초안을 원 요구사항과 대조해 스스로 한 번 더 검토·수정한 뒤에 제출합니다(member도 켤 수 있는 단순 품질 옵션, 결과물은 검토 후 최종본만 남고 초안은 실행 이력에서만 보임).',
+'- **"업무에 바로 실행"**: 실제 할 일(Task)에 결과를 남기며 실행합니다(기본 모드) — 여러 Agent를 고르고, 처리 방식(sequential/hierarchical)과 hierarchical일 때의 매니저 Agent를 직접 선택합니다. sequential이고 병행 실행이 아니면 **"자기 검토"** 체크박스도 켤 수 있습니다 — 각 Agent가 자기 초안을 원 요구사항과 대조해 스스로 한 번 더 검토·수정한 뒤에 제출합니다(member도 켤 수 있는 단순 품질 옵션, 결과물은 검토 후 최종본만 남고 초안은 실행 이력에서만 보임).',
 '- **"즉석 테스트(저장 안 됨)"**: 업무에 연결하지 않고 협업 구조만 가볍게 실험해봅니다 — 결과가 할 일에 남지 않습니다.',
 '- **"실행 이력"**(admin/manager 전용): 과거 Crew 실행의 협업 다이어그램·토큰 사용량·Gate 점수를 그대로 다시 볼 수 있습니다. "팀 관리" 탭의 각 팀 카드에서 "실행 이력 보기"를 누르면 이 목록이 그 팀의 실행만으로 좁혀져 나옵니다. 같은 할 일에 재실행한 이력이 있으면 결과 화면에 **"이전 실행과 비교"** 버튼이 떠 — 최종 산출물·Agent별 산출물 모두 추가분(녹색)/삭제분(빨간색) 줄 단위 diff로 바로 비교할 수 있습니다(재시도할 때마다 전에 되던 기능이 조용히 사라지는지 한눈에 확인하는 용도).',
 '',
@@ -9569,7 +9737,7 @@ const MANUAL_MARKDOWN = [
 '   - **simple_llm**(비용 발생): 실제 LLM을 한 번만 호출하는 가장 가벼운 실제 Agent.',
 '   - **crewai**(비용 발생): 실제 CrewAI Agent로 만듭니다 — 이후 "Crew 빌더"/"팀 Agent 실행"/파이프라인에서 다른 Agent와 실제로 협업·위임할 수 있는 건 이 방식뿐입니다.',
 '     필요 스킬에 지식검색/관계조회 등이 있으면 관련 Tool이 생성 시점부터 자동으로 붙습니다.',
-'3. 만든 Agent는 "**AI 에이전트 관리**"에서 **온보딩 승인**(pending_onboarding → active)을 눌러야 실제 배정·실행·대화 호출에 쓸 수 있습니다.',
+'3. 만든 Agent는 "**AI 에이전트 관리**"에서 **온보딩 승인**(온보딩 대기 → 활성)을 눌러야 실제 배정·실행·대화 호출에 쓸 수 있습니다.',
 '4. 같은 탭에서 Agent별로:',
 '   - **모델 설정**: 기본 LLM provider/model(비용 없음, 설정만 저장).',
 '   - **파인튜닝**: temperature·reasoning on/off·재시도 횟수 등 CrewAI 동작 파라미터(비용 없음, 설정만 저장 — "Crew 빌더"로 실제 CrewAI Crew에 투입될 때만 반영).',
@@ -9600,7 +9768,7 @@ const MANUAL_MARKDOWN = [
 '',
 '단계마다 **Gate A-G 통과 기준·최대 재시도 횟수·"사람 승인 필요" 여부**를 정합니다.',
 '승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어가고(최소 HITL), 기준 미달이면 "어떤 Gate가 왜 부족한지" 피드백을 반영해 자동 재시도합니다.',
-'재시도를 다 써도 못 넘기면 그때만 결재함으로 올라옵니다(최소 HOTL — 자동 반복이 완전히 실패했을 때만 사람에게 옵니다).',
+'재시도를 다 써도 못 넘기면 그때만 결재함으로 올라옵니다 — 자동 반복이 완전히 실패했을 때만 사람에게 옵니다.',
 '',
 '### 바로 써보기 — 기본 제공 "소프트웨어 개발 파이프라인"',
 '',
@@ -9616,7 +9784,7 @@ const MANUAL_MARKDOWN = [
 '| 6 | QA 기능테스트 | 순차 릴레이 | 테스트 계획 수립가 → QA 기능테스터 | 불필요 |',
 '| 7 | 품질 관리 최종 판정 | 단독 | 품질 관리자 | 불필요(반복 실패 시에만 자동 에스컬레이션) |',
 '',
-'5·6·7단계(코드 검증/QA 기능테스트/품질 관리 최종 판정)는 Gate 통과 기준(min_gate_pass_ratio)이 0.5로 설정돼 있어 — 측정된 Gate 절반 이상을 통과해야 다음 단계로 넘어가고, 미달이면 사유를 반영해 자동 재시도합니다. 나머지 단계는 0(Gate는 측정·기록만, 자동 통과)입니다. **마지막 자동 재시도에서는 자가검토(self_review)가 자동으로 켜져** — Agent가 스스로 초안을 원 요구사항과 대조해 한 번 더 고친 뒤 제출합니다 — 그래도 기준을 못 넘기면 그때 사람 승인으로 에스컬레이션됩니다(최소 HOTL, 자동 반복이 완전히 실패했을 때만 사람에게 옵니다).',
+'5·6·7단계(코드 검증/QA 기능테스트/품질 관리 최종 판정)는 Gate 통과 기준이 "측정된 Gate 절반 이상 통과"로 설정돼 있어 — 미달이면 사유를 반영해 자동 재시도합니다. 나머지 단계는 Gate를 측정·기록만 하고 자동으로 통과합니다. **마지막 자동 재시도에서는 자가검토가 자동으로 켜져** — Agent가 스스로 초안을 원 요구사항과 대조해 한 번 더 고친 뒤 제출합니다 — 그래도 기준을 못 넘기면 그때 사람 승인으로 올라갑니다(자동 반복이 완전히 실패했을 때만 사람에게 옵니다).',
 '실행은 **업무(Task)의 협업 워크스페이스**에서 이 템플릿을 고르고 "파이프라인 실행(비용 발생)"을 누르면 시작되거나, 이 파이프라인에 연결된 팀(4절 참고)을 대화에서 `@팀이름`으로 멘션해도 똑같이 시작됩니다(3절 4단계) — 기본 제공 팀은 없으므로 연결하려면 직접 팀을 만들어야 합니다.',
 '진행 상황은 같은 화면에서 단계별 배지(대기/진행중/통과/재시도N/승인대기/반려)로 실시간 확인합니다 — 대화에서 시작한 경우 같은 정보가 진행 메시지로 대화에도 올라옵니다.',
 '',
@@ -9688,9 +9856,9 @@ const MANUAL_MARKDOWN = [
 '',
 '- **`@멘션`했는데 아무 반응이 없다** → 그 Agent/Team/사람이 이 대화의 참가자가 아닐 가능성이 가장 큽니다.',
 '  메시지창에서 `@`를 다시 입력해 자동완성 목록에서 직접 골라 초대부터 되게 하세요.',
-'- **방금 만든 Agent가 배정/실행 목록에 안 보인다** → "AI 에이전트 관리"에서 온보딩 승인(pending_onboarding → active)을 먼저 눌러야 합니다.',
+'- **방금 만든 Agent가 배정/실행 목록에 안 보인다** → "AI 에이전트 관리"에서 온보딩 승인(온보딩 대기 → 활성)을 먼저 눌러야 합니다.',
 '- **Task ID/Brief ID를 넣어 만든 팀(TF팀)이 `@멘션`·배정 후보에 안 보인다** → TF팀은 "온보딩 대기" 상태로 시작합니다. "팀 관리"에서 그 팀 카드의 "**온보딩 시작**" 버튼을 눌러야 활성화됩니다(4절 참고).',
-'- **팀을 지우려는데 안 지워진다(409 오류)** → 그 팀에 확정(confirmed)된 배정이 남아 있으면 삭제가 막힙니다 — 할 일 상세의 "배정 취소"로 먼저 정리하세요.',
+'- **팀을 지우려는데 안 지워진다** → 그 팀에 확정된 배정이 남아 있으면 삭제가 막힙니다 — 할 일 상세의 "배정 취소"로 먼저 정리하세요.',
 '- **"조직도"와 "팀 관리"의 "TF팀"이 같은 개념 아닌가?** → 다릅니다. "조직도" 메뉴는 확정된 배정만 모아 보여주는 **읽기 전용 스냅샷**(생성/삭제 불가)이고, "TF팀"은 "팀 관리"에서 **직접 만들고 온보딩·해체시키는 실제 조직**입니다. 헷갈리면 조직도 화면 상단 안내문을 참고하세요.',
 '- **"AI 에이전트 생성"에서 새 Agent가 안 만들어지고 재사용 배지만 뜬다** → 같은 할 일(역할)에 이미 Agent가 있으면 새로 안 만들고 기존 것을 재사용합니다 — 의도한 동작입니다.',
 '  새로 만들려면 다른 할 일을 고르세요.',
