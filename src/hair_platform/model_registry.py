@@ -174,6 +174,17 @@ def delete_model(conn: sqlite3.Connection, actor_id: int, model_id: int) -> None
     ).fetchone()
     if row is None:
         raise ValueError("model_not_found")
+    # 버그 수정(2026-11-12, 사용자 보고 — "모델 삭제 시 500 Internal
+    # Server Error") — `model_benchmarks.model_registry_id`가 이
+    # 테이블을 FK로 참조하는데(`PRAGMA foreign_keys=ON`이 전역으로
+    # 걸려 있다, `db.py` 참고), 그 모델을 "성능 테스트"로 한 번이라도
+    # 테스트해 이력이 쌓인 뒤엔 바로 지우려 하면 FK 제약 위반으로 DB가
+    # 그 자리에서 예외를 던졌다(처리 안 된 500). DB 레벨 `ON DELETE
+    # CASCADE` 대신, 이 코드베이스가 이미 `data_admin.py` 전반에서
+    # 쓰는 "앱 레벨에서 먼저 자식 행을 지운다" 관례를 그대로 따른다.
+    conn.execute(
+        "DELETE FROM model_benchmarks WHERE model_registry_id = ?", (model_id,)
+    )
     conn.execute("DELETE FROM model_registry WHERE id = ?", (model_id,))
     audit.record(
         conn,

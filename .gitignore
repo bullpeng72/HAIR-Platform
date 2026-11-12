@@ -16,3 +16,6 @@ server.log
 .claude/.agent-evaluator/
 .vscode/
 uv.lock
+dist/
+build/
+*.egg-info/

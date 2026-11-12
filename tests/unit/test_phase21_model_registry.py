@@ -440,3 +440,37 @@ def test_gc230_benchmark_unknown_model_returns_404(client_and_conn):
     _login(client, "admin1", "adminpass")
     resp = client.post("/api/model-registry/999999/benchmark")
     assert resp.status_code == 404
+
+
+def test_gc231_delete_model_after_benchmark_does_not_500(client_and_conn):
+    """사용자 보고(2026-11-12, "모델 레지스트리에서 모델 삭제시 삭제되지
+    않고 500 Internal Server Error 발생") — `model_benchmarks.
+    model_registry_id`가 FK로 참조하는데(PRAGMA foreign_keys=ON),
+    성능 테스트를 한 번이라도 돌린 모델을 삭제하면 FK 위반으로 DB가
+    그 자리에서 예외를 던졌다. 삭제 시 이력도 같이 지워져야 한다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    model_id = client.post(
+        "/api/model-registry", json={"provider": "ollama", "name": "to-be-deleted"}
+    ).json()["id"]
+
+    with patch("hair_platform.llm.call_llm", return_value="결과"):
+        resp = client.post(f"/api/model-registry/{model_id}/benchmark")
+    assert resp.status_code == 201, resp.text
+
+    before = conn.execute(
+        "SELECT COUNT(*) AS c FROM model_benchmarks WHERE model_registry_id = ?",
+        (model_id,),
+    ).fetchone()["c"]
+    assert before == 1
+
+    resp = client.delete(f"/api/model-registry/{model_id}")
+    assert resp.status_code == 200, resp.text
+
+    after = conn.execute(
+        "SELECT COUNT(*) AS c FROM model_benchmarks WHERE model_registry_id = ?",
+        (model_id,),
+    ).fetchone()["c"]
+    assert after == 0
+    remaining_ids = [r["id"] for r in client.get("/api/model-registry").json()]
+    assert model_id not in remaining_ids
