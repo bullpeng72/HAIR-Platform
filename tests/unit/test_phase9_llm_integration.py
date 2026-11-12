@@ -233,6 +233,54 @@ def test_gc69_execute_agent_gives_deep_reasoning_agents_longer_llm_timeout(
     assert m.call_args.kwargs["timeout_seconds"] is None
 
 
+def test_gc70_execute_agent_ollama_deep_reasoning_gets_even_longer_timeout(
+    client_and_conn,
+):
+    """사용자 결정(2026-11-12, "클라우드보다 Ollama가 더 길게, 작업
+    성격에 따라 차등하되 대화 및 업무에 같은 기준이 적용되도록") —
+    `llm.py`가 Ollama의 "표준" 단발 호출 기본값 자체를 1800초로
+    올렸으므로, reasoning tier가 그와 **똑같은** 1800초를 쓰면 Ollama
+    안에서는 "작업 성격별 차등"이 사라진다. reasoning tier Ollama는
+    표준 Ollama(1800초)보다도 길어야 하고(3600초), 클라우드 reasoning
+    tier(1800초)보다도 길어야 한다(일반 원칙 — Ollama가 항상 더 김)."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status, tuning_config) "
+        "VALUES (?, ?, 'active', ?)",
+        ("심층추론 Agent", "[]", '{"reasoning": true}'),
+    )
+    deep_agent_id = cur.lastrowid
+    conn.commit()
+
+    with patch("hair_platform.llm.call_llm", return_value="결과") as m:
+        agent_runtime.execute_agent(
+            conn, deep_agent_id, admin_id, "보고서 작성", provider="ollama"
+        )
+    assert m.call_args.kwargs["timeout_seconds"] == 3600.0
+
+
+def test_gc71_ollama_standard_timeout_is_longer_than_cloud():
+    """같은 결정의 "표준"(reasoning 미설정) tier 확인 — Ollama 표준
+    호출도 클라우드 표준(900초)보다 길어야 한다(1800초). `execute_agent
+    ()`는 표준 tier에 `timeout_seconds=None`을 넘겨(위 테스트에서 이미
+    확인) `llm.call_llm()`의 provider별 기본값에 맡기므로, 여기서는
+    그 기본값 자체를 `llm._call_ollama()` 레벨에서 직접 확인한다."""
+    from unittest.mock import MagicMock
+
+    from hair_platform import llm
+
+    assert llm.OLLAMA_LLM_TIMEOUT_SECONDS > llm._CLOUD_LLM_TIMEOUT_SECONDS
+
+    fake_resp = MagicMock()
+    fake_resp.json.return_value = {"message": {"content": "결과"}}
+    with patch("httpx.post", return_value=fake_resp) as mock_post:
+        llm.call_llm("ollama", "아무모델", "system", "prompt")
+    assert mock_post.call_args.kwargs["timeout"] == llm.OLLAMA_LLM_TIMEOUT_SECONDS
+
+
 def test_gc68_execute_endpoint_rbac_and_status_codes(client_and_conn):
     client, conn = client_and_conn
     cur = conn.execute(

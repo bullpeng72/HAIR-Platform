@@ -2714,12 +2714,19 @@ async function renderConversationDetail(conversationId, containerId) {
     '<input id="conv-message-input" placeholder="메시지(@참가자이름으로 호출 가능)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
     '<ul class="mention-dropdown" id="conv-mention-dropdown" style="display:none"></ul>' +
     '</div>' +
-    // 사용자 요청(2026-10-26, "대화에 바로 로컬에 있는 파일을 업로드") —
-    // 버튼은 숨은 파일 입력을 클릭해 트리거만 하고, 실제 업로드는
-    // 파일이 선택되는 즉시(change 이벤트) 바로 일어난다(전송 버튼을
-    // 따로 안 눌러도 됨 — 메시지 입력과 분리된 별도 동작).
+    // 사용자 보고(2026-11-12, "자료 선택 시 대화입력·전송버튼 클릭
+    // 없이 바로 미리보기가 진행된다") — 예전엔 파일을 고르는 즉시
+    // 업로드·메시지 생성까지 끝나버려, 그 자료에 대한 설명을 같이
+    // 적을 틈이 없었다. 이제는 파일을 골라도 **보류만** 하고(아래
+    // pendingAttachmentFile), "전송"을 눌러야 비로소 — 입력창에 적은
+    // 글이 있으면 그 메시지를 먼저, 그 뒤에 첨부를 별도 메시지로 —
+    // 둘 다 한 번의 "전송" 클릭으로 올라간다. 멘션 감지는 여전히
+    // 입력창 텍스트에만 걸린다(첨부 파일 내용은 별도 메시지라 전과
+    // 동일하게 멘션 오탐 걱정이 없다).
     '<input type="file" id="conv-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf" style="display:none">' +
-    '<button type="button" class="small" id="conv-file-btn" title="자료 업로드(.md/.txt/.html/.pdf)">\U0001f4ce 자료</button>' +
+    '<button type="button" class="small" id="conv-file-btn" title="자료 첨부(.md/.txt/.html/.pdf) — 전송 시 함께 올라갑니다">\U0001f4ce 자료</button>' +
+    '<span class="muted" id="conv-pending-file-name" style="font-size:0.85rem"></span>' +
+    '<button type="button" class="small danger" id="conv-pending-file-remove" style="display:none">자료 제거</button>' +
     '<button class="primary" type="submit">전송</button>' +
     '</form>' +
     '</section>';
@@ -2804,16 +2811,44 @@ async function renderConversationDetail(conversationId, containerId) {
   // "@" 자동완성이 완전히 같은 검색·초대를 포함한다, `setupMentionAutocomplete`
   // 호출부와 `_inviteAndTrackParticipant()` 참고).
 
+  // 사용자 보고(2026-11-12) — 전송을 누르기 전까지 선택한 파일을
+  // 들고만 있는다(아래 change 핸들러는 업로드하지 않는다 — 실제
+  // 업로드는 "전송" 클릭 시에만 일어난다).
+  let pendingAttachmentFile = null;
+  const pendingFileNameEl = document.getElementById("conv-pending-file-name");
+  const pendingFileRemoveBtn = document.getElementById("conv-pending-file-remove");
+  function _clearPendingAttachment() {
+    pendingAttachmentFile = null;
+    pendingFileNameEl.textContent = "";
+    pendingFileRemoveBtn.style.display = "none";
+    document.getElementById("conv-file-input").value = "";
+  }
+  pendingFileRemoveBtn.addEventListener("click", _clearPendingAttachment);
+
   document.getElementById("conv-message-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const input = document.getElementById("conv-message-input");
     const content = input.value.trim();
-    if (!content) return;
+    if (!content && !pendingAttachmentFile) return;
     const skill = document.getElementById("conv-skill-select").value || undefined;
     try {
-      const payload = { content };
-      if (skill) payload.skill = skill;
-      const result = await api("POST", "/api/conversations/" + conversationId + "/messages", payload);
+      // 첨부가 있으면 먼저 올린다(멘션 감지가 걸리지 않는 별도
+      // 메시지로 남음 — 첨부 글 안에 우연히 "@참가자이름"이 있어도
+      // 멘션 오탐이 안 난다는 기존 안전장치를 그대로 유지). 입력창
+      // 텍스트가 있으면 그 뒤를 이어 두 번째 메시지로 보낸다 — 결과적으로
+      // "전송" 한 번으로 둘 다 올라간다.
+      if (pendingAttachmentFile) {
+        const formData = new FormData();
+        formData.append("file", pendingAttachmentFile);
+        await apiUpload("/api/conversations/" + conversationId + "/attachments", formData);
+        _clearPendingAttachment();
+      }
+      let result = null;
+      if (content) {
+        const payload = { content };
+        if (skill) payload.skill = skill;
+        result = await api("POST", "/api/conversations/" + conversationId + "/messages", payload);
+      }
       input.value = "";
       document.getElementById("conv-skill-select").value = "";
       mentionMirror.sync();
@@ -2824,34 +2859,19 @@ async function renderConversationDetail(conversationId, containerId) {
       // 작업마다(전부 끝날 때까지 기다리지 않고) 그 자리에서 상태를
       // 갱신하고 메시지 목록도 바로 반영한다 — 먼저 끝난 결과를
       // 늦게 끝나는 Job 때문에 못 보고 기다리지 않게.
-      _watchConversationJobs(conversationId, result.triggered_jobs, participants, conv);
+      if (result) _watchConversationJobs(conversationId, result.triggered_jobs, participants, conv);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
-  // 사용자 요청(2026-10-26, 2차 — "A안 + B안") — 처음엔 대화 업로드도
-  // 전역 VectorDB에 영구 색인됐는데("대화에 주입되는 문서는... 저장되지
-  // 않고 휘발되는 내용물"이라는 분석으로), 저장 없이 이 대화의 메시지로
-  // 바로 집어넣는 쪽으로 바꿨다(`/api/conversations/{id}/attachments`,
-  // `conversations.create_attachment_message()`) — 이 대화가 지워지면
-  // 같이 사라진다.
   document.getElementById("conv-file-btn").addEventListener("click", () => {
     document.getElementById("conv-file-input").click();
   });
-  document.getElementById("conv-file-input").addEventListener("change", async (ev) => {
+  document.getElementById("conv-file-input").addEventListener("change", (ev) => {
     const file = ev.target.files && ev.target.files[0];
     if (!file) return;
-    const formData = new FormData();
-    formData.append("file", file);
-    showMsg("global-msg", "파일을 읽는 중입니다...", "ok");
-    try {
-      const result = await apiUpload("/api/conversations/" + conversationId + "/attachments", formData);
-      showMsg(
-        "global-msg",
-        result.filename + " 첨부 완료(" + result.char_count + "자) — 이 대화에서만 참조됩니다.",
-        "ok"
-      );
-      await refreshConversationMessages(conversationId, participants, conv);
-    } catch (e) { showMsg("global-msg", e.message, "error"); }
+    pendingAttachmentFile = file;
+    pendingFileNameEl.textContent = "📎 " + file.name + "(전송 시 함께 올라갑니다)";
+    pendingFileRemoveBtn.style.display = "";
     ev.target.value = "";
   });
 
@@ -3300,9 +3320,17 @@ async function _renderBoardScope(content, scope, canSeeAll) {
 
 /* Phase 4 — execute-agent는 202+job_id만 즉시 돌려준다(사용자 요청,
    2026-09-28, "Phase 4 진행해줘"). 실제 완료는 여기서 폴링으로 확인한다
-   (실시간 WebSocket은 1차 범위 밖으로 명시적으로 뺐다). */
+   (실시간 WebSocket은 1차 범위 밖으로 명시적으로 뺐다).
+   사용자 결정(2026-11-12, "대화 및 업무에 같은 기준이 적용되도록") —
+   백엔드(agent_runtime.py/crew_runtime.py)는 단일 Agent 실행·팀
+   Crew 실행·파이프라인 단계 전부 `pollConversationJob()`과 똑같은
+   타임아웃 체계(최대 90분, Ollama reasoning/Crew 경로)를 공유하는데,
+   이 함수의 포기 시한만 2분으로 훨씬 짧게 남아 있었다 — 백엔드는
+   멀쩡히 돌고 있는데 여기만 먼저 포기해 사용자에게 실패처럼 보이는,
+   대화 쪽에서 이미 여러 번 겪은 바로 그 문제가 업무 쪽엔 반영이 안
+   돼 있었다. `pollConversationJob()`과 같은 40분으로 맞춘다. */
 async function pollExecutionJob(taskId, jobId, intervalMs, timeoutMs) {
-  const deadline = Date.now() + (timeoutMs || 120000);
+  const deadline = Date.now() + (timeoutMs || 2400000);
   while (Date.now() < deadline) {
     const jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
     const job = jobs.find(j => j.id === jobId);
@@ -7445,13 +7473,37 @@ async function renderModelRegistry(content) {
       esc(_OPTIMIZATION_TIER_LABELS[t]) + "</label>"
     ).join("") +
     '<button class="small" data-save-optimization-tiers="' + m.id + '">저장</button>';
+  // 사용자 요청(2026-11-12, "ollama, openai 등 프로바이더의 모델 성능
+  // Test하고 결과 표시, 티어 추천 기능") — 고정 테스트 프롬프트 1건을
+  // 실제로 호출해 속도(글자/초)를 재고, 그 속도만으로 tier를
+  // 추천한다(품질 평가 아님 — `model_benchmark.py` 모듈 docstring
+  // 참고). "저장"은 직접 눌러야 기존 "최적화 Tier 매핑"에 반영된다
+  // (추천이 자동 적용되지 않음 — ⚡ 최적화 추천과 같은 관례).
+  const benchmarkHtml = (m) => {
+    const b = m.latest_benchmark;
+    let resultHtml;
+    if (!b) {
+      resultHtml = '<span class="muted">아직 테스트 안 함</span>';
+    } else if (b.status === "failed") {
+      resultHtml = '<span class="gate-badge gate-warn" title="' + esc(b.error || "") + '">실패</span> ' +
+        '<span class="muted">' + esc(b.tested_at) + '</span>';
+    } else {
+      resultHtml = b.chars_per_second.toFixed(1) + '자/초 · ' + b.latency_seconds.toFixed(1) + '초 소요 · ' +
+        '<span class="gate-badge" title="속도만 반영한 참고용 추천입니다 — 실제 응답 품질은 직접 확인하세요">추천: ' +
+        esc(_OPTIMIZATION_TIER_LABELS[b.recommended_tier] || b.recommended_tier) + '</span> ' +
+        '<button class="small" data-apply-benchmark-tier="' + m.id + '" data-tier="' + b.recommended_tier + '">이 tier로 저장</button> ' +
+        '<span class="muted">(' + esc(b.tested_at) + ')</span>';
+    }
+    return resultHtml + '<br><button class="small" data-run-benchmark="' + m.id + '">성능 테스트</button>';
+  };
   const providerTableHtml = (provider) => {
     const rows = byProvider(provider);
     return "<h3>" + providerLabel[provider] + "</h3>" +
-      table(["모델명", "상태", "최적화 Tier 매핑", "동작"], rows.map(m => [
+      table(["모델명", "상태", "최적화 Tier 매핑", "성능 테스트", "동작"], rows.map(m => [
         esc(m.name),
         m.is_active ? "활성" : "비활성",
         tierMappingHtml(m),
+        benchmarkHtml(m),
         '<div class="actions">' +
           '<button class="small" data-toggle-model-active="' + m.id + '" data-active="' + (m.is_active ? "0" : "1") + '">' +
           (m.is_active ? "비활성화" : "활성화") + "</button>" +
@@ -7469,6 +7521,7 @@ async function renderModelRegistry(content) {
       '<li><b>비활성화</b>는 자동완성에서만 빼고 등록 자체는 유지합니다.</li>' +
       '<li><b>삭제</b>는 레지스트리 항목만 지웁니다 — 이미 Agent에 저장된 모델 설정 자체는 안 바뀝니다.</li>' +
       '<li><b>최적화 Tier 매핑</b>은 "LLM 설정 최적화"(Agent 관리 화면의 "⚡ 최적화 추천")가 심층추론/정밀·신속/표준 역할에 이 모델을 최우선으로 추천할지 직접 지정합니다(모델 하나가 여러 tier에 동시 매핑될 수 있습니다) — 아무것도 체크하지 않으면 모델명 패턴 추정으로 폴백합니다. 새 모델 출시·provider 교체 시 여기 매핑만 바꾸면 되고, 몇 번이든 다시 바꿀 수 있습니다.</li>' +
+      '<li><b>성능 테스트</b>는 고정된 짧은 프롬프트 1건을 이 모델에 실제로 보내 응답 속도(글자/초)를 재고, 그 속도만으로 tier를 추천합니다 — <b>속도만 보는 참고용이지 품질 평가가 아닙니다</b>(얼마나 똑똑한지는 측정하지 않습니다). "이 tier로 저장"을 눌러야 위 "최적화 Tier 매핑"에 실제로 반영됩니다. 클라우드 provider는 실제 API 비용이 발생합니다(Ollama는 로컬 연산이라 무료).</li>' +
       '<li>이 탭 전체가 admin 전용입니다 — manager를 포함한 다른 역할에는 메뉴 자체가 보이지 않습니다.</li>' +
       '</ul>'
     ) +
@@ -7568,6 +7621,33 @@ async function renderModelRegistry(content) {
           optimization_tiers: Array.from(checks).map(c => c.value),
         });
         showMsg("global-msg", "최적화 Tier 매핑을 저장했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-run-benchmark]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!(await confirmModal("이 모델에 실제로 테스트 프롬프트 1건을 보내 응답 속도를 측정합니다 — 클라우드 provider는 실제 API 비용이 발생합니다(Ollama는 로컬 연산이라 무료). 계속할까요?"))) return;
+      try {
+        await withBusy(btn, "테스트 중…", () =>
+          api("POST", "/api/model-registry/" + btn.dataset.runBenchmark + "/benchmark", {})
+        );
+        showMsg("global-msg", "성능 테스트가 끝났습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-apply-benchmark-tier]").forEach(btn => {
+    btn.onclick = async () => {
+      const modelId = btn.dataset.applyBenchmarkTier;
+      const tier = btn.dataset.tier;
+      const existing = models.find(m => m.id === Number(modelId));
+      const nextTiers = Array.from(new Set([...(existing.optimization_tiers || []), tier]));
+      try {
+        await api("PATCH", "/api/model-registry/" + modelId + "/optimization-tiers", {
+          optimization_tiers: nextTiers,
+        });
+        showMsg("global-msg", "추천 tier를 저장했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
@@ -9572,7 +9652,7 @@ const MANUAL_MARKDOWN = [
 '  예를 들어 실시간 정보가 필요한 질문이면 "**실시간웹검색**"을 골라두세요 — Tavily로 실제 웹 검색을 한 뒤 그 결과를 참고해 답합니다(서버에 `TAVILY_API_KEY` 설정이 먼저 돼 있어야 합니다 — 관리자에게 문의).',
 '  **멘션을 하나라도 넣으면 이 선택은 자동으로 비워집니다** — 멘션이 있으면 그 호출이 우선이고, 스킬 선택은 "아무도 안 불렀을 때(기본 AI가 답할 때) 어떤 지식/도구로 그라운딩할지"를 고르는 용도이기 때문입니다.',
 '- **메시지 입력창** — **`@`를 입력**하면 사람·Agent·Team 검색 자동완성이 뜹니다. 아직 이 대화에 초대 안 된 대상도 검색되고, 목록에서 고르면 **그 자리에서 자동으로 초대된 뒤** 멘션이 끼워 넣어집니다(따로 "참가자 초대" 화면을 거칠 필요가 없습니다).',
-'- **📎 자료 버튼** — 로컬 파일(`.md`/`.markdown`/`.txt`/`.html`/`.htm`/`.pdf`)을 즉시 첨부합니다. 파일을 고르는 순간(전송 버튼을 따로 안 눌러도) 바로 업로드·추출돼 메시지로 남습니다 — **이 대화에만 1회성으로 쓰이고 영구 저장되지 않습니다**(어디에도 파일 자체나 텍스트가 남지 않는 휘발성 설계 — 영구 보관하려는 자료는 8절 메뉴 지도의 "도구/스킬 Pool"이 아니라 admin/manager의 "지식 베이스" 관리 기능을 따로 써야 합니다).',
+'- **📎 자료 버튼** — 로컬 파일(`.md`/`.markdown`/`.txt`/`.html`/`.htm`/`.pdf`)을 고르면 버튼 옆에 파일명이 뜨며 **보류 상태로 대기**합니다(바로 올라가지 않음, "자료 제거"로 취소 가능). 이 상태에서 메시지를 적고 **"전송"**을 눌러야 — 입력한 메시지가 있으면 그 메시지가 먼저, 첨부 내용은 바로 이어서 별도 메시지로 — 한 번에 같이 올라갑니다(메시지 없이 첨부만 보내도 됩니다). **이 대화에만 1회성으로 쓰이고 영구 저장되지 않습니다**(어디에도 파일 자체나 텍스트가 남지 않는 휘발성 설계 — 영구 보관하려는 자료는 8절 메뉴 지도의 "도구/스킬 Pool"이 아니라 admin/manager의 "지식 베이스" 관리 기능을 따로 써야 합니다).',
 '',
 '### 3단계 — 멘션으로 누구를 부를지 정하고 메시지 전송',
 '',
@@ -9743,7 +9823,7 @@ const MANUAL_MARKDOWN = [
 '   - **파인튜닝**: temperature·reasoning on/off·재시도 횟수 등 CrewAI 동작 파라미터(비용 없음, 설정만 저장 — "Crew 빌더"로 실제 CrewAI Crew에 투입될 때만 반영).',
 '   - **⚡ 최적화 추천**: 이 Agent의 역할 특성(심층추론/정밀·신속/표준 3단계 중 하나로 분류)에 맞는 provider/model/파인튜닝을 추천받습니다(규칙 기반, 비용 없음). "등록된 모델 중 선택" 드롭다운에 **레지스트리의 활성 모델 전체가 순위대로** 뜨므로 1위 추천 대신 다른 모델을 직접 골라도 됩니다(★ 표시는 관리자가 "모델 레지스트리"에서 그 tier에 직접 매핑해둔 모델 — 아래 참고). 추천값은 입력란에 채워지기만 하고 저장은 직접 눌러야 합니다. "AI 의견 보기"를 누르면 LLM에게 추가로 검토받을 수 있습니다(이건 비용 발생).',
 '5. 여러 Agent를 한꺼번에 최적화하려면 **"LLM 설정 최적화"** 탭(admin 전용)에서 전체 목록을 보고 체크한 Agent에 바로 적용합니다 — 이미 추천과 같거나 한 번 적용한 Agent도 다시 체크해서 다른 모델로 재적용할 수 있습니다.',
-'6. **"모델 레지스트리"** 탭(admin 전용)에서 모델별로 **"최적화 Tier 매핑"** 체크박스(심층추론/정밀·신속/표준, 모델 하나가 여러 tier에 동시 매핑 가능)를 지정해두면 ⚡ 최적화 추천이 이름 패턴 추정 대신 그 매핑을 항상 먼저 후보로 올립니다 — 새 모델이 나오거나 provider를 바꿀 때 코드 수정 없이 여기서 매핑만 바꾸면 되고, 몇 번이든 다시 바꿀 수 있습니다(아무것도 체크 안 하면 기존처럼 모델명 패턴 추정으로 동작).',
+'6. **"모델 레지스트리"** 탭(admin 전용)에서 모델별로 **"최적화 Tier 매핑"** 체크박스(심층추론/정밀·신속/표준, 모델 하나가 여러 tier에 동시 매핑 가능)를 지정해두면 ⚡ 최적화 추천이 이름 패턴 추정 대신 그 매핑을 항상 먼저 후보로 올립니다 — 새 모델이 나오거나 provider를 바꿀 때 코드 수정 없이 여기서 매핑만 바꾸면 되고, 몇 번이든 다시 바꿀 수 있습니다(아무것도 체크 안 하면 기존처럼 모델명 패턴 추정으로 동작). 어느 tier에 매핑할지 감이 안 오면 같은 화면의 **"성능 테스트"** 버튼으로 실제 응답 속도를 재볼 수 있습니다 — 고정 프롬프트 1건을 실제로 호출해 글자/초를 측정하고 그 속도만으로 tier를 추천합니다(품질 평가가 아니라 속도만 봅니다). "이 tier로 저장"을 누르면 위 체크박스에 바로 반영됩니다.',
 '',
 '### Agent 그룹(팀) 만들기',
 '',

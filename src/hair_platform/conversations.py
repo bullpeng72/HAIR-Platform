@@ -64,6 +64,22 @@ _DEFAULT_SYSTEM_PROMPT = (
     "최종 결정과 책임은 사람에게 있다는 점을 기억하세요."
 )
 _CONTEXT_MESSAGE_LIMIT = 10
+# 사용자 보고(2026-11-12, "AI 모델의 응답 생성이 시간 제한을 넘겨
+# 중단됐습니다") — 실측 확인: 문제는 모델 선택이 아니었다(로컬 27B급
+# 모델 3종을 직접 벤치마크한 결과 생성 속도는 전부 비슷했다, 14.7~
+# 15.5 tok/s) — 원인은 대화 자체가 이미 커진 것(실측 사례: 메시지
+# 5건에 40,534자, `_CONTEXT_MESSAGE_LIMIT` 요약 압축은 아직 10건
+# 미만이라 적용 전). 그만큼 큰 프롬프트를 로컬 모델이 프리필하는
+# 시간까지 합치면 Ollama 기본값을 넘기기 쉽다.
+#
+# 뒤이은 사용자 결정(2026-11-12, "클라우드보다 Ollama가 더 길게...
+# 대화 및 업무에 같은 기준이 적용되도록") — 그래서 "기본 AI"
+# 전용으로 여기 따로 두지 않고, `llm.py`의 `OLLAMA_LLM_TIMEOUT_
+# SECONDS`(1800초)를 전역 Ollama 기본값 자체로 올렸다 — 이 모듈은
+# 이제 `call_llm()`에 `timeout_seconds`를 안 넘기고 그 전역 기본값을
+# 그대로 받는다(아래 `run_default_ai_job()` 참고). 실패 메시지에
+# 정확한 분을 보여줄 때만 그 정본 값을 그대로 참조한다(여기 숫자를
+# 다시 정의하지 않음 — 정본은 `llm.py` 하나뿐).
 # 사용자 요청(2026-10-18, "@자율 개발 크루" 품질 분석 후속) — 실측으로
 # 확인한 "앵커링" 문제(최근 10건 안에 과거 생성 코드가 여러 건 있으면
 # 새 spec보다 그 과거 코드를 거의 그대로 재사용함)를 프롬프트로 명시
@@ -1083,7 +1099,9 @@ def _finish_job_with_message(
     conn.commit()
 
 
-def _describe_job_failure(exc: Exception, trigger_type: str | None = None) -> str:
+def _describe_job_failure(
+    exc: Exception, trigger_type: str | None = None, provider: str | None = None
+) -> str:
     """사용자 보고(2026-10-15, "@자율 개발 크루... 일부 응답이 실패했습니다:
     Expecting value: line 1 column 1 (char 0)") 재발 방지 — 이 메시지는
     CrewAI/litellm 내부(에이전트 간 위임 도구 호출 인자를 JSON으로 파싱하는
@@ -1122,6 +1140,14 @@ def _describe_job_failure(exc: Exception, trigger_type: str | None = None) -> st
                 "발생할 수 있는 문제입니다. 요청을 더 간결하게 나눠서 다시 "
                 "시도하거나, 팀 구성(멤버 수)을 줄여보세요."
             )
+        if provider == "ollama":
+            minutes = int(llm.OLLAMA_LLM_TIMEOUT_SECONDS // 60)
+            return (
+                f"AI 모델의 응답 생성이 시간 제한(약 {minutes}분)을 넘겨 "
+                "중단됐습니다 — 대화가 길어졌거나 요청한 내용이 복잡할 때 "
+                "발생할 수 있는 문제입니다. 요청을 더 간결하게 나눠서 다시 "
+                "시도하거나, 대화가 많이 길어졌다면 새 대화를 시작해 보세요."
+            )
         return (
             "AI 모델의 응답 생성이 시간 제한을 넘겨 중단됐습니다 — 대화가 "
             "길어졌거나 요청한 내용이 복잡할 때 발생할 수 있는 문제입니다. "
@@ -1132,7 +1158,12 @@ def _describe_job_failure(exc: Exception, trigger_type: str | None = None) -> st
 
 
 def _fail_job(
-    conn: sqlite3.Connection, job_id: int, actor_id: int, exc: Exception
+    conn: sqlite3.Connection,
+    job_id: int,
+    actor_id: int,
+    exc: Exception,
+    *,
+    provider: str | None = None,
 ) -> None:
     conn.rollback()
     raw_error = str(exc)
@@ -1140,7 +1171,7 @@ def _fail_job(
         "SELECT trigger_type FROM conversation_jobs WHERE id = ?", (job_id,)
     ).fetchone()
     trigger_type = trigger_row["trigger_type"] if trigger_row else None
-    error = _describe_job_failure(exc, trigger_type)
+    error = _describe_job_failure(exc, trigger_type, provider)
     conn.execute(
         "UPDATE conversation_jobs SET status = 'failed', error = ?, "
         "finished_at = datetime('now') WHERE id = ?",
@@ -1855,6 +1886,7 @@ def run_default_ai_job(
     같은 원시 함수). `skill`이 있으면 그 스킬로, `linked_task_id`가
     있으면 그 Task의 `required_skills`로, 둘 다 없으면 일반 비서
     역할의 기본 system prompt로 그라운딩한다."""
+    provider: str | None = None
     try:
         conv = get_conversation(conn, conversation_id)
         assert conv is not None
@@ -1944,4 +1976,4 @@ def run_default_ai_job(
             llm_model=model,
         )
     except Exception as exc:  # noqa: BLE001
-        _fail_job(conn, job_id, actor_id, exc)
+        _fail_job(conn, job_id, actor_id, exc, provider=provider)

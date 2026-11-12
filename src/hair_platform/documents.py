@@ -23,6 +23,7 @@ VectorDB 검색(`vectorstore.search()`)은 전역이다(`source_agent_id`로
 
 from __future__ import annotations
 
+import re
 import sqlite3
 
 from hair_platform import audit, vectorstore
@@ -62,6 +63,14 @@ def _extension(filename: str) -> str:
     return filename[idx:].lower() if idx >= 0 else ""
 
 
+_HTML_BLOCK_TAGS = (
+    "p", "div", "br", "li", "h1", "h2", "h3", "h4", "h5", "h6",
+    "tr", "blockquote", "section", "article", "header", "footer",
+    "ul", "ol", "table",
+)
+_HTML_CELL_TAGS = ("td", "th")
+
+
 def _extract_html_text(raw_bytes: bytes) -> str:
     try:
         from bs4 import BeautifulSoup
@@ -74,7 +83,28 @@ def _extract_html_text(raw_bytes: bytes) -> str:
     soup = BeautifulSoup(raw_bytes.decode("utf-8", errors="replace"), "html.parser")
     for tag in soup(["script", "style"]):
         tag.decompose()
-    return soup.get_text(separator="\n")
+    # 버그 수정(2026-11-12, 사용자 보고 — "자료 미리보기가 깨져 보인다",
+    # 스크린샷으로 "HAIR(Human-AI Resource Management)" 다음 "는"이 한
+    # 글자만 따로 줄바뀜된 걸 확인) — `get_text(separator="\n")`은
+    # 블록/인라인 태그를 구분하지 않고 **모든** 태그 경계마다 줄바꿈을
+    # 끼워 넣는다. `<p>...<b>는</b> 사람과...</p>`처럼 문장 중간에 강조
+    # 인라인 태그(b/i/span/a 등)가 섞여 있으면, 원래 한 문장이던 글이
+    # 그 태그 경계마다 쪼개져 단어 하나하나가 따로 줄이 된다(실측 재현
+    # 완료, `soup.get_text(separator="\n")`로 직접 확인). 블록 레벨
+    # 태그 뒤에만 명시적으로 줄바꿈 문자열을 끼워 넣고, 인라인 태그는
+    # 건들지 않은 채 구분자 없는 `get_text()`로 이어 붙이면 원문의
+    # 띄어쓰기가 그대로 보존된다 — 표 셀(td/th)만 공백으로 구분한다
+    # (한 줄로 붙어버리면 "셀1셀2"처럼 읽기 힘들어지지만, 줄바꿈까지
+    # 쓰면 표 한 줄이 여러 줄로 쪼개져 더 읽기 어려워진다).
+    for tag in soup.find_all(_HTML_BLOCK_TAGS):
+        tag.insert_after("\n")
+    for tag in soup.find_all(_HTML_CELL_TAGS):
+        tag.insert_after(" ")
+    text = soup.get_text()
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _extract_pdf_text(raw_bytes: bytes) -> str:

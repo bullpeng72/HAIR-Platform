@@ -336,3 +336,107 @@ def test_gc225_fetch_candidates_wraps_provider_errors_as_400(client_and_conn):
         "/api/model-registry/fetch", params={"provider": "not_a_provider"}
     )
     assert resp.status_code == 400
+
+
+# ---------- 성능 테스트(사용자 요청, 2026-11-12, "ollama, openai 등
+# 프로바이더의 모델 성능 Test하고 결과 표시, 티어 추천 기능") ----------
+
+
+def test_gc226_benchmark_success_records_speed_and_tier_recommendation(
+    client_and_conn,
+):
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    model_id = client.post(
+        "/api/model-registry", json={"provider": "ollama", "name": "test-model"}
+    ).json()["id"]
+
+    with patch(
+        "hair_platform.llm.call_llm", return_value="가" * 300
+    ):
+        # 전역 `time` 모듈이 아니라 `model_benchmark` 모듈 안에서 바라보는
+        # 이름만 바꿔치기한다 — 테스트 클라이언트/FastAPI 내부가 쓰는
+        # 실제 time.monotonic()까지 건드리면 요청 처리 자체가 무한 대기에
+        # 빠질 위험이 있다(실제로 한 번 재현됨).
+        with patch("hair_platform.model_benchmark.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 3.0]
+            resp = client.post(f"/api/model-registry/{model_id}/benchmark")
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["latency_seconds"] == 3.0
+    assert body["output_chars"] == 300
+    assert body["chars_per_second"] == 100.0
+    assert body["recommended_tier"] == "standard"  # 100자/초 >= 50(FAST 경계)
+
+    # GET 목록에 최신 결과가 그대로 끼워져 나온다.
+    rows = client.get("/api/model-registry").json()
+    row = next(r for r in rows if r["id"] == model_id)
+    assert row["latest_benchmark"]["recommended_tier"] == "standard"
+
+    # 이력도 쌓인다.
+    history = client.get(f"/api/model-registry/{model_id}/benchmarks").json()
+    assert len(history) == 1
+    assert history[0]["status"] == "success"
+
+
+def test_gc227_benchmark_failure_recorded_with_error(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    model_id = client.post(
+        "/api/model-registry", json={"provider": "ollama", "name": "missing-model"}
+    ).json()["id"]
+
+    with patch(
+        "hair_platform.llm.call_llm",
+        side_effect=RuntimeError("model not found locally"),
+    ):
+        resp = client.post(f"/api/model-registry/{model_id}/benchmark")
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["status"] == "failed"
+    assert "model not found locally" in body["error"]
+
+    rows = client.get("/api/model-registry").json()
+    row = next(r for r in rows if r["id"] == model_id)
+    assert row["latest_benchmark"]["status"] == "failed"
+
+
+def test_gc228_benchmark_tier_recommendation_thresholds():
+    from hair_platform import model_benchmark
+
+    assert model_benchmark.recommend_tier(100.0) == "standard"
+    assert model_benchmark.recommend_tier(30.0) == "precision_fast"
+    assert model_benchmark.recommend_tier(5.0) == "deep_reasoning"
+    # 경계값 자체(동률)도 명확히 포함 관계를 확인
+    assert (
+        model_benchmark.recommend_tier(model_benchmark.FAST_CHARS_PER_SECOND)
+        == "standard"
+    )
+    assert (
+        model_benchmark.recommend_tier(model_benchmark.MODERATE_CHARS_PER_SECOND)
+        == "precision_fast"
+    )
+
+
+def test_gc229_benchmark_rbac_admin_only(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    model_id = client.post(
+        "/api/model-registry", json={"provider": "ollama", "name": "rbac-model"}
+    ).json()["id"]
+
+    _login(client, "manager1", "managerpass")
+    resp = client.post(f"/api/model-registry/{model_id}/benchmark")
+    assert resp.status_code == 403
+
+    _login(client, "member1", "memberpass")
+    resp = client.get(f"/api/model-registry/{model_id}/benchmarks")
+    assert resp.status_code == 403
+
+
+def test_gc230_benchmark_unknown_model_returns_404(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    resp = client.post("/api/model-registry/999999/benchmark")
+    assert resp.status_code == 404

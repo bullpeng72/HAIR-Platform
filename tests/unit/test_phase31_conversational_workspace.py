@@ -854,6 +854,69 @@ def test_gc_agent_mention_timeout_message_omits_wrong_specific_minutes(
     assert "다시 시도" in jobs[0]["error"]
 
 
+def test_gc_default_ai_ollama_timeout_message_cites_30_minutes(client_and_conn):
+    """사용자 보고(2026-11-12, "AI 모델의 응답 생성이 시간 제한을 넘겨
+    중단됐습니다") 후속 — 실측(27B급 로컬 모델 3종 벤치마크 결과
+    생성 속도는 비슷했고, 원인은 대화 자체가 커진 것으로 확인) 끝에
+    후속 결정(2026-11-12, "클라우드보다 Ollama가 더 길게... 대화 및
+    업무에 같은 기준이 적용되도록")으로 "기본 AI" 전용 분기를 따로
+    두지 않고 `llm.py`의 Ollama 전역 기본값 자체를 1800초(30분)로
+    올렸다 — 이 경로에서 timeout이 나면 그 분을 메시지에 보여줘야
+    한다(정본은 `llm.OLLAMA_LLM_TIMEOUT_SECONDS` 하나뿐)."""
+    from hair_platform import llm
+
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방3"}).json()["id"]
+    client.patch(
+        f"/api/conversations/{conv_id}/model",
+        json={"provider": "ollama", "model": "bonsai-2:27b"},
+    )
+
+    with patch(
+        "hair_platform.llm.call_llm", side_effect=TimeoutError("Request timed out.")
+    ) as mock_call:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "기획안 검토해줘"}
+        )
+        assert resp.status_code == 201, resp.text
+        # "기본 AI" 경로는 더 이상 timeout_seconds를 명시적으로 안 넘긴다
+        # (provider별 전역 기본값에 맡김) — 호출부가 그 책임을 안 지는지
+        # 확인한다.
+        assert "timeout_seconds" not in mock_call.call_args.kwargs
+
+    jobs = client.get(f"/api/conversations/{conv_id}/jobs").json()
+    assert jobs[0]["status"] == "failed"
+    expected_minutes = int(llm.OLLAMA_LLM_TIMEOUT_SECONDS // 60)
+    assert f"{expected_minutes}분" in jobs[0]["error"]
+
+
+def test_gc_default_ai_cloud_timeout_message_omits_minutes(client_and_conn):
+    """위 수정의 반대쪽 확인 — provider가 ollama가 아니면(클라우드 등)
+    기존처럼 특정 분 수를 단정하지 않는 일반 문구만 보여줘야 한다
+    (클라우드 타임아웃은 이번 신고 사례와 무관해 건드리지 않았다)."""
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방4"}).json()["id"]
+    client.patch(
+        f"/api/conversations/{conv_id}/model",
+        json={"provider": "anthropic", "model": "claude-sonnet-5"},
+    )
+
+    with patch(
+        "hair_platform.llm.call_llm", side_effect=TimeoutError("Request timed out.")
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "질문"}
+        )
+        assert resp.status_code == 201, resp.text
+
+    jobs = client.get(f"/api/conversations/{conv_id}/jobs").json()
+    assert jobs[0]["status"] == "failed"
+    assert "분" not in jobs[0]["error"]
+    assert "다시 시도" in jobs[0]["error"]
+
+
 # ---------- skill 사용 ----------
 
 

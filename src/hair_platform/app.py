@@ -64,6 +64,7 @@ from hair_platform import (
     jobs,
     llm,
     match_llm_judge,
+    model_benchmark,
     model_registry,
     performance,
     pipeline_runtime,
@@ -3436,6 +3437,32 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 ) from exc
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": model_id, "optimization_tiers": payload.optimization_tiers}
+
+    @app.post("/api/model-registry/{model_id}/benchmark", status_code=201)
+    def run_model_registry_benchmark(
+        model_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """사용자 요청(2026-11-12, "ollama, openai 등 프로바이더의 모델
+        성능 Test하고 결과 표시, 티어 추천 기능") — 고정 테스트 프롬프트
+        1건을 실제로 호출해 속도를 재고(비용 발생 가능 — 클라우드
+        provider는 실제 API 과금), 결과를 이력에 쌓는다. 속도만 보는
+        참고용 tier 추천이며 품질 평가가 아니다(`model_benchmark.py`
+        모듈 docstring 참고)."""
+        try:
+            result = model_benchmark.run_benchmark(conn, model_id, user["id"])
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="모델을 찾을 수 없습니다"
+            ) from exc
+        return result
+
+    @app.get("/api/model-registry/{model_id}/benchmarks")
+    def list_model_registry_benchmarks(
+        model_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        return model_benchmark.list_benchmarks(conn, model_id)
 
     @app.delete("/api/model-registry/{model_id}")
     def delete_model_registry_entry(

@@ -63,6 +63,29 @@ def test_extract_text_html_strips_tags_and_script():
     assert "color:red" not in text
 
 
+def test_extract_text_html_keeps_inline_tagged_sentence_intact():
+    """사용자 보고(2026-11-12, 스크린샷) — 문장 중간에 `<b>`/`<i>` 같은
+    인라인 태그가 섞이면 그 경계마다 줄바꿈이 끼어들어 "HAIR(...)"
+    다음에 와야 할 "는"이 따로 떨어진 줄로 깨져 보였다. 인라인 태그는
+    줄바꿈 없이 그대로 이어 붙어야 한다."""
+    html = (
+        "<html><body><p>HAIR(Human-AI Resource Management)"
+        "<b>는</b> 사람과 <i>AI Agent</i>를 같이 배치합니다.</p>"
+        "</body></html>"
+    ).encode()
+    text = documents.extract_text("report.html", html)
+    assert "HAIR(Human-AI Resource Management)는 사람과 AI Agent를 같이 배치합니다." in text
+
+
+def test_extract_text_html_separates_block_level_paragraphs():
+    html = (
+        "<html><body><p>첫 번째 문단</p><p>두 번째 문단</p></body></html>"
+    ).encode()
+    text = documents.extract_text("multi.html", html)
+    lines = [line for line in text.splitlines() if line.strip()]
+    assert lines == ["첫 번째 문단", "두 번째 문단"]
+
+
 def test_extract_text_pdf_reads_real_pdf_bytes():
     pypdf = pytest.importorskip("pypdf")
     from io import BytesIO

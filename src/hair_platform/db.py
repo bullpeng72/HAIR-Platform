@@ -313,6 +313,26 @@ CREATE TABLE IF NOT EXISTS model_registry (
     UNIQUE(provider, name)
 );
 
+-- 사용자 요청(2026-11-12, "ollama, openai 등 프로바이더의 모델 성능
+-- Test하고 결과 표시, 티어 추천 기능") — `model_registry.py` 참고.
+-- append-only 이력(agent_evaluations/crew_runs와 같은 패턴) — 같은
+-- 모델을 여러 번 테스트해도 지우지 않고 쌓는다(모델 서빙 환경이
+-- 바뀌면 — 예: 다른 모델이 동시에 메모리에 로드돼 있었는지 — 같은
+-- 모델도 결과가 달라질 수 있어, 과거 값을 덮어쓰면 "왜 지난번과 다른
+-- 결과가 나왔는지" 추적할 수 없게 된다).
+CREATE TABLE IF NOT EXISTS model_benchmarks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_registry_id INTEGER NOT NULL REFERENCES model_registry(id),
+    tested_by INTEGER NOT NULL REFERENCES users(id),
+    tested_at TEXT NOT NULL DEFAULT (datetime('now')),
+    status TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+    latency_seconds REAL,
+    output_chars INTEGER,
+    chars_per_second REAL,
+    recommended_tier TEXT,
+    error TEXT
+);
+
 -- 사용자 요청(2026-10-26, "embedding 모델 설정 기능을 구현해줘 (하드코딩
 -- 하지않도록)") — `vectorstore.py`의 임베딩 provider/모델명이 지금까지
 -- `DEFAULT_EMBEDDING_MODELS` 코드 상수로 박혀 있어("mxbai-embed-large:

@@ -26,7 +26,7 @@ import os
 import sqlite3
 from collections.abc import Sequence
 
-from hair_platform import audit
+from hair_platform import audit, model_benchmark
 
 PROVIDERS = ("anthropic", "openai", "ollama")
 
@@ -81,6 +81,10 @@ def create_model(
 
 
 def list_models(conn: sqlite3.Connection, provider: str | None = None) -> list[dict]:
+    # 사용자 요청(2026-11-12, "성능 Test하고 결과 표시") — 모델마다 또
+    # 쿼리하지 않고 `model_benchmark.latest_benchmarks_by_model()`로
+    # 한 번에 모아와 각 모델 응답에 끼워 넣는다(모델이 아직 테스트
+    # 안 됐으면 None).
     query = "SELECT * FROM model_registry"
     params: tuple = ()
     if provider is not None:
@@ -88,6 +92,7 @@ def list_models(conn: sqlite3.Connection, provider: str | None = None) -> list[d
         params = (provider,)
     query += " ORDER BY provider, name"
     rows = conn.execute(query, params).fetchall()
+    latest_by_model = model_benchmark.latest_benchmarks_by_model(conn)
     return [
         {
             "id": r["id"],
@@ -95,6 +100,7 @@ def list_models(conn: sqlite3.Connection, provider: str | None = None) -> list[d
             "name": r["name"],
             "is_active": bool(r["is_active"]),
             "optimization_tiers": json.loads(r["optimization_tiers"] or "[]"),
+            "latest_benchmark": latest_by_model.get(r["id"]),
         }
         for r in rows
     ]

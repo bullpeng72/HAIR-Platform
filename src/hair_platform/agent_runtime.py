@@ -187,7 +187,17 @@ def index_knowledge(
 # 보다 넉넉하게, `tuning_config.reasoning=True`인(agent_optimizer.py의
 # deep_reasoning tier) Agent의 단발 실행에만 적용한다. `execute_agent()`
 # 아래 참고.
+#
+# 사용자 결정(2026-11-12, "클라우드보다 Ollama가 더 길게, 작업 성격에
+# 따라 차등") — `llm.py`가 Ollama의 "표준" 단발 호출 기본값을 이미
+# 1800초로 올려서, provider 구분 없이 이 상수 하나만 썼다면
+# reasoning tier Ollama 호출이 표준 tier Ollama 호출과 같은 값이 돼
+# "작업 성격별 차등"이 Ollama에서만 사라질 뻔했다. 클라우드와 똑같이
+# "표준의 2배" 비율을 유지해 Ollama 전용 값을 따로 둔다(`crew_runtime
+# .CREWAI_LLM_TIMEOUT_SECONDS_OLLAMA`와 같은, 이미 자리 잡은 "provider
+# 별 쌍" 패턴).
 _DEEP_REASONING_LLM_TIMEOUT_SECONDS = 1800.0
+_DEEP_REASONING_LLM_TIMEOUT_SECONDS_OLLAMA = 3600.0
 
 
 def execute_agent(
@@ -268,9 +278,14 @@ def execute_agent(
     # 한도를 준다(크루 실행 경로의 `max_execution_time`과는 별개 — 그쪽은
     # `crew_runtime.py`가 이미 따로 처리).
     tuning = json.loads(agent["tuning_config"] or "{}")
-    timeout_seconds = (
-        _DEEP_REASONING_LLM_TIMEOUT_SECONDS if tuning.get("reasoning") is True else None
-    )
+    if tuning.get("reasoning") is True:
+        timeout_seconds = (
+            _DEEP_REASONING_LLM_TIMEOUT_SECONDS_OLLAMA
+            if resolved_provider == "ollama"
+            else _DEEP_REASONING_LLM_TIMEOUT_SECONDS
+        )
+    else:
+        timeout_seconds = None
     output = llm.call_llm(
         resolved_provider,
         resolved_model,

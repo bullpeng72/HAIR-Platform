@@ -152,7 +152,8 @@ def call_llm(
     """실제 API 호출 지점 — 여기서만 비용/로컬 연산이 발생한다.
 
     `timeout_seconds`를 생략하면(기존 모든 호출부가 그렇다) provider별
-    기본값(클라우드 900초/Ollama 600초)이 그대로 적용된다 — 하위 호환.
+    기본값(클라우드 900초/Ollama 1800초 — Ollama가 더 길다)이 그대로
+    적용된다 — 하위 호환.
     `agent_runtime.execute_agent()`가 deep_reasoning tier Agent에는 더 긴
     값을 넘겨 쓴다(아래 `_call_anthropic`/`_call_openai` 참고)."""
     if provider == "anthropic":
@@ -174,6 +175,22 @@ def call_llm(
 # 120→300→600초로 올린 것과 같은 원칙 — "멈춘 게 아니라 느린 것"일
 # 때까지는 끊지 않는다).
 _CLOUD_LLM_TIMEOUT_SECONDS = 900.0
+
+# 사용자 결정(2026-11-12, "전체적으로 타임아웃을 클라우드보다 Ollama가
+# 더 길게, 작업 성격에 따라 차등하되 대화 및 업무에 같은 기준이
+# 적용되도록") — 지금까지 Ollama는 단발 호출 기본값이 600초로,
+# 클라우드(900초)보다 오히려 더 짧았다(원칙과 반대). 로컬 연산이라
+# API 비용 걱정이 없고(README에 이미 기록된 실측 — 27B급 모델도
+# 대화가 길어지면 600초를 넘기는 사례), 더 기다려도 손해볼 게 없으므로
+# 클라우드보다 더 넉넉하게 잡는다. 다른 모듈의 "작업 성격별" 상위
+# 타임아웃(`agent_runtime._DEEP_REASONING_LLM_TIMEOUT_SECONDS[_OLLAMA]`,
+# `crew_runtime.CREWAI_LLM_TIMEOUT_SECONDS[_OLLAMA]`)도 전부 이
+# "Ollama > 클라우드" 원칙을 따르도록 같이 맞췄다 — 이 상수는 그중
+# "표준"(단발 호출, 별도 override 없음) 등급의 Ollama 값이다. 공개
+# 이름으로 둬 `conversations.py`가 타임아웃 실패 메시지에 분을
+# 정확히 표시할 때도 같은 값을 참조한다(이름을 아는 모듈이 둘로
+# 늘어도 값의 정본은 여기 하나뿐).
+OLLAMA_LLM_TIMEOUT_SECONDS = 1800.0
 
 
 def _call_anthropic(
@@ -239,11 +256,13 @@ def _call_ollama(
         # 7,959토큰·출력 7,729토큰짜리 긴 보고서)가 실제로는 337.7초
         # 만에 **정상 완료**됐다 — 멈춘 게 아니라 초당 ~23토큰의 순수
         # 생성 속도가 느린 것뿐이다(`total_duration`의 99.96%가
-        # `eval_duration`). 사용자 결정으로 600초로 다시 늘리고,
-        # 프런트엔드 `pollConversationJob()`의 폴링 포기 시한도 700초로
-        # 같이 올렸다(아래 timeout보다 여유 있게 길게 유지 — 백엔드가
-        # 결론을 내기 전에 프런트가 먼저 포기하지 않도록).
-        timeout=timeout_seconds or 600,
+        # `eval_duration`). 사용자 결정으로 600초로 다시 늘렸었고,
+        # 그 뒤로도 재발(대화가 길어진 상태에서 27B급 모델이 600초를
+        # 또 넘김)해 "클라우드보다 Ollama가 더 길어야 한다"는 원칙으로
+        # `OLLAMA_LLM_TIMEOUT_SECONDS`(1800초)로 다시 올렸다 — 프런트
+        # 폴링 포기 시한도 그보다 여유 있게 길게 유지한다(`webui.py`의
+        # `pollConversationJob()`/`pollExecutionJob()` 참고).
+        timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
     )
     resp.raise_for_status()
     return resp.json()["message"]["content"]
