@@ -33,7 +33,7 @@ Agent라고 다른 대우를 받지 않는다.
   있다.
 
 **지금 상태**: 위 기능 전부 실제로 동작하는 코드로 구현돼 있고(스텁이나
-목업이 아니다), 테스트 919건이 통과하는 상태로 유지된다. 개념·아키텍처
+목업이 아니다), 테스트 932건이 통과하는 상태로 유지된다. 개념·아키텍처
 전체 설명은 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은
 `git log`(커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를
 참고.
@@ -159,7 +159,7 @@ pip install -e ".[dev,all]"
 # 실행 시점에 `ModuleNotFoundError`로 깨진다. `all`(= crewai+mcp+llm+
 # documents 묶음, pyproject.toml 참고)까지 같이 설치해야 아래 골든셋이
 # 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 919건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 932건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 ### 설치 옵션(extras) 한눈에 보기
@@ -398,7 +398,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(175개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(176개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   match_llm_judge.py # 매칭 결과 LLM judge 폴백(역할명 부분일치로도 못 찾을 때)
@@ -444,7 +444,7 @@ docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # RBAC 권한 설정을 테스트로 감사하는 Claude Code 스킬
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 919건 통과
+tests/unit/                            # 골든셋 932건 통과
 ```
 
 ## 로드맵
@@ -461,6 +461,7 @@ tests/unit/                            # 골든셋 919건 통과
 
 | 버전 | 날짜 | 핵심 변경 |
 |------|------|-----------|
+| v0.1.6 | 2026-11-12 | 모델 레지스트리 성능 테스트(실측 속도 기반 tier 추천) 추가 · LLM 호출 타임아웃 기준 통일(Ollama가 클라우드보다 항상 길게, 대화·업무 공통) · 대화 HTML 첨부 미리보기 깨짐·즉시 전송 버그 수정 · 샘플 체험 기능 제거 |
 | v0.1.5 | 2026-11-12 | `hair serve` 로그 노이즈 제거 · 업무 진행상황 가시성 개선(실행 중 표시·완료 알림·보드 배지) · 피드백/확인 UX 통일 |
 | v0.1.4 | 2026-11-12 | PyPI 첫 배포 준비(라이선스 SPDX 전환, LICENSE/프로젝트 URL 추가) + 실제 배포 · pending_onboarding 팀이 활성화 토글로 온보딩 절차를 우회할 수 있던 버그 수정 |
 | v0.1.3 | 2026-11-11 | Skill/Tool "개발업무/일반업무" 분류(대화창 기본 숨김+필요시 노출) · HAIR 자체 Skill 이름 30개 한글화 · 제안서 작성/실적 보고 파이프라인 추가(템플릿 4종) |
