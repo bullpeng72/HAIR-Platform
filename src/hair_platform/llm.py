@@ -193,6 +193,8 @@ _CLOUD_LLM_TIMEOUT_SECONDS = 900.0
 OLLAMA_LLM_TIMEOUT_SECONDS = 1800.0
 
 
+_ANTHROPIC_MAX_OUTPUT_TOKENS = 8192
+
 def _call_anthropic(
     model: str, system: str, prompt: str, timeout_seconds: float | None = None
 ) -> str:
@@ -201,9 +203,17 @@ def _call_anthropic(
     client = anthropic.Anthropic(
         timeout=timeout_seconds or _CLOUD_LLM_TIMEOUT_SECONDS
     )  # ANTHROPIC_API_KEY 환경변수를 사용한다.
+    # 버그 수정(2026-11-13, 사용자 보고 — "결과물이 끝까지 생성되지
+    # 않고 잘리는 문제" 조사 중 발견) — Anthropic SDK는 `max_tokens`가
+    # 필수 인자라 반드시 어떤 값을 줘야 하는데, 지금까지 1024(약
+    # 700~800 한글 단어 분량)로 고정돼 있었다 — "20장짜리 발표자료"
+    # 같은 긴 산출물은 provider·모델 선택과 무관하게 이 값 하나 때문에
+    # 항상 잘렸을 것이다(Ollama 쪽과 달리 이쪽은 재현 없이도 코드만
+    # 봐도 확정적인 버그). Claude 최신 모델이 공통으로 지원하는
+    # 8192토큰으로 올린다.
     resp = client.messages.create(
         model=model,
-        max_tokens=1024,
+        max_tokens=_ANTHROPIC_MAX_OUTPUT_TOKENS,
         system=system,
         messages=[{"role": "user", "content": prompt}],
     )

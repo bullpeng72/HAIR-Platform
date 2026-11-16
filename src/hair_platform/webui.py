@@ -686,8 +686,19 @@ function _renderMarkdown(raw) {
 // 펜스(예: 설명+코드 혼합 응답)는 그대로 둔다(그건 의도된 "그 형식을
 // 먼저 보여주는" 문서지, 벗겨낼 "감싸기"가 아니다).
 function stripOuterFence(raw) {
-  const m = raw.match(/^```[a-zA-Z0-9]*\\n([\\s\\S]*?)\\n?```\\s*$/);
-  return m ? m[1] : raw;
+  const closed = raw.match(/^```[a-zA-Z0-9]*\\n([\\s\\S]*?)\\n?```\\s*$/);
+  if (closed) return closed[1];
+  // 사용자 보고(2026-11-13, "결과물이 끝까지 생성되지 않고 잘리는 문제...
+  // HTML 형태로 표시되지 않는 문제") — 응답이 중간에 잘리면(로컬 모델이
+  // 문서를 다 쓰기 전에 멈추면) 여는 펜스(```html)만 있고 닫는 펜스가
+  // 없다. 위 정규식은 닫는 펜스까지 있어야만 매칭되므로, 잘린 응답은
+  // "```html\\n<!DOCTYPE html>..."가 안 벗겨진 채 그대로 반환돼
+  // `_looksLikeFullHtmlDocument()`의 DOCTYPE 검사도 통과하지 못하고
+  // 평범한 코드블록으로 떨어졌다. 닫는 펜스가 없어도 여는 펜스 한 줄만
+  // 떼어내고 나머지(잘린 내용 그대로)는 살린다 — 완성본이든 잘린
+  // 본이든 최소한 HTML로는 보이게 한다.
+  const openOnly = raw.match(/^```[a-zA-Z0-9]*\\n([\\s\\S]*)$/);
+  return openOnly ? openOnly[1] : raw;
 }
 
 // 사용자 요청(2026-10-14) — 다이어그램/차트는 DOM에 실제로 붙은 뒤에만

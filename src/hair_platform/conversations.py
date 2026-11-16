@@ -917,7 +917,38 @@ def _strip_large_code_fences(content: str) -> str:
             "```"
         )
 
-    return _CODE_FENCE_RE.sub(_replace, content)
+    collapsed = _CODE_FENCE_RE.sub(_replace, content)
+
+    # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성가이드" 스킬로
+    # 요청했는데 직전 메시지(프레젠테이션 자료 작성자가 만든 HTML)의
+    # 색상표·구조를 그대로 베낀 결과가 나옴) — 실측 확인: 그 직전
+    # 메시지는 응답이 중간에 끊겨 닫는 펜스(```)가 없었다. 위
+    # `_CODE_FENCE_RE`는 여는 펜스와 닫는 펜스가 **둘 다** 있어야
+    # 매칭되므로(`webui.py`의 `stripOuterFence()`가 가졌던 것과 같은
+    # 사각지대 — 그쪽은 이미 고쳤다), 닫히지 않은 긴 HTML 전체가
+    # 한 글자도 안 접힌 채 다음 요청의 프롬프트에 그대로 끼어들어,
+    # 모델이 그 안의 구체적인 색상 변수까지 그대로 베끼는 "앵커링"이
+    # 재발했다. ``` 개수가 홀수(=닫히지 않은 펜스가 남음)면, 마지막
+    # 여는 펜스 이후도 같은 기준으로 접는다.
+    if collapsed.count("```") % 2 == 1:
+        last_fence_pos = collapsed.rfind("```")
+        newline_pos = collapsed.find("\n", last_fence_pos)
+        if newline_pos != -1:
+            lang = collapsed[last_fence_pos + 3 : newline_pos]
+            body = collapsed[newline_pos + 1 :]
+            line_count = body.count("\n") + 1
+            if line_count > _CODE_FENCE_STRIP_THRESHOLD_LINES:
+                collapsed = (
+                    collapsed[:last_fence_pos]
+                    + "```"
+                    + lang
+                    + "\n"
+                    + f"[코드 {line_count}줄 생략(응답이 끊겨 닫는 표시가 없음) "
+                    "— 이 메시지의 전체 내용은 대화 화면에서 직접 확인하세요. "
+                    "이 내용을 그대로 복사하지 말고, 이번 요청에 맞게 처음부터 "
+                    "다시 작성해야 합니다.]\n"
+                )
+    return collapsed
 
 
 def _build_transcript(
@@ -1233,13 +1264,19 @@ def run_agent_mention_job(
     를 confirmed 배정 확인 없이 직접 호출한다(그 Agent 자신의 저장된
     provider/model을 그대로 쓴다)."""
     try:
+        # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성가이드" 스킬
+        # 요청이 직전 메시지의 프레젠테이션 스타일을 그대로 베낌) 조사
+        # 중 발견 — 이 경로(단일 Agent 멘션)도 team_mention과 똑같이
+        # `_build_transcript()`가 넘긴 과거 산출물에 앵커링될 위험을
+        # 그대로 안고 있었는데 `_ANTI_ANCHORING_NOTE`가 안 붙어 있었다.
+        # 같은 위험이면 같은 방어를 적용한다.
         transcript = _build_transcript(conn, conversation_id)
         sink: dict = {}
         output = agent_runtime.execute_agent(
             conn,
             agent_id,
             actor_id,
-            transcript or "대화를 시작합니다.",
+            (transcript or "대화를 시작합니다.") + _ANTI_ANCHORING_NOTE,
             retrieval_sink=sink,
         )
         _finish_job_with_message(
@@ -1939,7 +1976,15 @@ def run_default_ai_job(
                     + "\n\n[실시간 조회 결과 — 아래 내용을 근거로 답변하세요]\n"
                     + retrieved_context
                 )
-        transcript = _build_transcript(conn, conversation_id)
+        # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성가이드" 스킬로
+        # 요청했는데 이 대화의 직전 메시지(다른 Agent가 만든 프레젠테이션
+        # HTML)의 색상표·구조를 그대로 베낀 결과가 나옴) — "기본 AI"
+        # 경로도 team_mention과 똑같이 `_build_transcript()`가 넘긴
+        # 과거 산출물에 앵커링될 위험을 그대로 안고 있었는데
+        # `_ANTI_ANCHORING_NOTE`가 안 붙어 있었다. 같은 위험이면 같은
+        # 방어를 적용한다(스킬 그라운딩이 있을 때만이 아니라 항상 —
+        # 멘션 없는 기본 AI 응답도 과거 메시지를 그대로 베낄 수 있다).
+        transcript = _build_transcript(conn, conversation_id) + _ANTI_ANCHORING_NOTE
         output = llm.call_llm(provider, model, system, transcript)
         if skills_for_augmentation:
             unsupported = pool_registry.unsupported_realtime_skill_names(

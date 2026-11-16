@@ -262,6 +262,102 @@ def test_gc70_execute_agent_ollama_deep_reasoning_gets_even_longer_timeout(
     assert m.call_args.kwargs["timeout_seconds"] == 3600.0
 
 
+def test_gc72_looks_truncated_detects_unclosed_fence_and_html():
+    """사용자 보고(2026-11-13, "결과물이 끝까지 생성되지 않고 잘리는
+    문제") — 실제 장애 메시지 3건을 직접 확인한 결과 전부 여는
+    ```html 펜스만 있고 닫는 펜스·`</html>`가 없었다."""
+    from hair_platform import agent_runtime
+
+    assert agent_runtime._looks_truncated("```html\n<!DOCTYPE html>\n<html>\n<body>중간에 끊김")
+    assert agent_runtime._looks_truncated("<!DOCTYPE html>\n<html><body>펜스 없이도 끊기면 감지")
+    # 정상 완료(닫는 펜스·</html> 둘 다 있음)는 끊긴 것으로 오판하지 않는다.
+    assert not agent_runtime._looks_truncated(
+        "```html\n<!DOCTYPE html>\n<html><body>완성</body></html>\n```"
+    )
+    assert not agent_runtime._looks_truncated("그냥 평범한 텍스트 응답입니다.")
+
+
+def test_gc73_execute_agent_auto_continues_truncated_html_output(client_and_conn):
+    """끊긴 것으로 보이면 자동으로 한 번 더 호출해 이어 붙인다 — 기존
+    내용은 버리지 않는다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, ?, 'active')",
+        ("프레젠테이션 작성자", "[]"),
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    truncated = "```html\n<!DOCTYPE html>\n<html><body>여기까지만 쓰고 멈춤"
+    completion = "...남은 내용\n</body></html>\n```"
+    with patch(
+        "hair_platform.llm.call_llm", side_effect=[truncated, completion]
+    ) as m:
+        output = agent_runtime.execute_agent(conn, agent_id, admin_id, "발표자료 작성")
+    assert output == truncated + completion
+    assert m.call_count == 2
+
+
+def test_gc74_execute_agent_stops_retrying_after_max_attempts(client_and_conn):
+    """계속 끊겨도 `_MAX_CONTINUATION_ATTEMPTS`를 넘기면 포기한다(무한
+    루프 방지) — 그래도 지금까지 이어 붙인 내용은 전부 보존한다."""
+    from hair_platform import agent_runtime
+
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, ?, 'active')",
+        ("항상 끊기는 Agent", "[]"),
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    always_truncated = "```html\n<!DOCTYPE html>계속 끊김"
+    with patch(
+        "hair_platform.llm.call_llm", return_value=always_truncated
+    ) as m:
+        output = agent_runtime.execute_agent(conn, agent_id, admin_id, "발표자료 작성")
+    assert m.call_count == 1 + agent_runtime._MAX_CONTINUATION_ATTEMPTS
+    assert output == always_truncated * (1 + agent_runtime._MAX_CONTINUATION_ATTEMPTS)
+
+
+def test_gc75_anthropic_max_tokens_raised_from_1024(monkeypatch):
+    """버그 수정 확인 — `max_tokens=1024`로 고정돼 있던 Anthropic 호출이
+    충분히 긴 산출물을 낼 수 있도록 상향됐는지 직접 확인한다."""
+    captured = {}
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+
+            class _Block:
+                type = "text"
+                text = "ok"
+
+            class _Resp:
+                content = [_Block()]
+
+            return _Resp()
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        messages = _FakeMessages()
+
+    monkeypatch.setattr(
+        "anthropic.Anthropic", lambda **kwargs: _FakeClient(), raising=False
+    )
+    llm._call_anthropic("claude-sonnet-5", "system", "prompt")
+    assert captured["max_tokens"] == llm._ANTHROPIC_MAX_OUTPUT_TOKENS
+    assert captured["max_tokens"] > 1024
+
+
 def test_gc71_ollama_standard_timeout_is_longer_than_cloud():
     """같은 결정의 "표준"(reasoning 미설정) tier 확인 — Ollama 표준
     호출도 클라우드 표준(900초)보다 길어야 한다(1800초). `execute_agent

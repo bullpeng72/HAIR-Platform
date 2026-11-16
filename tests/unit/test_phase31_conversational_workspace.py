@@ -711,6 +711,71 @@ def test_strip_large_code_fences_replaces_long_blocks_only():
     )  # 15줄 이하는 그대로
 
 
+def test_strip_large_code_fences_handles_unclosed_fence_from_truncated_response():
+    """사용자 보고(2026-11-13, "제안서작성가이드 스킬 요청이 직전
+    메시지의 프레젠테이션 스타일을 그대로 베낌") — 실측 확인: 그
+    직전 메시지는 응답이 중간에 끊겨 닫는 펜스(```)가 없었다. 기존
+    정규식(`_CODE_FENCE_RE`)은 여는 펜스+닫는 펜스가 둘 다 있어야
+    매칭돼, 닫히지 않은 긴 HTML 전체가 한 글자도 안 접힌 채 다음
+    요청의 프롬프트에 그대로 들어가 "앵커링"을 재발시켰다. 닫는
+    펜스가 없어도 같은 기준(15줄 초과)으로 접어야 한다."""
+    long_unclosed = "\n".join(f"line{i}" for i in range(20))
+    content = f"설명 문단입니다.\n\n```html\n{long_unclosed}"  # 닫는 펜스 없음
+    result = conversations._strip_large_code_fences(content)
+    assert "line0" not in result
+    assert "line19" not in result
+    assert "[코드 20줄 생략" in result
+    assert "닫는 표시가 없음" in result
+    assert "```html" in result
+    assert "설명 문단입니다." in result
+
+    # 짧으면(15줄 이하) 닫는 펜스가 없어도 그대로 둔다.
+    short_unclosed = "```js\n" + "\n".join(f"line{i}" for i in range(5))
+    assert (
+        conversations._strip_large_code_fences(short_unclosed) == short_unclosed
+    )
+
+
+def test_agent_mention_and_default_ai_include_anti_anchoring_note(client_and_conn):
+    """사용자 보고(2026-11-13) 후속 — team_mention에만 있던
+    `_ANTI_ANCHORING_NOTE`가 단일 Agent 멘션·"기본 AI" 경로에는
+    빠져 있었다. 같은 `_build_transcript()` 공유 위험이면 같은
+    방어를 적용해야 한다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent_id = _make_agent(conn, "제안서작성자")
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "agent", "participant_id": agent_id},
+    )
+
+    agent_row = conn.execute(
+        "SELECT role_name FROM agent_pool WHERE id = ?", (agent_id,)
+    ).fetchone()
+    with patch(
+        "hair_platform.llm.call_llm", return_value="결과"
+    ) as mock_call:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": f"@{agent_row['role_name']} 작성해줘"},
+        )
+        assert resp.status_code == 201, resp.text
+        prompt_sent = mock_call.call_args[0][3]
+        assert "그대로 복사하거나 재사용하지 마세요" in prompt_sent
+
+    conv_id2 = client.post("/api/conversations", json={"title": "방2"}).json()["id"]
+    with patch("hair_platform.llm.call_llm", return_value="결과") as mock_call:
+        resp = client.post(
+            f"/api/conversations/{conv_id2}/messages",
+            json={"content": "질문있어요"},
+        )
+        assert resp.status_code == 201, resp.text
+        prompt_sent = mock_call.call_args[0][3]
+        assert "그대로 복사하거나 재사용하지 마세요" in prompt_sent
+
+
 def test_business_plan_writing_guide_forbids_full_source_code():
     """사용자 보고(2026-10-19, "(제목 없음) 대화 분석") — "기획서 작성자"
     (스킬: business-plan-writing-guide)가 사업계획서 역할을 벗어나

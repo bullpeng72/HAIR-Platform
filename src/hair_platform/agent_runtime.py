@@ -29,6 +29,7 @@ IP를 지속 차단해 "외부검색"은 시드에서 빠졌고, 같은 역할�
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 
 from hair_platform import (
@@ -199,6 +200,37 @@ def index_knowledge(
 _DEEP_REASONING_LLM_TIMEOUT_SECONDS = 1800.0
 _DEEP_REASONING_LLM_TIMEOUT_SECONDS_OLLAMA = 3600.0
 
+# 사용자 보고(2026-11-13, "프레젠테이션 자료 작성자 결과물이 끝까지
+# 생성되지 않고 잘리는 문제") — 실측 확인: 같은 Agent·같은 시스템
+# 프롬프트로 재현을 시도한 결과 한 번은 11,325토큰을 끝까지 정상
+# 완료했고(done_reason: stop), 실제 장애 사례 3건은 각각 409자·
+# 19,606자·30,476자에서 제각각 다르게 끊겼다 — 고정된 상한(컨텍스트
+# 길이 등)에 걸리는 게 아니라 비결정적으로(로컬 모델 서빙 환경의
+# 변동 때문으로 추정 — 타임아웃 예외는 전혀 없었다, 셋 다 "성공"으로
+# 기록됨) 간헐적으로 발생한다. 원인을 하나로 특정해 막기보다, 끊긴
+# 것으로 보이면 그 자리에서 이어서 완성하도록 자동 보강한다 — 어느
+# 경로로 끊기든 결과적으로 사용자는 완성된 산출물을 받는다.
+_MAX_CONTINUATION_ATTEMPTS = 2
+
+
+def _looks_truncated(text: str) -> bool:
+    """완벽한 판정은 불가능하다 — 가장 흔한 두 신호만 본다: (1) 코드펜스
+    (```)를 열어놓고 안 닫음, (2) HTML 문서를 열어놓고 `</html>`로
+    안 닫음(펜스 안쪽이든 바깥이든). 둘 다 "문서를 끝까지 못 쓰고
+    멈췄다"는 정직한 신호일 뿐, 오탐(예: 설명 중 ```를 홀수 번 언급)
+    가능성도 있어 과하게 민감하게 잡지 않는다 — 그 정도 오탐은 한 번
+    더 이어쓰기를 시도해도 손해가 없다(기존 내용을 안 버리고 이어
+    붙이기만 하므로)."""
+    stripped = text.rstrip()
+    if stripped.count("```") % 2 == 1:
+        return True
+    has_html_open = bool(
+        re.search(r"<!DOCTYPE\s+html|<html[\s>]", stripped, re.IGNORECASE)
+    )
+    if has_html_open and "</html>" not in stripped.lower():
+        return True
+    return False
+
 
 def execute_agent(
     conn: sqlite3.Connection,
@@ -293,6 +325,25 @@ def execute_agent(
         augmented_prompt,
         timeout_seconds=timeout_seconds,
     )
+    # 중간에 끊긴 것으로 보이면 이어서 완성시킨다(`_looks_truncated()`
+    # 모듈 docstring 참고) — 최대 `_MAX_CONTINUATION_ATTEMPTS`번까지만
+    # 시도해, 같은 이유로 매번 또 끊기는 드문 경우에도 무한히 돌지
+    # 않는다. 이전까지 쓴 내용은 절대 버리지 않고 이어 붙이기만 한다.
+    for _ in range(_MAX_CONTINUATION_ATTEMPTS):
+        if not _looks_truncated(output):
+            break
+        continuation = llm.call_llm(
+            resolved_provider,
+            resolved_model,
+            system,
+            "직전 응답이 끝까지 작성되지 못하고 중간에 멈췄습니다. 아래는 "
+            "지금까지 작성된 내용의 마지막 부분입니다 — 처음부터 다시 쓰지 "
+            "말고, 끊긴 지점 바로 다음부터 자연스럽게 이어서 문서를 "
+            "완성하세요(펜스나 닫는 태그가 빠졌다면 그것도 포함해서 "
+            f"마무리하세요):\n\n...(생략)...\n{output[-1500:]}",
+            timeout_seconds=timeout_seconds,
+        )
+        output = output + continuation
 
     conn.execute(
         "UPDATE agent_pool SET last_output = ?, llm_provider = ?, llm_model = ? WHERE id = ?",
