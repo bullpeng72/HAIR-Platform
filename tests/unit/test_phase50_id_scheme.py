@@ -91,19 +91,24 @@ def test_init_schema_assigns_codes_to_all_reference_rows():
     # 분석가"/"제안서 작성자"/"실적 보고서 작성자" 추가(제안서/실적서
     # 작성 파이프라인 신설)로 23 → 26, Tool "수치 데이터 분석기" 추가로
     # 11 → 12, Skill 3종(data-analysis-guide/proposal-writing-guide/
-    # performance-report-writing-guide) 추가로 48 → 51.
+    # performance-report-writing-guide) 추가로 48 → 51. 2026-11-17
+    # "딥리서치 skill과... 최신(1주일) 뉴스와 인사이트를 제공해 주는
+    # Skill 추가"로 Tool "실시간 뉴스 검색(Tavily, 최근 7일)" 1개
+    # 추가(12 → 13), Skill 2종(딥리서치/AI업계동향브리핑) 추가(51 → 53).
+    # 2026-11-17 "주어진 업무를 잘 처리할 수 있는 skill을 생성하는
+    # skill을 추가해줘"로 Skill "스킬생성가이드" 1개 추가(53 → 54).
     assert len(agent_codes) == 26
     assert all(c is not None for c in agent_codes)
     assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 26종 전원 레퍼런스
     assert len(set(agent_codes)) == 26  # 전부 유일
 
-    assert len(tool_codes) == 12
+    assert len(tool_codes) == 13
     assert all(c is not None for c in tool_codes)
-    assert len(set(tool_codes)) == 12
+    assert len(set(tool_codes)) == 13
 
-    assert len(skill_codes) == 51
+    assert len(skill_codes) == 54
     assert all(c is not None for c in skill_codes)
-    assert len(set(skill_codes)) == 51
+    assert len(set(skill_codes)) == 54
 
 
 def test_init_schema_tool_codes_reflect_kind():
@@ -177,7 +182,7 @@ def test_reset_and_reassign_codes_wipes_then_reassigns_deterministically():
 
     counts = id_scheme.reset_and_reassign_codes(conn)
 
-    assert counts == {"agent_pool": 26, "tool_pool": 12, "skill_pool": 51}
+    assert counts == {"agent_pool": 26, "tool_pool": 13, "skill_pool": 54}
     after = {
         table: [
             r["code"]

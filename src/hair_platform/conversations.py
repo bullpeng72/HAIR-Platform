@@ -682,6 +682,122 @@ def delete_message(
     conn.commit()
 
 
+def edit_message(
+    conn: sqlite3.Connection,
+    conversation_id: int,
+    message_id: int,
+    actor_id: int,
+    content: str,
+) -> dict:
+    """`PATCH /api/conversations/{conversation_id}/messages/{message_id}` —
+    사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된 HTML을
+    수정할 수 있는 기능 추가 제안") 1단계 — 프레젠테이션 자료 작성자 같은
+    Agent가 만든 HTML에 색 대비 등의 버그가 있을 때, 사람이 소스를 직접
+    고쳐 저장할 수 있게 한다. 권한은 `delete_message()`와 완전히
+    동일하게 둔다(같은 메시지를 지울 수 있는 사람이면 고칠 수도 있어야
+    자연스럽다 — 본인이 보낸 사람 메시지는 본인이, 그 외(AI/Agent
+    응답 포함)는 대화 생성자가)."""
+    conv = get_conversation(conn, conversation_id)
+    if conv is None:
+        raise ValueError("conversation_not_found")
+    if not is_participant(conn, conversation_id, actor_id):
+        raise PermissionError("not_a_participant")
+    message = conn.execute(
+        "SELECT * FROM conversation_messages WHERE id = ? AND conversation_id = ?",
+        (message_id, conversation_id),
+    ).fetchone()
+    if message is None:
+        raise ValueError("message_not_found")
+    is_own_human_message = (
+        message["author_type"] == "human" and message["author_id"] == actor_id
+    )
+    is_creator = conv["created_by"] == actor_id
+    if not (is_own_human_message or is_creator):
+        raise PermissionError("not_allowed_to_edit_this_message")
+
+    conn.execute(
+        "UPDATE conversation_messages SET content = ? WHERE id = ?",
+        (content, message_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "conversation_message_edited",
+        "conversation_messages",
+        message_id,
+        before={"content_length": len(message["content"])},
+        after={"content_length": len(content)},
+    )
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM conversation_messages WHERE id = ?", (message_id,)
+    ).fetchone()
+    result = dict(updated)
+    if result.get("gate_scores"):
+        result["gate_scores"] = json.loads(result["gate_scores"])
+    return result
+
+
+def suggest_message_fix(
+    conn: sqlite3.Connection,
+    conversation_id: int,
+    message_id: int,
+    actor_id: int,
+    feedback: str,
+    provider: str | None,
+    model: str | None,
+) -> str:
+    """`POST /api/conversations/{id}/messages/{id}/suggest-fix` —
+    사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된 HTML을
+    수정할 수 있는 기능" 3단계) — 색 대비 버그 등을 손으로 고치는 대신
+    "이 부분 색이 안 보여" 같은 자연어 피드백을 주면 LLM이 수정안을
+    만든다. `deliverables.suggest_content_fix()`와 같은 설계 — 결과는
+    저장하지 않는다(사람이 검토 후 기존 `edit_message()`/`PATCH`로
+    직접 커밋). 권한은 그 저장 권한(`edit_message()`)과 완전히 동일
+    하게 둔다."""
+    conv = get_conversation(conn, conversation_id)
+    if conv is None:
+        raise ValueError("conversation_not_found")
+    if not is_participant(conn, conversation_id, actor_id):
+        raise PermissionError("not_a_participant")
+    message = conn.execute(
+        "SELECT * FROM conversation_messages WHERE id = ? AND conversation_id = ?",
+        (message_id, conversation_id),
+    ).fetchone()
+    if message is None:
+        raise ValueError("message_not_found")
+    is_own_human_message = (
+        message["author_type"] == "human" and message["author_id"] == actor_id
+    )
+    is_creator = conv["created_by"] == actor_id
+    if not (is_own_human_message or is_creator):
+        raise PermissionError("not_allowed_to_edit_this_message")
+    resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
+    # 사용자 요청(2026-11-17, "모든 대화 결과물에서도 수정이 가능하도록")
+    # 전까지는 "수정"/"AI에게 요청" 버튼 자체가 완전한 HTML 문서로 감지된
+    # 메시지에만 떴으므로 여기서도 항상 html 지시문을 썼다 — 이제는 일반
+    # 텍스트/마크다운 메시지도 이 버튼을 쓸 수 있으므로, 고정하지 않고
+    # `_looks_like_full_html_document()`(대화 메시지엔 content_type
+    # 컬럼이 없어, 프런트의 `_looksLikeFullHtmlDocument()`와 동일한
+    # 판정을 한 번 더 거친다)로 매번 판정한다 — 일반 텍스트 메시지에
+    # "완전한 HTML 문서로 쓰라"는 엉뚱한 지시가 섞이는 걸 막는다.
+    content_type = "html" if _looks_like_full_html_document(message["content"]) else "text"
+    type_instruction = deliverables._CONTENT_TYPE_INSTRUCTIONS.get(content_type, "")
+    system = (
+        "주어진 기존 메시지 내용을 사용자 피드백에 따라 수정하는 역할입니다. "
+        "피드백과 관련된 부분만 고치고, 나머지 내용과 구조는 그대로 "
+        "보존하세요(요청받지 않은 부분까지 다시 쓰지 마세요). 전체 "
+        "내용을 처음부터 끝까지 완성된 형태로 다시 출력하세요(일부만 "
+        "보여주거나 '...' 같은 생략 표시를 쓰지 마세요)."
+        + (("\n\n" + type_instruction) if type_instruction else "")
+    )
+    prompt = (
+        f"기존 메시지 내용:\n{message['content']}\n\n"
+        f"사용자 피드백(이 부분을 고쳐주세요): {feedback}"
+    )
+    return llm.call_llm(resolved_provider, resolved_model, system, prompt)
+
+
 def _detect_mentions(
     conn: sqlite3.Connection,
     conversation_id: int,
@@ -1537,6 +1653,30 @@ def ensure_task_for_conversation(
     return task_id
 
 
+_OUTER_FENCE_CLOSED_RE = re.compile(r"^```[a-zA-Z0-9]*\n(.*?)\n?```\s*$", re.DOTALL)
+_OUTER_FENCE_OPEN_RE = re.compile(r"^```[a-zA-Z0-9]*\n(.*)$", re.DOTALL)
+_FULL_HTML_DOC_RE = re.compile(r"^<!DOCTYPE\s+html|^<html[\s>]", re.IGNORECASE)
+
+
+def _looks_like_full_html_document(raw: str) -> bool:
+    """`webui.py`의 `_looksLikeFullHtmlDocument()`(대화 화면이 메시지를
+    HTML로 보여줄지 판단하는 바로 그 함수)와 동일한 로직의 Python
+    버전 — 대화창에서는 이미 완전한 HTML 문서로 보이던 메시지가,
+    갤러리로 보내는 순간엔 이 판정이 없어 평문으로 저장되던 버그
+    (2026-11-16, 사용자 보고 "갤러리 미리보기에서 HTML 소스로 보임")
+    수정에 쓴다. 코드 중복이지만 JS/Python 경계라 공유 함수로 뺄 수
+    없다(기존 `_CONTENT_TYPE_INSTRUCTIONS`의 deliverables.py/
+    crew_runtime.py 중복과 같은 성격)."""
+    stripped = (raw or "").strip()
+    closed = _OUTER_FENCE_CLOSED_RE.match(stripped)
+    if closed:
+        unwrapped = closed.group(1)
+    else:
+        open_only = _OUTER_FENCE_OPEN_RE.match(stripped)
+        unwrapped = open_only.group(1) if open_only else stripped
+    return bool(_FULL_HTML_DOC_RE.match(unwrapped.strip()))
+
+
 def save_message_as_deliverable(
     conn: sqlite3.Connection, conversation_id: int, message_id: int, actor_id: int
 ) -> int:
@@ -1546,7 +1686,13 @@ def save_message_as_deliverable(
     사람이 "이건 남길 만하다"고 판단한 메시지 하나를 명시적으로
     결과물로 승격한다 — 사람 메시지든 Agent 응답이든 동일하게
     동작한다(원 메시지의 author_type/author_id를 그대로 물려받아
-    "누가/무엇이 실제로 작성했는지"가 결과물에도 정확히 남는다)."""
+    "누가/무엇이 실제로 작성했는지"가 결과물에도 정확히 남는다).
+
+    `content_type`(2026-11-16 수정) — 대화 메시지는 content_type
+    컬럼이 없어 화면이 `_looksLikeFullHtmlDocument()`로 매번 스스로
+    판단하는데, 이 함수는 그 판정 없이 항상 `'text'`로 저장해 갤러리
+    에서는 완전한 HTML 문서도 펜스가 그대로 보이는 평문으로 보였다
+    (실측 확인). 저장 시점에 한 번 판정해 고정한다."""
     message = conn.execute(
         "SELECT * FROM conversation_messages WHERE id = ? AND conversation_id = ?",
         (message_id, conversation_id),
@@ -1557,10 +1703,11 @@ def save_message_as_deliverable(
     task_id = ensure_task_for_conversation(
         conn, conversation_id, actor_id, origin_note="메시지를 결과물로 저장해 자동 생성됨."
     )
+    content_type = "html" if _looks_like_full_html_document(message["content"]) else "text"
     cur = conn.execute(
         "INSERT INTO deliverables (task_id, author_type, author_id, content, "
-        "content_type, status) VALUES (?, ?, ?, ?, 'text', 'approved')",
-        (task_id, message["author_type"], message["author_id"], message["content"]),
+        "content_type, status) VALUES (?, ?, ?, ?, ?, 'approved')",
+        (task_id, message["author_type"], message["author_id"], message["content"], content_type),
     )
     deliverable_id = cur.lastrowid
     assert deliverable_id is not None
@@ -1971,9 +2118,31 @@ def run_default_ai_job(
                 conn, skills_for_augmentation, query
             )
             if retrieved_context:
+                # 사용자 보고(2026-11-17, "실시간웹검색 스킬로 대화를
+                # 했지만 '이번 응답은 실제 실시간 웹 검색 도구 호출이
+                # 가능하지 않은 환경에서'와 같은 메시지가 반복 출력")
+                # — 실측으로 원인 확인: `skill_grounded_system_prompt()`
+                # 가 `NO_TOOL_LOOP_GUARD`("이 실행 경로에는 실제로 호출
+                # 가능한 도구가 연결되어 있지 않습니다... 그 도구를
+                # 실제로 호출할 수 없습니다")를 **무조건** 먼저 넣어둔
+                # 뒤, 바로 다음에 실제 검색 결과를 붙이고 있었다 — 같은
+                # 프롬프트 안에 "도구를 못 쓴다"와 "여기 실제 검색
+                # 결과가 있다"가 동시에 있어 모델이 그 모순을 해소하려고
+                # 매번 "도구 호출이 불가능한 환경"이라는 디스클레이머를
+                # 답변에 그대로 베껴 넣었다(실제로는 서버가 이미 검색을
+                # 끝내고 결과를 줬으므로 전혀 사실이 아닌 디스클레이머).
+                # `NO_TOOL_LOOP_GUARD`는 일반 사례(mcp_remote/mcp_stdio
+                # 등 정말 아무 결과도 못 가져오는 스킬)엔 여전히 맞는
+                # 말이라 그대로 두고, 검색이 실제로 성공한 이 경우에만
+                # 바로 뒤에 정정 지시를 덧붙여 모순을 없앤다.
                 system = (
                     system
-                    + "\n\n[실시간 조회 결과 — 아래 내용을 근거로 답변하세요]\n"
+                    + "\n\n[실시간 조회 결과 — 아래 내용을 근거로 답변하세요. "
+                    "위에서 '도구를 호출할 수 없다'고 안내했지만, 이 검색은 "
+                    "시스템이 이미 대신 수행해 그 결과를 아래에 그대로 준 것입니다 "
+                    "— 당신이 도구를 직접 호출한 게 아니라는 이유로 '실시간 검색이 "
+                    "불가능한 환경'이라는 식의 변명이나 디스클레이머를 답변에 넣지 "
+                    "말고, 아래 내용을 실제 조사한 사실처럼 그대로 활용해 답하세요.]\n"
                     + retrieved_context
                 )
         # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성가이드" 스킬로

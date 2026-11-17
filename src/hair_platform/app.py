@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import urllib.parse
 from functools import partial
 
 from dotenv import load_dotenv
@@ -39,7 +40,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from hair_platform import (
@@ -71,6 +72,7 @@ from hair_platform import (
     pool,
     pool_registry,
     retention,
+    skill_markdown,
     teams,
     vectorstore,
     webui,
@@ -100,8 +102,10 @@ from hair_platform.models import (
     AssistRequest,
     BriefSubmission,
     ConsentRequest,
+    ContentFixSuggestRequest,
     ConversationAutoReplyUpdate,
     ConversationCreate,
+    ConversationMessageContentUpdate,
     ConversationMessageCreate,
     ConversationModelUpdate,
     ConversationParticipantInvite,
@@ -109,6 +113,7 @@ from hair_platform.models import (
     CrewRunRequest,
     DelegateAgentRequest,
     DeliverableCommentCreate,
+    DeliverableContentUpdate,
     DeliverableCreate,
     EmbeddingConfigUpdate,
     GenerateRequest,
@@ -130,10 +135,12 @@ from hair_platform.models import (
     PipelineTemplateCreate,
     PlatformLlmConfigUpdate,
     RagSearchConfigUpdate,
+    SkillMarkdownImport,
     SkillPoolCreate,
     SkillPoolUpdate,
     TaskDecomposition,
     TaskDependencyCreate,
+    TaskHumanJudgmentUpdate,
     TaskNotesUpdate,
     TaskParticipantInvite,
     TaskPriorityUpdate,
@@ -1311,6 +1318,25 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=404, detail="할 일을 찾을 수 없습니다"
             ) from None
 
+    @app.patch("/api/tasks/{task_id}/human-judgment")
+    def update_task_human_judgment_endpoint(
+        task_id: int,
+        payload: TaskHumanJudgmentUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-11-17, "Human Agency Scale... 인간 고유
+        능력을 보호하는 Task는 Gate 점수와 무관하게 항상 사람에게
+        올라가야 한다" → "구현 시작") — `retry-budget`과 같은 이유로
+        admin/manager 전용 거버넌스 설정."""
+        try:
+            return deliverables.update_task_human_judgment(
+                conn, task_id, user["id"], payload.requires_human_judgment
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="할 일을 찾을 수 없습니다"
+            ) from None
+
     @app.post("/api/tasks/{task_id}/dependencies", status_code=201)
     def add_task_dependency_endpoint(
         task_id: int,
@@ -1855,6 +1881,84 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=detail) from None
         return {"chunk_id": chunk_id}
 
+    @app.patch("/api/conversations/{conversation_id}/messages/{message_id}")
+    def edit_conversation_message_endpoint(
+        conversation_id: int,
+        message_id: int,
+        payload: ConversationMessageContentUpdate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된
+        HTML을 수정할 수 있는 기능") 1단계 — Agent가 만든 발표자료
+        HTML에 색 대비 등의 버그가 있을 때 소스를 직접 고쳐 저장한다.
+        권한은 삭제와 동일(`conversations.edit_message()` 참고)."""
+        try:
+            updated = conversations.edit_message(
+                conn, conversation_id, message_id, user["id"], payload.content
+            )
+        except ValueError as exc:
+            detail = (
+                "대화를 찾을 수 없습니다"
+                if str(exc) == "conversation_not_found"
+                else "메시지를 찾을 수 없습니다"
+            )
+            raise HTTPException(status_code=404, detail=detail) from None
+        except PermissionError as exc:
+            detail = (
+                "이 대화의 참가자만 메시지를 고칠 수 있습니다"
+                if str(exc) == "not_a_participant"
+                else "본인이 보낸 메시지이거나 대화를 만든 사람만 고칠 수 있습니다"
+            )
+            raise HTTPException(status_code=403, detail=detail) from None
+        return updated
+
+    @app.post("/api/conversations/{conversation_id}/messages/{message_id}/suggest-fix")
+    def suggest_message_fix_endpoint(
+        conversation_id: int,
+        message_id: int,
+        payload: ContentFixSuggestRequest,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된
+        HTML을 수정할 수 있는 기능") 3단계 — "이 부분 색이 안 보여" 같은
+        자연어 피드백으로 LLM 수정안을 받는다. 결과는 저장하지 않는다
+        (`assist_task()`와 같은 설계 — 검토 후 위 PATCH로 직접 커밋).
+        실제 LLM API를 호출하므로 비용이 발생한다. 팀원/뷰어는
+        provider/model을 직접 선택할 수 없다(RBAC 결정, 비용 통제 —
+        `assist_task()`와 동일)."""
+        if user["role"] not in ("admin", "manager") and (
+            payload.provider or payload.model
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="팀원은 provider/model을 직접 선택할 수 없습니다",
+            )
+        try:
+            suggestion = conversations.suggest_message_fix(
+                conn,
+                conversation_id,
+                message_id,
+                user["id"],
+                payload.feedback,
+                payload.provider,
+                payload.model,
+            )
+        except ValueError as exc:
+            detail = (
+                "대화를 찾을 수 없습니다"
+                if str(exc) == "conversation_not_found"
+                else "메시지를 찾을 수 없습니다"
+            )
+            raise HTTPException(status_code=404, detail=detail) from None
+        except PermissionError as exc:
+            detail = (
+                "이 대화의 참가자만 수정을 요청할 수 있습니다"
+                if str(exc) == "not_a_participant"
+                else "본인이 보낸 메시지이거나 대화를 만든 사람만 수정을 요청할 수 있습니다"
+            )
+            raise HTTPException(status_code=403, detail=detail) from None
+        return {"suggestion": suggestion}
+
     @app.delete("/api/conversations/{conversation_id}/messages/{message_id}")
     def delete_conversation_message_endpoint(
         conversation_id: int,
@@ -2101,6 +2205,70 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
             )
         return item
+
+    @app.patch("/api/deliverables/{deliverable_id}")
+    def update_deliverable_content_endpoint(
+        deliverable_id: int,
+        payload: DeliverableContentUpdate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된
+        HTML을 수정할 수 있는 기능") 1단계 — Agent가 만든 HTML 산출물에
+        색 대비 등의 버그가 있을 때 소스를 직접 고쳐 저장한다. 권한은
+        삭제와 동일(`deliverables.update_deliverable_content()` 참고)."""
+        try:
+            updated = deliverables.update_deliverable_content(
+                conn, deliverable_id, user["id"], user["role"], payload.content
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="결과물을 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 결과물을 수정할 권한이 없습니다"
+            ) from None
+        return updated
+
+    @app.post("/api/deliverables/{deliverable_id}/suggest-fix")
+    def suggest_deliverable_fix_endpoint(
+        deliverable_id: int,
+        payload: ContentFixSuggestRequest,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된
+        HTML을 수정할 수 있는 기능") 3단계 — "이 부분 색이 안 보여" 같은
+        자연어 피드백으로 LLM 수정안을 받는다. 결과는 저장하지 않는다
+        (`assist_task()`와 같은 설계 — 검토 후 위 PATCH로 직접 커밋).
+        실제 LLM API를 호출하므로 비용이 발생한다. 팀원/뷰어는
+        provider/model을 직접 선택할 수 없다(RBAC 결정, 비용 통제 —
+        `assist_task()`와 동일)."""
+        if user["role"] not in ("admin", "manager") and (
+            payload.provider or payload.model
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="팀원은 provider/model을 직접 선택할 수 없습니다",
+            )
+        try:
+            suggestion = deliverables.suggest_content_fix(
+                conn,
+                deliverable_id,
+                user["id"],
+                user["role"],
+                payload.feedback,
+                payload.provider,
+                payload.model,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="결과물을 찾을 수 없습니다"
+            ) from None
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="이 결과물의 수정을 요청할 권한이 없습니다"
+            ) from None
+        return {"suggestion": suggestion}
 
     @app.delete("/api/deliverables/{deliverable_id}")
     def delete_deliverable_endpoint(
@@ -2691,6 +2859,39 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
         return pipeline_runtime.list_pipeline_runs_for_task(conn, task_id)
 
+    @app.post("/api/pipeline-runs/{run_id}/cancel")
+    def cancel_pipeline_run_endpoint(
+        run_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """사용자 요청(2026-11-17, "Human Agency Scale... 코파일럿...
+        실행 중단 요청" → "구현 시작") — 권한은 위 파이프라인 실행
+        이력 조회와 동일(참가자 또는 admin/manager)."""
+        run = conn.execute(
+            "SELECT task_id FROM pipeline_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if run is None:
+            raise HTTPException(status_code=404, detail="실행을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(
+                conn, run["task_id"], user["id"]
+            )
+            is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
+            )
+        try:
+            return pipeline_runtime.request_pipeline_run_cancel(
+                conn, user["id"], run_id
+            )
+        except ValueError as exc:
+            if str(exc) == "pipeline_run_already_finished":
+                raise HTTPException(
+                    status_code=409, detail="이미 끝난 실행입니다"
+                ) from exc
+            raise HTTPException(status_code=404, detail="실행을 찾을 수 없습니다") from exc
+
     @app.get("/api/tasks/{task_id}/crew-runs")
     def list_task_crew_runs(
         task_id: int, user: sqlite3.Row = Depends(get_current_user)
@@ -3269,6 +3470,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 payload.augmentation_mode,
                 payload.show_in_conversation,
                 payload.category,
+                payload.output_format,
+                payload.examples,
+                payload.constraints,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3297,6 +3501,57 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     status_code=404, detail="스킬을 찾을 수 없습니다"
                 ) from exc
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": skill_id}
+
+    @app.get("/api/skill-pool/{skill_id}/export")
+    def export_skill_pool_entry(
+        skill_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-11-17, "마크다운 규격으로 export") — 이
+        스킬을 frontmatter + 섹션 규격 마크다운 원문으로 내려준다."""
+        skills = pool_registry.list_skills(conn)
+        skill = next((s for s in skills if s["id"] == skill_id), None)
+        if skill is None:
+            raise HTTPException(status_code=404, detail="스킬을 찾을 수 없습니다")
+        markdown_text = skill_markdown.export_skill_markdown(conn, skill)
+        # 한글 스킬 이름은 Content-Disposition 헤더에 latin-1로 인코딩할
+        # 수 없으므로(실측: UnicodeEncodeError) RFC 5987 filename*로
+        # UTF-8 퍼센트 인코딩한다 — filename(ASCII 폴백)은 코드로.
+        encoded_name = urllib.parse.quote(f"{skill['name']}.md")
+        return PlainTextResponse(
+            markdown_text,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{skill["code"]}.md"; '
+                    f"filename*=UTF-8''{encoded_name}"
+                )
+            },
+        )
+
+    @app.post("/api/skill-pool/import", status_code=201)
+    def import_skill_pool_entry(
+        payload: SkillMarkdownImport,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """사용자 요청(2026-11-17, "외부에서 마크다운 포멧의 Skill을
+        import") — `export_skill_pool_entry()`가 내려주는 것과 같은
+        규격의 마크다운을 받아 새 Skill Pool 항목으로 등록한다."""
+        try:
+            fields = skill_markdown.parse_skill_markdown(conn, payload.markdown)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"마크다운 형식을 해석할 수 없습니다: {exc}"
+            ) from exc
+        try:
+            skill_id = pool_registry.create_skill(conn, user["id"], **fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"이미 있는 이름입니다: {fields['name']}"
+            ) from exc
         return {"id": skill_id}
 
     @app.delete("/api/skill-pool/{skill_id}")

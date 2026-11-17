@@ -36,18 +36,26 @@ def test_category_column_backfilled_correctly_on_fresh_db():
     assert skill_categories == {"sw_dev", "general"}
     sw_dev_count = sum(1 for s in skills if s["category"] == "sw_dev")
     general_count = sum(1 for s in skills if s["category"] == "general")
-    assert sw_dev_count + general_count == len(skills) == 51
+    assert sw_dev_count + general_count == len(skills) == 54
     # 2026-11-11 "SKL-NONE-023(승인루프)은 개발업무 Skill로 변경" —
-    # 34 → 35, 17 → 16.
-    assert sw_dev_count == 35
-    assert general_count == 16
+    # 34 → 35, 17 → 16. 2026-11-17 "딥리서치 skill과... 최신(1주일)
+    # 뉴스와 인사이트를 제공해 주는 Skill 추가"로 Skill 2종이 전부
+    # category 기본값 'general'로 추가(16 → 18, sw_dev는 그대로 35).
+    # 같은 날 "주어진 업무를 잘 처리할 수 있는 skill을 생성하는 skill을
+    # 추가해줘"로 "스킬생성가이드"가 category='general'로 추가(18 → 19).
+    # 2026-11-18 "SKL-NONE-021 스킬은 개발업무로 분류해줘"로
+    # "문서작성가이드"가 general → sw_dev로 재분류(35 → 36, 19 → 18).
+    assert sw_dev_count == 36
+    assert general_count == 18
 
     tools = pool_registry.list_tools(conn)
     sw_dev_tool_count = sum(1 for t in tools if t["category"] == "sw_dev")
     general_tool_count = sum(1 for t in tools if t["category"] == "general")
-    assert sw_dev_tool_count + general_tool_count == len(tools) == 12
+    assert sw_dev_tool_count + general_tool_count == len(tools) == 13
     assert sw_dev_tool_count == 4
-    assert general_tool_count == 8
+    # 2026-11-17 위와 같은 사용자 요청으로 Tool "실시간 뉴스 검색
+    # (Tavily, 최근 7일)"이 category 기본값 'general'로 추가(8 → 9).
+    assert general_tool_count == 9
 
 
 @pytest.mark.parametrize(
@@ -60,6 +68,7 @@ def test_category_column_backfilled_correctly_on_fresh_db():
         "코드리뷰체크리스트",
         "아키텍처설계가이드",
         "승인루프",
+        "문서작성가이드",
     ],
 )
 def test_known_dev_skills_classified_as_sw_dev(name):
@@ -77,7 +86,6 @@ def test_known_dev_skills_classified_as_sw_dev(name):
         "관계조회",
         "실시간웹검색",
         "커버리지체크",
-        "문서작성가이드",
         "전략분석프레임워크",
         "데이터분석가이드",
         "제안서작성가이드",
@@ -85,11 +93,11 @@ def test_known_dev_skills_classified_as_sw_dev(name):
     ],
 )
 def test_known_general_skills_classified_as_general(name):
-    """커버리지체크/문서작성가이드는 개발 파이프라인에서 유래했지만
-    내용 자체가 도메인 무관이고, 실제로 기획서/C-level 보고서 작성자가
-    이미 재사용 중이라 'general'이어야 한다(Agent가 아니라 스킬 내용
-    기준 분류라는 설계 확인). 승인루프는 사용자 재검토(2026-11-11,
-    "SKL-NONE-023은 개발업무 Skill로 변경") 후 sw_dev로 옮겨 이
+    """커버리지체크는 개발 파이프라인에서 유래했지만 내용 자체가 도메인
+    무관이라 'general'이어야 한다(Agent가 아니라 스킬 내용 기준 분류라는
+    설계 확인). 승인루프는 사용자 재검토(2026-11-11, "SKL-NONE-023은
+    개발업무 Skill로 변경") 후, 문서작성가이드는 사용자 요청(2026-11-18,
+    "SKL-NONE-021 스킬은 개발업무로 분류해줘") 후 각각 sw_dev로 옮겨 이
     목록에서 제외됐다 — `test_known_dev_skills_classified_as_sw_dev`
     참고."""
     conn = db.get_connection(":memory:")

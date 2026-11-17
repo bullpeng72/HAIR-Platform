@@ -133,10 +133,28 @@ def retrieve_context(
             hits = vectorstore.search(conn, query)
         except Exception:  # noqa: BLE001 — 임베딩 API 실패를 보강 실패로만 취급
             hits = []
-        if hits:
-            sections.append(
-                "참고할 과거 산출물:\n" + "\n".join(f"- {h['text']}" for h in hits)
-            )
+        # 사용자 요청(2026-11-17, "Human Agency Scale... ReAct 루프가
+        # 없는 단발 경로는 검색 결과가 부족해도 다시 찾아보지 못한다는
+        # 한계를 최소한 투명하게라도 드러내야 한다" → "구현 시작") —
+        # 지금까지 VectorDB만 결과가 0건이면 이 섹션 자체를 조용히
+        # 생략했다(graphdb/Tavily는 이미 "결과를 찾지 못했습니다"류
+        # 문구를 항상 돌려주는데 VectorDB만 비대칭이었다 — 아래 두
+        # websearch 함수 docstring의 "실패≠0건" 원칙과 같은 이유:
+        # 검색을 **시도했다는 사실 자체**를 LLM에게 숨기면, "검색해봤지만
+        # 없었다"와 "애초에 검색할 필요가 없었다"를 LLM이 구분 못 해
+        # 답을 지어낼 위험이 커진다).
+        # 사용자 요청(2026-11-17, "웹검색, 딥리서치, RAG 등 조사 관련
+        # skill의 경우 출처를 반드시 명시하도록 해줘") — 지금까지
+        # 청크 텍스트만 넘기고 `h['id']`를 버려서, "출처를 밝히라"고
+        # 스킬 제약사항에 적어도 LLM이 인용할 구체적인 식별자 자체가
+        # 없었다(지어낼 수밖에 없는 구조). 청크 ID를 같이 노출해 실제
+        # 인용이 가능하게 한다.
+        sections.append(
+            "참고할 과거 산출물(각 항목 뒤 [청크#번호]가 출처 식별자):\n"
+            + "\n".join(f"- {h['text']} [청크#{h['id']}]" for h in hits)
+            if hits
+            else "VectorDB에서 관련된 과거 산출물을 찾지 못했습니다."
+        )
     if "graphdb_query" in native_ids:
         sections.append(graphquery.context_for_prompt(conn))
     if "tavily_search" in native_ids:
@@ -147,6 +165,12 @@ def retrieve_context(
         # context_for_prompt()와 동일) 여기서 별도 예외 처리가 필요
         # 없다.
         sections.append(websearch.tavily_context_for_prompt(query))
+    if "tavily_news_search" in native_ids:
+        # 사용자 요청(2026-11-17, "딥리서치 skill과... 최신(1주일) 뉴스와
+        # 인사이트를 제공해 주는 Skill 추가") — 도구 호출 루프가 없는
+        # 이 경로(대화 @멘션·스킬 드롭다운)에서도 "최근 N일 뉴스" 스킬이
+        # 동작하도록 같은 방식으로 정적 주입한다.
+        sections.append(websearch.tavily_news_context_for_prompt(query))
     if not sections:
         return None
     return "\n\n".join(sections)

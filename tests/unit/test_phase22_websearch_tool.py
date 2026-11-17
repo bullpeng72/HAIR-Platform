@@ -281,3 +281,78 @@ def test_gc199_as_tavily_crewai_tool_has_ascii_name_and_wraps_context_for_prompt
         result = tool.func("질문 내용")
     ctx_mock.assert_called_once_with("질문 내용", top_k=2)
     assert result == "검색 결과 텍스트"
+
+
+# ---------- Phase 76 — 최근 뉴스 검색(사용자 요청, 2026-11-17, "딥리서치
+# skill과, AI 빅테크와 AI기반 개발/일반 업무 혁신 관련 최신(1주일)
+# 뉴스와 인사이트를 제공해 주는 Skill을 추가해줘") ----------
+
+
+def test_tavily_news_context_for_prompt_requests_news_topic_and_days(monkeypatch):
+    """일반 검색과 달리 `topic="news"`+`days`를 실제로 Tavily에 보내야
+    "최근 N일"이 보장된다 — 관련도 순 일반 검색은 최신성을 보장 못
+    한다는 게 이 기능을 따로 만든 이유 그 자체다."""
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    payload = {
+        "answer": "이번 주 OpenAI와 Anthropic이 새 모델을 발표했습니다.",
+        "results": [
+            {
+                "title": "OpenAI, 신모델 발표",
+                "content": "성능이 크게 개선됐다",
+                "url": "https://news.example/openai",
+                "published_date": "2026-11-15",
+            },
+        ],
+    }
+    with patch("httpx.post", return_value=_mock_response(payload)) as post_mock:
+        text = websearch.tavily_news_context_for_prompt(
+            "AI 빅테크 최신 동향", top_k=5, days=7
+        )
+
+    sent_json = post_mock.call_args.kwargs["json"]
+    assert sent_json["topic"] == "news"
+    assert sent_json["days"] == 7
+    assert "최근 7일 뉴스 검색 결과(Tavily)" in text
+    assert "OpenAI, 신모델 발표: 성능이 크게 개선됐다" in text
+    assert "요약: 이번 주 OpenAI와 Anthropic이 새 모델을 발표했습니다." in text
+
+
+def test_tavily_context_for_prompt_does_not_send_days(monkeypatch):
+    """회귀 가드 — 일반 검색(`tavily_context_for_prompt()`)은 기존처럼
+    `days` 없이 `topic="general"`만 보내야 한다(새 뉴스 전용 경로가
+    기존 일반 검색 동작을 바꾸면 안 된다)."""
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    with patch(
+        "httpx.post", return_value=_mock_response({"results": []})
+    ) as post_mock:
+        websearch.tavily_context_for_prompt("아무 질문")
+    sent_json = post_mock.call_args.kwargs["json"]
+    assert sent_json["topic"] == "general"
+    assert "days" not in sent_json
+
+
+def test_tavily_news_context_for_prompt_distinguishes_failure_from_no_results(
+    monkeypatch,
+):
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    import httpx
+
+    with patch("httpx.post", side_effect=httpx.ConnectError("no network")):
+        text = websearch.tavily_news_context_for_prompt("질문")
+    assert "검색 실패" in text
+
+    with patch("httpx.post", return_value=_mock_response({"results": []})):
+        text = websearch.tavily_news_context_for_prompt("질문", days=7)
+    assert "최근 7일 안에 관련된 뉴스를 찾지 못했습니다." == text
+
+
+def test_as_tavily_news_crewai_tool_has_ascii_name_and_wraps_context_for_prompt():
+    tool = websearch.as_tavily_news_crewai_tool(conn=None, top_k=5, days=7)
+    assert tool.name == "recent_news_search"
+    with patch(
+        "hair_platform.websearch.tavily_news_context_for_prompt",
+        return_value="뉴스 결과 텍스트",
+    ) as ctx_mock:
+        result = tool.func("AI 업계 동향")
+    ctx_mock.assert_called_once_with("AI 업계 동향", top_k=5, days=7)
+    assert result == "뉴스 결과 텍스트"

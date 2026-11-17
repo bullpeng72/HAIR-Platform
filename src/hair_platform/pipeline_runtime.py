@@ -568,6 +568,44 @@ def start_pipeline_run(
     return run_id
 
 
+def request_pipeline_run_cancel(
+    conn: sqlite3.Connection, actor_id: int, run_id: int
+) -> dict:
+    """사용자 요청(2026-11-17, "Human Agency Scale... 코파일럿... 실행
+    중단 요청" → "구현 시작"). `status='running'`이면 지금 당장 멈추지
+    않고 `cancel_requested` 플래그만 세워 `_execute_stage_attempt()`가
+    다음 안전한 지점(다음 시도/다음 단계 시작 직전)에서 알아서
+    멈추게 한다. `status='paused_for_approval'`이면 그 사이에 실행
+    중인 배경 작업이 아예 없으므로(사람 결재를 기다리며 그냥 멈춰
+    있음) 즉시 'cancelled'로 전이한다. 이미 끝난 실행(`completed`/
+    `failed`/`cancelled`)은 취소할 대상이 없어 거부한다."""
+    run = conn.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+    if run is None:
+        raise ValueError("pipeline_run_not_found")
+    if run["status"] == "running":
+        conn.execute(
+            "UPDATE pipeline_runs SET cancel_requested = 1 WHERE id = ?", (run_id,)
+        )
+        audit.record(
+            conn, actor_id, "pipeline_run_cancel_requested", "pipeline_runs", run_id
+        )
+    elif run["status"] == "paused_for_approval":
+        conn.execute(
+            "UPDATE pipeline_runs SET status = 'cancelled', finished_at = datetime('now') "
+            "WHERE id = ?",
+            (run_id,),
+        )
+        audit.record(
+            conn, actor_id, "pipeline_run_cancelled", "pipeline_runs", run_id
+        )
+    else:
+        raise ValueError("pipeline_run_already_finished")
+    conn.commit()
+    run = conn.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+    assert run is not None
+    return dict(run)
+
+
 def _gate_pass_ratio(gate_scores: dict) -> float:
     measured = [g for g in gate_scores.values() if not g.get("not_measured")]
     if not measured:
@@ -743,6 +781,25 @@ def _execute_stage_attempt(
 ) -> None:
     run_id = run["id"]
     stage_id = stage["id"]
+
+    # 사용자 요청(2026-11-17, "Human Agency Scale... 코파일럿... 실행
+    # 중단 요청 정도가 최소한의 첫 단계" → "구현 시작") — 비용이 드는
+    # Crew 호출을 시작하기 직전, 가장 안전한 지점에서만 멈춘다. 이미
+    # 진행 중인 Crew 호출 자체를 끊지는 않는다(그건 더 큰 작업).
+    if run["cancel_requested"]:
+        conn.execute(
+            "UPDATE pipeline_runs SET status = 'cancelled', finished_at = datetime('now') "
+            "WHERE id = ?",
+            (run_id,),
+        )
+        audit.record(
+            conn, actor_id, "pipeline_run_cancelled", "pipeline_runs", run_id
+        )
+        conn.commit()
+        if on_stage_resolved is not None:
+            on_stage_resolved()
+        return
+
     attempt = conn.execute(
         "SELECT COALESCE(MAX(attempt), 0) + 1 AS next_attempt FROM pipeline_run_stages "
         "WHERE pipeline_run_id = ? AND stage_id = ?",
@@ -1026,6 +1083,23 @@ def _execute_stage_attempt(
     if stage["mode"] == "parallel_delegated" and not gate_scores["delegation_check"]["passed"]:
         passed = False
 
+    # 사용자 요청(2026-11-17, "Human Agency Scale... 사람 고유 능력을
+    # 보호하는 Task는 Gate 점수와 무관하게 항상 사람에게 올라가야
+    # 한다" → "구현 시작") — 지금까지 사람 개입 여부는 전부 성과
+    # 기반(Gate 통과율)이었고, 업무 '종류'(협상·민감한 커뮤니케이션
+    # 등) 자체로 항상 사람이 봐야 하는 Task를 지정할 방법이 없었다.
+    # `stage["requires_human_approval"]`(파이프라인 템플릿이 고정하는
+    # 단계별 설정)과 OR로 묶어, Task 하나에만 이 플래그를 켜면 그
+    # Task가 어떤 파이프라인을 타든 모든 단계에서 Gate 통과 자체를
+    # 승인으로 치지 않게 만든다 — 템플릿을 따로 만들 필요 없음.
+    task_row = conn.execute(
+        "SELECT max_retry_budget, requires_human_judgment FROM tasks WHERE id = ?",
+        (run["task_id"],),
+    ).fetchone()
+    stage_requires_human = bool(
+        stage["requires_human_approval"] or task_row["requires_human_judgment"]
+    )
+
     cur = conn.execute(
         "INSERT INTO pipeline_run_stages (pipeline_run_id, stage_id, attempt, status, "
         "output, gate_scores, tcr) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1051,10 +1125,9 @@ def _execute_stage_attempt(
         # 적용)이 Task 전체 누적 재시도 수를 넘겼으면, 이 단계의
         # 재시도가 아직 남아 있어도(`attempt < max_retry`) 더 재시도
         # 하지 않고 바로 에스컬레이션한다 — 기존 "재시도 소진" 분기를
-        # 그대로 재사용(코드 중복 없음).
-        task_row = conn.execute(
-            "SELECT max_retry_budget FROM tasks WHERE id = ?", (run["task_id"],)
-        ).fetchone()
+        # 그대로 재사용(코드 중복 없음). `task_row`는 바로 위에서
+        # (이 함수 앞부분에서) 이미 한 번 조회해뒀다 — 재조회 없이
+        # 재사용한다.
         budget_exceeded = False
         if task_row["max_retry_budget"] is not None:
             retries_so_far = dashboard.task_retry_summary(conn, run["task_id"])[
@@ -1099,10 +1172,10 @@ def _execute_stage_attempt(
     # 통과 — 사람이 볼 수 있게 deliverables에 남긴다(요청대로 Task 협업
     # 워크스페이스 경로에 연결). 승인이 필요 없는 단계는 Gate 통과 자체가
     # 승인이라는 뜻이므로 'approved'로 바로 올린다(이게 "최소 HITL"의
-    # 핵심 — 결재함을 거치지 않고 즉시 다음 단계로 전진한다).
-    deliverable_status = (
-        "pending_review" if stage["requires_human_approval"] else "approved"
-    )
+    # 핵심 — 결재함을 거치지 않고 즉시 다음 단계로 전진한다). 단,
+    # Task 자체에 `requires_human_judgment`가 켜져 있으면 이 단계의
+    # 템플릿 설정과 무관하게 항상 사람에게 올린다(`stage_requires_human`).
+    deliverable_status = "pending_review" if stage_requires_human else "approved"
     cur = conn.execute(
         "INSERT INTO deliverables (task_id, author_type, author_id, content, "
         "content_type, status) VALUES (?, 'agent', ?, ?, ?, ?)",
@@ -1123,7 +1196,7 @@ def _execute_stage_attempt(
         (deliverable_id, run_stage_id),
     )
 
-    if stage["requires_human_approval"]:
+    if stage_requires_human:
         conn.execute(
             "UPDATE pipeline_runs SET status = 'paused_for_approval' WHERE id = ?",
             (run_id,),
@@ -1315,6 +1388,7 @@ def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[
                 "pipeline_template_name": template["name"] if template else None,
                 "status": run["status"],
                 "current_stage_seq": run["current_stage_seq"],
+                "cancel_requested": bool(run["cancel_requested"]),
                 "created_at": run["created_at"],
                 "finished_at": run["finished_at"],
                 "stage_results": [

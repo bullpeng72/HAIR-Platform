@@ -1039,6 +1039,30 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 아직 남아 있어도 Task 전체 예산을 넘으면 바로 에스컬레이션한다.
     _ensure_column(conn, "tasks", "max_retry_budget", "INTEGER")
 
+    # 사용자 요청(2026-11-17, "Human Agency Scale... 인간이 갖고
+    # 있어야 할 고유 능력을 보호하는 Task는 Gate 점수와 무관하게 항상
+    # 사람에게 올라가야 한다" → "구현 시작") — 기본값 0(false, 기존
+    # Task 전부 동작 무변화). 켜면 `pipeline_runtime._execute_stage_
+    # attempt()`가 그 Task가 타는 모든 파이프라인 단계에서, 그 단계
+    # 템플릿 자체의 `requires_human_approval` 설정과 무관하게 Gate
+    # 통과를 자동 승인으로 치지 않고 항상 결재를 거치게 한다.
+    _ensure_column(
+        conn, "tasks", "requires_human_judgment", "INTEGER NOT NULL DEFAULT 0"
+    )
+
+    # 사용자 요청(2026-11-17, "Human Agency Scale... 코파일럿(사람이
+    # 실시간으로 제어)에 해당하는 기능이 없다, 실행 중 중단 요청
+    # 정도가 최소한의 첫 단계" → "구현 시작") — `pipeline_runs.status`
+    # CHECK 제약은 이미 'cancelled' 값을 허용해뒀지만(스키마 선제
+    # 준비) 실제로 그 상태로 전이시키는 코드가 지금까지 전혀 없었다.
+    # 이 플래그는 "지금 당장 멈춰라"가 아니라 "다음 안전한 지점
+    # (`_execute_stage_attempt()` 진입 직후, 비용이 드는 Crew 호출
+    # 시작 전)에서 멈춰라"는 요청이다 — 이미 시작된 Crew 실행 중간에
+    # 끼어들지 않는다(그건 더 큰 작업, 범위 밖).
+    _ensure_column(
+        conn, "pipeline_runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"
+    )
+
     # 2026-10-08, Phase 3 — 댓글
     # `@멘션`으로 트리거된 Agent 실행을 "AI 에이전트 실행" 버튼으로
     # 트리거된 것과 구분하기 위한 출처 표시. NULL이면 기존 경로(버튼),
@@ -1310,6 +1334,20 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_task_id ON teams(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_brief_id ON teams(brief_id)")
+
+    # 사용자 요청(2026-11-17, "skill을 정해진 섹션 규격을 참조해
+    # 구조화하고, 외부에서 마크다운 포맷의 Skill을 import하거나...
+    # export, skill의 동작을... 수정하는 기능") — `description` 하나에
+    # 요약·방법론·출력형식이 전부 뭉쳐 있던 것을, 외부 표준 Skill
+    # 포맷(frontmatter + 섹션)과 호환되는 전용 필드로 나눈다. 전부
+    # NULL 허용 — 기존 53개 스킬 전부 이 컬럼 없이 만들어졌으므로
+    # 마이그레이션 시점엔 전부 NULL이고(`skill_markdown.py`의
+    # export/import, `pool_registry.skill_knowledge_text()`가 모두
+    # "없으면 생략" 원칙을 지킨다), 값이 있는 스킬만 더 자세한 지시를
+    # 받는다 — 기존 동작에 회귀가 없다.
+    _ensure_column(conn, "skill_pool", "output_format", "TEXT")
+    _ensure_column(conn, "skill_pool", "examples", "TEXT")
+    _ensure_column(conn, "skill_pool", "constraints", "TEXT")
 
 
 # 위 마이그레이션이 지우는 대상 — 2026-10-26 "자율 개발 크루" 12명→6명
@@ -1756,6 +1794,11 @@ _SW_DEV_CATEGORY_SKILL_NAMES = (
     "품질인수기준가이드",
     "데이터인프라구현가이드",
     "테스트케이스도출",
+    # 사용자 요청(2026-11-18, "SKL-NONE-021 스킬은 개발업무로
+    # 분류해줘") — "문서작성가이드"(SKL-NONE-021, README·설계 문서·
+    # API 레퍼런스 작성)는 소프트웨어 개발 문서화 전용이라 일반업무가
+    # 아닌 개발업무로 재분류.
+    "문서작성가이드",
 )
 _SW_DEV_CATEGORY_TOOL_NAMES = (
     "Gate 조치 지식 조회(recommend_fix)",
@@ -1780,6 +1823,81 @@ def _backfill_skill_tool_category(conn: sqlite3.Connection) -> None:
         f"UPDATE tool_pool SET category = 'sw_dev' WHERE name IN ({placeholders})",
         _SW_DEV_CATEGORY_TOOL_NAMES,
     )
+
+
+def _backfill_skill_structured_fields(conn: sqlite3.Connection) -> None:
+    """사용자 요청(2026-11-17, "기존 skill들을 개선된 기능에 맞춰
+    최적의 품질을 낼 수 있도록 개선해줘") — `output_format`/`examples`/
+    `constraints` 컬럼이 막 추가된 직후 1회만 실행(`category` 백필과
+    같은 패턴). 이미 description에 암묵적으로 들어 있던 순서/형식·
+    금지 문구를 구조화된 필드로 끌어올린 것이라 새 지시를 지어내지
+    않는다 — agent-evaluator 절차 스킬 14개(harness-autopilot 등)처럼
+    description 자체가 외부의 더 상세한 정의를 가리키는 짧은 포인터뿐인
+    경우는, 여기서 근거 없이 내용을 지어내면 그 외부 정의와 어긋날
+    위험이 있어 의도적으로 그대로 NULL로 남긴다(일부 스킬만 일부
+    필드만 채우는 비대칭도 같은 이유 — 채울 근거가 있는 필드만 채움).
+    각 필드는 `IS NULL`일 때만 채워, 관리자가 그 뒤 직접 수정한 값을
+    덮어쓰지 않는다."""
+    for name, output_format, examples, constraints in (
+        ('지식검색', None, None, '검색 결과에 없는 내용을 추측해서 답하지 않는다. 답변에 참고한 과거 산출물의 출처(청크 ID 등 식별 정보)를 반드시 명시한다.'),
+        ('관계조회', None, None, '그래프에 없는 관계를 추측해서 만들어내지 않는다. 답변의 출처(근거가 된 배정/관계 데이터)를 반드시 명시한다.'),
+        ('gate-improvement-loop', None, None, '한 번에 한 가지만 바꾸고 재측정한다(여러 변경을 동시에 적용하지 않는다).'),
+        ('background-real-verification', None, None, '아직 끝나지 않은 실행 결과를 추측해서 보고하지 않는다.'),
+        ('evidence-based-gate-fix', None, None, 'SDK 소스 코드로 채점 공식을 확인하기 전에는 추측으로 임계값을 조정하지 않는다.'),
+        ('honest-refuted-experiment-logging', None, None, 'refuted 결과를 지우거나 조용히 넘어가지 않는다 — 커밋·문서에 그대로 남긴다.'),
+        ('일반웹검색', None, None, '검색된 범위에서만 답하고, 검색되지 않은 사실을 추측하지 않는다. 답변에 사용한 자료의 출처(제목·URL)를 반드시 명시한다.'),
+        ('요구사항검증', 'EARS 표기 위반 문장 목록 + [NEEDS CLARIFICATION] 태그 존재 여부.', None, None),
+        ('실패모드도출', 'EARS 요구사항 문장별 실패 모드 초안(트리거 + 실패 시 영향 질문).', None, None),
+        ('커버리지체크', '완료조건 기준별 키워드 충족 여부 목록 + 전체 커버리지 비율(%).', None, None),
+        ('설계결정기록', 'ADR 형식: 결정 → 배경 → 대안 → 결과.', '### 결정\n인증 토큰 저장소를 Redis로 변경\n\n### 배경\n기존 in-memory 세션은 서버 재시작 시 전부 로그아웃됨\n\n### 대안\nDB 세션 테이블(조회 비용 큼) vs Redis(선택)\n\n### 결과\n재시작에도 세션 유지, 운영 인프라에 Redis 의존성 추가', '구현을 시작하기 전에 작성한다(사후 기록이 아니다).'),
+        ('코드리뷰체크리스트', '코딩 컨벤션/에러 처리/테스트 커버리지/가독성 4개 항목별 체크 결과.', None, None),
+        ('커밋메시지작성', '요약(무엇을 바꿨는지) + 근거(왜 바꿨는지) 구조.', 'fix(payment): 환불 처리 시 중복 차감 버그 수정 — 재시도 시 같은 트랜잭션이 두 번 처리되고 있어 트랜잭션 ID로 멱등성을 보장하도록 수정', None),
+        ('문서작성가이드', 'README·설계 문서·API 레퍼런스 등 프로젝트 문서 포맷 — 용어 통일, 예시 포함, 간결한 구조.', None, None),
+        ('장애회고', '원인 → 대응 → 재발 방지책 순서의 회고 문서.', None, '특정 개인을 비난하는 표현을 쓰지 않는다(blameless).'),
+        ('승인루프', None, None, '반려 사유를 반영하지 않은 재제출을 하지 않는다. 같은 사유가 반복되면 방향 자체를 재검토한다.'),
+        ('프레임워크템플릿생성', '지정한 프레임워크(3C/4P/SWOT)의 표준 분석 범주 + 각 범주를 채울 가이드 질문으로 구성된 빈 템플릿.', None, '분석 결과 자체를 대신 채우지 않는다 — 채워야 할 틀만 제공한다.'),
+        ('발표자료구성', '슬라이드별 "제목 + 핵심 불릿" 형태의 목록(마크다운 헤더 단위로 나눈 아웃라인).', None, None),
+        ('전략분석프레임워크', '3C(자사/고객/경쟁사) → 4P(제품/가격/유통/판촉) → SWOT(강점/약점/기회/위협) 순서의 섹션 구조. 각 범주를 빠짐없이 채운 표 또는 목록.', None, None),
+        ('기획서작성가이드', '배경 → 목표 → 실행계획(어떻게·누가·언제) → 예산 → 리스크와 대응방안 순서의 문서. 결론을 맨 앞에 둔다.', None, None),
+        ('사업전략수립', '시장·경쟁 분석 → 목표 고객·포지셔닝 → 차별화 전략 → 실행 로드맵 → 성과지표(KPI) 순서의 문서.', None, None),
+        ('경영보고서작성', '핵심 요약 → 결론 → 근거 → 권고(Action) 순서로 1페이지 분량에 압축한 문서.', None, None),
+        ('테스트케이스도출', '요구사항 문장별 positive/negative/boundary 3종 케이스 골격(Given-When-Then).', None, None),
+        ('진행관리조율', '단계별 진행 상태 + 담당 Agent + 블로커(있으면 원인과 다음 조치) 목록.', None, '스스로 산출물을 만들지 않는다 — 조율·보고만 한다.'),
+        ('아키텍처설계가이드', '모듈 경계 → 모듈 간 인터페이스 → 기술 스택 선정(대안과 비교) 순서의 설계 문서.', None, '요구사항/스펙에 없는 기능을 임의로 추가하지 않는다. 구현 난이도가 아니라 요구사항 충족을 기준으로 모듈을 나눈다.'),
+        ('데이터모델설계가이드', '엔티티·속성 목록 → 관계(1:1/1:N/N:M) → 정규화 수준 → 조회 패턴에 따른 인덱스/비정규화 검토 순서, ERD와 선택 근거 포함.', None, None),
+        ('모듈분해업무배분', '모듈 목록(담당자·선행 조건·완료 기준 포함) + 모듈 간 의존관계.', None, '배분 결과에 담당자·선행 조건·완료 기준이 빠지면 안 된다.'),
+        ('프론트엔드구현가이드', None, None, '디자인에 없는 화면/동작을 임의로 추가하지 않는다. 접근성(키보드 조작·대비)과 반응형을 기본으로 고려한다.'),
+        ('UIUX기획가이드', '사용자 시나리오 → 화면 흐름도 → 화면별 구성 요소와 인터랙션 순서의 기획 문서.', None, '요구사항/스펙에 없는 화면·기능을 임의로 추가하지 않는다.'),
+        ('테스트계획설계가이드', '테스트 범위 → 테스트 전략(단위/통합/E2E) → 요구사항별 테스트 케이스(정상/예외/경계값) 순서의 계획 문서.', None, '케이스를 설계만 하고 직접 실행하지 않는다(QA 기능테스터의 역할과 구분).'),
+        ('품질인수기준가이드', 'Gate A-G 점수/테스트 커버리지/미해결 결함 심각도 종합 판정 + 부족한 항목 구체적 명시.', None, '개별 모듈이 통과했다는 것만으로 전체 인수 기준 충족을 선언하지 않는다.'),
+        ('데이터인프라구현가이드', None, None, '설계에 없는 테이블/컬럼을 임의로 추가하지 않는다. 스키마 변경은 마이그레이션 이력으로 남긴다.'),
+        ('실시간웹검색', None, None, '검색된 범위에서만 답하고, 검색되지 않은 사실을 추측하지 않는다. 답변에 사용한 자료의 출처(제목·URL)를 반드시 명시한다.'),
+        ('최신정보필수확인', None, None, '검색된 범위에서만 답하고, 검색되지 않은 사실을 추측하지 않는다. 답변에 사용한 자료의 출처(제목·URL)를 반드시 명시한다.'),
+        ('데이터분석가이드', '계산된 수치(합계/평균/증감률/표준편차)와 그 수치에 근거한 인사이트 문장을 함께 제시하는 문서.', None, None),
+        ('제안서작성가이드', '완전한 HTML 슬라이드 문서(<!DOCTYPE html>~</html>), <style> 인라인, 섹션마다 <section class="slide">로 구분, 16:9(aspect-ratio: 16/9) 비율, 표지 슬라이드 1장으로 시작. WCAG AA 명암비 준수. 슬라이드 네비게이션/전체화면 버튼은 직접 만들지 않음(플랫폼이 자동 주입).', None, None),
+        ('실적서작성가이드', '목표 대비/전기 대비 수치 비교표 → 달성·미달 원인 분석 → 차기 계획 순서의 문서. 수치 비교표가 본문의 핵심.', None, None),
+        ('딥리서치', '주제별 하위 질문 → 각 하위 질문의 검색 결과 → 교차 검증 결과 → 종합 결론(출처 URL 포함) 순서의 구조화된 보고서.', None, '최소 3회 이상 검색하기 전에는 결론을 내지 않는다. 출처 URL을 생략하지 않는다.'),
+        ('AI업계동향브리핑', '기업/분야별 뉴스 사실 목록 → 그로부터의 인사이트(이 조직의 개발/업무에 주는 시사점) 구분 제시.', None, '검색되지 않은 내용을 추측해서 지어내지 않는다. 단순 나열에 머물지 않는다. 뉴스 각 항목마다 출처(제목·URL)를 반드시 명시한다.'),
+    ):
+        if output_format is not None:
+            conn.execute(
+                "UPDATE skill_pool SET output_format = ? "
+                "WHERE name = ? AND output_format IS NULL",
+                (output_format, name),
+            )
+        if examples is not None:
+            conn.execute(
+                "UPDATE skill_pool SET examples = ? "
+                "WHERE name = ? AND examples IS NULL",
+                (examples, name),
+            )
+        if constraints is not None:
+            conn.execute(
+                "UPDATE skill_pool SET constraints = ? "
+                "WHERE name = ? AND constraints IS NULL",
+                (constraints, name),
+            )
+
 
 
 def _seed_default_pools(conn: sqlite3.Connection) -> None:
@@ -1827,6 +1945,18 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
                 "검색이 가능한 방법을 제안해줘')."
             ),
             "tavily_search",
+        ),
+        (
+            "실시간 뉴스 검색(Tavily, 최근 7일)",
+            (
+                "websearch.tavily_news_context_for_prompt()를 감싼 네이티브 "
+                "CrewAI Tool — API 키 필요(TAVILY_API_KEY). 일반 검색과 달리 "
+                "Tavily의 topic='news'+days 파라미터로 결과를 실제로 최근 N일 "
+                "이내로 제한한다(관련도 순 일반 검색은 '최신'을 보장 못 함) "
+                "— 사용자 요청(2026-11-17, '최신(1주일) 뉴스와 인사이트를 "
+                "제공해 주는 Skill 추가')."
+            ),
+            "tavily_news_search",
         ),
     ]
     # 사용자 요청(2026-10-26, "도구/skill에서 동작하지 않는 검색은
@@ -1876,6 +2006,42 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
             ),
             "tavily_search",
             "always",
+        ),
+        # 사용자 요청(2026-11-17, "딥리서치 skill과, AI 빅테크와 AI기반
+        # 개발/일반 업무 혁신 관련 최신(1주일) 뉴스와 인사이트를 제공해
+        # 주는 Skill을 추가해줘") — 둘 다 `augmentation_mode='tool'`로
+        # 둔다('always'로 하면 대화/스킬 드롭다운 경로에서 사용자가 입력한
+        # 문장을 그대로 검색어로 쓰는데, 주제와 무관한 일반 문장이면 엉뚱한
+        # 걸 검색해버린다 — 'tool'이면 최소한 진짜 CrewAI Agent 실행
+        # 경로에서는 Agent가 스스로 더 적절한 검색어를 지어 호출할 수
+        # 있다). "실시간웹검색"과 같은 Tavily 일반 검색 Tool을 그대로
+        # 재사용하되(새 Tool 불필요), 설명만 "여러 번 교차 검색하는
+        # 심층 조사 방법론"으로 다르게 지시한다.
+        (
+            "딥리서치",
+            (
+                "한 번의 검색으로 끝내지 않는 심층 조사 방법론이다 — 주제를 "
+                "여러 하위 질문으로 쪼개 각각 검색하고, 서로 다른 출처의 "
+                "내용을 교차 검증한 뒤, 결과를 종합해 근거(출처 URL 포함)와 "
+                "함께 구조화된 보고서로 정리한다. 최소 3회 이상 검색한 "
+                "뒤에만 결론을 낸다 — 검색 한 번의 결과만으로 단정하지 "
+                "않는다."
+            ),
+            "tavily_search",
+            "tool",
+        ),
+        (
+            "AI업계동향브리핑",
+            (
+                "OpenAI·Anthropic·Google·Microsoft·Meta 등 AI 빅테크와 AI "
+                "기반 개발도구·업무자동화 분야의 최근 1주일 이내 뉴스를 "
+                "실제로 검색해 가져온다 — 검색되지 않은 내용을 추측해서 "
+                "지어내지 않는다. 단순 뉴스 나열이 아니라, 검색된 사실과 "
+                "그로부터 이끌어낼 수 있는 인사이트(이 조직의 개발/업무에 "
+                "주는 시사점)를 구분해 제시한다."
+            ),
+            "tavily_news_search",
+            "tool",
         ),
     ]
     for name, description, native_id, augmentation_mode in skills:
@@ -2032,6 +2198,72 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
             (name, description),
         )
 
+    # 사용자 요청(2026-11-17, "주어진 업무를 잘 처리할 수 있는 skill을
+    # 생성는 skill을 추가해줘(대화창에서 활용)") — 바로 앞 라운드
+    # ("기존 skill들을... 최적의 품질을 낼 수 있도록 개선")에서 만든
+    # output_format/examples/constraints 구조를 이 메타 스킬 자체가
+    # 가장 먼저 활용한다. augmentation_mode='none'(실제 등록은 사람이
+    # '마크다운으로 스킬 가져오기'로 직접 승인해야 하는 HITL 경계를
+    # 유지 — 이 Skill이 Agent에게 스킬을 자동으로 등록할 권한을 주는
+    # 건 아니다). `skill_markdown.py`가 만드는 것과 똑같은 frontmatter+
+    # 섹션 규격으로 결과를 내게 지시해, 사람이 그 출력을 그대로 import
+    # 화면에 붙여넣기만 하면 되도록 설계했다 — 이번 세션에 추가한
+    # import/export 기능과 바로 이어지는 활용 사례.
+    conn.execute(
+        "INSERT OR IGNORE INTO skill_pool "
+        "(name, description, default_tool_pool_ids, augmentation_mode, "
+        "category, output_format, examples, constraints) "
+        "VALUES (?, ?, '[]', 'none', 'general', ?, ?, ?)",
+        (
+            "스킬생성가이드",
+            (
+                "주어진 업무를 가장 잘 수행할 수 있는 새 Skill을 설계한다 — "
+                "먼저 그 업무의 목적과 전형적인 산출물을 파악하고, 이미 "
+                "등록된 Skill Pool에 같은 역할을 하는 스킬이 있는지 먼저 "
+                "확인한다(있으면 새로 만들지 않고 그 스킬의 설명을 "
+                "보완하도록 안내한다). 그다음 augmentation_mode를 고른다 — "
+                "실시간 검색/외부 조회가 꼭 필요하면 'tool'(이미 등록된 "
+                "Tool Pool 항목만 연결하고, 없는 도구를 지어내지 않는다), "
+                "매 실행마다 판단 없이 무조건 끼워 넣어야 하는 치명적 "
+                "정보면 'always', 순수 지식·절차 안내라 도구가 필요 없으면 "
+                "'none'. 이름은 그 업무를 한 번에 짐작할 수 있는 한글 "
+                "명사(예: '...가이드'/'...브리핑', 기존 명명 관례를 따름)로 "
+                "짓고, 지침에는 그 업무를 '어떻게' 수행하는지(순서·기준·"
+                "금지사항)를 한 단락으로 명확히 적는다."
+            ),
+            (
+                "frontmatter(name/category/augmentation_mode/tool) + "
+                "## 지침/## 출력 형식/## 예시/## 제약사항 섹션으로 구성된 "
+                "마크다운 — '도구/스킬 Pool' 화면의 '마크다운으로 스킬 "
+                "가져오기'에 그대로 붙여넣을 수 있는 형태로 작성한다. "
+                "'tool' 모드일 때만 frontmatter에 tool: 항목을 추가하고, "
+                "실제 존재하는 native Tool의 식별자만 쓴다."
+            ),
+            (
+                "요청: \"매주 받는 고객 VOC(문의/불만) 원문을 카테고리별로 "
+                "분류하고 요약해주는 스킬을 만들어줘\"\n\n"
+                "---\nname: VOC분류요약가이드\ncategory: general\n"
+                "augmentation_mode: none\n---\n\n"
+                "## 지침\n\n고객 VOC 원문을 카테고리(배송/품질/환불/기타 등 "
+                "내용에 맞게)별로 분류한 뒤, 카테고리별로 건수와 대표 "
+                "사례 1~2건을 요약한다.\n\n"
+                "## 출력 형식\n\n카테고리별 건수 표 + 카테고리별 대표 사례 "
+                "요약 목록.\n\n"
+                "## 제약사항\n\n원문에 없는 내용을 추측해서 보완하지 "
+                "않는다. 분류 기준이 모호하면 '기타'로 두고 임의로 "
+                "끼워맞추지 않는다."
+            ),
+            (
+                "실제로 등록되지 않은 Tool Pool 항목을 augmentation_mode="
+                "'tool'로 참조하지 않는다(연결이 비어 있는 빈 스킬이 "
+                "된다). 이미 있는 Skill과 기능이 겹치면 새로 만들지 말고 "
+                "기존 스킬의 description을 보완하도록 안내한다. 한 Skill에 "
+                "서로 관련 없는 여러 책임을 몰아넣지 않는다(업무가 여러 "
+                "역할로 나뉘면 Skill도 나눈다)."
+            ),
+        ),
+    )
+
     # 사용자 요청(2026-09-28, "CrewAI AI Agent가 개발 단계에 필요한 기능일지
     # 확인하고, 필요한 경우 AI Agent가 호출할 수 있도록 변형해줘") — 18개 중
     # 17개는 git/PR/CLI 판단·SDK 소스 읽기 같은 HITL 절차라 실행 가능한 도구로
@@ -2173,6 +2405,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # 쌍이라 하나만 확인해도 충분 — `_migrate_schema()`가 둘을 항상
     # 같이 `_ensure_column()`한다).
     is_new_category_column = not _column_exists(conn, "skill_pool", "category")
+    is_new_output_format_column = not _column_exists(conn, "skill_pool", "output_format")
     conn.executescript(SCHEMA)
     _migrate_schema(conn)
     _seed_default_pools(conn)
@@ -2185,6 +2418,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _backfill_show_in_conversation(conn)
     if is_new_category_column:
         _backfill_skill_tool_category(conn)
+    if is_new_output_format_column:
+        _backfill_skill_structured_fields(conn)
     # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
     # (종류 구분 가능) 초기화하여 정리") — 시드가 전부 끝난 뒤에만
     # 돌려야 한다(위 show_in_conversation 백필과 같은 이유 — 레퍼런스

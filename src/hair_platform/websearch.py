@@ -235,10 +235,19 @@ _TAVILY_TIMEOUT_SECONDS = 10.0
 _TAVILY_QUERY_MAX_CHARS = 400
 
 
-def _tavily_search_raw(query: str, top_k: int) -> dict:
+def _tavily_search_raw(
+    query: str, top_k: int, *, topic: str = "general", days: int | None = None
+) -> dict:
     """실제 Tavily API 호출 지점 — `_search_raw()`(Wikipedia)와 같은
     "실패를 숨기지 않는다" 원칙. API 키가 아예 없으면 네트워크 호출
-    전에 바로 실패시켜 설정 실수를 명확히 드러낸다."""
+    전에 바로 실패시켜 설정 실수를 명확히 드러낸다.
+
+    `topic`/`days`(2026-11-17, "최신(1주일) 뉴스와 인사이트를 제공해
+    주는 Skill 추가") — Tavily API가 `topic="news"`일 때만 지원하는
+    `days`(최근 N일로 결과를 실제로 제한)를 그대로 전달한다. 일반
+    검색(`tavily_context_for_prompt()`)은 관련도 순 결과라 "최근 N일"을
+    보장하지 못하므로, 진짜 최신성이 필요한 뉴스 전용 스킬은 이 경로
+    (`tavily_news_context_for_prompt()`)를 반드시 따로 써야 한다."""
     import httpx  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
     api_key = os.environ.get("TAVILY_API_KEY")
@@ -250,15 +259,20 @@ def _tavily_search_raw(query: str, top_k: int) -> dict:
 
     query = query.strip()[:_TAVILY_QUERY_MAX_CHARS]
 
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "max_results": top_k,
+        "include_answer": True,
+        "topic": topic,
+    }
+    if days is not None:
+        payload["days"] = days
+
     try:
         resp = httpx.post(
             TAVILY_ENDPOINT,
-            json={
-                "api_key": api_key,
-                "query": query,
-                "max_results": top_k,
-                "include_answer": True,
-            },
+            json=payload,
             timeout=_TAVILY_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
@@ -320,3 +334,52 @@ def as_tavily_crewai_tool(conn=None, top_k: int = 3):
         return tavily_context_for_prompt(query, top_k=top_k)
 
     return search_realtime_web
+
+
+# 사용자 요청(2026-11-17, "딥리서치 skill과, AI 빅테크와 AI기반 개발/
+# 일반 업무 혁신 관련 최신(1주일) 뉴스와 인사이트를 제공해 주는 Skill을
+# 추가해줘") — 일반 검색(`tavily_context_for_prompt()`)은 관련도 순
+# 결과라 "최근 1주일"을 보장하지 않는다. Tavily의 `topic="news"` +
+# `days`로 실제 최신성을 강제하는 별도 경로가 필요해 추가한다.
+def tavily_news_context_for_prompt(query: str, top_k: int = 5, days: int = 7) -> str:
+    """LLM 프롬프트에 덧붙일 최근 뉴스 검색 결과 텍스트 — `days`로
+    지정한 기간 안의 뉴스만 반환되도록 Tavily에 직접 요청한다(관련도
+    순 일반 검색과 달리 실제로 최신성이 보장된다). `tavily_context_
+    for_prompt()`와 같은 "실패≠0건" 구분 원칙을 따른다."""
+    try:
+        data = _tavily_search_raw(query, top_k, topic="news", days=days)
+    except WebSearchError as exc:
+        return (
+            f'(최근 뉴스 검색 실패 — {exc}. 이건 "관련 뉴스가 없다"는 뜻이 '
+            "아니라 검색 자체가 되지 않았다는 뜻입니다 — 이 사실을 사용자에게 "
+            "명시적으로 알리고, 뉴스 내용을 추측하거나 지어내지 마세요.)"
+        )
+    results = data.get("results") or []
+    if not results:
+        return f"최근 {days}일 안에 관련된 뉴스를 찾지 못했습니다."
+    lines = [
+        f"- {r.get('title', '')}: {r.get('content', '')} ({r.get('url', '')}, "
+        f"{r.get('published_date', '게시일 미상')})"
+        for r in results[:top_k]
+    ]
+    text = f"최근 {days}일 뉴스 검색 결과(Tavily):\n" + "\n".join(lines)
+    answer = data.get("answer")
+    if answer:
+        text = f"요약: {answer}\n\n{text}"
+    return text
+
+
+def as_tavily_news_crewai_tool(conn=None, top_k: int = 5, days: int = 7):
+    """최근 뉴스 검색을 실제 CrewAI Tool로 감싼다(`as_tavily_crewai_
+    tool()`과 같은 패턴 — ASCII 함수명 제약도 동일하게 적용된다).
+    `crewai`는 지연 import한다."""
+    from crewai.tools import tool  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
+
+    @tool("recent_news_search")
+    def search_recent_news(query: str) -> str:
+        """특정 주제의 최근 뉴스/업계 동향이 필요할 때 검색한다 —
+        일반 웹 검색과 달리 실제로 최근 며칠 이내로 기간이 제한된
+        결과만 돌려준다. 오래된 일반 정보면 호출하지 마라."""
+        return tavily_news_context_for_prompt(query, top_k=top_k, days=days)
+
+    return search_recent_news

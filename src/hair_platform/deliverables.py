@@ -65,6 +65,7 @@ deliverable이 'draft'에 영영 머물고 완료 판정 경로가
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 
 from hair_platform import (
@@ -523,8 +524,125 @@ def delete_deliverable(
     )
 
 
-def _preview_text(content: str, limit: int = 200) -> str:
-    collapsed = " ".join(content.split())
+def update_deliverable_content(
+    conn: sqlite3.Connection, deliverable_id: int, actor_id: int, role: str, content: str
+) -> dict:
+    """`PATCH /api/deliverables/{id}` — 사용자 요청(2026-11-16, "PIP로
+    배포 가능한 환경에서 생성된 HTML을 수정할 수 있는 기능 추가 제안")
+    1단계 — Agent가 만든 HTML 산출물에 색 대비 등의 버그가 있을 때
+    사람이 소스를 직접 고쳐 저장할 수 있게 한다. 권한 경계는
+    `delete_deliverable()`과 동일하게 둔다(지울 수 있는 사람이면
+    고칠 수도 있어야 자연스럽다 — admin/manager는 항상, 그 외엔 본인이
+    작성한 draft 상태 결과물만; 제출 후에는 결재 이력이라 본인도 못
+    고친다 — 삭제와 같은 이유)."""
+    row = conn.execute(
+        "SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("deliverable_not_found")
+    if role not in ("admin", "manager") and not (
+        row["author_type"] == "human"
+        and row["author_id"] == actor_id
+        and row["status"] == "draft"
+    ):
+        raise PermissionError("not_allowed")
+    conn.execute(
+        "UPDATE deliverables SET content = ? WHERE id = ?",
+        (content, deliverable_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "deliverable_content_edited",
+        "deliverable",
+        deliverable_id,
+        before={"content_length": len(row["content"])},
+        after={"content_length": len(content)},
+    )
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    assert updated is not None
+    return _deliverable_to_dict(conn, updated)
+
+
+def suggest_content_fix(
+    conn: sqlite3.Connection,
+    deliverable_id: int,
+    actor_id: int,
+    role: str,
+    feedback: str,
+    provider: str | None,
+    model: str | None,
+) -> str:
+    """`POST /api/deliverables/{id}/suggest-fix` — 사용자 요청(2026-11-16,
+    "PIP로 배포 가능한 환경에서 생성된 HTML을 수정할 수 있는 기능" 3단계)
+    — 색 대비 버그 등을 손으로 고치는 대신 "이 부분 색이 안 보여" 같은
+    자연어 피드백을 주면 LLM이 수정안을 만든다. `assist()`와 같은 설계 —
+    결과는 저장하지 않는다(사람이 검토 후 기존 `update_deliverable_
+    content()`/`PATCH`로 직접 커밋). 권한은 그 저장 권한과 완전히
+    동일하게 둔다 — 저장할 수 없는 사람이 수정안을 받아봐야 쓸 데가
+    없다. provider/model이 팀원 요청인지 확인하는 RBAC은 `app.py`가
+    한다(`assist()`와 동일한 분담)."""
+    row = conn.execute(
+        "SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("deliverable_not_found")
+    if role not in ("admin", "manager") and not (
+        row["author_type"] == "human"
+        and row["author_id"] == actor_id
+        and row["status"] == "draft"
+    ):
+        raise PermissionError("not_allowed")
+    resolved_provider, resolved_model = llm.resolve_provider_and_model(provider, model)
+    type_instruction = _CONTENT_TYPE_INSTRUCTIONS.get(row["content_type"], "")
+    system = (
+        "주어진 기존 산출물을 사용자 피드백에 따라 수정하는 역할입니다. "
+        "피드백과 관련된 부분만 고치고, 나머지 내용과 구조는 그대로 "
+        "보존하세요(요청받지 않은 부분까지 다시 쓰지 마세요). 전체 "
+        "내용을 처음부터 끝까지 완성된 형태로 다시 출력하세요(일부만 "
+        "보여주거나 '...' 같은 생략 표시를 쓰지 마세요)."
+        + (("\n\n" + type_instruction) if type_instruction else "")
+    )
+    prompt = (
+        f"기존 산출물:\n{row['content']}\n\n"
+        f"사용자 피드백(이 부분을 고쳐주세요): {feedback}"
+    )
+    return llm.call_llm(resolved_provider, resolved_model, system, prompt)
+
+
+# 사용자 보고(2026-11-16, "새탭에서는 html 웹 형식으로 잘 보이지만,
+# 갤러리 화면에서는 여전히 소스 그대로 보임") — 갤러리 카드는 의도적
+# 설계로 iframe을 그리지 않고 짧은 텍스트 미리보기만 보여준다(그리드에
+# 여러 개를 한 번에 나열하므로). 그런데 html 산출물은 펜스·태그·
+# `<style>`/`<script>` 원문이 그대로 잘려 들어가 "소스 그대로"로
+# 보였다 — content_type이 html일 때만 펜스를 벗기고 태그/스타일/
+# 스크립트를 걷어낸 뒤 남는 실제 텍스트로 미리보기를 만든다.
+# `conversations.py`의 `_looks_like_full_html_document()`와 같은 펜스
+# 정규식을 쓰지만, deliverables.py→conversations.py는 순환 참조라
+# 공유 함수로 뺄 수 없다(기존 `_CONTENT_TYPE_INSTRUCTIONS` 중복과
+# 같은 성격).
+_PREVIEW_FENCE_CLOSED_RE = re.compile(r"^```[a-zA-Z0-9]*\n(.*?)\n?```\s*$", re.DOTALL)
+_PREVIEW_FENCE_OPEN_RE = re.compile(r"^```[a-zA-Z0-9]*\n(.*)$", re.DOTALL)
+_HTML_STYLE_SCRIPT_RE = re.compile(r"<(style|script)\b[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _preview_text(content: str, limit: int = 200, content_type: str = "text") -> str:
+    text = content
+    if content_type == "html":
+        stripped = text.strip()
+        closed = _PREVIEW_FENCE_CLOSED_RE.match(stripped)
+        if closed:
+            stripped = closed.group(1)
+        else:
+            open_only = _PREVIEW_FENCE_OPEN_RE.match(stripped)
+            if open_only:
+                stripped = open_only.group(1)
+        text = _HTML_TAG_RE.sub(" ", _HTML_STYLE_SCRIPT_RE.sub(" ", stripped))
+    collapsed = " ".join(text.split())
     return collapsed[:limit] + ("…" if len(collapsed) > limit else "")
 
 
@@ -644,7 +762,7 @@ def list_deliverables_gallery(
             "content_type": row["content_type"],
             "status": row["status"],
             "created_at": row["created_at"],
-            "preview": _preview_text(row["content"]),
+            "preview": _preview_text(row["content"], content_type=row["content_type"]),
         }
         for row in rows
     ]
@@ -1005,8 +1123,20 @@ _CONTENT_TYPE_INSTRUCTIONS = {
     "text": "",
     "markdown": "결과물은 Markdown 형식으로 작성하세요(제목은 #, 목록은 -, 강조는 **, "
     "코드는 ``` 블록을 쓰세요).",
+    # 사용자 보고(2026-11-16, "폰트 색이 배경색과 같아 보이지 않는 경우
+    # 발생") — 기존 지시는 "완전한 HTML 문서로"만 말했을 뿐 색 대비에
+    # 대해서는 아무 말이 없었다(프레젠테이션 자료 작성자 Agent의
+    # `expected_output`에만 "색 대비" 한 단어가 있었지만 구체적 기준이
+    # 없어 LLM이 지켜도 그만 안 지켜도 그만이었다) — 명암비 수치 기준과
+    # "요소별로 배경·글자색을 함께 지정"이라는 구체적 행동 지침을 명시해
+    # 검증 가능하게 만든다.
     "html": "결과물은 완전한 HTML 문서로 작성하세요(<!DOCTYPE html>부터 </html>까지, "
-    "스타일은 <style> 태그 안에 인라인으로만 넣고 외부 리소스는 참조하지 마세요).",
+    "스타일은 <style> 태그 안에 인라인으로만 넣고 외부 리소스는 참조하지 마세요). "
+    "배경에 색이나 그라디언트를 쓰는 모든 요소는 그 위에 올라가는 글자색을 그 "
+    "요소 안에서 함께 명시하세요(바깥의 공통 글자색 변수에만 기대지 말 것) — "
+    "밝은 배경엔 어두운 글자, 어두운 배경엔 밝은 글자를 써서 최소 WCAG AA "
+    "기준(명암비 4.5:1 이상)을 지키고, 글자색과 배경색이 같거나 비슷한 "
+    "계열이 되지 않게 하세요.",
     "code": "결과물은 코드로 작성하세요. 전체를 ``` 코드 블록 안에 넣고, 필요하면 "
     "블록 앞뒤에 짧은 설명만 덧붙이세요.",
 }
@@ -2121,6 +2251,7 @@ def get_task_detail(conn: sqlite3.Connection, task_id: int) -> dict | None:
         return None
     detail = dict(row)
     detail["required_skills"] = json.loads(detail["required_skills"])
+    detail["requires_human_judgment"] = bool(detail["requires_human_judgment"])
     return detail
 
 
@@ -2231,6 +2362,43 @@ def update_task_retry_budget(
         task_id,
         before={"max_retry_budget": old_budget},
         after={"max_retry_budget": max_retry_budget},
+    )
+    conn.commit()
+    detail = get_task_detail(conn, task_id)
+    assert detail is not None
+    return detail
+
+
+def update_task_human_judgment(
+    conn: sqlite3.Connection, task_id: int, actor_id: int, requires_human_judgment: bool
+) -> dict:
+    """`PATCH /api/tasks/{task_id}/human-judgment`(2026-11-17, "Human
+    Agency Scale... 인간 고유 능력을 보호하는 Task는 Gate 점수와
+    무관하게 항상 사람에게 올라가야 한다" → "구현 시작") —
+    `max_retry_budget`과 같은 이유로 admin/manager 전용 거버넌스
+    설정(호출부 `app.py`가 `require_role(Role.ADMIN, Role.MANAGER)`로
+    막아줌, 여기선 참가자 판정을 하지 않는다). 켜면 그 Task가 타는
+    모든 파이프라인 단계가 `requires_human_approval` 템플릿 설정과
+    무관하게 항상 결재를 거친다(`pipeline_runtime._execute_stage_
+    attempt()`)."""
+    task = conn.execute(
+        "SELECT requires_human_judgment FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    if task is None:
+        raise ValueError("task_not_found")
+    old_value = bool(task["requires_human_judgment"])
+    conn.execute(
+        "UPDATE tasks SET requires_human_judgment = ? WHERE id = ?",
+        (1 if requires_human_judgment else 0, task_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "task_requires_human_judgment_updated",
+        "tasks",
+        task_id,
+        before={"requires_human_judgment": old_value},
+        after={"requires_human_judgment": requires_human_judgment},
     )
     conn.commit()
     detail = get_task_detail(conn, task_id)

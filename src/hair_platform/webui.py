@@ -334,9 +334,10 @@ INDEX_HTML = """<!DOCTYPE html>
      어려워(숨겨져 있는 느낌)") — 지금까지 #global-msg가 <main> 맨
      위 일반 플로우에 있어, 긴 목록 아래쪽에서 액션을 하면 결과
      메시지가 화면 밖(스크롤 위)에 떠서 안 보였다. 뷰포트에 고정해
-     스크롤 위치와 무관하게 항상 보이게 한다 — z-index는 이 파일에서
-     가장 큰 기존 값(.artifact-fullscreen-overlay의 100)보다 위로
-     둔다(알림이 전체화면 미리보기보다 더 급한 신호라고 판단).
+     스크롤 위치와 무관하게 항상 보이게 한다 — z-index를 넉넉히 높게
+     둔다(알림이 다른 오버레이보다 더 급한 신호라고 판단. 단, 2026-11-12
+     추가된 `.confirm-modal-overlay`(300)는 "반드시 응답해야 하는" 더
+     급한 신호라 그 위에 둔다 — 아래 해당 CSS 주석 참고).
      비어 있을 때 클릭을 가로채면 안 되므로 바깥 래퍼는 pointer-events:
      none, 실제 메시지 박스만 auto로 되돌린다. */
   #global-msg { position: fixed; top: 1rem; right: 1rem; z-index: 200;
@@ -458,14 +459,15 @@ INDEX_HTML = """<!DOCTYPE html>
   /* 사용자 보고(2026-10-19, 스크린샷 — HTML 결과 미리보기 영역이 너무
      좁아 게임 캔버스가 안 보이고 스크롤바까지 생김) — 기본 240px는
      이 플랫폼에서 실제로 자주 나오는 게임류 캔버스(480~800px 높이)
-     에 턱없이 부족했다. 전체화면(.artifact-fullscreen-body)의 60vh
-     만큼은 아니어도 인라인에서 바로 알아볼 수 있을 만큼 넉넉히 올린다. */
+     에 턱없이 부족했다. 인라인에서 바로 알아볼 수 있을 만큼 넉넉히
+     올린다(더 크게 보려면 2026-11-16부터는 "전체화면"이 새 탭을
+     연다 — 아래 `openArtifactFullscreen()` 참고). */
   .html-preview { width: 100%; min-height: 480px; border: 1px solid #e2e4e8; border-radius: 6px; background: #fff; }
-  /* 복사/미리보기·소스 토글(2026-10-12) — Claude Artifact처럼 결과물에
-     전용 툴바를 둔다. 새 색상 토큰 없이 기존 .small 버튼 스타일만
-     재사용한다. */
+  /* 복사/전체화면 등 결과물 전용 툴바(2026-10-12) — Claude Artifact처럼
+     결과물에 전용 툴바를 둔다. 새 색상 토큰 없이 기존 .small 버튼
+     스타일만 재사용한다. (읽기 전용 "소스 보기" 토글은 2026-11-16
+     제거됨 — "수정"의 소스 모드와 중복이라는 사용자 보고 반영.) */
   .artifact-toolbar { display: flex; justify-content: flex-end; gap: 0.3rem; margin-bottom: 0.3rem; }
-  .artifact-source-pre { max-height: 400px; overflow-y: auto; }
   /* 사용자 요청(2026-10-13, "HAIR 최종 실행 결과물은 claude artifact
      수준으로") — 지금까지 이 블록엔 카드 테두리가 전혀 없어 주변
      텍스트(사람 코멘트 등)와 시각적으로 구분이 안 됐다. 실제 Claude
@@ -473,15 +475,16 @@ INDEX_HTML = """<!DOCTYPE html>
      덩어리다"를 한눈에 알아보게 한다. */
   .artifact-block { border: 1px solid #e2e4e8; border-radius: 8px; background: #fff; padding: 0.6rem 0.75rem; margin: 0.3rem 0; }
   .artifact-block .artifact-toolbar { margin-bottom: 0.5rem; }
-  /* 전체화면 오버레이(2026-10-13) — 단일 재사용 엘리먼트, body에 직접
-     붙인다(카드 안에 있으면 overflow:hidden 조상에 잘릴 수 있어서). */
-  .artifact-fullscreen-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 2rem; box-sizing: border-box; }
-  .artifact-fullscreen-panel { position: relative; background: #fff; border-radius: 10px; width: 100%; max-width: 900px; max-height: 90vh; overflow: auto; padding: 2.5rem 1.5rem 1.5rem; box-sizing: border-box; }
-  .artifact-fullscreen-close { position: absolute; top: 0.6rem; right: 0.6rem; }
-  .artifact-fullscreen-body .html-preview { min-height: 60vh; }
+  /* 사용자 요청(2026-11-16, "생성된 HTML을 수정할 수 있는 기능" 1단계)
+     — 소스 보기(읽기 전용)와 시각적으로 구분되게 편집 중임을 테두리
+     색으로 표시한다. */
+  .artifact-edit-textarea { border: 1px solid #14213d; border-radius: 6px; padding: 0.5rem; }
+  /* 2단계 — CodeMirror가 textarea를 대체할 때의 높이/테두리(CDN 로드
+     실패 시 이 규칙은 그냥 안 쓰이고 위 textarea 스타일만 적용됨). */
+  .artifact-edit .CodeMirror { height: auto; max-height: 500px; border: 1px solid #14213d; border-radius: 6px; font-size: 0.85rem; }
   /* 커스텀 확인 모달(2026-11-12) — 네이티브 confirm() 대체. z-index는
-     전체화면 오버레이(100)보다 위, 전역 메시지 토스트(200)보다도
-     위에 둔다(사용자가 반드시 응답해야 하는 모달이 가장 급하다). */
+     전역 메시지 토스트(200)보다 위에 둔다(사용자가 반드시 응답해야
+     하는 모달이 가장 급하다). */
   .confirm-modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 1rem; box-sizing: border-box; }
   .confirm-modal-box { background: var(--color-surface); color: var(--color-text); border-radius: 8px; width: 100%; max-width: 420px; padding: 1.25rem; box-sizing: border-box; box-shadow: 0 8px 28px rgba(0,0,0,0.3); }
   .confirm-modal-text { margin: 0 0 1rem; font-size: 0.9rem; white-space: pre-wrap; }
@@ -532,6 +535,19 @@ INDEX_HTML = """<!DOCTYPE html>
      diff 없이 두 산출물을 그대로 나열해 보여주는 것으로 대체하고
      나머지 기능은 전혀 영향받지 않는다(아래 renderTextDiff 참고). -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.2.0/diff.min.js"></script>
+<!-- 사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된 HTML을
+     수정할 수 있는 기능" 2단계 "가벼운 코드 에디터") — 1단계의 평범한
+     textarea 편집에 HTML 문법 강조를 붙인다. CodeMirror 5: vanilla JS,
+     의존성 0개, MIT — 위 라이브러리들과 같은 패턴(런타임 CDN 로드, pip
+     패키징 영향 없음). CDN 로드 실패 시 1단계의 평범한 textarea로 그대로
+     남는다(아래 renderContent()의 "수정" 버튼 핸들러 — `typeof CodeMirror
+     === "undefined"` 체크 참고) — 나머지 기능은 전혀 영향받지 않는다. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
 </head>
 <body>
 
@@ -575,6 +591,26 @@ function esc(s) {
 // 그대로 넣으면 따옴표에서 값이 끊길 수 있어 별도로 이스케이프한다.
 function escAttr(s) {
   return esc(s).replace(/"/g, "&quot;");
+}
+
+// 사용자 보고(2026-11-17, "대화에 '... 2026-11-17 08:39:05'라고
+// 시간정보가 표시되지만, 실제 시간은 17:39:05 — 한국시간 기준이
+// 아님") — 모든 `*_at` 타임스탬프는 SQLite `datetime('now')`로
+// 저장되는데, 이 함수는 **UTC**를 "YYYY-MM-DD HH:MM:SS" 형태(타임존
+// 표시 없이)로 반환한다(직접 확인: 같은 순간에 KST는 그보다 9시간
+// 빠르다). 지금까지 화면에는 이 문자열을 변환 없이 그대로 보여줬다
+// — 저장 형식(UTC, 올바른 관행)은 그대로 두고, 보여줄 때만 'Z'를
+// 붙여 Date가 UTC로 해석하게 한 뒤 **보는 사람의 브라우저 로컬
+// 타임존**으로 다시 포맷한다(한국에서 열면 자동으로 KST로 보정되고,
+// 다른 타임존에서 열어도 그 타임존에 맞게 자동으로 보정된다 — 서버가
+// 어디서 돌든, 보는 사람이 어디에 있든 하드코딩 없이 맞는 방식).
+function fmtTime(raw) {
+  if (!raw) return "";
+  const d = new Date(String(raw).replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return String(raw);  // 파싱 실패 시 원본 그대로(안전장치)
+  const pad = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " +
+    pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
 }
 
 // 복사·전체화면·다이어그램 id 발급용 — renderContent()와
@@ -656,6 +692,50 @@ function _highlightCode(raw, lang) {
 // 그 뒤엔 신뢰한 태그만 추가"라는 안전장치를, 더 검증된 라이브러리
 // 기반 살균으로 교체한 것뿐 안전 수준은 유지(오히려 표·인용문·이미지
 // 같은 더 넓은 HTML 표면을 다루면서도 DOMPurify가 전부 검사한다).
+// 사용자 보고(2026-11-16, "**굵게** 마크다운이 생성 결과물에서 동작
+// 안 하는 버그") — 직접 재현해보니 두 가지 서로 다른 경계 조건에서
+// marked.js(13.0.3은 물론 2026-11-16 시점 최신 18.2.0에서도 재현 —
+// 업스트림 라이브러리 자체의 한계, 버전을 올려도 안 고쳐짐)가 강조
+// 판정 자체를 포기하고 `**`를 리터럴 텍스트로 그대로 남겨버린다:
+// (1) `**`의 안쪽이 따옴표 등 구두점이고 바깥쪽이 공백 없이 한글/
+// 한자와 바로 붙어 있는 경우(예: `핵심과제를 **"신뢰 및 통제 1위"**로`),
+// (2) `**` 안쪽에 공백이 남아 있는 경우(예: `**심도 조절 **: ...` —
+// 사용자가 실제로 겪은 두 번째 사례, CommonMark 명세상 원래 강조로
+// 안 쳐주는 게 맞지만 LLM이 흔히 실수로 만들어내는 패턴). marked.parse()
+// 전에 `**...**` 쌍 하나하나를 직접 찾아 안쪽 공백을 지우고, 그 경계가
+// (1)의 조건에 해당할 때만 공백 하나를 끼워 넣어 우회한다 — 이미
+// 정상이던 케이스는 두 조건 모두 해당 안 돼 전혀 안 건드린다(직접
+// 여러 케이스로 node에서 회귀 없음 확인).
+//
+// 코드펜스(```...```) 안쪽은 절대 건드리지 않는다 — 처음엔 안쪽/바깥쪽
+// 전체를 한 정규식으로 훑었더니, 파이썬 `def f(**kwargs):` 같은 코드
+// 예시의 짝 없는 `**`가 그 블록 밖 멀리 떨어진 다른 `**강조**`와 잘못
+// 짝지어지며 그 사이 텍스트를 통째로 삼켜버리는 회귀를 직접 재현해
+// 확인했다 — 코드펜스 구간은 분리해 건드리지 않는 것으로 막는다.
+const _CJK_CHAR_RANGE = "\\u3131-\\u318E\\uAC00-\\uD7A3\\u4E00-\\u9FFF\\u3400-\\u4DBF";
+const _BOLD_BOUNDARY_PUNCT = "\\"'\\u201C\\u201D\\u2018\\u2019().,!?:;\\u2026\\u00B7";
+const _CJK_RE = new RegExp("[" + _CJK_CHAR_RANGE + "]");
+const _BOLD_BOUNDARY_PUNCT_RE = new RegExp("[" + _BOLD_BOUNDARY_PUNCT + "]");
+
+function _fixBoldMarkdownSegment(raw) {
+  return raw.replace(
+    /([\\s\\S]?)\\*\\*(\\s*)([\\s\\S]*?)(\\s*)\\*\\*([\\s\\S]?)/g,
+    (m, before, lead, inner, trail, after) => {
+      if (!inner.trim()) return m; // "**" 쌍 사이가 통째로 공백뿐이면 강조가 아닐 가능성 — 손대지 않음
+      const trimmedInner = inner.trim();
+      let openSep = "";
+      if (before && _CJK_RE.test(before) && _BOLD_BOUNDARY_PUNCT_RE.test(trimmedInner[0])) openSep = " ";
+      let closeSep = "";
+      if (_BOLD_BOUNDARY_PUNCT_RE.test(trimmedInner[trimmedInner.length - 1]) && after && _CJK_RE.test(after)) closeSep = " ";
+      return before + openSep + "**" + trimmedInner + "**" + closeSep + after;
+    }
+  );
+}
+function _fixBoldMarkdown(raw) {
+  const parts = raw.split(/(```[\\s\\S]*?```)/);
+  return parts.map((part, i) => (i % 2 === 1 ? part : _fixBoldMarkdownSegment(part))).join("");
+}
+
 function _renderMarkdown(raw) {
   if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
     return "<p>" + esc(raw).replace(/\\n/g, "<br>") + "</p>"; // CDN 미로드 폴백
@@ -666,7 +746,7 @@ function _renderMarkdown(raw) {
   // 중…"에서 멈춘 전례가 실제로 있었다 — 여기서 잡아 평문 폴백으로
   // 내려가고, 화면 자체는 계속 열리게 한다.
   try {
-    return DOMPurify.sanitize(marked.parse(raw));
+    return DOMPurify.sanitize(marked.parse(_fixBoldMarkdown(raw)));
   } catch (e) {
     console.error("markdown rendering failed, falling back to plain text:", e);
     return "<p>" + esc(raw).replace(/\\n/g, "<br>") + "</p>";
@@ -828,61 +908,346 @@ function renderTextDiff(oldText, newText) {
   return '<pre class="code-block diff-block">' + html + '</pre>';
 }
 
-function renderContent(raw, contentType) {
-  if (contentType === "html" || contentType === "code" || contentType === "markdown") {
-    raw = stripOuterFence(raw);
-  }
-  const artifactId = "artifact-" + (++_artifactSeq);
-  // 사용자 요청(2026-10-14) — 마크다운도 이제 raw 소스(기호·다이어그램/
-  // 차트 코드펜스 원문)를 그대로 확인할 수 있어야 쓸모가 있어 토글
-  // 대상에 추가한다.
-  const hasToggle = contentType === "html" || contentType === "code" || contentType === "markdown";
+// 사용자 요청(2026-11-16, "HTML 문서 생성시 프레젠테이션 발표에
+// 적합한 슬라이드 size와 비율로 생성되고, 전체화면 등에서 slide show
+// 기능이 제공되도록") — LLM이 매번 스스로 만들어 넣게 기대하는 대신
+// (이 세션에서 반복 확인된 "일관성 없음" 문제와 같은 성격 — 색 대비/
+// 굵게 마크다운 등), `.slide` 클래스 섹션이 2개 이상이면(프레젠테이션
+// 자료 작성자 Agent의 expected_output이 이미 그렇게 구조화하도록
+// 지시해둠 — 16:9 비율도 그쪽에서 지시) 플랫폼이 항상 같은 이전/다음·
+// 슬라이드 번호·전체화면 컨트롤을 직접 주입한다. 저장된 원본 HTML은
+// 절대 안 건드린다 — 이 함수는 "보여줄 때"(미리보기 iframe·전체화면
+// 새 탭·단독 뷰 페이지)만 거치고, 복사/다운로드/수정 화면이 쓰는
+// 원본 텍스트(`effectiveRaw`)는 그대로다.
+function _injectSlideshowController(html) {
+  const slideCount = (html.match(/class=["'][^"']*\\bslide\\b[^"']*["']/g) || []).length;
+  if (slideCount < 2) return html;
+  const controller =
+    // 사용자 보고(2026-11-16, "슬라이드 크기가 변화지 않아 상단
+    // 중앙에 작게 표시됨") — 원인 확인: 이 결과물은 16:9/반응형
+    // 크기 지시가 생기기 *전에* 만들어진 구형 산출물이라, `.slide`에
+    // `width` 지정이 아예 없고 `margin:0 auto`(가운데 정렬)·
+    // `min-height:640px`(고정값)만 있었다 — 화면 크기와 무관하게
+    // 늘 그 작은 고정 크기로만 보였다. 새로 생성되는 산출물은 Agent
+    // 지시에 `width:100%;aspect-ratio:16/9`가 포함돼 있어 나아지긴
+    // 하겠지만, 그것도 LLM이 지시를 정확히 따랐을 때만 보장된다 —
+    // 이 세션 내내 반복 확인된 "LLM 지시 준수는 보장이 아니다"라는
+    // 원칙대로, 산출물이 신형이든 구형이든 **항상** 전체 화면을
+    // 채우도록 플랫폼이 강제로 덮어쓴다(내용의 색·폰트·여백 등은
+    // 그대로 두고 크기/위치만 관여).
+    '<style id="__hair_slideshow_style">' +
+    'body.__hair_slideshow .slide{display:none!important}' +
+    'body.__hair_slideshow .slide.__hair_active{display:flex!important;flex-direction:column;' +
+    'position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;' +
+    'max-width:none!important;max-height:none!important;min-width:0!important;min-height:0!important;' +
+    'margin:0!important;box-sizing:border-box!important;overflow:auto!important}' +
+    '#__hair_slideshow_bar{position:fixed;left:0;right:0;bottom:0;z-index:999999;display:flex;' +
+    'align-items:center;justify-content:center;gap:0.5rem;padding:0.5rem;' +
+    'background:rgba(15,23,42,0.75);font-family:sans-serif}' +
+    '#__hair_slideshow_bar button{background:#fff;border:none;border-radius:4px;' +
+    'padding:0.3rem 0.7rem;cursor:pointer;font-size:0.85rem}' +
+    '#__hair_slideshow_bar span{color:#fff;font-size:0.85rem;min-width:3.5rem;text-align:center}' +
+    '</style>' +
+    '<div id="__hair_slideshow_bar">' +
+    '<button id="__hair_prev" type="button">이전</button>' +
+    '<span id="__hair_counter"></span>' +
+    '<button id="__hair_next" type="button">다음</button>' +
+    '<button id="__hair_fullscreen" type="button">슬라이드 재생</button>' +
+    '</div>' +
+    '<script>(function(){' +
+    'var slides=Array.prototype.slice.call(document.querySelectorAll(".slide"));' +
+    'if(slides.length<2)return;' +
+    'document.body.classList.add("__hair_slideshow");' +
+    'var idx=0;' +
+    'function show(i){' +
+    'idx=Math.max(0,Math.min(slides.length-1,i));' +
+    'slides.forEach(function(s,j){s.classList.toggle("__hair_active",j===idx)});' +
+    'var c=document.getElementById("__hair_counter");' +
+    'if(c)c.textContent=(idx+1)+" / "+slides.length;' +
+    '}' +
+    'show(0);' +
+    'var prevBtn=document.getElementById("__hair_prev");' +
+    'var nextBtn=document.getElementById("__hair_next");' +
+    'var fsBtn=document.getElementById("__hair_fullscreen");' +
+    'if(prevBtn)prevBtn.addEventListener("click",function(){show(idx-1)});' +
+    'if(nextBtn)nextBtn.addEventListener("click",function(){show(idx+1)});' +
+    // 사용자 보고(2026-11-16, "전체화면 버튼 클릭시 아무 동작 안 함") —
+    // sandbox 토큰을 고쳐도(위 renderContent()의 iframe 주석 참고)
+    // 브라우저별 Fullscreen API 지원 차이가 남아 100% 보장은 못 한다.
+    // requestFullscreen()이 없거나 거부되면, 부모 페이지(SPA)에
+    // postMessage로 알려 이미 확실히 동작하는 "전체화면"(새 탭 열기,
+    // openArtifactFullscreen())으로 대신 처리하게 한다 — 버튼을 누르면
+    // 항상 뭔가는 반드시 일어나게 만드는 이중 안전장치.
+    'if(fsBtn)fsBtn.addEventListener("click",function(){' +
+    'if(document.fullscreenElement){document.exitFullscreen();return}' +
+    'var fallback=function(){try{window.parent.postMessage({__hair_slideshow_fullscreen:true},"*")}catch(e){}};' +
+    'if(document.documentElement.requestFullscreen){' +
+    'var p=document.documentElement.requestFullscreen();' +
+    'if(p&&p.catch){p.catch(fallback)}' +
+    '}else{fallback()}' +
+    '});' +
+    'document.addEventListener("keydown",function(ev){' +
+    'if(ev.key==="ArrowRight"||ev.key===" "||ev.key==="PageDown"){show(idx+1);ev.preventDefault()}' +
+    'else if(ev.key==="ArrowLeft"||ev.key==="PageUp"){show(idx-1);ev.preventDefault()}' +
+    '});' +
+    '})();<\\/script>';
+  return /<\\/body>/i.test(html) ? html.replace(/<\\/body>/i, controller + "</body>") : html + controller;
+}
 
+// 사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된 HTML을
+// 수정할 수 있는 기능 추가 제안" → "1단계부터 구현해줘") — 미리보기/
+// 소스보기 HTML을 만드는 로직을 `renderContent()`의 최초 렌더와, 수정
+// 저장 후 그 자리에서 다시 그리는 경로(아래 `data-save-artifact` 핸들러)
+// 양쪽이 공유한다 — 중복 없이 하나의 소스에서 나온다.
+// `rawForStorage`(선택, 2026-11-17 "모든 대화 결과물에서도 수정이
+// 가능하도록") — 대화 메시지는 미리보기에 @멘션 강조 HTML이 섞인
+// `raw`(예: `_highlightMentions()`가 만든 문자열)를 넘기면서도,
+// 복사/다운로드/수정 textarea/저장은 그 강조 태그가 섞이지 않은
+// **진짜 원본**(`m.content`)을 써야 한다 — 안 그러면 수정 후 저장 시
+// 멘션 강조 `<span>` 태그가 메시지 내용에 그대로 끼어 들어간다. 이
+// 값이 있으면 저장용 effectiveRaw만 이걸로 바꾸고, 미리보기는 여전히
+// `raw`(강조 포함)로 그대로 렌더한다 — 기존 호출부(이 인자를 안 주는
+// 전부)는 100% 그대로 동작한다.
+function _buildArtifactParts(raw, contentType, rawForStorage) {
+  const needsFenceStrip = contentType === "html" || contentType === "code" || contentType === "markdown";
+  const displayRaw = needsFenceStrip ? stripOuterFence(raw) : raw;
+  const effectiveRaw = rawForStorage !== undefined
+    ? (needsFenceStrip ? stripOuterFence(rawForStorage) : rawForStorage)
+    : displayRaw;
   let previewHtml;
   if (contentType === "html") {
-    previewHtml = '<iframe class="html-preview" sandbox="allow-scripts" srcdoc="' + escAttr(raw) + '"></iframe>';
+    // 사용자 보고(2026-11-16, "슬라이드 이동 버튼 옆 전체화면 버튼
+    // 클릭시 아무 동작 안 함") — `allow="fullscreen"`/`allowfullscreen`
+    // 속성만으로는 부족했다. `sandbox` 속성이 있는 iframe은 그 안의
+    // 별도 토큰 `allow-fullscreen`이 없으면 Fullscreen API 자체가
+    // 거부된다(Permissions Policy의 `allow`와는 별개의, sandbox
+    // 전용 허용 토큰) — 이게 빠져 있었다.
+    previewHtml = '<iframe class="html-preview" sandbox="allow-scripts allow-fullscreen" allow="fullscreen" allowfullscreen ' +
+      'srcdoc="' + escAttr(_injectSlideshowController(displayRaw)) + '"></iframe>';
   } else if (contentType === "code") {
-    previewHtml = '<pre class="code-block">' + _highlightCode(raw) + "</pre>";
+    previewHtml = '<pre class="code-block">' + _highlightCode(displayRaw) + "</pre>";
   } else {
     // markdown이든 타입 미지정이든 전부 실제 마크다운 렌더러를 거친다
     // (기존에도 타입 미지정은 **굵게**/코드펜스만 가볍게 처리하는
     // "마크다운 라이트" 취급이었다 — 이제 똑같이 풀 렌더링으로 올린다).
-    previewHtml = '<div class="md-content">' + _renderMarkdown(raw) + "</div>";
+    previewHtml = '<div class="md-content">' + _renderMarkdown(displayRaw) + "</div>";
   }
+  return { effectiveRaw, previewHtml };
+}
+
+// `editTarget`(선택) — {kind: "message", id, conversationId} 또는
+// {kind: "deliverable", id}. 넘기면 "수정" 버튼과 편집 영역이 추가돼
+// 소스를 직접 고쳐 저장할 수 있다(1단계: 수동 편집 — AI가 만든 HTML에
+// 색 대비 등의 버그가 있을 때 즉석에서 고치는 용도). 넘기지 않으면
+// 기존 동작과 100% 동일(대부분의 renderContent() 호출부 — Crew 실행
+// 결과·샌드박스 미리보기·근거 블록 등은 원본 데이터가 없거나 수정이
+// 의미가 없는 이력성 데이터라 이 옵션을 쓰지 않는다).
+// `rawForStorage`(선택) — `_buildArtifactParts()` 주석 참고.
+function renderContent(raw, contentType, editTarget, rawForStorage) {
+  const artifactId = "artifact-" + (++_artifactSeq);
+  const { effectiveRaw, previewHtml } = _buildArtifactParts(raw, contentType, rawForStorage);
 
   // 복사 버튼은 렌더링된(하이라이팅/HTML태그 섞인) 결과가 아니라 원본
   // raw 텍스트를 복사해야 한다 — <textarea> 안에 esc()로 이스케이프해
   // 넣으면 브라우저가 파싱 시점에 엔티티를 다시 원문으로 풀어주므로,
   // `.value`를 읽기만 하면 별도 보관 없이 정확한 원본을 얻는다.
   const downloadExt = _DOWNLOAD_EXT[contentType] || "md";
+  // 사용자 보고(2026-11-16, "'소스보기' 버튼 클릭시 다시 리프레시되어
+  // 화면 닫힘, 수정 기능에서 소스 보기 기능이 있어 중복이므로 '소스
+  // 보기' 버튼 삭제해줘") — 읽기 전용 소스 토글(이 버튼 + `.artifact-
+  // source` div)을 완전히 제거한다. "수정"을 열면 소스 모드 textarea/
+  // CodeMirror로 원본을 그대로 볼 수 있어 editTarget이 있는 콘텐츠는
+  // 중복이었고, editTarget이 없는 콘텐츠는 복사/다운로드로 원본을
+  // 그대로 받을 수 있다.
   const toolbarHtml =
     '<div class="artifact-toolbar">' +
     '<button type="button" class="small" data-copy-artifact="' + artifactId + '">복사</button>' +
     '<button type="button" class="small" data-download-artifact="' + artifactId + '" data-download-ext="' + downloadExt + '">다운로드</button>' +
-    (hasToggle
-      ? '<button type="button" class="small" data-toggle-artifact="' + artifactId + '">소스 보기</button>'
-      : "") +
     // 사용자 요청(2026-10-13, "claude artifact 수준으로") — Claude
     // Artifact의 대표적인 특징인 "전체화면으로 보기"를 추가한다.
     '<button type="button" class="small" data-fullscreen-artifact="' + artifactId + '">전체화면</button>' +
+    (editTarget
+      ? '<button type="button" class="small" data-edit-artifact="' + artifactId + '">수정</button>'
+      : "") +
     '</div>';
-  const sourceHtml = hasToggle
-    ? '<div class="artifact-source" id="' + artifactId + '-source" style="display:none">' +
-      '<pre class="code-block artifact-source-pre">' +
-      _highlightCode(raw, contentType === "html" ? "xml" : contentType === "markdown" ? "markdown" : undefined) +
-      "</pre></div>"
+  // `data-content-type`은 editTarget 유무와 무관하게 항상 붙인다 —
+  // "전체화면"을 새 탭으로 여는 로직(`openArtifactFullscreen()`)이
+  // HTML 콘텐츠인지 구분하는 데 모든 renderContent() 호출부에서 필요.
+  const editAttrs =
+    ' data-content-type="' + esc(contentType || "") + '"' +
+    (editTarget
+      ? ' data-edit-kind="' + esc(editTarget.kind) + '" data-edit-id="' + editTarget.id + '"' +
+        (editTarget.conversationId != null ? ' data-edit-conversation-id="' + editTarget.conversationId + '"' : "")
+      : "");
+  // 3단계("AI에게 다시 요청") — 손으로 직접 고치는 대신 "이 부분 색이
+  // 안 보여" 같은 자연어 피드백을 주면 LLM이 수정안을 textarea에
+  // 채워준다(저장은 안 됨 — 사람이 검토 후 아래 "저장" 버튼을 직접
+  // 눌러야 한다, `assist()`와 같은 설계).
+  //
+  // 사용자 요청(2026-11-16, "html 수정에 소스 수정이 아닌 Editor 도입이
+  // 가능한지") — 비주얼(WYSIWYG) 편집 모드를 추가한다. iframe 샌드박스
+  // 안쪽은 `allow-same-origin` 없이는 부모가 손댈 방법이 없고(의도된
+  // 보안장치), 그걸 풀면 신뢰 못 하는 LLM 생성 스크립트가 부모 앱 DOM에
+  // 접근할 길이 열려 위험하다 — 그래서 iframe이 아니라 DOMPurify로
+  // 살균한 HTML을 일반 `contenteditable` div에 직접 넣는 방식을 쓴다
+  // (DOMPurify 기본 설정은 `<style>`은 허용하고 `<script>`는 항상
+  // 제거한다 — 직접 소스로 확인함). 이 제거는 되돌릴 수 없으므로,
+  // `<script>`나 `on*` 이벤트 핸들러가 있는 결과물(게임 등 인터랙티브
+  // HTML)에는 비주얼 모드 버튼 자체를 안 보여주고 소스 편집만 쓸 수
+  // 있게 한다 — 발표자료/보고서류(색 대비 버그가 실제로 나온 케이스)는
+  // 스크립트가 없어 비주얼 모드가 안전하게 열린다.
+  // 사용자 보고(2026-11-16, "대화의 HTML 결과물 확인시 비주얼 편집
+  // 기능이 표시안됨") — 실제 저장된 메시지로 재현 확인한 원인: 아래
+  // 정규식에 단어 경계(\\b)가 없어 `<meta ... content="...">`의
+  // "content="(그 안에 "on"으로 끝나는 "c**on**tent" 부분 문자열)
+  // 같은 평범한 속성까지 "이벤트 핸들러"로 오인해 거의 모든 실제
+  // 문서에서 비주얼 모드를 숨겨버렸다 — 진짜 이벤트 핸들러(onclick=
+  // 등)는 항상 공백/태그 경계 뒤에서 시작하므로 \\b를 앞에 붙이면
+  // "content="/"action="처럼 단어 중간에 "on"이 낀 경우는 더 이상
+  // 안 걸리고, 진짜 on* 핸들러만 정확히 잡힌다(직접 재현해 확인).
+  const _hasScriptOrHandler = /<script[\\s>]|\\bon\\w+\\s*=/i.test(effectiveRaw);
+  const showVisualToggle = !!(editTarget && contentType === "html" && !_hasScriptOrHandler);
+  const modeToggleHtml = showVisualToggle
+    ? '<div class="artifact-edit-mode-toggle" style="display:flex;gap:0.3rem;margin-bottom:0.4rem">' +
+      '<button type="button" class="small primary" data-edit-mode-btn="' + artifactId + '" data-mode="source">소스 편집</button>' +
+      '<button type="button" class="small" data-edit-mode-btn="' + artifactId + '" data-mode="visual">비주얼 편집</button>' +
+      '</div>'
+    : "";
+  const visualEditHtml = showVisualToggle
+    ? '<div class="artifact-edit-visual" id="' + artifactId + '-edit-visual-wrap" style="display:none">' +
+      '<div style="display:flex;gap:0.8rem;align-items:center;margin-bottom:0.4rem">' +
+      '<label class="muted">글자색 <input type="color" data-visual-color="fore" data-artifact="' + artifactId + '" value="#000000"></label>' +
+      '<label class="muted">배경색 <input type="color" data-visual-color="back" data-artifact="' + artifactId + '" value="#ffffff"></label>' +
+      '<span class="muted" style="font-size:0.8rem">글자를 드래그로 선택한 뒤 색을 고르세요</span>' +
+      '</div>' +
+      '<div class="artifact-visual-editable" id="' + artifactId + '-edit-visual" contenteditable="true" ' +
+      'style="border:1px solid #14213d;border-radius:6px;padding:0.75rem;min-height:220px;max-height:500px;overflow:auto;background:#fff;color:#000"></div>' +
+      '</div>'
+    : "";
+  const editHtml = editTarget
+    ? '<div class="artifact-edit" id="' + artifactId + '-edit" data-edit-mode="source" style="display:none">' +
+      '<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem">' +
+      '<input type="text" id="' + artifactId + '-fix-feedback" placeholder="' +
+      (contentType === "html" ? "예: 이 부분 색이 안 보여" : "예: 이 부분을 더 간결하게 줄여줘") + '" ' +
+      'style="flex:1;box-sizing:border-box" autocomplete="off">' +
+      '<button type="button" class="small" data-suggest-fix-artifact="' + artifactId + '">AI에게 요청</button>' +
+      '</div>' +
+      modeToggleHtml +
+      '<div class="artifact-edit-source" id="' + artifactId + '-edit-source-wrap">' +
+      '<textarea class="artifact-edit-textarea" id="' + artifactId + '-edit-textarea" ' +
+      'style="width:100%;box-sizing:border-box;min-height:220px;font-family:monospace;font-size:0.85rem"></textarea>' +
+      '</div>' +
+      visualEditHtml +
+      '<div class="artifact-toolbar">' +
+      '<button type="button" class="small primary" data-save-artifact="' + artifactId + '">저장</button>' +
+      '<button type="button" class="small" data-cancel-edit-artifact="' + artifactId + '">취소</button>' +
+      '<span class="muted" id="' + artifactId + '-edit-status" style="font-size:0.85rem"></span>' +
+      '</div></div>'
     : "";
 
   return (
-    '<div class="artifact-block" data-artifact-id="' + artifactId + '">' +
+    '<div class="artifact-block" data-artifact-id="' + artifactId + '"' + editAttrs + '>' +
     toolbarHtml +
     '<div class="artifact-preview" id="' + artifactId + '-preview">' + previewHtml + '</div>' +
-    sourceHtml +
+    editHtml +
     '<textarea class="artifact-raw-store" id="' + artifactId + '-raw" style="display:none" aria-hidden="true">' +
-    esc(raw) + '</textarea>' +
+    esc(effectiveRaw) + '</textarea>' +
     '</div>'
   );
 }
+
+// 대화창 스킬 선택 — 네이티브 <select>를 버튼+목록으로 대체(위
+// renderConversationDetail의 "Firefox 스크린샷" 주석 참고)한 뒤 그
+// 현재값/표시 라벨을 함께 갱신하는 공용 헬퍼. 숨은 input의 `.value`는
+// 기존 코드(메시지 전송 시 읽는 부분)가 그대로 쓰므로 수정 불필요.
+function _setSkillSelectDisplay(value, label) {
+  const hidden = document.getElementById("conv-skill-select");
+  const btn = document.getElementById("conv-skill-select-btn");
+  if (hidden) hidden.value = value;
+  if (btn) btn.textContent = (label || "스킬 선택 안 함") + " ▾";
+}
+
+// 사용자 요청(2026-11-16, "html 수정에 소스 수정이 아닌 Editor 도입이
+// 가능한지" → "개선해줘") — 비주얼(WYSIWYG) 편집 모드. 소스/비주얼
+// 전환 시 양방향으로 내용을 동기화한다(한쪽에서 고친 걸 다른 쪽으로
+// 넘어가도 잃지 않게). `renderContent()`의 `showVisualToggle` 주석
+// 참고 — `<script>`가 있는 결과물엔 이 모드 버튼 자체가 안 뜬다.
+function _switchArtifactEditMode(id, mode) {
+  const editBox = document.getElementById(id + "-edit");
+  const sourceWrap = document.getElementById(id + "-edit-source-wrap");
+  const visualWrap = document.getElementById(id + "-edit-visual-wrap");
+  const editTextarea = document.getElementById(id + "-edit-textarea");
+  const visualEl = document.getElementById(id + "-edit-visual");
+  if (!editBox || !sourceWrap || !visualWrap || !editTextarea || !visualEl) return;
+  if ((editBox.dataset.editMode || "source") === mode) return;
+  if (mode === "visual") {
+    if (editTextarea._cm) editTextarea._cm.save();
+    // DOMPurify로 살균한 뒤 contenteditable에 넣는다 — <script>는
+    // 이미 이 모드 자체가 안 뜨는 콘텐츠로 걸러졌지만, 혹시 모를
+    // on* 핸들러 등은 여기서도 한 번 더 걸러진다(이중 안전장치).
+    visualEl.innerHTML = (typeof DOMPurify !== "undefined")
+      ? DOMPurify.sanitize(editTextarea.value)
+      : esc(editTextarea.value);
+    sourceWrap.style.display = "none";
+    visualWrap.style.display = "block";
+  } else {
+    const rebuilt = _rebuildHtmlDocument(visualEl.innerHTML);
+    editTextarea.value = rebuilt;
+    if (editTextarea._cm) editTextarea._cm.setValue(rebuilt);
+    sourceWrap.style.display = "block";
+    visualWrap.style.display = "none";
+  }
+  editBox.dataset.editMode = mode;
+  const toggleWrap = editBox.querySelector(".artifact-edit-mode-toggle");
+  if (toggleWrap) {
+    toggleWrap.querySelectorAll("[data-edit-mode-btn]").forEach(btn => {
+      btn.classList.toggle("primary", btn.dataset.mode === mode);
+    });
+  }
+}
+
+// 비주얼 편집 결과(살균된 body 내용물)를 다시 완전한 HTML 문서로
+// 감싼다 — DOMPurify가 펼쳐버린 <head> 메타데이터(title 등)는 복구
+// 못 하지만(색 대비 같은 단순 수정 목적엔 영향 없음), <style>은 그
+// 내용 안에 그대로 남아 있어 위치와 무관하게 똑같이 적용된다.
+function _rebuildHtmlDocument(bodyInner) {
+  return "<!DOCTYPE html>\\n<html>\\n<head><meta charset=\\"utf-8\\"></head>\\n<body>\\n" +
+    bodyInner + "\\n</body>\\n</html>";
+}
+
+// <input type="color"> 클릭으로 포커스가 옮겨가면 contenteditable 안의
+// 텍스트 선택(Selection)이 끊겨 execCommand가 적용될 곳을 잃는다 —
+// 마우스를 떼거나 키를 뗄 때마다 그 시점의 선택 범위를 엘리먼트에
+// 직접 저장해뒀다가, 색상 적용 시 그 범위를 되살린 뒤 명령을 내린다.
+function _saveVisualEditorSelection(ev) {
+  const el = ev.target.closest(".artifact-visual-editable");
+  if (!el) return;
+  const sel = window.getSelection();
+  if (sel.rangeCount > 0 && el.contains(sel.anchorNode)) {
+    el._savedRange = sel.getRangeAt(0).cloneRange();
+  }
+}
+document.addEventListener("mouseup", _saveVisualEditorSelection);
+document.addEventListener("keyup", _saveVisualEditorSelection);
+document.addEventListener("change", (ev) => {
+  const colorInput = ev.target.closest("[data-visual-color]");
+  if (!colorInput) return;
+  const visualEl = document.getElementById(colorInput.dataset.artifact + "-edit-visual");
+  if (!visualEl) return;
+  if (visualEl._savedRange) {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(visualEl._savedRange);
+  }
+  visualEl.focus();
+  const command = colorInput.dataset.visualColor === "fore" ? "foreColor" : "hiliteColor";
+  try {
+    document.execCommand(command, false, colorInput.value);
+  } catch (e) {
+    // 구형/일부 브라우저에서 execCommand 자체가 없거나 실패해도
+    // 나머지 편집(텍스트 직접 타이핑) 기능은 그대로 쓸 수 있다.
+  }
+});
 
 // 전역 위임(한 번만 등록) — renderContent()가 어디서 호출되든(Task
 // 워크스페이스/Crew 실행 결과/대화 등) 매번 버튼을 다시 연결할 필요가
@@ -892,6 +1257,26 @@ document.addEventListener("click", async (ev) => {
   // 발생하는 네이티브 click이 그대로 버블되면 정렬(data-sort-col)까지
   // 같이 트리거된다 — 여기서 먼저 걸러낸다.
   if (ev.target.closest(".col-resizer")) return;
+  // 스킬 선택 드롭다운 — 바깥을 클릭하면 열려 있던 목록을 닫는다
+  // (다른 분기보다 먼저, return 없이 실행해 아래 토글/선택 처리와
+  // 함께 동작하게 한다).
+  const openSkillList = document.getElementById("conv-skill-select-list");
+  if (openSkillList && openSkillList.style.display !== "none" && !ev.target.closest(".skill-select-wrap")) {
+    openSkillList.style.display = "none";
+  }
+  const skillToggleBtn = ev.target.closest("[data-skill-select-toggle]");
+  if (skillToggleBtn) {
+    const list = document.getElementById("conv-skill-select-list");
+    if (list) list.style.display = list.style.display === "none" ? "block" : "none";
+    return;
+  }
+  const skillOption = ev.target.closest("[data-skill-select-option]");
+  if (skillOption) {
+    _setSkillSelectDisplay(skillOption.dataset.skillSelectOption, skillOption.textContent);
+    const list = document.getElementById("conv-skill-select-list");
+    if (list) list.style.display = "none";
+    return;
+  }
   const copyBtn = ev.target.closest("[data-copy-artifact]");
   if (copyBtn) {
     const raw = document.getElementById(copyBtn.dataset.copyArtifact + "-raw");
@@ -903,21 +1288,161 @@ document.addEventListener("click", async (ev) => {
     }).catch(() => showMsg("global-msg", "클립보드 복사에 실패했습니다", "error"));
     return;
   }
-  const toggleBtn = ev.target.closest("[data-toggle-artifact]");
-  if (toggleBtn) {
-    const id = toggleBtn.dataset.toggleArtifact;
-    const preview = document.getElementById(id + "-preview");
-    const source = document.getElementById(id + "-source");
-    if (!preview || !source) return;
-    const showingSource = source.style.display !== "none";
-    source.style.display = showingSource ? "none" : "block";
-    preview.style.display = showingSource ? "block" : "none";
-    toggleBtn.textContent = showingSource ? "소스 보기" : "미리보기";
-    return;
-  }
   const fullscreenBtn = ev.target.closest("[data-fullscreen-artifact]");
   if (fullscreenBtn) {
     openArtifactFullscreen(fullscreenBtn.dataset.fullscreenArtifact);
+    return;
+  }
+  // 사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된 HTML을
+  // 수정할 수 있는 기능" 1단계) — "수정" 버튼은 `renderContent()`가
+  // `editTarget`을 받은 블록에만 존재하므로(대화 메시지의 완전한 HTML
+  // 문서·Task 산출물), 다른 renderContent() 호출부(Crew 실행 이력,
+  // 근거 블록 등)는 이 분기에 전혀 걸리지 않는다 — 기존 동작 무변화.
+  const editArtifactBtn = ev.target.closest("[data-edit-artifact]");
+  if (editArtifactBtn) {
+    const id = editArtifactBtn.dataset.editArtifact;
+    const preview = document.getElementById(id + "-preview");
+    const editBox = document.getElementById(id + "-edit");
+    const editTextarea = document.getElementById(id + "-edit-textarea");
+    const rawEl = document.getElementById(id + "-raw");
+    if (!preview || !editBox || !editTextarea || !rawEl) return;
+    editTextarea.value = rawEl.value;
+    // 2단계("가벼운 코드 에디터") — HTML 수정에만 CodeMirror로 문법
+    // 강조를 붙인다(htmlmixed 모드, CDN 로드 성공 시에만). CDN 로드
+    // 실패 시 `typeof CodeMirror === "undefined"`라 그냥 지나가고
+    // 위에서 이미 채운 평범한 textarea(1단계)가 그대로 쓰인다.
+    const block = document.querySelector('[data-artifact-id="' + id + '"]');
+    const contentType = block ? block.dataset.contentType : "";
+    if (editTextarea._cm) {
+      editTextarea._cm.setValue(rawEl.value);
+    } else if (typeof CodeMirror !== "undefined" && contentType === "html") {
+      editTextarea._cm = CodeMirror.fromTextArea(editTextarea, {
+        mode: "htmlmixed", lineNumbers: true, lineWrapping: true, viewportMargin: Infinity,
+      });
+    }
+    // 매번 열 때 소스 모드로 리셋한다 — 지난번에 비주얼 모드로 저장/
+    // 취소하고 닫았어도 다음에 열면 항상 소스부터 보여준다(예측 가능성).
+    editBox.dataset.editMode = "source";
+    const sourceWrap = document.getElementById(id + "-edit-source-wrap");
+    const visualWrap = document.getElementById(id + "-edit-visual-wrap");
+    if (sourceWrap) sourceWrap.style.display = "block";
+    if (visualWrap) visualWrap.style.display = "none";
+    const toggleWrap = editBox.querySelector(".artifact-edit-mode-toggle");
+    if (toggleWrap) {
+      toggleWrap.querySelectorAll("[data-edit-mode-btn]").forEach(btn => {
+        btn.classList.toggle("primary", btn.dataset.mode === "source");
+      });
+    }
+    preview.style.display = "none";
+    editBox.style.display = "block";
+    if (editTextarea._cm) editTextarea._cm.refresh();
+    return;
+  }
+  const cancelEditArtifactBtn = ev.target.closest("[data-cancel-edit-artifact]");
+  if (cancelEditArtifactBtn) {
+    const id = cancelEditArtifactBtn.dataset.cancelEditArtifact;
+    const preview = document.getElementById(id + "-preview");
+    const editBox = document.getElementById(id + "-edit");
+    if (preview) preview.style.display = "block";
+    if (editBox) editBox.style.display = "none";
+    return;
+  }
+  // 소스/비주얼 편집 모드 전환 버튼 — 실제 전환·동기화 로직은
+  // `_switchArtifactEditMode()`(아래, 편집 패널 밖에서도 재사용 가능하게
+  // 독립 함수로 뺌)가 한다.
+  const editModeBtn = ev.target.closest("[data-edit-mode-btn]");
+  if (editModeBtn) {
+    _switchArtifactEditMode(editModeBtn.dataset.editModeBtn, editModeBtn.dataset.mode);
+    return;
+  }
+  // 3단계("AI에게 다시 요청") — 결과는 저장하지 않고 편집 textarea를
+  // 채우기만 한다(검토 후 "저장" 버튼을 직접 눌러야 실제로 반영됨).
+  const suggestFixBtn = ev.target.closest("[data-suggest-fix-artifact]");
+  if (suggestFixBtn) {
+    const id = suggestFixBtn.dataset.suggestFixArtifact;
+    const block = document.querySelector('[data-artifact-id="' + id + '"]');
+    const feedbackEl = document.getElementById(id + "-fix-feedback");
+    const editTextarea = document.getElementById(id + "-edit-textarea");
+    const statusEl = document.getElementById(id + "-edit-status");
+    if (!block || !feedbackEl || !editTextarea) return;
+    const feedback = feedbackEl.value.trim();
+    if (!feedback) {
+      showMsg("global-msg", "어떤 부분을 고칠지 피드백을 먼저 입력하세요", "error");
+      return;
+    }
+    const kind = block.dataset.editKind;
+    const targetId = block.dataset.editId;
+    const conversationId = block.dataset.editConversationId;
+    const endpoint = kind === "message"
+      ? "/api/conversations/" + conversationId + "/messages/" + targetId + "/suggest-fix"
+      : "/api/deliverables/" + targetId + "/suggest-fix";
+    suggestFixBtn.disabled = true;
+    if (statusEl) statusEl.textContent = "AI가 수정안을 만드는 중...";
+    try {
+      const result = await api("POST", endpoint, { feedback });
+      // 비주얼 모드로 보고 있었다면 소스 모드로 전환해 수정안을 바로
+      // 볼 수 있게 한다(비주얼 영역은 그대로 둬도 안 보이는 곳이라
+      // 채워봐야 소용없다).
+      const editBoxForSuggest = document.getElementById(id + "-edit");
+      if (editBoxForSuggest && editBoxForSuggest.dataset.editMode === "visual") {
+        _switchArtifactEditMode(id, "source");
+      }
+      editTextarea.value = result.suggestion;
+      if (editTextarea._cm) editTextarea._cm.setValue(result.suggestion);
+      showMsg("global-msg", "수정안을 받았습니다 — 검토 후 저장하세요", "ok");
+    } catch (e) {
+      showMsg("global-msg", e.message, "error");
+    } finally {
+      suggestFixBtn.disabled = false;
+      if (statusEl) statusEl.textContent = "";
+    }
+    return;
+  }
+  const saveArtifactBtn = ev.target.closest("[data-save-artifact]");
+  if (saveArtifactBtn) {
+    const id = saveArtifactBtn.dataset.saveArtifact;
+    const block = document.querySelector('[data-artifact-id="' + id + '"]');
+    const editBox = document.getElementById(id + "-edit");
+    const editTextarea = document.getElementById(id + "-edit-textarea");
+    const statusEl = document.getElementById(id + "-edit-status");
+    if (!block || !editBox || !editTextarea) return;
+    const kind = block.dataset.editKind;
+    const targetId = block.dataset.editId;
+    const conversationId = block.dataset.editConversationId;
+    const contentType = block.dataset.contentType || undefined;
+    // 비주얼 모드로 편집 중이었으면 그 내용을 완전한 HTML 문서로
+    // 다시 감싸 저장한다(아래 `_rebuildHtmlDocument()` 참고) — 소스
+    // 모드면 지금까지와 동일하게 textarea/CodeMirror 값을 그대로 쓴다.
+    let newContent;
+    if (editBox.dataset.editMode === "visual") {
+      const visualEl = document.getElementById(id + "-edit-visual");
+      newContent = visualEl ? _rebuildHtmlDocument(visualEl.innerHTML) : editTextarea.value;
+    } else {
+      if (editTextarea._cm) editTextarea._cm.save(); // CodeMirror 내용을 원본 textarea.value로 동기화
+      newContent = editTextarea.value;
+    }
+    const endpoint = kind === "message"
+      ? "/api/conversations/" + conversationId + "/messages/" + targetId
+      : "/api/deliverables/" + targetId;
+    saveArtifactBtn.disabled = true;
+    if (statusEl) statusEl.textContent = "저장 중...";
+    try {
+      await api("PATCH", endpoint, { content: newContent });
+      const built = _buildArtifactParts(newContent, contentType);
+      const previewEl = document.getElementById(id + "-preview");
+      const rawEl = document.getElementById(id + "-raw");
+      if (previewEl) { previewEl.innerHTML = built.previewHtml; previewEl.style.display = "block"; }
+      if (rawEl) rawEl.value = built.effectiveRaw;
+      editTextarea.value = built.effectiveRaw;
+      if (editTextarea._cm) editTextarea._cm.setValue(built.effectiveRaw);
+      editBox.style.display = "none";
+      showMsg("global-msg", "저장했습니다", "ok");
+    } catch (e) {
+      showMsg("global-msg", e.message, "error");
+    } finally {
+      saveArtifactBtn.disabled = false;
+      if (statusEl) statusEl.textContent = "";
+    }
     return;
   }
   // 사용자 요청(2026-10-14, "결과 파일을 복사 및 다운로드 가능하도록") —
@@ -1087,6 +1612,11 @@ document.addEventListener("click", async (ev) => {
 async function _reloadConversationMessagesInPlace(conversationId) {
   const box = document.getElementById("conv-messages");
   if (!box) return;
+  // `refreshConversationMessages()`와 같은 이유로 — 열려 있는 편집
+  // 영역이 있으면 건너뛴다(아래 해당 함수의 2026-11-16 주석 참고).
+  const openEdit = Array.from(box.querySelectorAll(".artifact-edit"))
+    .some(el => el.style.display !== "none");
+  if (openEdit) return;
   try {
     const [conv, participants, messages] = await Promise.all([
       api("GET", "/api/conversations/" + conversationId),
@@ -1102,42 +1632,62 @@ async function _reloadConversationMessagesInPlace(conversationId) {
   }
 }
 
-// 사용자 요청(2026-10-13, "claude artifact 수준으로") — 이미 렌더링된
-// 미리보기 DOM을 그대로 복제해 전체화면 오버레이에 옮겨 붙인다(다시
-// 파싱/렌더링할 필요 없음 — html은 iframe이라 복제해도 그대로 동작한다).
-// 오버레이 엘리먼트 하나를 재사용한다(열 때마다 새로 만들지 않음).
-let _artifactFullscreenEl = null;
-function _ensureArtifactFullscreenEl() {
-  if (_artifactFullscreenEl) return _artifactFullscreenEl;
-  const overlay = document.createElement("div");
-  overlay.className = "artifact-fullscreen-overlay";
-  overlay.style.display = "none";
-  overlay.innerHTML =
-    '<div class="artifact-fullscreen-panel">' +
-    '<button type="button" class="small artifact-fullscreen-close" aria-label="닫기">✕ 닫기</button>' +
-    '<div class="artifact-fullscreen-body"></div>' +
-    "</div>";
-  document.body.appendChild(overlay);
-  overlay.addEventListener("click", (ev) => {
-    if (ev.target === overlay || ev.target.closest(".artifact-fullscreen-close")) {
-      closeArtifactFullscreen();
-    }
-  });
-  _artifactFullscreenEl = overlay;
-  return overlay;
-}
+// 사용자 요청(2026-10-13, "claude artifact 수준으로") — 처음엔 모달
+// 오버레이(팝업)로 구현했으나, 사용자 보고(2026-11-16, "대화 중
+// '전체화면'의 경우 팝업창으로 표시되는데, 이를 새로운 탭으로
+// 변경해줘")로 새 브라우저 탭에서 여는 방식으로 교체한다.
+// `content_type === "html"`이면 raw HTML을 그대로 새 탭의 문서로
+// 띄운다(이미 완결된 문서라 그대로 열면 됨 — 다운로드 버튼이 받는
+// 파일과 동일한 내용). 그 외(markdown/code/text)는 현재 페이지의
+// <style> 전체(모든 .code-block/.md-content 등 클래스가 그 안에
+// 있음)와 highlight.js 테마만 같이 넣어 새 문서를 만들어, 지금 보이는
+// 미리보기와 똑같은 모양으로 렌더되게 한다(mermaid로 이미 그려진
+// SVG는 innerHTML에 그대로 포함돼 그대로 뜨지만, Chart.js 캔버스는
+// 비트맵이라 innerHTML 복제로는 다시 안 그려지는 알려진 한계로 남겨둔다
+// — 이 플랫폼에서 전체화면을 쓰는 대부분의 경우가 HTML 프레젠테이션/
+// 코드/문서라 영향이 작다).
 function openArtifactFullscreen(artifactId) {
   const preview = document.getElementById(artifactId + "-preview");
-  if (!preview) return;
-  const overlay = _ensureArtifactFullscreenEl();
-  overlay.querySelector(".artifact-fullscreen-body").innerHTML = preview.innerHTML;
-  overlay.style.display = "flex";
+  const rawEl = document.getElementById(artifactId + "-raw");
+  const block = document.querySelector('[data-artifact-id="' + artifactId + '"]');
+  if (!preview || !rawEl) return;
+  const contentType = block ? block.dataset.contentType : "";
+  let docHtml;
+  if (contentType === "html") {
+    docHtml = _injectSlideshowController(rawEl.value);
+  } else {
+    const styleTag = document.querySelector("head > style");
+    docHtml =
+      '<!doctype html><html><head><meta charset="utf-8">' +
+      "<title>HAIR-Platform 결과물</title>" +
+      (styleTag ? styleTag.outerHTML : "") +
+      '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/atom-one-dark.min.css">' +
+      '</head><body style="padding:1.5rem;box-sizing:border-box;max-width:900px;margin:0 auto">' +
+      preview.innerHTML +
+      "</body></html>";
+  }
+  const blob = new Blob([docHtml], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, "_blank");
+  if (!win) {
+    showMsg("global-msg", "새 탭을 열지 못했습니다 — 팝업 차단을 해제해주세요", "error");
+  }
+  // 새 탭이 blob을 로드할 시간을 넉넉히 준 뒤 해제 — 너무 빨리 해제하면
+  // 느린 환경에서 탭이 콘텐츠를 못 읽어올 수 있다.
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
-function closeArtifactFullscreen() {
-  if (_artifactFullscreenEl) _artifactFullscreenEl.style.display = "none";
-}
-document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") closeArtifactFullscreen();
+
+// 주입된 슬라이드쇼 컨트롤(위 `_injectSlideshowController()`)의 "슬라이드
+// 재생" 버튼이 iframe 안에서 Fullscreen API를 못 쓰면(브라우저별 지원
+// 차이) 이 메시지로 알려온다 — 어느 iframe이 보냈는지는 `event.source`
+// (그 iframe의 contentWindow)로 역으로 찾아, 이미 확실히 동작하는
+// "전체화면"(새 탭 열기)으로 대신 열어준다.
+window.addEventListener("message", (ev) => {
+  if (!ev.data || !ev.data.__hair_slideshow_fullscreen) return;
+  const iframe = Array.from(document.querySelectorAll(".html-preview"))
+    .find(el => el.contentWindow === ev.source);
+  const block = iframe && iframe.closest(".artifact-block");
+  if (block) openArtifactFullscreen(block.dataset.artifactId);
 });
 
 // 결과물을 그대로 다운로드(2026-10-07, Tier 1 — "다운로드는 가능한지
@@ -1247,8 +1797,8 @@ async function withBusy(btn, busyLabel, fn) {
 // 사용자 요청(2026-11-12, "UI/UX 개선") — 지금까지 파괴적/비용 발생
 // 액션 확인을 전부 브라우저 네이티브 `confirm()`으로 했다(스타일링
 // 불가·앱 전체를 막는 모달·나머지 UI와 톤이 다름). 커스텀 오버레이로
-// 교체한다 — `.artifact-fullscreen-overlay`(이미 있는 유일한 fixed
-// 오버레이)와 같은 시각 톤을 맞춘다. 반환값은 네이티브 confirm()과
+// 교체한다(어두운 반투명 배경 + 둥근 모서리 패널의 시각 톤은
+// 이 파일 전역의 모달류와 통일). 반환값은 네이티브 confirm()과
 // 동일하게 Promise<boolean>이라, 호출부는 `if (!window.confirm(msg))
 // return;`을 `if (!(await confirmModal(msg))) return;`로만 바꾸면
 // 된다(그 함수가 async가 아니었다면 그 함수 자체도 async로 바꿔야
@@ -2304,7 +2854,7 @@ async function renderConversations(content) {
     table(["ID", "제목", "시작일", "동작"], list.map(c => [
       c.id,
       esc(c.title || "(제목 없음)") + (c.linked_task_id ? ' <span class="muted">(업무 #' + c.linked_task_id + ')</span>' : ''),
-      esc(c.created_at),
+      esc(fmtTime(c.created_at)),
       '<button class="small" data-open-conversation="' + c.id + '">열기</button> ' +
       '<button class="small danger" data-leave-conversation="' + c.id + '">나가기</button> ' +
       (c.created_by === ME.id
@@ -2357,6 +2907,19 @@ async function renderConversations(content) {
 async function refreshConversationMessages(conversationId, participants, conv) {
   const box = document.getElementById("conv-messages");
   if (!box) return;
+  // 사용자 보고(2026-11-16, "HTML 수정하려해도, HTML 결과물이
+  // 리프레시되며 입력을 못하게 막아(AI 수정 요청 항목이 닫힘)") —
+  // 이 함수가 6초마다 메시지 목록 전체를 innerHTML로 통째로
+  // 갈아끼우는데(아래), "수정" 버튼으로 열어둔 편집 영역(텍스트/
+  // CodeMirror·AI 피드백 입력창)도 그 DOM의 일부라 매번 같이
+  // 사라지면서 입력 중이던 내용까지 날아갔다. 지금 열려 있는 편집
+  // 영역이 하나라도 있으면 이번 갱신 주기는 건너뛴다 — 편집을
+  // 끝내면(저장/취소) 다음 주기부터 다시 정상적으로 갱신된다. 새
+  // 메시지 반영이 그만큼 늦어지는 트레이드오프는 받아들인다(입력
+  // 중인 내용을 잃는 것보다 훨씬 낫다).
+  const openEdit = Array.from(box.querySelectorAll(".artifact-edit"))
+    .some(el => el.style.display !== "none");
+  if (openEdit) return;
   try {
     const messages = await api("GET", "/api/conversations/" + conversationId + "/messages");
     box.innerHTML = messages.length ? messages.map(m => _renderConversationMessage(m, participants, conv)).join("")
@@ -2439,6 +3002,29 @@ function _conversationDelegationBadge(m) {
     return ' <span class="gate-badge gate-ok">위임 ' + m.delegation_count + '건</span>';
   }
   return ' <span class="muted" style="font-size:0.85em">위임 0건</span>';
+}
+
+// 사용자 요청(2026-11-17, "Human Agency Scale/ReAct 등 개념과 비교해
+// HAIR-Platform 개선이 필요한 Insight 정리" → "구현 시작") — "기본
+// AI"/"@Agent 멘션"(단일) 응답은 `agent_runtime.retrieve_context()`가
+// 검색 결과를 1회만 프롬프트에 끼워 넣을 뿐 CrewAI처럼 Agent가 스스로
+// 다시 검색을 호출하는 루프가 없다(`agent_runtime.py` 자체 주석에
+// 이미 명시된 구조적 한계) — 사용자가 "검색 결과가 부족해 보이는데
+// 왜 다시 안 찾아보지?"라고 오해하지 않도록 이 메시지가 재질의가
+// 불가능한 1회성 응답이라는 걸 미리 알려준다. `delegation_count`가
+// 있는 메시지(실제 CrewAI 위임 루프를 거친 팀 실행)와 `llm_provider`
+// 조차 없는 메시지(파이프라인 진행 상황 같은 순수 알림, LLM 호출
+// 자체가 없었음, `conversations.post_pipeline_run_status_message()`)
+// 는 둘 다 이 배지가 해당하지 않는다 — 셋을 가르는 기준은 이미 DB에
+// 있는 두 컬럼(`llm_provider`/`delegation_count`)뿐이라 서버 변경
+// 없이 프런트에서만 구분할 수 있다.
+function _conversationSingleShotBadge(m) {
+  if (m.author_type !== "agent") return "";
+  if (m.delegation_count !== null && m.delegation_count !== undefined) return "";
+  if (!m.llm_provider) return "";
+  return ' <span class="gate-badge gate-na" ' +
+    'title="검색/도구 결과를 1회만 반영해 답했습니다 — 결과가 부족해도 스스로 다시 찾아보지 않습니다(실제 CrewAI 실행과 다른 점입니다).">' +
+    '단발 응답</span>';
 }
 
 // 사용자 요청(2026-10-19, "HTML 표시시 css, script 등 실행가능하도록
@@ -2591,13 +3177,25 @@ function _renderConversationMessage(m, participants, conv) {
   const isFullHtmlDoc = _looksLikeFullHtmlDocument(m.content);
   const contentType = isFullHtmlDoc ? "html" : undefined;
   const bodyContent = isFullHtmlDoc ? m.content : _highlightMentions(m.content, participants);
+  // 사용자 요청(2026-11-17, "대화에서 HTML 결과물에 적용된 수정기능을
+  // 참조해 모든 대화 결과물에서도 수정이 가능하도록") — 이전엔 완전한
+  // HTML 문서로 인식된 메시지에만 "수정"을 붙였다(그 외엔 `bodyContent`
+  // 가 원본이 아니라 @멘션 강조 처리가 섞인 표시용 HTML이라, 그대로
+  // 저장하면 메시지가 깨질 위험이 있었다). `renderContent()`에 추가한
+  // `rawForStorage` 인자(`m.content`, 강조 처리 전 진짜 원본)로 저장/
+  // 수정은 항상 원본을 쓰게 분리했으므로, 이제 모든 메시지 타입에
+  // "수정"을 붙일 수 있다. 권한은 삭제 버튼(`canDelete`)과 동일
+  // (`conversations.edit_message()`가 서버에서 같은 규칙으로 재확인).
+  const editTarget = canDelete
+    ? { kind: "message", id: m.id, conversationId: m.conversation_id }
+    : undefined;
   return '<div class="deliverable-card ' + side + '">' +
     '<div class="muted"><span class="msg-avatar ' + avatarClass + '">' +
     esc(_conversationAuthorInitial(who)) + '</span>' +
     '<strong class="' + whoClass + '">' + who + '</strong>' + skillBadge +
-    _conversationGateBadge(m) + _conversationDelegationBadge(m) + ' · ' + esc(m.created_at) +
+    _conversationGateBadge(m) + _conversationDelegationBadge(m) + _conversationSingleShotBadge(m) + ' · ' + esc(fmtTime(m.created_at)) +
     saveBtn + knowledgeBtn + deleteBtn + '</div>' +
-    '<div>' + renderContent(bodyContent, contentType) + '</div>' +
+    '<div>' + renderContent(bodyContent, contentType, editTarget, m.content) + '</div>' +
     '</div>';
 }
 
@@ -2717,9 +3315,21 @@ async function renderConversationDetail(conversationId, containerId) {
     // `renderConversationDetail` 재호출).
     '<label class="muted" style="font-size:0.85rem;white-space:nowrap">' +
     '<input type="checkbox" id="conv-show-dev-skills"' + (_convShowDevSkills ? " checked" : "") + '> 개발업무 스킬도 보기</label>' +
-    '<select id="conv-skill-select"><option value="">스킬 선택 안 함</option>' +
-    skillNames.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join("") +
-    '</select>' +
+    // 사용자 보고(2026-11-16, Firefox 스크린샷 — 스킬 선택 드롭다운이
+    // 화면 오른쪽 위 엉뚱한 곳에 뜨며 클릭으로 선택이 안 됨) — 네이티브
+    // <select>의 팝업 위치 계산이 Firefox 엔진 자체에서 어긋나는
+    // 것으로 보임(페이지 CSS로 고칠 수 없는 네이티브 위젯 렌더링
+    // 영역). 네이티브 select 대신 이미 같은 화면에서 쓰는
+    // `.mention-dropdown`과 같은 패턴(버튼 + 문서 흐름 안에서 절대
+    // 위치되는 목록)으로 바꿔 모든 브라우저에서 동일하게 동작하게 한다.
+    '<div class="skill-select-wrap" style="position:relative;display:inline-block">' +
+    '<button type="button" class="small" id="conv-skill-select-btn" data-skill-select-toggle>스킬 선택 안 함 ▾</button>' +
+    '<input type="hidden" id="conv-skill-select" value="">' +
+    '<ul class="mention-dropdown skill-select-list" id="conv-skill-select-list" style="display:none;top:100%;left:0;width:auto;white-space:nowrap">' +
+    '<li data-skill-select-option="">스킬 선택 안 함</li>' +
+    skillNames.map(s => '<li data-skill-select-option="' + esc(s) + '">' + esc(s) + '</li>').join("") +
+    '</ul>' +
+    '</div>' +
     '<div class="mention-wrap" style="position:relative;flex:1;min-width:200px">' +
     '<div id="conv-message-highlight" aria-hidden="true"></div>' +
     '<input id="conv-message-input" placeholder="메시지(@참가자이름으로 호출 가능)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
@@ -2765,8 +3375,7 @@ async function renderConversationDetail(conversationId, containerId) {
     search: (q) => api("GET", qs("/api/conversations/mentionable", { q })),
     onInvited: (item) => _inviteAndTrackParticipant(conversationId, participants, item),
     onMentionSelected: () => {
-      const skillSelect = document.getElementById("conv-skill-select");
-      if (skillSelect) skillSelect.value = "";
+      _setSkillSelectDisplay("", "");
       mentionMirror.sync();
     },
   });
@@ -2861,7 +3470,7 @@ async function renderConversationDetail(conversationId, containerId) {
         result = await api("POST", "/api/conversations/" + conversationId + "/messages", payload);
       }
       input.value = "";
-      document.getElementById("conv-skill-select").value = "";
+      _setSkillSelectDisplay("", "");
       mentionMirror.sync();
       await refreshConversationMessages(conversationId, participants, conv);
       // 사용자 요청(2026-10-18, "어떤 에이전트가 어떤 동작을 하고
@@ -3032,7 +3641,7 @@ async function renderInbox(content) {
       // docstring 참고). 다른 경고성 카드와 톤이 다르다는 걸 보여주려고
       // gate-ok 배지를 쓴다(나머지는 muted 텍스트뿐).
       return '<div class="deliverable-card"><div><span class="gate-badge gate-ok">' + labelOf[item.type] + '</span> · ' + esc(item.role_name) + '</div>' +
-        '<div class="muted">' + esc(item.completed_at || "") + '</div>' +
+        '<div class="muted">' + esc(fmtTime(item.completed_at)) + '</div>' +
         '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
     }
     return '<div class="deliverable-card"><div class="muted">' + labelOf[item.type] + " · " + esc(item.role_name) + '</div>' +
@@ -3100,7 +3709,7 @@ async function renderMyWork(content) {
         : r.latest_status ? esc(label(r.latest_status)) : '<span class="muted">아직 없음</span>',
       r.has_final_result ? '<span class="gate-badge gate-ok">✓ 승인됨</span>' : '<span class="muted">-</span>',
       r.deliverable_count,
-      r.latest_deliverable_at ? esc(r.latest_deliverable_at) : "-",
+      r.latest_deliverable_at ? esc(fmtTime(r.latest_deliverable_at)) : "-",
       '<button class="small" data-open-workspace="' + r.task_id + '">열기</button>',
     ])) +
     '<div id="mywork-detail"></div></section>';
@@ -3185,7 +3794,7 @@ async function _renderGalleryFiltered(content, filters) {
         '<span class="muted">#' + r.id + '</span>' +
         '</div>' +
         '<p><b>' + esc(r.task_role_name) + '</b> (할 일 #' + r.task_id + ')</p>' +
-        '<p class="muted">' + esc(r.created_at) + '</p>' +
+        '<p class="muted">' + esc(fmtTime(r.created_at)) + '</p>' +
         '<p>' + esc(r.preview || "(내용 없음)") + '</p>' +
         '<div class="gallery-card-actions">' +
         '<a href="/deliverables/' + r.id + '/view" target="_blank" rel="noopener">새 탭에서 보기</a>' +
@@ -3524,7 +4133,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const jobCard = (latestJob && latestJob.status === "running")
     ? '<div class="deliverable-card chat-agent"><div class="muted">AI 에이전트 · 생성 중…</div></div>'
     : (latestJob && latestJob.status === "failed"
-      ? '<div class="deliverable-card chat-agent"><div class="muted">AI 에이전트 · 실행 실패(' + esc(latestJob.finished_at) + ')</div>' +
+      ? '<div class="deliverable-card chat-agent"><div class="muted">AI 에이전트 · 실행 실패(' + esc(fmtTime(latestJob.finished_at)) + ')</div>' +
         '<div>' + esc(latestJob.error || "알 수 없는 오류") + '</div>' +
         promptSnapshotDetails(latestJob) + '</div>'
       : '');
@@ -3588,9 +4197,15 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     // 나왔는지 사후에 재현해볼 수 있게).
     const promptJob = jobs.find(j => j.deliverable_id === d.id && j.prompt_snapshot);
     const promptBlock = promptJob ? promptSnapshotDetails(promptJob) : "";
+    // 권한은 삭제 버튼과 동일한 경계(`deliverables.update_deliverable_
+    // content()`가 서버에서 같은 규칙으로 재확인) — admin/manager는
+    // 항상, 그 외엔 본인이 작성한 draft 상태 산출물만.
+    const canEditDeliverable = isSupervisor ||
+      (d.author_type === "human" && d.status === "draft" && d.author_id === ME.id);
+    const deliverableEditTarget = canEditDeliverable ? { kind: "deliverable", id: d.id } : undefined;
     return '<div class="deliverable-card ' + side + '">' +
-    '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(d.created_at) + " " + gateBadge + '</div>' +
-    '<div>' + renderContent(d.content, d.content_type) + '</div>' +
+    '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(fmtTime(d.created_at)) + " " + gateBadge + '</div>' +
+    '<div>' + renderContent(d.content, d.content_type, deliverableEditTarget) + '</div>' +
     '<div class="actions"><button class="small" data-download-deliverable="' + d.id + '">다운로드</button></div>' +
     evidenceBlock +
     promptBlock +
@@ -3646,10 +4261,14 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const finalResultLabel = finalResult === primaryDeliverable
     ? "✓ 최종 결과물(파이프라인 핵심 산출물)"
     : "✓ 최종 결과물(승인됨)";
+  const finalResultEditTarget = finalResult && (
+    isSupervisor ||
+    (finalResult.author_type === "human" && finalResult.status === "draft" && finalResult.author_id === ME.id)
+  ) ? { kind: "deliverable", id: finalResult.id } : undefined;
   const finalResultCard = finalResult
     ? '<div class="final-result-card">' +
-      '<div class="muted">' + finalResultLabel + ' · ' + esc(label(finalResult.author_type)) + ' · ' + esc(finalResult.created_at) + '</div>' +
-      '<div>' + renderContent(finalResult.content, finalResult.content_type) + '</div>' +
+      '<div class="muted">' + finalResultLabel + ' · ' + esc(label(finalResult.author_type)) + ' · ' + esc(fmtTime(finalResult.created_at)) + '</div>' +
+      '<div>' + renderContent(finalResult.content, finalResult.content_type, finalResultEditTarget) + '</div>' +
       '<div class="actions"><button class="small" data-download-deliverable="' + finalResult.id + '">다운로드</button></div>' +
       '</div>'
     : '<p class="muted">아직 승인된 최종 결과물이 없습니다 — 아래는 진행 중인 이력입니다.</p>';
@@ -3839,7 +4458,16 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       '</select>' +
       '<button class="small" id="ws-execute-pipeline-btn">파이프라인 실행(비용 발생)</button>' +
       '<p class="muted">선택한 파이프라인의 1단계부터 순서대로 진행됩니다 — "사람 승인 필요"로 표시된 단계가 아니면 Gate 기준 통과 시 자동으로 다음 단계로 넘어갑니다.</p>'
-    : (pipelineRunActive ? "" : '<p class="muted">등록된(활성) 파이프라인이 없습니다 — "파이프라인 관리" 탭에서 먼저 만드세요.</p>');
+    // 사용자 요청(2026-11-17, "Human Agency Scale... 코파일럿... 실행
+    // 중단 요청" → "구현 시작") — 진행 중인 실행에 "중단 요청" 버튼을
+    // 둔다. 이미 요청해둔 상태(`cancel_requested`)면 버튼 대신 안내
+    // 문구로 바꾼다(중복 클릭 방지).
+    : (pipelineRunActive
+        ? (latestPipelineRun.cancel_requested
+            ? '<p class="muted">⏳ 중단 요청됨 — 다음 안전한 지점(다음 단계 시작 전)에서 멈춥니다.</p>'
+            : '<button class="small danger" data-cancel-pipeline-run="' + latestPipelineRun.id + '">실행 중단 요청</button>' +
+              '<p class="muted">진행 중인 단계가 끝나는 즉시 멈춥니다 — 이미 시작된 Crew 실행 자체를 바로 끊지는 않습니다.</p>')
+        : '<p class="muted">등록된(활성) 파이프라인이 없습니다 — "파이프라인 관리" 탭에서 먼저 만드세요.</p>');
   const pipelineSectionHtml =
     '<section class="card"><h4>파이프라인 실행</h4>' +
     pipelineExecuteHtml +
@@ -3868,7 +4496,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 합친 통합 활동 기록. 기본은 접혀 있다(평소엔 "진행 이력"만으로
   // 충분하고, 이건 "누가 언제 뭘 했는지"를 감사하듯 들여다볼 때만 연다).
   const activityRows = activity.map(a =>
-    '<tr><td>' + esc(a.created_at) + '</td>' +
+    '<tr><td>' + esc(fmtTime(a.created_at)) + '</td>' +
     '<td>사용자 #' + esc(a.actor_id) + '</td>' +
     '<td>' + esc(a.action) + '</td>' +
     '<td class="muted">' + esc(label(a.subject_type)) + (a.subject_id === null ? "" : " #" + esc(a.subject_id)) + '</td></tr>'
@@ -3928,6 +4556,21 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       '</div>'
     : "";
 
+  // 사용자 요청(2026-11-17, "Human Agency Scale... 인간 고유 능력을
+  // 보호하는 Task는 Gate 점수와 무관하게 항상 사람에게 올라가야
+  // 한다" → "구현 시작") — `budgetCardHtml`과 달리 `budget` 조회
+  // 실패(403 등)에 묶이지 않도록 별도 블록으로 둔다. admin/manager
+  // 전용(거버넌스성 설정 — `max_retry_budget`과 같은 권한 범위).
+  const humanJudgmentCardHtml = isSupervisor
+    ? '<div class="card" style="margin:0.25rem 0 0.75rem">' +
+      '<label><input type="checkbox" id="ws-human-judgment-toggle"' +
+      (taskDetail.requires_human_judgment ? " checked" : "") + '> ' +
+      '사람 판단 필수 — 켜면 이 할 일이 타는 모든 파이프라인 단계는 ' +
+      'Gate 점수와 무관하게 항상 사람 결재를 거칩니다(협상·민감한 ' +
+      '커뮤니케이션 등 AI가 대신 판단해선 안 되는 업무용)</label>' +
+      '</div>'
+    : "";
+
   // 의존관계 그래프(사용자 결정: Riido 수준 시각화). 제거는
   // SVG 안에서 처리하기보다(클릭 판별이 번거롭다) 그래프 아래 평범한
   // 목록에 "제거" 버튼을 둬서 접근성·구현 단순성을 둘 다 잡는다 —
@@ -3981,6 +4624,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
     statusPriorityBar +
     budgetCardHtml +
+    humanJudgmentCardHtml +
     finalResultCard +
     notesCard +
     // 2026-10-08 — 이
@@ -4068,6 +4712,19 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   }
+  const cancelPipelineRunBtn = detail.querySelector("[data-cancel-pipeline-run]");
+  if (cancelPipelineRunBtn) {
+    cancelPipelineRunBtn.onclick = async () => {
+      if (!(await confirmModal(
+        "이 파이프라인 실행에 중단을 요청합니다 — 지금 바로 멈추는 게 아니라, 진행 중인 단계가 끝나는 다음 안전한 지점에서 멈춥니다. 계속할까요?"
+      ))) return;
+      try {
+        await api("POST", "/api/pipeline-runs/" + cancelPipelineRunBtn.dataset.cancelPipelineRun + "/cancel");
+        showMsg("global-msg", "중단을 요청했습니다.", "ok");
+        renderCollabWorkspace(taskId, containerId);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  }
   items.forEach(d => loadDeliverableComments(d.id, taskId, containerId));
   _loadTaskConversation(taskId);
 
@@ -4143,6 +4800,18 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       showMsg("global-msg", "재시도 예산을 저장했습니다.", "ok");
       renderCollabWorkspace(taskId, containerId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  const humanJudgmentToggle = document.getElementById("ws-human-judgment-toggle");
+  if (humanJudgmentToggle) humanJudgmentToggle.addEventListener("change", async () => {
+    const requiresHumanJudgment = humanJudgmentToggle.checked;
+    try {
+      await api("PATCH", "/api/tasks/" + taskId + "/human-judgment", { requires_human_judgment: requiresHumanJudgment });
+      showMsg("global-msg", requiresHumanJudgment ? "이제 이 할 일은 항상 사람 결재를 거칩니다." : "사람 판단 필수를 껐습니다.", "ok");
+    } catch (e) {
+      humanJudgmentToggle.checked = !requiresHumanJudgment;  // 실패 시 되돌림
+      showMsg("global-msg", e.message, "error");
+    }
   });
 
   const dependencyFormEl = document.getElementById("ws-dependency-form");
@@ -6611,6 +7280,12 @@ async function renderPoolRegistry(content) {
     '<li><b>대화창 표시</b>를 꺼두면 대화창의 스킬 선택 드롭다운에는 안 보이지만(선택해서 고를 수 없음), Agent의 skill_tags로는 그대로 쓸 수 있습니다 — mcp_remote/mcp_stdio/custom_python 도구가 붙은 스킬은 대화창 기본 AI(단발 호출, 실행 루프 없음)에서는 실제로 호출이 안 돼 기본값이 꺼짐으로 돼 있습니다(실제 CrewAI Agent 실행에서는 똑같이 동작합니다).</li>' +
     '<li><b>분류</b>(사용자 요청, 2026-11-11, "SW개발업무와 일반업무로 구분, 개발업무는 Default로 대화창에 안 보이고 필요시 노출") — "개발업무"로 분류된 스킬/도구는 대화창 드롭다운에 default로 안 보이지만 완전히 숨겨진 건 아닙니다 — 대화창의 "개발업무 스킬도 보기" 체크박스를 켠 사용자에게는 보입니다("대화창 표시"가 꺼진 스킬과는 다른 축으로, 둘 다 적용됩니다 — show_in_conversation이 꺼져 있으면 체크박스를 켜도 안 보입니다). Agent/Task의 skill_tags 자동완성에는 분류와 무관하게 항상 둘 다 뜹니다(그 경로는 CrewAI 실행이라 개발업무 스킬도 실제로 동작하기 때문). 위쪽 "분류 필터"로 목록을 좁혀볼 수 있고, 수정 화면에서 바로 바꿀 수 있습니다.</li>' +
     '<li><b>삭제</b>(관리자 전용)는 이 스킬 레코드만 지웁니다 — 같은 이름의 skill_tags를 가진 Agent/사람은 그대로 남고, 다음 실행부터 자동 도구 연결만 안 됩니다.</li>' +
+    // 사용자 요청(2026-11-17, "외부에서 마크다운 포멧의 Skill을
+    // import하거나, 마크다운 규격으로 export") — frontmatter(name/
+    // category/augmentation_mode/tool) + ## 지침/## 출력 형식/## 예시/
+    // ## 제약사항 섹션 규격. "내보내기"는 표의 각 행에서, "가져오기"는
+    // 아래 전용 폼에서 한다.
+    '<li><b>내보내기/가져오기</b> — 각 행의 "내보내기"는 이 스킬을 frontmatter(name/category/augmentation_mode/tool) + 섹션(## 지침/## 출력 형식/## 예시/## 제약사항) 규격 마크다운 파일로 내려받습니다. 아래 "마크다운으로 스킬 가져오기" 폼에 그 규격의 텍스트를 붙여넣으면 새 스킬로 등록됩니다.</li>' +
     '</ul>'
     ) +
     table(["코드", "이름", "설명", "기본 도구", "모드", "분류", "대화창 표시", "동작"], skills.map(s => [
@@ -6630,6 +7305,7 @@ async function renderPoolRegistry(content) {
         ? "숨김"
         : (s.category === "sw_dev" ? "기본 숨김(개발업무)" : "표시"),
       '<div class="actions"><button class="small" data-edit-skill="' + s.id + '">수정</button>' +
+        '<button class="small" data-export-skill="' + s.id + '">내보내기</button>' +
         (isAdmin ? '<button class="small danger" data-delete-skill="' + s.id + '">삭제</button>' : "") +
         "</div>",
     ])) +
@@ -6637,7 +7313,14 @@ async function renderPoolRegistry(content) {
     '<section class="card"><h2>신규 스킬 생성</h2>' +
     '<form id="skill-form">' +
     '<label style="display:block">스킬명(skill_tags와 일치)<br><input id="sp-name" required style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
-    '<label style="display:block;margin-top:0.5rem">설명<br><textarea id="sp-description" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem"></textarea></label>' +
+    '<label style="display:block;margin-top:0.5rem">지침(설명)<br><textarea id="sp-description" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem"></textarea></label>' +
+    // 사용자 요청(2026-11-17, "skill을 정해진 섹션 규격을 참조해
+    // 구조화") — description("지침")과 별개로 출력 형식/예시/제약사항을
+    // 선택 필드로 받는다. 전부 비워도 기존과 동일(백엔드가 None으로
+    // 저장).
+    '<label style="display:block;margin-top:0.5rem">출력 형식(선택)<br><textarea id="sp-output-format" rows="2" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem"></textarea></label>' +
+    '<label style="display:block;margin-top:0.5rem">예시(선택)<br><textarea id="sp-examples" rows="2" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem"></textarea></label>' +
+    '<label style="display:block;margin-top:0.5rem">제약사항(선택)<br><textarea id="sp-constraints" rows="2" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem"></textarea></label>' +
     '<label style="display:block;margin-top:0.5rem">모드<br>' +
     '<select id="sp-mode" style="margin-top:0.2rem"><option value="tool">tool(자동 호출)</option><option value="always">always</option><option value="none">none</option></select>' +
     '</label>' +
@@ -6652,6 +7335,26 @@ async function renderPoolRegistry(content) {
     '</div>' +
     '<label style="display:block;margin-top:0.5rem"><input type="checkbox" id="sp-show-in-conv" checked> 대화창에 표시</label>' +
     '<button class="primary" type="submit" style="margin-top:0.6rem">스킬 등록</button></form>' +
+    "</section>" +
+    '<section class="card"><h2>마크다운으로 스킬 가져오기</h2>' +
+    helpBox(
+      '<p class="muted">각 스킬 행의 "내보내기"가 내려주는 것과 같은 규격(frontmatter + ## 지침/## 출력 형식/## 예시/## 제약사항 섹션)의 .md 파일을 올리거나 아래에 직접 붙여넣으면 새 스킬로 등록됩니다. 이름이 이미 있으면 거부됩니다.</p>'
+    ) +
+    '<form id="skill-import-form">' +
+    // 사용자 요청(2026-11-17, "Skill 마크다운 파일을 읽어오고(규격
+    // 검사) 등록하는 방식으로 개선") — 기존엔 붙여넣기만 가능했다.
+    // 파일을 고르면 브라우저에서 바로 읽어(FileReader, 서버 업로드
+    // 아님) textarea를 채우고, frontmatter(name 필수)와 섹션 헤더가
+    // 있는지 최소한의 규격을 클라이언트에서 먼저 점검해 즉시 피드백을
+    // 준다 — 실제 등록 가능 여부의 최종 판정은 여전히 서버
+    // (`skill_markdown.parse_skill_markdown()`)가 한다(여기선 "이상해
+    // 보이면 미리 알려주는" 보조 검사일 뿐, 통과했다고 서버 등록이
+    // 보장되진 않는다 — 예: tool: 참조가 실제 존재하는지는 서버만 안다).
+    '<label style="display:block">마크다운 파일<br>' +
+    '<input type="file" id="sp-import-file" accept=".md,.markdown,text/markdown" style="margin-top:0.3rem"></label>' +
+    '<p id="sp-import-file-check" class="muted" style="margin:0.3rem 0 0"></p>' +
+    '<textarea id="sp-import-markdown" rows="10" placeholder="---&#10;name: 예시스킬&#10;category: general&#10;augmentation_mode: none&#10;---&#10;&#10;## 지침&#10;&#10;..." style="width:100%;box-sizing:border-box;font-family:monospace;resize:vertical;margin-top:0.6rem"></textarea>' +
+    '<button class="primary" type="submit" style="margin-top:0.6rem">등록하기</button></form>' +
     "</section>";
 
   document.getElementById("pool-category-filter").addEventListener("change", (ev) => {
@@ -6727,6 +7430,9 @@ async function renderPoolRegistry(content) {
         augmentation_mode: spModeSelect.value,
         show_in_conversation: document.getElementById("sp-show-in-conv").checked,
         category: document.getElementById("sp-category").value,
+        output_format: document.getElementById("sp-output-format").value || null,
+        examples: document.getElementById("sp-examples").value || null,
+        constraints: document.getElementById("sp-constraints").value || null,
       });
       showMsg("global-msg", "스킬을 등록했습니다.", "ok");
       refresh();
@@ -6824,8 +7530,14 @@ async function renderPoolRegistry(content) {
         '<h4 style="margin-top:0">스킬 #' + s.id + ' 수정</h4>' +
         '<p><b>' + esc(s.name) + '</b> <span class="muted">— 이름은 변경 불가(Agent의 skill_tags와 정확히 일치해야 매칭되므로, 바꾸면 그 연결이 끊어집니다).</span></p>' +
         '<p class="muted">모드: <b>' + esc(s.augmentation_mode) + '</b>(수정 불가 — 코드(' + esc(s.code || "-") + ')에 모드가 세그먼트로 박혀 있어, 모드를 바꾸려면 삭제 후 새로 등록해야 합니다).</p>' +
-        '<label style="display:block;margin-top:0.4rem">설명<br>' +
+        '<label style="display:block;margin-top:0.4rem">지침(설명)<br>' +
         '<textarea id="spe-description" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem">' + esc(s.description) + '</textarea></label>' +
+        '<label style="display:block;margin-top:0.4rem">출력 형식(선택)<br>' +
+        '<textarea id="spe-output-format" rows="2" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem">' + esc(s.output_format || "") + '</textarea></label>' +
+        '<label style="display:block;margin-top:0.4rem">예시(선택)<br>' +
+        '<textarea id="spe-examples" rows="2" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem">' + esc(s.examples || "") + '</textarea></label>' +
+        '<label style="display:block;margin-top:0.4rem">제약사항(선택)<br>' +
+        '<textarea id="spe-constraints" rows="2" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem">' + esc(s.constraints || "") + '</textarea></label>' +
         '<label style="display:block;margin-top:0.4rem">분류<br>' +
         '<select id="spe-category" style="margin-top:0.2rem">' +
         '<option value="general"' + (s.category === "general" ? " selected" : "") + '>일반업무(대화창에 기본 표시)</option>' +
@@ -6861,6 +7573,9 @@ async function renderPoolRegistry(content) {
             default_tool_pool_ids,
             show_in_conversation: tr.querySelector("#spe-show-in-conv").checked,
             category: tr.querySelector("#spe-category").value,
+            output_format: tr.querySelector("#spe-output-format").value || null,
+            examples: tr.querySelector("#spe-examples").value || null,
+            constraints: tr.querySelector("#spe-constraints").value || null,
           });
           showMsg("global-msg", "스킬을 수정했습니다.", "ok");
           refresh();
@@ -6887,6 +7602,72 @@ async function renderPoolRegistry(content) {
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
+  });
+  // 사용자 요청(2026-11-17, "마크다운 규격으로 export") — export
+  // 엔드포인트는 JSON이 아니라 평문 마크다운을 내려주므로 `api()`를
+  // 그대로 못 쓴다(`api()`는 항상 `resp.json()`을 시도한다) — 인증
+  // 헤더만 똑같이 넣어 직접 fetch한 뒤 Blob으로 다운로드한다
+  // (`downloadDeliverable()`과 같은 패턴).
+  content.querySelectorAll("[data-export-skill]").forEach(btn => {
+    btn.onclick = async () => {
+      const s = skills.find(x => x.id === Number(btn.dataset.exportSkill));
+      try {
+        const token = sessionStorage.getItem("hair_token");
+        const headers = token ? { Authorization: "Bearer " + token } : {};
+        const resp = await fetch("/api/skill-pool/" + s.id + "/export", { headers, credentials: "same-origin" });
+        if (!resp.ok) throw new Error(resp.status + " " + resp.statusText);
+        const text = await resp.text();
+        const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = (s.code || s.name) + ".md";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) { showMsg("global-msg", "내보내기 실패: " + e.message, "error"); }
+    };
+  });
+  // 사용자 요청(2026-11-17, "Skill 마크다운 파일을 읽어오고(규격 검사)
+  // 등록하는 방식으로 개선") — 최소 규격(frontmatter의 name, 섹션
+  // 헤더 1개 이상)만 훑어보는 가벼운 사전 점검. export_skill_markdown()
+  // /parse_skill_markdown()과 똑같은 정규식을 쓰지 않는 이유는 이건
+  // "파일이 완전히 엉뚱한 걸 올렸을 때" 수준의 조기 피드백이 목적이고,
+  // 실제 정확한 판정(예: tool: 참조가 진짜 존재하는지)은 서버만 할 수
+  // 있기 때문이다 — 여기서 통과해도 제출 시 서버가 거부할 수 있다.
+  function _checkSkillMarkdownShape(text) {
+    const fmMatch = /^---\\r?\\n([\\s\\S]*?)\\r?\\n---\\r?\\n?/.exec(text);
+    if (!fmMatch) return "frontmatter(---로 둘러싼 부분)를 찾을 수 없습니다.";
+    if (!/^\\s*name\\s*:/m.test(fmMatch[1])) return "frontmatter에 name 항목이 없습니다.";
+    if (!/^##\\s+\\S/m.test(text.slice(fmMatch[0].length))) {
+      return "본문에 '## 지침' 같은 섹션 헤더가 하나도 없습니다.";
+    }
+    return null;
+  }
+  const spImportFileCheck = document.getElementById("sp-import-file-check");
+  document.getElementById("sp-import-file").addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      document.getElementById("sp-import-markdown").value = text;
+      const problem = _checkSkillMarkdownShape(text);
+      spImportFileCheck.textContent = problem ? "⚠ " + problem : "✓ 형식 확인됨(frontmatter + 섹션 발견) — 실제 등록 가능 여부는 \\"등록하기\\" 클릭 시 서버가 최종 판정합니다.";
+      spImportFileCheck.style.color = problem ? "var(--danger, #b91c1c)" : "var(--muted, #6b7280)";
+    } catch (e) {
+      spImportFileCheck.textContent = "⚠ 파일을 읽지 못했습니다: " + e.message;
+    }
+  });
+  document.getElementById("skill-import-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      await api("POST", "/api/skill-pool/import", {
+        markdown: document.getElementById("sp-import-markdown").value,
+      });
+      showMsg("global-msg", "마크다운에서 스킬을 가져왔습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 }
 
@@ -6994,7 +7775,7 @@ async function renderTeams(content) {
         (t.task_id ? "Task #" + t.task_id : "") +
         (t.task_id && t.brief_id ? ", " : "") +
         (t.brief_id ? "Brief #" + t.brief_id : "") +
-        (t.completed_at ? " (미션 완료: " + esc(t.completed_at) + ")" : "") +
+        (t.completed_at ? " (미션 완료: " + esc(fmtTime(t.completed_at)) + ")" : "") +
         '</p>'
       : "";
     const lifecycleButtonsHtml =
@@ -7241,6 +8022,32 @@ function wirePipelineAgentRowRemovers(scope) {
   });
 }
 
+// 사용자 요청(2026-11-17, "Human Agency Scale 등 개념과 비교해 HAIR-
+// Platform 개선이 필요한 Insight 정리" → "구현 시작") — 협업 수준
+// (자동화↔증강)이 재시도 상한·Gate 임계값·승인 필요 여부에 흩어져
+// 있어, 관리자가 이 단계가 실제로 어느 정도 사람 개입을 필요로
+// 하는지 한눈에 보려면 세 숫자를 따로 읽고 조합해야 했다 — 이미
+// 있는 세 값만 조합해 보여주는 순수 파생 라벨이다(새 저장값 없음).
+// `requires_human_approval=false`여도 재시도를 다 소진하면 결국
+// 사람에게 에스컬레이션된다는 사실(`pipeline_runtime.py`)까지
+// 반영해, "완전 자동"이라 부를 수 있는 경우를 Gate 기준이 느슨할
+// 때로 좁힌다 — 정확한 분류가 아니라 참고용 근사치임을 title로
+// 명시한다.
+function _pipelineStageCollaborationBadge(stage) {
+  let label, cls, title;
+  if (stage.requires_human_approval) {
+    label = "사람 필수"; cls = "gate-warn";
+    title = "Gate 통과 여부와 무관하게 항상 사람 결재를 거칩니다.";
+  } else if (stage.min_gate_pass_ratio <= 0.3) {
+    label = "자동화 중심"; cls = "gate-ok";
+    title = "Gate 기준이 느슨해(" + Math.round(stage.min_gate_pass_ratio * 100) + "%) 대부분 사람 개입 없이 다음 단계로 넘어갑니다(단, 재시도를 다 소진하면 그때는 사람에게 올라갑니다).";
+  } else {
+    label = "증강 중심"; cls = "gate-na";
+    title = "Gate 기준이 엄격해(" + Math.round(stage.min_gate_pass_ratio * 100) + "%) 실패가 잦으면 재시도 소진 후 사람에게 에스컬레이션됩니다.";
+  }
+  return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + ' (참고용 근사치 — HAS 척도 기반)">' + label + '</span>';
+}
+
 function pipelineStageCardHtml(templateId, stage, index, total) {
   const agentsText = stage.agents.map(a =>
     esc(a.role_name) + (a.role_name === stage.lead_role_name ? " (리드)" : "")
@@ -7256,7 +8063,8 @@ function pipelineStageCardHtml(templateId, stage, index, total) {
     (stage.expected_output ? '<p class="muted"><b>기대 산출물:</b> ' + esc(stage.expected_output) + "</p>" : "") +
     "<p>참여 역할: " + agentsText + "</p>" +
     '<p class="muted">Gate 통과 기준 ' + Math.round(stage.min_gate_pass_ratio * 100) + "% · 최대 재시도 " +
-    stage.max_retry + "회 · 사람 승인 " + (stage.requires_human_approval ? "필요" : "불필요") + "</p>" +
+    stage.max_retry + "회 · 사람 승인 " + (stage.requires_human_approval ? "필요" : "불필요") +
+    " " + _pipelineStageCollaborationBadge(stage) + "</p>" +
     '<div class="actions">' +
     (index > 0 ? '<button class="small" data-reorder-stage="' + stage.id + ':up">↑</button>' : "") +
     (index < total - 1 ? '<button class="small" data-reorder-stage="' + stage.id + ':down">↓</button>' : "") +
@@ -7497,13 +8305,13 @@ async function renderModelRegistry(content) {
       resultHtml = '<span class="muted">아직 테스트 안 함</span>';
     } else if (b.status === "failed") {
       resultHtml = '<span class="gate-badge gate-warn" title="' + esc(b.error || "") + '">실패</span> ' +
-        '<span class="muted">' + esc(b.tested_at) + '</span>';
+        '<span class="muted">' + esc(fmtTime(b.tested_at)) + '</span>';
     } else {
       resultHtml = b.chars_per_second.toFixed(1) + '자/초 · ' + b.latency_seconds.toFixed(1) + '초 소요 · ' +
         '<span class="gate-badge" title="속도만 반영한 참고용 추천입니다 — 실제 응답 품질은 직접 확인하세요">추천: ' +
         esc(_OPTIMIZATION_TIER_LABELS[b.recommended_tier] || b.recommended_tier) + '</span> ' +
         '<button class="small" data-apply-benchmark-tier="' + m.id + '" data-tier="' + b.recommended_tier + '">이 tier로 저장</button> ' +
-        '<span class="muted">(' + esc(b.tested_at) + ')</span>';
+        '<span class="muted">(' + esc(fmtTime(b.tested_at)) + ')</span>';
     }
     return resultHtml + '<br><button class="small" data-run-benchmark="' + m.id + '">성능 테스트</button>';
   };
@@ -7696,7 +8504,7 @@ async function renderKnowledgeBase(content) {
     esc(c.text.length > 80 ? c.text.slice(0, 80) + "…" : c.text),
     String(c.text.length),
     esc(c.embedding_provider) + "/" + esc(c.embedding_model),
-    esc(c.created_at),
+    esc(fmtTime(c.created_at)),
     '<button class="small danger" data-delete-chunk="' + c.id + '">삭제</button>',
   ]);
   const pageStart = chunkPage.total ? _kbChunkOffset + 1 : 0;
@@ -7766,7 +8574,7 @@ async function renderKnowledgeBase(content) {
       esc(d.uploaded_by_username),
       String(d.char_count),
       String(d.chunk_count),
-      esc(d.created_at),
+      esc(fmtTime(d.created_at)),
       '<button class="small danger" data-delete-document="' + d.id + '">삭제</button>',
     ])) +
     (knowledgeDocs.length ? "" : '<p class="muted">아직 올린 자료가 없습니다.</p>') +
@@ -8038,7 +8846,7 @@ async function _renderCrewHistory(container, teamId) {
             r.process,
             esc(label(r.status)),
             progressText,
-            esc(r.created_at),
+            esc(fmtTime(r.created_at)),
             '<button class="small" data-view-crew-run="' + r.id + '">보기</button>',
           ];
         }))
@@ -9239,7 +10047,7 @@ function _initCostTrendChart(trend) {
           callbacks: {
             label: (ctx) => {
               const t = ctx.raw.t;
-              return label(t.subject_type) + " #" + t.subject_id + " · " + t.created_at + " · " + t.cost_estimate;
+              return label(t.subject_type) + " #" + t.subject_id + " · " + fmtTime(t.created_at) + " · " + t.cost_estimate;
             },
           },
         },
@@ -9259,7 +10067,7 @@ async function renderDashboard(content) {
   // 사용자 요청(2026-10-27, "다룬 테이블도 ID 표기되는 것이 남아
   // 있는지 확인") — agent_pool/human_pool 변경 이력이라 code로 교체.
   const trendRows = d.cost_trend.map(t => [
-    esc(t.created_at), esc(label(t.subject_type)), esc(t.subject_code || ("#" + t.subject_id)), t.cost_estimate,
+    esc(fmtTime(t.created_at)), esc(label(t.subject_type)), esc(t.subject_code || ("#" + t.subject_id)), t.cost_estimate,
   ]);
 
   // 2026-10-08, Phase 4 — "팀 부하" 바
@@ -9443,7 +10251,7 @@ async function renderAudit(content) {
       // code로 변경") — 처리자는 username, 대상은 agent_pool인 경우만
       // code(그 외 종류는 code 개념이 없어 id 그대로).
       table(["시각", "처리자", "동작", "대상 종류", "대상 ID"], body.items.map(a => [
-        esc(a.created_at), esc(a.actor_username || ("#" + a.actor_id)), esc(a.action), esc(label(a.subject_type)),
+        esc(fmtTime(a.created_at)), esc(a.actor_username || ("#" + a.actor_id)), esc(a.action), esc(label(a.subject_type)),
         a.subject_id === null ? "-" : esc(a.subject_code || a.subject_id),
       ]));
   };
@@ -9660,7 +10468,7 @@ const MANUAL_MARKDOWN = [
 '',
 '- **"개발업무 스킬도 보기" 체크박스**(기본값 꺼짐) — 바로 옆 스킬 선택 드롭다운에는 기본적으로 **일반업무**(기획·전략·자료조사·보고서·데이터분석·제안서·실적서 등) 스킬만 보입니다. 소프트웨어 개발/Gate 채점처럼 **개발업무**용 스킬은 완전히 없어진 게 아니라 "기본적으로 안 보이게" 숨겨뒀을 뿐이라 — 이 체크박스를 켜면 바로 보입니다. 일반 업무를 하는 사용자는 이 체크박스를 켤 일이 거의 없습니다(어느 스킬이 어느 분류인지는 "도구/스킬 Pool" 관리 화면에서 확인·변경할 수 있습니다 — admin/manager 전용, 8절 메뉴 지도에서 위치를 찾을 수 있습니다).',
 '- **스킬 선택 드롭다운**(기본값 "스킬 선택 안 함") — 비워두고 질문만 보내도 되지만, 멘션 없이 보내는 응답을 특정 스킬로 "그라운딩"하고 싶을 때 씁니다.',
-'  예를 들어 실시간 정보가 필요한 질문이면 "**실시간웹검색**"을 골라두세요 — Tavily로 실제 웹 검색을 한 뒤 그 결과를 참고해 답합니다(서버에 `TAVILY_API_KEY` 설정이 먼저 돼 있어야 합니다 — 관리자에게 문의).',
+'  예를 들어 실시간 정보가 필요한 질문이면 "**실시간웹검색**"을 골라두세요 — Tavily로 실제 웹 검색을 한 뒤 그 결과를 참고해 답합니다(서버에 `TAVILY_API_KEY` 설정이 먼저 돼 있어야 합니다 — 관리자에게 문의). "**지식검색**"(VectorDB)·"**일반웹검색**"·"**최신정보필수확인**"·"**딥리서치**"·"**AI업계동향브리핑**" 등 조사 성격의 스킬은 전부 답변에 **출처(제목·URL 또는 참고한 과거 산출물의 식별자)를 반드시 밝히도록** 되어 있습니다 — 출처가 안 보이는 답변이 오면 스킬이 실제로 그라운딩됐는지부터 의심해보세요.',
 '  **멘션을 하나라도 넣으면 이 선택은 자동으로 비워집니다** — 멘션이 있으면 그 호출이 우선이고, 스킬 선택은 "아무도 안 불렀을 때(기본 AI가 답할 때) 어떤 지식/도구로 그라운딩할지"를 고르는 용도이기 때문입니다.',
 '- **메시지 입력창** — **`@`를 입력**하면 사람·Agent·Team 검색 자동완성이 뜹니다. 아직 이 대화에 초대 안 된 대상도 검색되고, 목록에서 고르면 **그 자리에서 자동으로 초대된 뒤** 멘션이 끼워 넣어집니다(따로 "참가자 초대" 화면을 거칠 필요가 없습니다).',
 '- **📎 자료 버튼** — 로컬 파일(`.md`/`.markdown`/`.txt`/`.html`/`.htm`/`.pdf`)을 고르면 버튼 옆에 파일명이 뜨며 **보류 상태로 대기**합니다(바로 올라가지 않음, "자료 제거"로 취소 가능). 이 상태에서 메시지를 적고 **"전송"**을 눌러야 — 입력한 메시지가 있으면 그 메시지가 먼저, 첨부 내용은 바로 이어서 별도 메시지로 — 한 번에 같이 올라갑니다(메시지 없이 첨부만 보내도 됩니다). **이 대화에만 1회성으로 쓰이고 영구 저장되지 않습니다**(어디에도 파일 자체나 텍스트가 남지 않는 휘발성 설계 — 영구 보관하려는 자료는 8절 메뉴 지도의 "도구/스킬 Pool"이 아니라 admin/manager의 "지식 베이스" 관리 기능을 따로 써야 합니다).',
@@ -9677,10 +10485,14 @@ const MANUAL_MARKDOWN = [
 '대화 상단의 provider/모델 select에서 고르고 "**모델 설정 저장**"을 눌러야 반영됩니다.',
 '',
 '> ⚠️ 흔히 헷갈리는 부분: 이 설정은 **멘션 없는 기본 AI 응답에만** 적용됩니다. `@Agent이름`으로 부르면 그 Agent 자신에게 저장된 모델이, `@Team이름`으로 부르면 서버가 자동 판별한 모델이 쓰입니다(이 설정과 무관). 각 메시지에 실제로 쓰인 모델은 메시지 작성자 줄에 표시됩니다.',
+'>',
+'> provider/model을 둘 다 "**기본값 사용**"으로 두면 ① 관리자가 "**LLM 설정 최적화**" 탭(admin 전용)의 "플랫폼 공통 기본 LLM" 카드에서 지정해둔 모델 → ② 없으면 서버 환경변수 → ③ 그래도 없으면 API 키 존재 여부로 자동 판별합니다. provider는 직접 고르고 model만 "기본값 사용"으로 두면 ①을 건너뛰고 그 provider의 표준 기본 모델이 쓰입니다.',
 '',
 '### 5단계 — 결과 확인',
 '',
 '실행에는 실제 LLM API 호출이 들어가므로 **비용이 발생**합니다 — 결과는 잠시 뒤 메시지로 도착하고(비동기 처리, 화면에 "응답을 기다리는 중…" 표시), 실패하면 원인이 메시지로 안내됩니다.',
+'',
+'AI 메시지 작성자 줄에는 그 응답이 실제로 어떻게 만들어졌는지 보여주는 배지가 붙습니다 — **"단발 응답"**(기본 AI·단일 Agent 멘션 — 검색이 됐어도 1회성 조회일 뿐, Agent가 스스로 다시 찾아보는 루프는 없습니다)과 **"위임 N건"**(Team 멘션 — 실제 CrewAI 위임이 몇 건 있었는지, 0건이면 매니저 혼자 처리했다는 뜻). 어느 쪽도 안 보이면(Gate 배지만 있거나 아예 없으면) 파이프라인 진행 알림처럼 LLM 호출 자체가 없는 메시지입니다.',
 '',
 '각 메시지 줄에는 두 가지 "보내기" 버튼이 있습니다(대화의 모든 메시지가 자동으로 쌓이지 않고, 남길 만하다고 직접 고른 메시지만 보냅니다):',
 '',
@@ -9763,6 +10575,7 @@ const MANUAL_MARKDOWN = [
 '- **"파이프라인 실행(비용 발생)"**: 등록된 파이프라인 템플릿을 골라 처음부터 끝까지 단계별로 자동 진행시킵니다(6절).',
 '- 사람이 직접 쓴 결과물도 "**검토 요청**"을 누르면 Agent 결과물과 같은 결재 체인을 거칩니다.',
 '- (admin/manager 전용) **"재시도 예산"** 입력 — 이 할 일이 파이프라인·Crew 재시도를 합쳐서 총 몇 번까지 시도할 수 있는지 상한을 걸어둘 수 있습니다(빈 값=무제한). 상한에 걸리면 그 단계의 자체 재시도 횟수가 남아 있어도 즉시 사람 승인으로 에스컬레이션됩니다 — 같은 할 일을 반복 재시도하며 비용만 계속 쓰는 걸 막는 안전장치입니다.',
+'- (admin/manager 전용) **"사람 판단 필수"** 체크박스 — 켜두면 이 할 일이 어떤 파이프라인을 타든, 그 단계 자체는 "사람 승인 불필요"로 설정돼 있어도 **Gate 점수와 무관하게 항상 결재를 거칩니다**. 협상·민감한 대외 커뮤니케이션처럼 Gate 통과 여부와 별개로 사람이 반드시 봐야 하는 업무에 씁니다.',
 '',
 '### 6단계 — 결과물 결재로 마무리',
 '',
@@ -9841,6 +10654,23 @@ const MANUAL_MARKDOWN = [
 '4절 "N:N 조합 — 방법 A"를 참고하세요.',
 '"AI 에이전트 생성"에서 여러 할 일을 한 번에 골라 만든 직후에는 그 결과 화면에 **"팀으로 묶기"** 단축 버튼도 있어, "팀 관리" 탭을 따로 열지 않고도 바로 팀을 만들 수 있습니다.',
 '',
+'### Skill 관리(admin/manager 전용, "도구/스킬 Pool" 탭)',
+'',
+'📍 **메뉴**: 도구/스킬 Pool',
+'',
+'Skill은 이름표만이 아니라 Agent/대화의 "기본 AI"에 실제로 주입되는 지침입니다. 각 Skill은 아래 4개 필드로 구조화돼 있습니다(전부 선택 입력 — 비워도 기존처럼 동작합니다):',
+'',
+'- **지침(설명)** — 무엇을·어떻게 수행하는지(필수에 가까운 핵심 필드).',
+'- **출력 형식** — 산출물이 어떤 구조여야 하는지(예: "배경 → 목표 → 실행계획 순서").',
+'- **예시** — 실제로 어떻게 작성하면 되는지 보여주는 짧은 본보기.',
+'- **제약사항** — 하지 말아야 할 것(예: "검색되지 않은 사실을 추측하지 않는다", "출처를 반드시 명시한다").',
+'',
+'네 필드 전부 대화·Agent 실행 어느 경로든 "참고 지식"으로 함께 주입됩니다 — "지침"만 쓰던 기존 Skill도 그대로 동작하고, 나머지 세 필드는 채운 만큼만 추가로 더 구체적인 지시가 됩니다.',
+'',
+'**마크다운으로 내보내기/가져오기** — 각 Skill 행의 "**내보내기**" 버튼을 누르면 그 Skill이 frontmatter(name/category/augmentation_mode/tool) + 섹션(`## 지침`/`## 출력 형식`/`## 예시`/`## 제약사항`) 규격의 `.md` 파일로 내려받아집니다. 같은 화면 아래 "**마크다운으로 스킬 가져오기**" 폼에서 그 규격의 `.md` 파일을 올리거나(파일을 고르면 frontmatter·섹션이 있는지 최소 형식을 먼저 점검해 보여줍니다) 직접 붙여넣은 뒤 "**등록하기**"를 누르면 새 Skill로 등록됩니다 — 이름이 이미 있으면 거부됩니다. 다른 환경에서 만든 Skill을 옮기거나, 텍스트 편집기로 여러 Skill을 한 번에 다듬을 때 씁니다.',
+'',
+'**"스킬생성가이드"** — "주어진 업무를 가장 잘 수행할 수 있는 새 Skill을 어떻게 설계할지" 안내하는 메타 Skill입니다(대화창 스킬 선택 드롭다운에서도 바로 쓸 수 있음). 어떤 업무를 처리할 Skill이 필요한지 설명하면, 위 "내보내기/가져오기"와 같은 규격의 마크다운으로 결과를 내놓습니다 — 그대로 복사해 "마크다운으로 스킬 가져오기"에 붙여넣으면 바로 등록할 수 있습니다. 단, 이 Skill 자체는 등록을 대신 해주지 않습니다(사람이 "등록하기"를 직접 눌러야 함) — 새 Skill이 실제로 조직에 추가되는 건 항상 사람의 확인을 거칩니다.',
+'',
 '<h2 id="pipeline">6. 파이프라인 — 단계형 자동 진행 엔진</h2>',
 '',
 '사람이 **계획 확정 시점에 한 번만 승인**하면, 그 뒤로는 구현 → 검증 → 품질 관리가 Gate A-G 기준으로 자동 반복되는 엔진입니다 — 쉽게 말해 "처음에 방향만 한 번 확인해주면, 그다음은 기준을 통과할 때까지 알아서 반복하고, 정말 안 될 때만 다시 사람을 부르는" 방식입니다.',
@@ -9860,6 +10690,7 @@ const MANUAL_MARKDOWN = [
 '단계마다 **Gate A-G 통과 기준·최대 재시도 횟수·"사람 승인 필요" 여부**를 정합니다.',
 '승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어가고(최소 HITL), 기준 미달이면 "어떤 Gate가 왜 부족한지" 피드백을 반영해 자동 재시도합니다.',
 '재시도를 다 써도 못 넘기면 그때만 결재함으로 올라옵니다 — 자동 반복이 완전히 실패했을 때만 사람에게 옵니다.',
+'진행 중인 실행이 방향을 잘못 탔거나 더 이상 필요 없어졌다면, 협업 워크스페이스의 **"실행 중단 요청"** 버튼으로 멈출 수 있습니다 — 그 순간 바로 끊기는 게 아니라, 지금 진행 중인 단계(실제 LLM 호출)가 끝나는 다음 안전한 지점에서 멈춥니다. 이미 "사람 승인 대기" 상태(배경에서 실행 중인 게 없음)라면 요청 즉시 멈춥니다.',
 '',
 '### 바로 써보기 — 기본 제공 "소프트웨어 개발 파이프라인"',
 '',
@@ -10028,32 +10859,141 @@ def render_deliverable_view_page(deliverable: dict, task_role_name: str | None) 
 </head>
 <body>
 <h1>{escaped_title}</h1>
-<div class="meta">content_type: {escaped_content_type} · 작성: {escaped_created_at}</div>
+<div class="meta">content_type: {escaped_content_type} · 작성: <span id="created-at" data-raw-utc="{escaped_created_at}">{escaped_created_at}</span></div>
 <div id="content"></div>
 <script>
+// 사용자 보고(2026-11-17, "대화에 ... 시간정보가 표시되지만 실제
+// 시간과 차이가 남 — 한국시간 기준이 아님") — SQLite datetime('now')
+// 는 UTC를 타임존 표시 없이 저장한다. 메인 SPA의 fmtTime()과 같은
+// 변환을 이 독립 페이지에도 똑같이 적용한다(이 페이지는 SPA의 JS를
+// 안 불러오므로 같은 로직을 여기 따로 둔다).
+(function () {{
+  const span = document.getElementById("created-at");
+  const raw = span && span.dataset.rawUtc;
+  if (!raw) return;
+  const d = new Date(raw.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return;
+  const pad = (n) => String(n).padStart(2, "0");
+  span.textContent = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " +
+    pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+}})();
 const DATA = {payload};
 const el = document.getElementById("content");
+// 사용자 보고(2026-11-16, "새탭에서 보기에서도 소스로 보임") — SPA의
+// `stripOuterFence()`와 똑같은 로직. 이 결과물이 ```html/```code
+// 펜스로 통째로 감싸여 저장돼 있으면(LLM이 흔히 이렇게 응답) 벗겨내지
+// 않고는 그대로 iframe/코드블록에 그 펜스 문자까지 리터럴로 보인다.
+function stripOuterFence(raw) {{
+  const closed = raw.match(/^```[a-zA-Z0-9]*\\n([\\s\\S]*?)\\n?```\\s*$/);
+  if (closed) return closed[1];
+  const openOnly = raw.match(/^```[a-zA-Z0-9]*\\n([\\s\\S]*)$/);
+  return openOnly ? openOnly[1] : raw;
+}}
+// 사용자 요청(2026-11-16, "전체화면 등에서 slide show 기능이
+// 제공되도록") — SPA의 `_injectSlideshowController()`와 똑같은 로직
+// (`.slide` 섹션이 2개 이상이면 이전/다음·번호·전체화면 컨트롤을
+// 직접 주입). 저장된 원본은 안 건드리고 이 보여주기 전용 복사본만
+// 바뀐다.
+function injectSlideshowController(html) {{
+  const slideCount = (html.match(/class=["'][^"']*\\bslide\\b[^"']*["']/g) || []).length;
+  if (slideCount < 2) return html;
+  const controller =
+    // 사용자 보고(2026-11-16, "슬라이드 크기가 변화지 않아 상단
+    // 중앙에 작게 표시됨") — SPA의 `_injectSlideshowController()`와
+    // 같은 이유로 같은 수정을 적용한다(구형 산출물의 고정 크기
+    // CSS·신형 산출물의 LLM 지시 미준수 둘 다에 대비해, 크기/위치는
+    // 플랫폼이 항상 강제로 전체 화면을 채우게 함).
+    '<style id="__hair_slideshow_style">' +
+    'body.__hair_slideshow .slide{{display:none!important}}' +
+    'body.__hair_slideshow .slide.__hair_active{{display:flex!important;flex-direction:column;' +
+    'position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;' +
+    'max-width:none!important;max-height:none!important;min-width:0!important;min-height:0!important;' +
+    'margin:0!important;box-sizing:border-box!important;overflow:auto!important}}' +
+    '#__hair_slideshow_bar{{position:fixed;left:0;right:0;bottom:0;z-index:999999;display:flex;' +
+    'align-items:center;justify-content:center;gap:0.5rem;padding:0.5rem;' +
+    'background:rgba(15,23,42,0.75);font-family:sans-serif}}' +
+    '#__hair_slideshow_bar button{{background:#fff;border:none;border-radius:4px;' +
+    'padding:0.3rem 0.7rem;cursor:pointer;font-size:0.85rem}}' +
+    '#__hair_slideshow_bar span{{color:#fff;font-size:0.85rem;min-width:3.5rem;text-align:center}}' +
+    '</style>' +
+    '<div id="__hair_slideshow_bar">' +
+    '<button id="__hair_prev" type="button">이전</button>' +
+    '<span id="__hair_counter"></span>' +
+    '<button id="__hair_next" type="button">다음</button>' +
+    '<button id="__hair_fullscreen" type="button">슬라이드 재생</button>' +
+    '</div>' +
+    '<script>(function(){{' +
+    'var slides=Array.prototype.slice.call(document.querySelectorAll(".slide"));' +
+    'if(slides.length<2)return;' +
+    'document.body.classList.add("__hair_slideshow");' +
+    'var idx=0;' +
+    'function show(i){{' +
+    'idx=Math.max(0,Math.min(slides.length-1,i));' +
+    'slides.forEach(function(s,j){{s.classList.toggle("__hair_active",j===idx)}});' +
+    'var c=document.getElementById("__hair_counter");' +
+    'if(c)c.textContent=(idx+1)+" / "+slides.length;' +
+    '}}' +
+    'show(0);' +
+    'var prevBtn=document.getElementById("__hair_prev");' +
+    'var nextBtn=document.getElementById("__hair_next");' +
+    'var fsBtn=document.getElementById("__hair_fullscreen");' +
+    'if(prevBtn)prevBtn.addEventListener("click",function(){{show(idx-1)}});' +
+    'if(nextBtn)nextBtn.addEventListener("click",function(){{show(idx+1)}});' +
+    // 사용자 보고(2026-11-16, "전체화면 버튼 클릭시 아무 동작 안 함") —
+    // requestFullscreen()이 없거나 거부되면 이 페이지(부모)에
+    // postMessage로 알려 대신 전체화면을 시도하게 한다(아래 이 파일의
+    // "message" 리스너 참고).
+    'if(fsBtn)fsBtn.addEventListener("click",function(){{' +
+    'if(document.fullscreenElement){{document.exitFullscreen();return}}' +
+    'var fallback=function(){{try{{window.parent.postMessage({{__hair_slideshow_fullscreen:true}},"*")}}catch(e){{}}}};' +
+    'if(document.documentElement.requestFullscreen){{' +
+    'var p=document.documentElement.requestFullscreen();' +
+    'if(p&&p.catch){{p.catch(fallback)}}' +
+    '}}else{{fallback()}}' +
+    '}});' +
+    'document.addEventListener("keydown",function(ev){{' +
+    'if(ev.key==="ArrowRight"||ev.key===" "||ev.key==="PageDown"){{show(idx+1);ev.preventDefault()}}' +
+    'else if(ev.key==="ArrowLeft"||ev.key==="PageUp"){{show(idx-1);ev.preventDefault()}}' +
+    '}});' +
+    '}})();<\\/script>';
+  return /<\\/body>/i.test(html) ? html.replace(/<\\/body>/i, controller + "</body>") : html + controller;
+}}
+const content = (DATA.content_type === "html" || DATA.content_type === "code" || DATA.content_type === "markdown")
+  ? stripOuterFence(DATA.content)
+  : DATA.content;
 if (DATA.content_type === "html") {{
   const iframe = document.createElement("iframe");
   iframe.className = "html-view";
-  iframe.sandbox = "allow-scripts";
-  iframe.srcdoc = DATA.content;
+  iframe.sandbox = "allow-scripts allow-fullscreen";
+  iframe.setAttribute("allow", "fullscreen");
+  iframe.setAttribute("allowfullscreen", "");
+  iframe.srcdoc = injectSlideshowController(content);
   el.appendChild(iframe);
+  // 슬라이드쇼 "슬라이드 재생" 버튼이 iframe 안에서 Fullscreen API를
+  // 못 쓰면 이 페이지(부모) 쪽에 알려온다 — 이 페이지 전체를 대신
+  // 전체화면으로 돌린다(SPA와 달리 "새 탭 열기"로 위임할 곳이 없으므로
+  // 이 페이지 자체를 전체화면으로).
+  window.addEventListener("message", (ev) => {{
+    if (!ev.data || !ev.data.__hair_slideshow_fullscreen) return;
+    if (document.documentElement.requestFullscreen) {{
+      document.documentElement.requestFullscreen().catch(() => {{}});
+    }}
+  }});
 }} else if (DATA.content_type === "code") {{
   const pre = document.createElement("pre");
   const code = document.createElement("code");
-  code.textContent = DATA.content;
+  code.textContent = content;
   pre.appendChild(code);
   el.appendChild(pre);
   if (window.hljs) {{ hljs.highlightElement(code); }}
 }} else if (window.marked && window.DOMPurify) {{
   const div = document.createElement("div");
   div.className = "md-content";
-  div.innerHTML = DOMPurify.sanitize(marked.parse(DATA.content));
+  div.innerHTML = DOMPurify.sanitize(marked.parse(content));
   el.appendChild(div);
 }} else {{
   const pre = document.createElement("pre");
-  pre.textContent = DATA.content;
+  pre.textContent = content;
   el.appendChild(pre);
 }}
 </script>

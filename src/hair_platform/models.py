@@ -378,11 +378,48 @@ class TaskPriorityUpdate(BaseModel):
     priority: TaskPriority
 
 
+class ConversationMessageContentUpdate(BaseModel):
+    """사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된
+    HTML을 수정할 수 있는 기능") 1단계 — Agent가 만든 메시지(특히
+    HTML 프레젠테이션)에 색 대비 등의 버그가 있을 때 소스를 직접
+    고쳐 저장한다."""
+
+    content: str
+
+
+class DeliverableContentUpdate(BaseModel):
+    """위와 같은 목적, Task 산출물(deliverable)용."""
+
+    content: str
+
+
+class ContentFixSuggestRequest(BaseModel):
+    """사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된
+    HTML을 수정할 수 있는 기능" 3단계) — 사람이 직접 고치는 대신
+    자연어 피드백("이 부분 색이 안 보여" 등)을 주면 LLM이 수정안을
+    만든다. 결과는 저장하지 않는다 — 사람이 검토 후 기존 PATCH 경로로
+    직접 커밋해야 한다(`AssistRequest`/`assist()`와 같은 설계)."""
+
+    feedback: str
+    provider: str | None = None
+    model: str | None = None
+
+
 class TaskRetryBudgetUpdate(BaseModel):
     """사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도 예산
     추적") — `None`이면 "예산 해제"(= 제한 없음, 기본값)로 취급한다."""
 
     max_retry_budget: int | None = None
+
+
+class TaskHumanJudgmentUpdate(BaseModel):
+    """사용자 요청(2026-11-17, "Human Agency Scale... 인간 고유 능력을
+    보호하는 Task는 Gate 점수와 무관하게 항상 사람에게 올라가야 한다"
+    → "구현 시작") — 켜면 이 Task가 타는 모든 파이프라인 단계가 그
+    단계 템플릿의 `requires_human_approval` 설정과 무관하게 항상
+    결재를 거친다(`pipeline_runtime._execute_stage_attempt()`)."""
+
+    requires_human_judgment: bool
 
 
 class TaskDependencyCreate(BaseModel):
@@ -806,6 +843,12 @@ class SkillPoolCreate(BaseModel):
     # False로 끌 수 있게 한다.
     show_in_conversation: bool = True
     category: PoolCategory = "general"
+    # 사용자 요청(2026-11-17, "skill을 정해진 섹션 규격을 참조해
+    # 구조화") — 외부 표준 Skill 포맷(frontmatter + 섹션)과 호환되는
+    # 선택 필드. 전부 생략하면 기존 동작과 100% 동일.
+    output_format: str | None = None
+    examples: str | None = None
+    constraints: str | None = None
 
 
 class SkillPoolUpdate(BaseModel):
@@ -819,6 +862,17 @@ class SkillPoolUpdate(BaseModel):
     augmentation_mode: AugmentationMode | None = None
     show_in_conversation: bool | None = None
     category: PoolCategory | None = None
+    output_format: str | None = None
+    examples: str | None = None
+    constraints: str | None = None
+
+
+class SkillMarkdownImport(BaseModel):
+    """`skill_markdown.parse_skill_markdown()`가 기대하는 frontmatter +
+    섹션 규격의 마크다운 원문을 그대로 받는다(2026-11-17, "외부에서
+    마크다운 포멧의 Skill을 import")."""
+
+    markdown: str
 
 
 class ModelRegistryCreate(BaseModel):

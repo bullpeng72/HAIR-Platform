@@ -552,6 +552,36 @@ def test_gc_save_message_as_deliverable_creates_approved_entry(client_and_conn):
     assert any(d["id"] == deliverable_id for d in gallery)
 
 
+def test_gc_save_message_as_deliverable_detects_full_html_document(client_and_conn):
+    """사용자 보고(2026-11-16, "갤러리 미리보기에서 HTML 소스로 보임,
+    새탭에서 보기에서도 소스로 보임") — 대화 메시지가 완전한 HTML
+    문서(펜스로 감싸져 있어도)일 때, 갤러리로 보내면 content_type이
+    항상 'text'로 고정돼 펜스가 그대로 노출되던 버그의 회귀 가드."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post(
+        "/api/conversations", json={"title": "HTML 메시지 저장방"}
+    ).json()["id"]
+    html_content = (
+        "```html\n<!DOCTYPE html>\n<html lang=\"ko\"><head><title>t</title></head>"
+        "<body>안녕</body></html>\n```"
+    )
+    msg = client.post(
+        f"/api/conversations/{conv_id}/messages", json={"content": html_content}
+    ).json()
+
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages/{msg['id']}/save-as-deliverable"
+    )
+    assert resp.status_code == 201, resp.text
+    deliverable_id = resp.json()["deliverable_id"]
+
+    row = conn.execute(
+        "SELECT content_type FROM deliverables WHERE id = ?", (deliverable_id,)
+    ).fetchone()
+    assert row["content_type"] == "html"
+
+
 def test_gc_save_message_as_deliverable_second_call_reuses_linked_task(
     client_and_conn,
 ):

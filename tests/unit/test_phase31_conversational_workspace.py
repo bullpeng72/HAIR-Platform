@@ -1061,6 +1061,41 @@ def test_gc_native_skill_actually_searches_in_default_ai_reply(client_and_conn):
     assert messages[-1]["content"] == "원격근무 설명을 참고한 답변"
 
 
+def test_gc_native_skill_search_result_overrides_no_tool_loop_guard(client_and_conn):
+    """사용자 보고(2026-11-17, "실시간웹검색 스킬로 대화를 했지만 '이번
+    응답은 실제 실시간 웹 검색 도구 호출이 가능하지 않은 환경에서'와
+    같은 메시지가 반복 출력") — 원인: `skill_grounded_system_prompt()`
+    가 넣는 `NO_TOOL_LOOP_GUARD`("도구를 실제로 호출할 수 없습니다")가
+    실제 검색 결과 바로 앞에 무조건 붙어, 같은 프롬프트 안에서 "도구를
+    못 쓴다"와 "여기 실제 검색 결과가 있다"가 모순돼 모델이 그 모순을
+    디스클레이머로 답변에 그대로 베꼈다. 검색이 실제로 성공했을 때는
+    그 모순을 정정하는 지시가 검색 결과 바로 앞에 같이 들어가야 한다."""
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+
+    with (
+        patch(
+            "hair_platform.websearch.tavily_context_for_prompt",
+            return_value="실시간 웹 검색 결과(Tavily):\n- 원격근무: 원격근무 설명 (https://x)",
+        ),
+        patch("hair_platform.llm.call_llm", return_value="답변") as mock_call,
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "원격근무 정책이 뭐야?", "skill": "실시간웹검색"},
+        )
+        assert resp.status_code == 201, resp.text
+        system_prompt = mock_call.call_args[0][2]
+
+    guard_idx = system_prompt.index("그 도구를 실제로 호출할 수 없습니다")
+    override_idx = system_prompt.index("이 검색은 시스템이 이미 대신 수행해")
+    result_idx = system_prompt.index("원격근무 설명")
+    # 정정 지시가 가드 뒤, 실제 검색 결과 바로 앞에 와야 모순이 풀린다.
+    assert guard_idx < override_idx < result_idx
+    assert "실시간 검색이 불가능한 환경" in system_prompt  # 금지 문구로 명시
+
+
 def test_gc_mcp_remote_skill_warns_instead_of_faking_search(client_and_conn):
     """ "일반웹검색"(kind='mcp_remote', Parallel Search)은 CrewAI Agent
     루프가 있는 경로에서만 실제 호출이 가능하다 — 대화창 기본 AI는

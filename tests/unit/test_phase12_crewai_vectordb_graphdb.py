@@ -1360,6 +1360,43 @@ def test_gc195_execute_agent_augments_prompt_for_realtime_search_role(client_and
     assert "원격근무 정책이 뭐야?" in augmented_prompt
 
 
+def test_execute_agent_augments_prompt_for_ai_news_briefing_role(client_and_conn):
+    """사용자 요청(2026-11-17, "딥리서치 skill과, AI 빅테크와 AI기반
+    개발/일반 업무 혁신 관련 최신(1주일) 뉴스와 인사이트를 제공해 주는
+    Skill을 추가해줘") — "AI업계동향브리핑" skill_tags를 가진 Agent는
+    `websearch.tavily_news_context_for_prompt()`(일반 검색이 아니라
+    뉴스 전용 — 최신성 보장) 결과를 프롬프트에 덧붙여야 한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('AI 동향 브리퍼', '[\"AI업계동향브리핑\"]', 'active')"
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    with (
+        patch(
+            "hair_platform.websearch.tavily_news_context_for_prompt",
+            return_value="최근 7일 뉴스 검색 결과(Tavily):\n- OpenAI 신모델 발표: ... (https://x)",
+        ) as news_mock,
+        patch(
+            "hair_platform.llm.call_llm", return_value="이번 주 AI 업계 브리핑"
+        ) as llm_mock,
+    ):
+        output = agent_runtime.execute_agent(
+            conn, agent_id, admin_id, "이번주 AI 업계 소식 알려줘", provider="openai"
+        )
+
+    news_mock.assert_called_once()
+    assert output == "이번 주 AI 업계 브리핑"
+    augmented_prompt = llm_mock.call_args[0][3]
+    assert "OpenAI 신모델 발표" in augmented_prompt
+    assert "이번주 AI 업계 소식 알려줘" in augmented_prompt
+
+
 def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
     client_and_conn,
 ):
@@ -1386,7 +1423,7 @@ def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
     agent_id = cur.lastrowid
     conn.commit()
 
-    for vectordb_hits in ([{"text": "과거산출물"}], []):
+    for vectordb_hits in ([{"id": 1, "text": "과거산출물"}], []):
         with (
             patch(
                 "hair_platform.vectorstore.search", return_value=vectordb_hits
@@ -1405,6 +1442,68 @@ def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
         search_mock.assert_called_once()  # tavily_search(실시간웹검색)도 같이 조회된다
         augmented_prompt = llm_mock.call_args[0][3]
         assert "원격근무 설명" in augmented_prompt
+
+
+def test_gc_retrieve_context_exposes_vectordb_chunk_id_for_citation(client_and_conn):
+    """사용자 요청(2026-11-17, "웹검색, 딥리서치, RAG 등 조사 관련
+    skill의 경우 출처를 반드시 명시하도록 해줘") — "출처를 밝히라"고
+    스킬 제약사항에 적어도, 인용할 구체적인 식별자 자체가 프롬프트에
+    없으면 LLM이 지어낼 수밖에 없다. 청크 `id`를 텍스트에 노출해 실제
+    인용이 가능하게 한다."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('지식검색가', '[\"지식검색\"]', 'active')"
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    with (
+        patch(
+            "hair_platform.vectorstore.search",
+            return_value=[{"id": 42, "text": "과거 산출물 내용", "source_agent_id": None, "score": 0.9}],
+        ),
+        patch("hair_platform.llm.call_llm", return_value="답변") as llm_mock,
+    ):
+        agent_runtime.execute_agent(
+            conn, agent_id, admin_id, "질문", provider="openai"
+        )
+
+    augmented_prompt = llm_mock.call_args[0][3]
+    assert "[청크#42]" in augmented_prompt
+
+
+def test_gc_retrieve_context_reports_vectordb_zero_hits_explicitly(client_and_conn):
+    """사용자 요청(2026-11-17, "Human Agency Scale... 단발 경로는 검색
+    결과가 부족해도 다시 찾아보지 못한다는 한계를 최소한 투명하게라도
+    드러내야 한다" → "구현 시작") — 전엔 VectorDB가 0건이면 섹션 자체를
+    조용히 생략해, LLM이 "검색을 안 해봤다"와 "검색했는데 없었다"를
+    구분할 수 없었다(graphdb/Tavily는 이미 이 구분을 지킴 — 이 비대칭을
+    없앤다)."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "('지식검색가', '[\"지식검색\"]', 'active')"
+    )
+    agent_id = cur.lastrowid
+    conn.commit()
+
+    with (
+        patch("hair_platform.vectorstore.search", return_value=[]),
+        patch("hair_platform.llm.call_llm", return_value="답변") as llm_mock,
+    ):
+        agent_runtime.execute_agent(
+            conn, agent_id, admin_id, "아무 질문", provider="openai"
+        )
+
+    augmented_prompt = llm_mock.call_args[0][3]
+    assert "VectorDB에서 관련된 과거 산출물을 찾지 못했습니다." in augmented_prompt
 
 
 def test_gc_retrieve_context_survives_vectordb_embedding_failure(client_and_conn):

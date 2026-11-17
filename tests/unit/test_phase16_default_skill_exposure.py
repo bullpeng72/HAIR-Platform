@@ -71,7 +71,7 @@ def test_gc125_init_schema_seeds_agent_eval_procedural_skills():
     skill_names = {s["name"] for s in skills}
     assert _EXPECTED_AGENT_EVAL_SKILL_NAMES <= skill_names
     assert (
-        len(skills) == 5 + len(_EXPECTED_AGENT_EVAL_SKILL_NAMES) + 28
+        len(skills) == 5 + len(_EXPECTED_AGENT_EVAL_SKILL_NAMES) + 31
     )  # rag/graphdb 2(원래 vectordb/rag/graphdb/관계질의 4였으나 2026-10-06
     # 자동완성 중복 통합으로 2로 줄어듦) + 일반웹검색 1 + 실시간웹검색 1
     # (Tavily, 2026-10-26 "대화에서 외부 검색이 가능한 방법을 제안해줘"로
@@ -96,6 +96,12 @@ def test_gc125_init_schema_seeds_agent_eval_procedural_skills():
     # 실적서작성 개선)로 추가된 Skill 3개(data-analysis-guide 'tool'
     # 모드 1 + proposal-writing-guide/performance-report-writing-guide
     # 'none' 모드 2 = 25 + 3 = 28).
+    # + 2026-11-17("딥리서치 skill과... 최신(1주일) 뉴스와 인사이트를
+    # 제공해 주는 Skill 추가")로 추가된 "딥리서치"/"AI업계동향브리핑"
+    # 2개(둘 다 'tool' 모드 = 28 + 2 = 30).
+    # + 2026-11-17("주어진 업무를 잘 처리할 수 있는 skill을 생성하는
+    # skill을 추가해줘")로 추가된 "스킬생성가이드" 1개('none' 모드
+    # = 30 + 1 = 31).
 
     by_name = {s["name"]: s for s in skills}
     for name in _UNTOOLED_AGENT_EVAL_SKILL_NAMES:

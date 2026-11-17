@@ -40,6 +40,10 @@ NATIVE_TOOL_FACTORIES = {
     # (`websearch.as_crewai_tool`)는 지우지 않았다 — 되살리려면 여기에
     # 다시 추가.
     "tavily_search": websearch.as_tavily_crewai_tool,
+    # 사용자 요청(2026-11-17, "최신(1주일) 뉴스와 인사이트를 제공해 주는
+    # Skill 추가") — 일반 검색과 별개로 Tavily의 `topic="news"`+`days`로
+    # 실제 최신성을 보장하는 전용 경로.
+    "tavily_news_search": websearch.as_tavily_news_crewai_tool,
 }
 
 
@@ -329,7 +333,14 @@ def create_skill(
     augmentation_mode: str = "tool",
     show_in_conversation: bool = True,
     category: str = "general",
+    output_format: str | None = None,
+    examples: str | None = None,
+    constraints: str | None = None,
 ) -> int:
+    """`output_format`/`examples`/`constraints`(2026-11-17, "skill을
+    정해진 섹션 규격을 참조해 구조화") — 외부 표준 Skill 포맷(frontmatter
+    + 섹션)과 호환되는 선택 필드. 전부 생략하면 기존 동작과 100%
+    동일(지금까지의 모든 호출부가 그렇다)."""
     if augmentation_mode not in ("tool", "always", "none"):
         raise ValueError(f"unsupported_augmentation_mode:{augmentation_mode}")
     if category not in ("sw_dev", "general"):
@@ -337,7 +348,8 @@ def create_skill(
     cur = conn.execute(
         "INSERT INTO skill_pool "
         "(name, description, default_tool_pool_ids, augmentation_mode, "
-        "show_in_conversation, category) VALUES (?, ?, ?, ?, ?, ?)",
+        "show_in_conversation, category, output_format, examples, constraints) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             name,
             description,
@@ -345,6 +357,9 @@ def create_skill(
             augmentation_mode,
             show_in_conversation,
             category,
+            output_format,
+            examples,
+            constraints,
         ),
     )
     skill_id = cur.lastrowid
@@ -386,6 +401,9 @@ def list_skills(conn: sqlite3.Connection, category: str | None = None) -> list[d
             "augmentation_mode": r["augmentation_mode"],
             "show_in_conversation": bool(r["show_in_conversation"]),
             "category": r["category"],
+            "output_format": r["output_format"],
+            "examples": r["examples"],
+            "constraints": r["constraints"],
         }
         for r in rows
     ]
@@ -413,6 +431,9 @@ def update_skill(
         "default_tool_pool_ids",
         "show_in_conversation",
         "category",
+        "output_format",
+        "examples",
+        "constraints",
     }
     unknown = set(fields) - allowed
     if unknown:
@@ -585,15 +606,33 @@ def skill_knowledge_text(conn: sqlite3.Connection, skills: list[str]) -> str:
     _agent_backstory()`)에도 똑같이 적용한다 — `augmentation_mode`
     값과 무관하게 이름이 일치하는 모든 스킬의 설명을 모은다(설명 자체가
     '이 스킬이 왜/언제 필요한지' 안내문 역할을 하므로, 'tool' 모드처럼
-    실행 가능한 Tool이 이미 붙어 있어도 중복이 아니다)."""
+    실행 가능한 Tool이 이미 붙어 있어도 중복이 아니다).
+
+    `output_format`/`examples`/`constraints`(2026-11-17, "skill을 정해진
+    섹션 규격을 참조해 구조화") — 있는 스킬만 각각 "출력 형식"/"예시"/
+    "제약사항" 하위 줄로 덧붙인다. 전부 NULL인 스킬(마이그레이션 직후
+    기존 53개 대부분)은 지금까지와 글자 하나 다르지 않게 동일한 결과를
+    낸다 — `description`만 있던 기존 동작이 그대로 보존된다."""
     if not skills:
         return ""
     placeholders = ",".join("?" * len(skills))
     rows = conn.execute(
-        f"SELECT description FROM skill_pool WHERE name IN ({placeholders})",
+        f"SELECT description, output_format, examples, constraints "
+        f"FROM skill_pool WHERE name IN ({placeholders})",
         skills,
     ).fetchall()
-    return "\n".join(f"- {r['description']}" for r in rows if r["description"])
+    lines = []
+    for r in rows:
+        if not r["description"]:
+            continue
+        lines.append(f"- {r['description']}")
+        if r["output_format"]:
+            lines.append(f"  출력 형식: {r['output_format']}")
+        if r["examples"]:
+            lines.append(f"  예시: {r['examples']}")
+        if r["constraints"]:
+            lines.append(f"  제약사항: {r['constraints']}")
+    return "\n".join(lines)
 
 
 # 사용자 보고(2026-10-14, "개발자 Agent의 결과가 게임 코드가 아닌 이상한

@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
-from hair_platform import db, deliverables
+from hair_platform import db, deliverables, webui
 from hair_platform import pipeline_runtime as pr
 from hair_platform.auth import Role, create_user
 
@@ -331,6 +331,34 @@ def test_gallery_content_type_filter(client_and_conn):
     assert all(d["content_type"] == "code" for d in body["items"])
     assert len(body["items"]) == 1
     assert body["total"] == 1
+
+
+def test_gallery_preview_strips_html_tags_and_fence(client_and_conn):
+    """사용자 보고(2026-11-16, "새탭에서는 html 웹 형식으로 잘 보이지만,
+    갤러리 화면에서는 여전히 소스 그대로 보임") — 갤러리 카드는 짧은
+    텍스트 미리보기만 보여주는데, content_type이 html이면 펜스/태그/
+    <style>/<script> 원문이 그대로 잘려 들어가 "소스 그대로"로 보였다."""
+    client, conn = client_and_conn
+    _, task_id = _setup_member1_task(client, conn)
+    _login(client, "member1", "memberpass")
+    html_content = (
+        "```html\n<!DOCTYPE html><html><head><style>body{color:red}</style>"
+        "<script>alert(1)</script></head><body><h1>실제로 보여야 할 제목</h1>"
+        "<p>실제 본문 내용입니다</p></body></html>\n```"
+    )
+    client.post(
+        f"/api/tasks/{task_id}/deliverables",
+        json={"content": html_content, "content_type": "html"},
+    )
+    resp = client.get("/api/deliverables?content_type=html")
+    assert resp.status_code == 200, resp.text
+    preview = resp.json()["items"][0]["preview"]
+    assert "실제로 보여야 할 제목" in preview
+    assert "실제 본문 내용입니다" in preview
+    assert "```" not in preview
+    assert "<" not in preview
+    assert "color:red" not in preview
+    assert "alert(1)" not in preview
 
 
 def test_gallery_status_filter(client_and_conn):
@@ -653,3 +681,24 @@ def test_stage_execution_writes_configured_output_content_type_to_deliverable():
     ).fetchone()
     assert deliverable is not None
     assert deliverable["content_type"] == "code"
+
+
+def test_render_deliverable_view_page_converts_timestamp_client_side():
+    """사용자 보고(2026-11-17, "대화에 ... 시간정보가 표시되지만 실제
+    시간과 차이가 남 — 한국시간 기준이 아님") — SQLite `datetime('now')`
+    는 UTC를 타임존 표시 없이 저장한다. 서버가 그 문자열을 그대로
+    박아 넣으면 보는 사람 기준 몇 시간씩 어긋난다 — 원본 UTC 값은
+    `data-raw-utc` 속성에만 담고, 실제 표시 텍스트는 보는 사람의
+    브라우저에서 클라이언트 JS가 변환하게 한다."""
+    html_out = webui.render_deliverable_view_page(
+        {
+            "id": 1,
+            "content": "내용",
+            "content_type": "text",
+            "created_at": "2026-11-17 08:39:05",
+        },
+        None,
+    )
+    assert 'data-raw-utc="2026-11-17 08:39:05"' in html_out
+    assert "getElementById(\"created-at\")" in html_out
+    assert "replace(\" \", \"T\") + \"Z\"" in html_out  # UTC로 파싱되도록 'Z' 부여
