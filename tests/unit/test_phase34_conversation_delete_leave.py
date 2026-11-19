@@ -194,3 +194,103 @@ def test_gc_leave_nonexistent_conversation_404(client_and_conn):
     _login(client, "member1", "memberpass")
     resp = client.post("/api/conversations/999999/leave")
     assert resp.status_code == 404, resp.text
+
+
+# ---------- 2026-11-19, 사용자 보고 "대화 삭제 시 500 Error 발생" ----------
+
+
+def test_gc_delete_conversation_with_knowledge_chunks_does_not_500(client_and_conn):
+    """`conversation_knowledge_chunks.source_message_id`가 메시지를 FK로
+    참조하는데, `_cascade_delete_conversation()`이 메시지를 먼저 지우면
+    `sqlite3.IntegrityError: FOREIGN KEY constraint failed`로 500이
+    났다 — 첨부파일을 올려 색인된 대화를 삭제하면 실제로 재현됨."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "첨부방"}).json()["id"]
+    client.post(f"/api/conversations/{conv_id}/messages", json={"content": "자료 첨부"})
+    # 메시지 id는 목록 조회로 확정한다(응답 shape이 job 목록이라).
+    message_row = conn.execute(
+        "SELECT id FROM conversation_messages WHERE conversation_id = ? "
+        "ORDER BY id LIMIT 1",
+        (conv_id,),
+    ).fetchone()
+    conn.execute(
+        "INSERT INTO conversation_knowledge_chunks (conversation_id, "
+        "source_message_id, filename, chunk_index, text, embedding, "
+        "embedding_provider, embedding_model) VALUES (?, ?, 'a.txt', 0, "
+        "'내용', '[0.1]', 'openai', 'text-embedding-3-small')",
+        (conv_id, message_row["id"]),
+    )
+    conn.commit()
+
+    resp = client.delete(f"/api/conversations/{conv_id}")
+    assert resp.status_code == 200, resp.text
+    assert conn.execute(
+        "SELECT COUNT(*) AS c FROM conversation_knowledge_chunks WHERE conversation_id = ?",
+        (conv_id,),
+    ).fetchone()["c"] == 0
+
+
+def test_gc_delete_conversation_detaches_source_pipeline_run_instead_of_blocking(
+    client_and_conn,
+):
+    """`pipeline_runs.source_conversation_id`도 같은 이유로 대화 삭제를
+    막을 수 있다 — 파이프라인 run 자체(산출물·감사기록이 있는 실제
+    업무 이력)는 지우지 않고 참조만 끊는다."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "파이프라인 출처방"}).json()[
+        "id"
+    ]
+    cur = conn.execute(
+        "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (1, 'x', '[]')"
+    )
+    brief_id = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, '역할', '[]')",
+        (brief_id,),
+    )
+    task_id = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO pipeline_templates (name) VALUES ('테스트 템플릿')"
+    )
+    template_id = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO pipeline_runs (pipeline_template_id, task_id, actor_id, "
+        "source_conversation_id) VALUES (?, ?, 1, ?)",
+        (template_id, task_id, conv_id),
+    )
+    run_id = cur.lastrowid
+    conn.commit()
+
+    resp = client.delete(f"/api/conversations/{conv_id}")
+    assert resp.status_code == 200, resp.text
+    run = conn.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+    assert run is not None  # run 자체는 보존됨
+    assert run["source_conversation_id"] is None  # 참조만 끊김
+
+
+def test_gc_delete_message_with_knowledge_chunk_does_not_500(client_and_conn):
+    """`delete_message()`도 같은 FK 문제의 쌍둥이 버그였다."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "메시지삭제방"}).json()[
+        "id"
+    ]
+    client.post(f"/api/conversations/{conv_id}/messages", json={"content": "자료"})
+    message_row = conn.execute(
+        "SELECT id FROM conversation_messages WHERE conversation_id = ? "
+        "ORDER BY id LIMIT 1",
+        (conv_id,),
+    ).fetchone()
+    conn.execute(
+        "INSERT INTO conversation_knowledge_chunks (conversation_id, "
+        "source_message_id, filename, chunk_index, text, embedding, "
+        "embedding_provider, embedding_model) VALUES (?, ?, 'a.txt', 0, "
+        "'내용', '[0.1]', 'openai', 'text-embedding-3-small')",
+        (conv_id, message_row["id"]),
+    )
+    conn.commit()
+
+    resp = client.delete(f"/api/conversations/{conv_id}/messages/{message_row['id']}")
+    assert resp.status_code == 200, resp.text

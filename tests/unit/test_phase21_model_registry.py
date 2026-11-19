@@ -318,6 +318,72 @@ def test_optimization_tiers_endpoint_rbac_and_round_trip(client_and_conn):
     assert resp.status_code == 403
 
 
+def test_context_window_endpoint_rbac_and_round_trip(client_and_conn):
+    """사용자 요청(2026-11-18, "...엔터프라이즈 환경 적용이 가능한
+    수준의 확실한 개선 방안을 도출해줘" 개선축 B) — admin이 모델별 실제
+    토큰 한도를 등록/재설정/초기화할 수 있어야 `token_budget.
+    resolve_context_window()`가 정확한 값을 쓴다."""
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    model_id = client.post(
+        "/api/model-registry",
+        json={"provider": "ollama", "name": "context-window-model:latest"},
+    ).json()["id"]
+
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/context-window",
+        json={"context_window": 32768},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"id": model_id, "context_window": 32768}
+    row = next(
+        r for r in client.get("/api/model-registry").json() if r["id"] == model_id
+    )
+    assert row["context_window"] == 32768
+
+    # 재설정 — 다른 값, 그리고 null로 초기화.
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/context-window",
+        json={"context_window": 8192},
+    )
+    assert resp.status_code == 200
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/context-window",
+        json={"context_window": None},
+    )
+    assert resp.status_code == 200
+    row = next(
+        r for r in client.get("/api/model-registry").json() if r["id"] == model_id
+    )
+    assert row["context_window"] is None
+
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/context-window",
+        json={"context_window": 0},
+    )
+    assert resp.status_code == 400
+
+    resp = client.patch(
+        "/api/model-registry/999999/context-window",
+        json={"context_window": 32768},
+    )
+    assert resp.status_code == 404
+
+    _login(client, "manager1", "managerpass")
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/context-window",
+        json={"context_window": 32768},
+    )
+    assert resp.status_code == 403, resp.text
+
+    _login(client, "member1", "memberpass")
+    resp = client.patch(
+        f"/api/model-registry/{model_id}/context-window",
+        json={"context_window": 32768},
+    )
+    assert resp.status_code == 403
+
+
 def test_gc225_fetch_candidates_wraps_provider_errors_as_400(client_and_conn):
     """ollama 서버 접속 실패·API 키 미설정 등은 흔한 실패 모드라 500이
     아니라 400으로, 사람이 읽을 수 있는 메시지로 돌려준다."""

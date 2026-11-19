@@ -124,6 +124,7 @@ from hair_platform.models import (
     ManagerUpdate,
     ManualKnowledgeTextCreate,
     ModelActiveUpdate,
+    ModelContextWindowUpdate,
     ModelOptimizationTiersUpdate,
     ModelRegistryCreate,
     PerformanceScoreRequest,
@@ -211,6 +212,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # `pipeline_runs.status='running'`이 영원히 방치된다(위 agent_
     # execution_jobs와 같은 "단일 프로세스 재기동 시 정리" 전제).
     pipeline_runtime.reap_orphaned_pipeline_runs(conn)
+    # 사용자 보고(2026-11-19, "ollama 실행되지 않고 있는데... 실행 중이
+    # 표시됨") — 위 두 reap과 같은 이유로 `conversation_jobs`(기본 AI/
+    # Agent 멘션/Team 멘션)도 정리가 빠져 있었다 — 서버 재시작으로도
+    # 안 풀리는 "실행 중" 먹통 상태의 원인이었다.
+    conversations.reap_orphaned_conversation_jobs(conn)
     # 사용자 결정(2026-09-29, "assignment_history/audit_log 보관기간 1년") —
     # 오래 켜진 배포에서 기동 때마다 자연스럽게 정리되도록 여기서도 실행한다
     # (retention.py 참고, 지울 게 없으면 DB에 손도 대지 않는다).
@@ -1996,7 +2002,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # attachments`(저장 없이 메시지로 직접 주입)로 분리했다. 이
     # `/api/documents`는 이제 "지식 베이스"(admin/manager 전용 공통·
     # 영구 지식)만 다룬다.
-    _MAX_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
+    #
+    # 사용자 요청(2026-11-18, "자료 업로드 형식으로 csv, excel, word,
+    # powerpoint를 포함하도록" → "구현 시작") — 상한이 포맷마다 달라져
+    # (`documents.max_upload_bytes()` 참고) 고정 10MB 상수 대신 파일명
+    # 기준으로 그때그때 조회한다. 세 업로드 경로(이 엔드포인트·대화
+    # 첨부·Task 실행 참고자료) 전부 같은 헬퍼를 쓴다.
+    def _reject_if_too_large(filename: str, raw_bytes: bytes) -> None:
+        limit = documents.max_upload_bytes(filename)
+        if len(raw_bytes) > limit:
+            raise HTTPException(
+                status_code=400,
+                detail=f"파일이 너무 큽니다(최대 {limit // (1024 * 1024)}MB)",
+            )
 
     @app.post("/api/documents", status_code=201)
     async def upload_document(
@@ -2004,8 +2022,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         raw_bytes = await file.read()
-        if len(raw_bytes) > _MAX_DOCUMENT_UPLOAD_BYTES:
-            raise HTTPException(status_code=400, detail="파일이 너무 큽니다(최대 10MB)")
+        _reject_if_too_large(file.filename or "", raw_bytes)
 
         try:
             return documents.ingest_document(
@@ -2031,8 +2048,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=403, detail="이 대화의 참가자만 파일을 올릴 수 있습니다"
             )
         raw_bytes = await file.read()
-        if len(raw_bytes) > _MAX_DOCUMENT_UPLOAD_BYTES:
-            raise HTTPException(status_code=400, detail="파일이 너무 큽니다(최대 10MB)")
+        _reject_if_too_large(file.filename or "", raw_bytes)
 
         filename = file.filename or "첨부 파일"
         try:
@@ -2042,7 +2058,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         try:
             message_id = conversations.create_attachment_message(
-                conn, conversation_id, user["id"], filename, text
+                conn, conversation_id, user["id"], filename, text, raw_bytes=raw_bytes
             )
         except ValueError as exc:
             raise HTTPException(
@@ -2503,10 +2519,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         attachment_filename: str | None = None
         if attachment is not None and attachment.filename:
             raw_bytes = await attachment.read()
-            if len(raw_bytes) > 10 * 1024 * 1024:
-                raise HTTPException(
-                    status_code=400, detail="첨부 파일이 너무 큽니다(최대 10MB)"
-                )
+            _reject_if_too_large(attachment.filename, raw_bytes)
             attachment_filename = attachment.filename
             try:
                 attachment_text = documents.extract_text(attachment_filename, raw_bytes)
@@ -2835,9 +2848,33 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "pipeline_template_has_no_stages": "단계가 없는 파이프라인 템플릿입니다",
             }.get(str(exc), str(exc))
             raise HTTPException(status_code=400, detail=detail) from None
-        background_tasks.add_task(
-            pipeline_runtime.run_pipeline_stage_job, conn, run_id, user["id"]
-        )
+        if payload.use_graph_engine:
+            # 사용자 요청(2026-11-18, "다음 개선 진행해줘") — LangGraph
+            # 실행엔진은 아직 `single`/`sequential_relay`만 지원한다.
+            # `start_pipeline_run()`이 이미 run 행을 만들어버린 뒤라
+            # (여기서 막으면 run이 'running' 상태로 고아가 됨) 미리
+            # 검증해 실패 시 run 자체를 바로 취소 처리한다.
+            from hair_platform import execution_graph
+
+            try:
+                execution_graph.validate_template_supported(
+                    conn, payload.pipeline_template_id
+                )
+            except ValueError as exc:
+                conn.execute(
+                    "UPDATE pipeline_runs SET status = 'cancelled', "
+                    "finished_at = datetime('now') WHERE id = ?",
+                    (run_id,),
+                )
+                conn.commit()
+                raise HTTPException(status_code=400, detail=str(exc)) from None
+            background_tasks.add_task(
+                execution_graph.run_pipeline_graph_job, conn, run_id, user["id"]
+            )
+        else:
+            background_tasks.add_task(
+                pipeline_runtime.run_pipeline_stage_job, conn, run_id, user["id"]
+            )
         return {"run_id": run_id, "status": "running"}
 
     @app.get("/api/tasks/{task_id}/pipeline-runs")
@@ -3693,6 +3730,28 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": model_id, "optimization_tiers": payload.optimization_tiers}
 
+    @app.patch("/api/model-registry/{model_id}/context-window")
+    def set_model_registry_context_window(
+        model_id: int,
+        payload: ModelContextWindowUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """사용자 요청(2026-11-18, "...엔터프라이즈 환경 적용이 가능한
+        수준의 확실한 개선 방안을 도출해줘" 개선축 B) — 이 모델이 실제로
+        받아들이는 토큰 한도를 admin이 등록한다. `null`로 보내면 초기화
+        (provider별 보수적 기본값으로 폴백)."""
+        try:
+            model_registry.set_context_window(
+                conn, user["id"], model_id, payload.context_window
+            )
+        except ValueError as exc:
+            if str(exc) == "model_not_found":
+                raise HTTPException(
+                    status_code=404, detail="모델을 찾을 수 없습니다"
+                ) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": model_id, "context_window": payload.context_window}
+
     @app.post("/api/model-registry/{model_id}/benchmark", status_code=201)
     def run_model_registry_benchmark(
         model_id: int,
@@ -3963,6 +4022,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "manager_must_be_active_agent_member_of_team": "지정한 매니저가 이 팀의 온보딩(active)된 Agent 멤버가 아닙니다",
                 "pipeline_template_not_found": "파이프라인 템플릿을 찾을 수 없습니다",
                 "pipeline_template_inactive": "비활성화된 파이프라인 템플릿입니다",
+                "use_graph_engine_requires_pipeline_template": "신규 실행엔진을 켜려면 먼저 파이프라인 템플릿을 연결해야 합니다",
+                "hierarchical_mode_blocked_for_new_teams": "신규로 hierarchical 모드를 지정할 수 없습니다 — CrewAI hierarchical 모드의 신뢰성 문제로 더는 새로 전환할 수 없게 막아뒀습니다. sequential_relay 기반 파이프라인(가능하면 신규 실행엔진)을 사용하세요. 이미 hierarchical인 팀은 계속 쓸 수 있습니다.",
             }.get(str(exc), str(exc))
             raise HTTPException(status_code=400, detail=detail) from exc
         return {"id": team_id, **saved}
@@ -4940,6 +5001,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
             assignment_result = None
             deliverable_result = None
             pipeline_run_id = None
+            # 사용자 요청(2026-11-18, "langgraph + langgraph-checkpoint-
+            # sqlite... 결재함과 연결") — `pipeline_run_stage` 결재 대상이
+            # 기존 `pipeline_runtime` 상태 머신이 아니라 LangGraph 실행
+            # 엔진(`execution_graph.py`)으로 진행 중인 run이면, 재개
+            # 방식이 완전히 다르다(DB 컬럼 직접 조작 대신 `interrupt()`
+            # 재개) — 아래서 `pipeline_run_stage` 분기 진입 시 확정된다.
+            pipeline_run_is_graph_engine = False
             new_pipeline_run_id = None
             new_pipeline_run_actor_id = None
             next_step_pending = False
@@ -4992,9 +5060,32 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     # 승인하면, 파이프라인이 다음 단계로 이어서 진행된다
                     # (LLM 호출이 들어가므로 여기선 DB 상태만 바꾸고
                     # BackgroundTasks로 이어서 돌린다).
-                    pipeline_run_id = pipeline_runtime.resolve_stage_decision(
-                        conn, user["id"], subject_id, True, payload.reason
+                    #
+                    # 사용자 요청(2026-11-18, "결재함과 연결") — 이 단계가
+                    # LangGraph 실행엔진으로 진행 중이면 `pipeline_runtime.
+                    # resolve_stage_decision()`(DB 컬럼을 직접 조작하는
+                    # 상태 머신 전제)을 호출하면 안 된다 — 그 엔진의
+                    # "진실의 원천"은 LangGraph 체크포인트라 서로 충돌한다.
+                    stage_run_row = conn.execute(
+                        "SELECT pipeline_run_id FROM pipeline_run_stages WHERE id = ?",
+                        (subject_id,),
+                    ).fetchone()
+                    engine_row = (
+                        conn.execute(
+                            "SELECT engine FROM pipeline_runs WHERE id = ?",
+                            (stage_run_row["pipeline_run_id"],),
+                        ).fetchone()
+                        if stage_run_row is not None
+                        else None
                     )
+                    if engine_row is not None and engine_row["engine"] == "graph":
+                        assert stage_run_row is not None
+                        pipeline_run_is_graph_engine = True
+                        pipeline_run_id = stage_run_row["pipeline_run_id"]
+                    else:
+                        pipeline_run_id = pipeline_runtime.resolve_stage_decision(
+                            conn, user["id"], subject_id, True, payload.reason
+                        )
             else:
                 approvals_mod.skip_remaining_steps(
                     conn, subject_type, subject_id, approval["step"]
@@ -5011,9 +5102,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     # 반려 = "다시 해와"(승인루프 스킬 안내와
                     # 일치) — 재시도 여력이 남아 있으면 파이프라인은
                     # 'running'으로 돌아가 같은 단계를 재시도한다.
-                    pipeline_run_id = pipeline_runtime.resolve_stage_decision(
-                        conn, user["id"], subject_id, False, payload.reason
+                    # 그래프 엔진 분기는 위 승인 branch와 동일한 이유.
+                    stage_run_row = conn.execute(
+                        "SELECT pipeline_run_id FROM pipeline_run_stages WHERE id = ?",
+                        (subject_id,),
+                    ).fetchone()
+                    engine_row = (
+                        conn.execute(
+                            "SELECT engine FROM pipeline_runs WHERE id = ?",
+                            (stage_run_row["pipeline_run_id"],),
+                        ).fetchone()
+                        if stage_run_row is not None
+                        else None
                     )
+                    if engine_row is not None and engine_row["engine"] == "graph":
+                        assert stage_run_row is not None
+                        pipeline_run_is_graph_engine = True
+                        pipeline_run_id = stage_run_row["pipeline_run_id"]
+                    else:
+                        pipeline_run_id = pipeline_runtime.resolve_stage_decision(
+                            conn, user["id"], subject_id, False, payload.reason
+                        )
             audit.record(
                 conn,
                 user["id"],
@@ -5042,7 +5151,26 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except Exception:
             conn.rollback()
             raise
-        if pipeline_run_id is not None:
+        if pipeline_run_id is not None and pipeline_run_is_graph_engine:
+            # 사용자 요청(2026-11-18, "결재함과 연결") — 이 run은 아직
+            # `pipeline_runs.status`가 'paused_for_approval'인 채다(실제
+            # 상태 전이는 `_node_human_approval()`이 재개될 때 일어난다
+            # — 그래서 레거시 엔진의 `status == "running"` 체크가 여기선
+            # 적용되지 않는다, 즉시 재개 작업을 건다). `conversations.
+            # resume_pipeline_graph_from_approval_and_notify()`를 거쳐야
+            # — 대화에서 트리거된 run이면 재개 후 진행 메시지도 올린다
+            # (`run_pipeline_stage_job_and_notify()`와 같은 이유, 레거시
+            # 엔진도 직접 `pipeline_runtime`을 안 부르고 그 래퍼를 씀).
+            background_tasks.add_task(
+                conversations.resume_pipeline_graph_from_approval_and_notify,
+                conn,
+                pipeline_run_id,
+                {
+                    "decision": "approve" if payload.approve else "reject",
+                    "reason": payload.reason,
+                },
+            )
+        elif pipeline_run_id is not None:
             pipeline_run_row = conn.execute(
                 "SELECT status, actor_id FROM pipeline_runs WHERE id = ?",
                 (pipeline_run_id,),

@@ -783,6 +783,9 @@ def test_update_team_defaults_requires_admin_or_manager_and_validates(client_and
     assert resp.status_code == 403
 
     _login(client, "manager1", "managerpass")
+    # 사용자 요청(2026-11-19, "CrewAI hierarchical 모드 신규 팀 생성
+    # 차단") — 아직 hierarchical이 아닌 이 새 팀은 더 이상
+    # hierarchical로 전환할 수 없다(회귀 가드).
     resp = client.patch(
         f"/api/teams/{team_id}",
         json={
@@ -790,20 +793,29 @@ def test_update_team_defaults_requires_admin_or_manager_and_validates(client_and
             "default_manager_agent_id": manager_agent,
         },
     )
+    assert resp.status_code == 400, resp.text
+    assert "hierarchical" in resp.json()["detail"]
+
+    resp = client.patch(
+        f"/api/teams/{team_id}",
+        json={"default_process": "sequential"},
+    )
     assert resp.status_code == 200, resp.text
-    # `pipeline_template_id`(2026-10-29, "TF팀을 teams의 확장으로")가
-    # 응답에 추가됐다 — 이 테스트는 그 전에는 없던 필드라 안 건드렸으면
-    # None이어야 한다.
+    # `pipeline_template_id`(2026-10-29, "TF팀을 teams의 확장으로")/
+    # `use_graph_engine`(2026-11-18, "다음 개선 진행해줘" → conversations.py
+    # 통합)가 응답에 추가됐다 — 이 테스트는 둘 다 안 건드렸으면
+    # 각각 None/False여야 한다.
     assert resp.json() == {
         "id": team_id,
-        "default_process": "hierarchical",
-        "default_manager_agent_id": manager_agent,
+        "default_process": "sequential",
+        "default_manager_agent_id": None,
         "pipeline_template_id": None,
+        "use_graph_engine": False,
     }
 
     resp = client.get(f"/api/teams/{team_id}")
-    assert resp.json()["default_process"] == "hierarchical"
-    assert resp.json()["default_manager_agent_id"] == manager_agent
+    assert resp.json()["default_process"] == "sequential"
+    assert resp.json()["default_manager_agent_id"] is None
 
     # 이 팀의 멤버가 아닌 Agent는 매니저로 지정할 수 없다.
     resp = client.patch(
@@ -893,15 +905,17 @@ def test_execute_team_crew_endpoint_falls_back_to_team_default_process_and_manag
     team_id = _make_team_confirmed_on_task(
         client, conn, task_id, [manager_agent, worker_agent], team_name="실행기본값팀"
     )
-    _login(client, "manager1", "managerpass")
-    resp = client.patch(
-        f"/api/teams/{team_id}",
-        json={
-            "default_process": "hierarchical",
-            "default_manager_agent_id": manager_agent,
-        },
+    # 사용자 요청(2026-11-19, "CrewAI hierarchical 모드 신규 팀 생성
+    # 차단") 이후 — 이 테스트의 목적은 "팀 Agent 실행"이 이미
+    # hierarchical인 팀의 기본값을 올바르게 폴백하는지 확인하는 것이라
+    # (전환 정책 자체를 테스트하는 게 아님), API 대신 DB에 직접 심어
+    # "이미 hierarchical인 팀" 상태를 만든다.
+    conn.execute(
+        "UPDATE teams SET default_process = 'hierarchical', "
+        "default_manager_agent_id = ? WHERE id = ?",
+        (manager_agent, team_id),
     )
-    assert resp.status_code == 200, resp.text
+    conn.commit()
 
     captured = {}
 

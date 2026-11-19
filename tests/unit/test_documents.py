@@ -110,6 +110,147 @@ def test_extract_text_rejects_empty_result():
         documents.extract_text("empty.txt", b"   \n\n  ")
 
 
+# ---------- extract_text() — csv/xlsx/docx/pptx(사용자 요청, 2026-11-18,
+# "자료 업로드 형식으로 csv, excel, word, powerpoint를 포함하도록
+# 개선 방안을 제안해줘" → "구현 시작") ----------
+
+
+def test_extract_text_csv_decoded_as_is():
+    csv_bytes = "이름,나이\n홍길동,30\n".encode("utf-8")
+    assert documents.extract_text("list.csv", csv_bytes) == "이름,나이\n홍길동,30"
+
+
+def test_extract_text_csv_falls_back_to_cp949_encoding():
+    """한국 사용자가 Excel에서 "CSV(쉼표로 분리)"로 내보내면 흔히
+    cp949로 저장된다 — UTF-8로만 디코드하면 깨진다."""
+    csv_bytes = "이름,나이\n박영희,40\n".encode("cp949")
+    text = documents.extract_text("list_cp949.csv", csv_bytes)
+    assert "박영희" in text
+    assert "�" not in text
+
+
+def test_extract_text_xlsx_reads_multiple_sheets():
+    openpyxl = pytest.importorskip("openpyxl")
+    from io import BytesIO
+
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "매출"
+    ws1.append(["월", "매출액"])
+    ws1.append(["1월", 1000])
+    ws2 = wb.create_sheet("비고")
+    ws2.append(["특이사항 없음"])
+    buf = BytesIO()
+    wb.save(buf)
+
+    text = documents.extract_text("report.xlsx", buf.getvalue())
+    assert "[시트: 매출]" in text
+    assert "월 | 매출액" in text
+    assert "1월 | 1000" in text
+    assert "[시트: 비고]" in text
+    assert "특이사항 없음" in text
+
+
+def test_extract_text_xlsx_truncates_rows_over_cap(monkeypatch):
+    """바이트 크기와 무관하게 셀이 빽빽하면 텍스트가 크게 불어날 수
+    있다 — 시트당 행 수 상한을 두되, 잘렸다는 사실 자체는 숨기지
+    않는다."""
+    openpyxl = pytest.importorskip("openpyxl")
+    from io import BytesIO
+
+    monkeypatch.setattr(documents, "_MAX_XLSX_ROWS_PER_SHEET", 3)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for i in range(5):
+        ws.append([i])
+    buf = BytesIO()
+    wb.save(buf)
+
+    text = documents.extract_text("big.xlsx", buf.getvalue())
+    lines = text.splitlines()
+    assert lines[1:4] == ["0", "1", "2"]
+    assert lines[-1] == "...(이하 2행 생략)"
+
+
+def test_extract_text_xlsx_skips_fully_empty_rows():
+    openpyxl = pytest.importorskip("openpyxl")
+    from io import BytesIO
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["a"])
+    ws.append([None])
+    ws.append(["b"])
+    buf = BytesIO()
+    wb.save(buf)
+
+    text = documents.extract_text("gaps.xlsx", buf.getvalue())
+    assert text.splitlines()[1:] == ["a", "b"]
+
+
+def test_extract_text_docx_reads_paragraphs_and_tables():
+    docx = pytest.importorskip("docx")
+    from io import BytesIO
+
+    doc = docx.Document()
+    doc.add_paragraph("본문 문단입니다.")
+    table = doc.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "항목"
+    table.cell(0, 1).text = "값"
+    buf = BytesIO()
+    doc.save(buf)
+
+    text = documents.extract_text("report.docx", buf.getvalue())
+    assert "본문 문단입니다." in text
+    assert "[표 1]" in text
+    assert "항목 | 값" in text
+
+
+def test_extract_text_pptx_reads_slide_text_and_notes():
+    pptx = pytest.importorskip("pptx")
+    from io import BytesIO
+
+    prs = pptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "첫 번째 슬라이드"
+    slide.placeholders[1].text = "핵심 내용"
+    slide.notes_slide.notes_text_frame.text = "발표 포인트"
+    buf = BytesIO()
+    prs.save(buf)
+
+    text = documents.extract_text("deck.pptx", buf.getvalue())
+    assert "[1번 슬라이드]" in text
+    assert "첫 번째 슬라이드" in text
+    assert "핵심 내용" in text
+    assert "[발표자 노트] 발표 포인트" in text
+
+
+def test_extract_text_pptx_skips_slide_with_no_text():
+    pptx = pytest.importorskip("pptx")
+    from io import BytesIO
+
+    prs = pptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])  # 빈 레이아웃 — 텍스트 없음
+    slide2 = prs.slides.add_slide(prs.slide_layouts[6])
+    tb = slide2.shapes.add_textbox(0, 0, 100, 100)
+    tb.text_frame.text = "두 번째엔 내용 있음"
+    buf = BytesIO()
+    prs.save(buf)
+
+    text = documents.extract_text("deck2.pptx", buf.getvalue())
+    assert "[1번 슬라이드]" not in text  # 빈 슬라이드는 섹션 자체가 생략됨
+    assert "[2번 슬라이드]" in text
+
+
+# ---------- max_upload_bytes() ----------
+
+
+def test_max_upload_bytes_default_and_pptx_override():
+    assert documents.max_upload_bytes("note.md") == 10 * 1024 * 1024
+    assert documents.max_upload_bytes("deck.pptx") == 25 * 1024 * 1024
+    assert documents.max_upload_bytes("NO_EXTENSION") == 10 * 1024 * 1024
+
+
 # ---------- chunk_text() ----------
 
 
@@ -196,6 +337,77 @@ def test_upload_document_rejects_unsupported_extension(client_and_conn):
         files={"file": ("archive.zip", b"PK\x03\x04", "application/zip")},
     )
     assert resp.status_code == 400, resp.text
+
+
+def test_upload_document_accepts_csv(client_and_conn):
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        resp = client.post(
+            "/api/documents",
+            files={"file": ("list.csv", "이름,나이\n홍길동,30\n".encode(), "text/csv")},
+        )
+    assert resp.status_code == 201, resp.text
+
+
+def test_upload_document_enforces_per_extension_size_limit(client_and_conn):
+    """사용자 요청(2026-11-18, "10MB 상한을 포맷별로 다르게") — .md는
+    여전히 10MB가 상한이라 10MB를 살짝 넘기면 400이어야 한다."""
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    too_big = b"a" * (10 * 1024 * 1024 + 1)
+    resp = client.post(
+        "/api/documents", files={"file": ("huge.md", too_big, "text/markdown")}
+    )
+    assert resp.status_code == 400, resp.text
+    assert "10MB" in resp.json()["detail"]
+
+
+def test_upload_conversation_attachment_accepts_pptx_up_to_25mb(client_and_conn):
+    """PPTX는 .md와 달리 25MB까지 허용된다 — 10MB를 넘겨도(.md였다면
+    거부됐을 크기) 25MB 이하면 통과해야 한다."""
+    pptx = pytest.importorskip("pptx")
+    from io import BytesIO
+
+    client, _conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    conv_id = client.post("/api/conversations", json={"title": "테스트"}).json()["id"]
+
+    import secrets
+
+    prs = pptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    # 단순 반복 문자는 zip 압축(pptx 포맷의 실제 저장 방식)으로 원본
+    # 바이트 수와 무관하게 쪼그라든다 — 압축에 강한 무작위 16진수
+    # 문자열을 써야 실제 업로드 바이트 수가 의도한 만큼 커진다. 텍스트
+    # 노드 하나에 몰아넣으면 lxml 자체의 "텍스트 노드가 너무 길다"는
+    # 안전장치에 걸리므로, 여러 텍스트 상자로 나눠 담는다.
+    for _ in range(14):  # 실측(2026-11-18) — 약 16MB로, 10MB~25MB 사이
+        tb = slide.shapes.add_textbox(0, 0, 100, 100)
+        tb.text_frame.text = secrets.token_hex(1024 * 1024)  # 상자당 2MB
+    buf = BytesIO()
+    prs.save(buf)
+    raw = buf.getvalue()
+    assert len(raw) > 10 * 1024 * 1024  # 실제로 10MB를 넘는지 확인
+
+    # 사용자 요청(2026-11-18, "...메모리를 활용하는 방안... 개선 방안을
+    # 도출해줘" 개선축 C) — 이 정도로 큰 첨부는 추출된 텍스트가 문턱
+    # (`conversations._LARGE_ATTACHMENT_CHAR_THRESHOLD`)을 넘어 대화
+    # 메모리에 색인되므로(실제 임베딩 API 호출), 다른 임베딩 테스트와
+    # 같은 관례로 모킹한다 — 안 하면 실제 네트워크 호출을 반복하다
+    # 멈추지 않는다(실측: 11분 넘게 걸려 강제 종료해야 했던 회귀).
+    with patch("hair_platform.vectorstore.embed_text", side_effect=_fake_embed):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/attachments",
+            files={
+                "file": (
+                    "deck.pptx",
+                    raw,
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                )
+            },
+        )
+    assert resp.status_code == 201, resp.text
 
 
 # ---------- GET/DELETE /api/documents ----------

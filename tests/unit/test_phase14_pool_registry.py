@@ -478,8 +478,11 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     # (데이터 분석/제안서/실적서 작성 개선)로 추가된 "수치 데이터
     # 분석기" 1개(= 11 + 1 = 12) + 2026-11-17("딥리서치 skill과... 최신
     # (1주일) 뉴스와 인사이트를 제공해 주는 Skill 추가")로 추가된
-    # "실시간 뉴스 검색(Tavily, 최근 7일)" 1개(= 12 + 1 = 13).
-    assert len(resp.json()) == 13
+    # "실시간 뉴스 검색(Tavily, 최근 7일)" 1개(= 12 + 1 = 13) + 2026-11-18
+    # ("excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프 출력 등이
+    # 가능하도록... 전담 팀을 구성해")로 추가된 "차트 생성기" 1개
+    # (= 13 + 1 = 14).
+    assert len(resp.json()) == 14
 
     # 사용자 결정(2026-09-29, "(a) MCP 종류만 admin 전용으로 좁히기") —
     # 매니저는 mcp_remote/mcp_stdio 등록이 이제 403이다. native는
@@ -533,7 +536,7 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 54
+        len(resp.json()) == 55
     )  # 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 일반웹검색 1 +
     # 실시간웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복
     # 통합으로 제거됨. 2026-10-26 "대화에서 외부 검색이 가능한 방법을
@@ -563,6 +566,9 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     # (= 51 + 2 = 53).
     # + 2026-11-17("주어진 업무를 잘 처리할 수 있는 skill을 생성하는
     # skill을 추가해줘")로 "스킬생성가이드" 1개 추가(= 53 + 1 = 54).
+    # + 2026-11-18("excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프
+    # 출력 등이 가능하도록... 전담 팀을 구성해")로 "데이터시각화가이드"
+    # 1개 추가(= 54 + 1 = 55).
 
     resp = client.post(
         "/api/skill-pool",

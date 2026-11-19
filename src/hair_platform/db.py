@@ -256,6 +256,31 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 사용자 요청(2026-11-18, "대화에서 업무처리시... 메모리를 활용하는
+-- 방안 등을 고려해 엔터프라이즈 환경 적용이 가능한 수준의 확실한
+-- 개선 방안을 도출해줘" 개선축 C) — `knowledge_chunks`(전역, 영구
+-- VectorDB)와 의도적으로 분리한 대화 전용 임시 색인. 2026-10-26
+-- 결정("대화에 주입되는 문서는 저장되지 않고 휘발되는 내용물")을
+-- 보존한다 — `conversation_id`로 스코프돼 그 대화가 지워지면(`_cascade_
+-- delete_conversation()`) 같이 지워지고, 다른 대화의 검색에는 전혀
+-- 안 걸린다. 거대한 첨부파일(2026-11-18 사고: 19KB 하나가 로컬 모델
+-- 컨텍스트 한도를 넘김)을 전문 그대로 메시지에 박는 대신 청크+임베딩
+-- 해뒀다가, 질문이 올 때마다 관련 있는 청크만 꺼내 쓴다.
+CREATE TABLE IF NOT EXISTS conversation_knowledge_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    source_message_id INTEGER REFERENCES conversation_messages(id),
+    filename TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    embedding_provider TEXT NOT NULL,
+    embedding_model TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_knowledge_chunks_conv
+    ON conversation_knowledge_chunks(conversation_id);
+
 CREATE TABLE IF NOT EXISTS tool_pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT,
@@ -304,12 +329,21 @@ CREATE TABLE IF NOT EXISTS skill_pool (
 -- 하나도 없으면 그 tier는 기존처럼 이름 패턴 추정으로 폴백한다(하위
 -- 호환). 새 모델 출시·provider 교체 시 코드를 고치지 않고 이 매핑만
 -- 바꾸면 되고, 몇 번이든 다시 바꿀 수 있다.
+-- `context_window`(사용자 요청, 2026-11-18, "Skill, tool 사용 제약을
+-- 없애고, 메모리를 활용하는 방안 등을 고려해 엔터프라이즈 환경 적용이
+-- 가능한 수준의 확실한 개선 방안을 도출해줘" 개선축 B) — 이 모델이
+-- 실제로 받아들이는 토큰 한도. NULL(기본값)이면 `token_budget.
+-- DEFAULT_CONTEXT_WINDOW_BY_PROVIDER`의 provider별 보수적 기본값으로
+-- 폴백한다 — Ollama는 로컬 서버 실행 플래그(`-c 32768` 등)로 결정되는
+-- 값이라 DB가 자동으로 알 수 없으므로 admin이 "모델 레지스트리"
+-- 화면에서 직접 등록해야 정확해진다.
 CREATE TABLE IF NOT EXISTS model_registry (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL CHECK (provider IN ('anthropic', 'openai', 'ollama')),
     name TEXT NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 1,
     optimization_tiers TEXT NOT NULL DEFAULT '[]',
+    context_window INTEGER,
     UNIQUE(provider, name)
 );
 
@@ -1261,6 +1295,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(
         conn, "model_registry", "optimization_tiers", "TEXT NOT NULL DEFAULT '[]'"
     )
+    # 사용자 요청(2026-11-18, "...엔터프라이즈 환경 적용이 가능한 수준의
+    # 확실한 개선 방안을 도출해줘" 개선축 B) — 기존 DB에도 추가.
+    # NULL(기본값) = provider별 보수적 기본값으로 폴백(위 스키마 주석
+    # 참고), admin이 등록해야 모델별 실제 한도가 정확히 반영된다.
+    _ensure_column(conn, "model_registry", "context_window", "INTEGER")
     # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
     # (종류 구분 가능) 초기화하여 정리") — 기존 DB에도 `code` 컬럼을
     # 추가한다. UNIQUE 인덱스는 컬럼이 확실히 생긴 뒤인 여기서만
@@ -1305,12 +1344,32 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "pipeline_template_id",
         "INTEGER REFERENCES pipeline_templates(id)",
     )
+    # 사용자 요청(2026-11-18, "다음 개선 진행해줘" → conversations.py
+    # 통합) — `teams.pipeline_template_id`로 파이프라인에 연결된 팀이
+    # `@팀멘션`될 때, 기존 `pipeline_runtime.py` 엔진 대신 신규
+    # LangGraph 엔진(`execution_graph.py`)을 opt-in으로 쓸지 결정하는
+    # 플래그. 기본 0(기존 동작 100% 무변화) — admin이 `PATCH /api/
+    # teams/{id}/defaults`로 켤 수 있다(단, 그 팀의 템플릿이
+    # `parallel_delegated` 단계를 포함하면 거부됨, `teams.py` 참고).
+    _ensure_column(conn, "teams", "use_graph_engine", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(
         conn,
         "pipeline_runs",
         "source_conversation_id",
         "INTEGER REFERENCES conversations(id)",
     )
+    # 사용자 요청(2026-11-18, "langgraph + langgraph-checkpoint-sqlite
+    # 신규 의존성 추가 방향으로 설계를 구체화하고 진행해줘" → "진행해줘"
+    # — 결재함 승인/반려를 LangGraph 실행엔진(`execution_graph.py`)의
+    # `interrupt()`에 연결) — 기존 `pipeline_runtime.run_pipeline_
+    # stage_job()`으로 계속 실행 중인 run과, 새 그래프 엔진으로
+    # 시작된 run을 구분해야 한다 — 서로 상태 전이 방식이 달라서(그래프
+    # 엔진은 LangGraph 체크포인트가 "진실의 원천", 기존 엔진은 DB
+    # 컬럼이 "진실의 원천") 승인 처리 시 반드시 맞는 엔진으로만
+    # 재개해야 한다. 기본값 'legacy' — 기존 run은 전부 이 값, 그래프
+    # 엔진으로 시작된 run만 `execution_graph.run_pipeline_graph()`가
+    # 'graph'로 바꾼다(기존 동작 100% 무변화).
+    _ensure_column(conn, "pipeline_runs", "engine", "TEXT NOT NULL DEFAULT 'legacy'")
     _sync_dev_crew_pipeline_integration(conn)
     # 사용자 요청(2026-10-29, "TF팀을 teams의 확장으로, Team 온보딩
     # 라이프사이클 도입 — 기존 활성 팀은 전부 자동 active 처리") —
@@ -1618,6 +1677,17 @@ _DEV_CREW_LEGACY_ROLE_LABEL_MIGRATIONS = (
     ("데이터/인프라", "4단계: 구현(데이터/인프라)"),
     ("풀스택(유동 배치)", "4단계: 구현(풀스택, 유동 배치)"),
     ("UI/UX", "4단계: 구현(UI/UX)"),
+    # 사용자 요청(2026-11-19, "'에이전틱 실행엔진'에 맞춰... 정비해줘.
+    # 정비시 기존에 설정된 hierarchical을 배제, sequential 방식으로
+    # 해도 좋아") — 바로 위 마이그레이션이 만든 이 문구도 "구현"
+    # 단계가 sequential_relay로 전환(2026-11-07)된 뒤로 더는 사실이
+    # 아니다(이 역할은 "구현" 단계 참여자가 아니고, 위임을 지휘하는
+    # 매니저 개념 자체가 그 단계에 없다) — 같은 체인으로 한 번 더
+    # 교체한다.
+    (
+        "3단계: 개발 계획 수립 / 4단계: 매니저(hierarchical 위임 리드)",
+        "3단계: 개발 계획 수립",
+    ),
 )
 
 
@@ -1692,11 +1762,39 @@ def _sync_dev_crew_pipeline_integration(conn: sqlite3.Connection) -> None:
             )
         # 기존 6명의 role_label도 새 "N단계: ..." 표기로 맞춘다 — 옛
         # 문구 그대로인 행만(관리자가 이미 직접 고친 라벨은 안 건드림).
+        #
+        # 사용자 요청(2026-11-19, "'에이전틱 실행엔진'에 맞춰... 정비
+        # 해줘. 정비시 기존에 설정된 hierarchical을 배제, sequential
+        # 방식으로 해도 좋아") — 바로 아래서 지워질 "4단계: 매니저
+        # (hierarchical 위임 리드)" 문구가 **지금** 남아 있다는 건 이
+        # 팀이 "구현" 단계 sequential_relay 전환(2026-11-07) 이후로
+        # 한 번도 재검토되지 않았다는 신호다 — 그 경우에만 팀 자체의
+        # hierarchical 설정(`default_process`/`default_manager_agent_
+        # id`)도 같이 sequential + 신규 그래프 엔진으로 전환한다
+        # (관리자가 이미 직접 들여다본 팀은 이 조건 자체가 다시 안
+        # 맞아 건드리지 않음 — 다른 마이그레이션과 같은 안전장치).
+        stale_manager_label = (
+            "3단계: 개발 계획 수립 / 4단계: 매니저(hierarchical 위임 리드)"
+        )
+        has_stale_manager_label = (
+            conn.execute(
+                "SELECT 1 FROM team_members WHERE team_id = ? AND member_type = 'agent' "
+                "AND role_label = ?",
+                (team_row["id"], stale_manager_label),
+            ).fetchone()
+            is not None
+        )
         for old_label, new_label in _DEV_CREW_LEGACY_ROLE_LABEL_MIGRATIONS:
             conn.execute(
                 "UPDATE team_members SET role_label = ? "
                 "WHERE team_id = ? AND member_type = 'agent' AND role_label = ?",
                 (new_label, team_row["id"], old_label),
+            )
+        if has_stale_manager_label:
+            conn.execute(
+                "UPDATE teams SET default_process = 'sequential', "
+                "default_manager_agent_id = NULL, use_graph_engine = 1 WHERE id = ?",
+                (team_row["id"],),
             )
 
     # (4) 모델 전환 — "자율 개발 크루" 팀원 중 지금 Ollama인 agent만
@@ -1879,6 +1977,11 @@ def _backfill_skill_structured_fields(conn: sqlite3.Connection) -> None:
         ('딥리서치', '주제별 하위 질문 → 각 하위 질문의 검색 결과 → 교차 검증 결과 → 종합 결론(출처 URL 포함) 순서의 구조화된 보고서.', None, '최소 3회 이상 검색하기 전에는 결론을 내지 않는다. 출처 URL을 생략하지 않는다.'),
         ('AI업계동향브리핑', '기업/분야별 뉴스 사실 목록 → 그로부터의 인사이트(이 조직의 개발/업무에 주는 시사점) 구분 제시.', None, '검색되지 않은 내용을 추측해서 지어내지 않는다. 단순 나열에 머물지 않는다. 뉴스 각 항목마다 출처(제목·URL)를 반드시 명시한다.'),
     ):
+        # ('데이터시각화가이드', ...)는 여기 추가하지 않는다 — 이 함수는
+        # `output_format` 컬럼이 막 생긴 시점에만(`is_new_output_format_
+        # column` 게이트) 1회 호출되므로, 이미 그 컬럼이 있는 기존 설치엔
+        # 절대 실행되지 않는다. 그 스킬은 `_backfill_data_visualization_
+        # feature()`가 매 기동마다(멱등) 직접 채운다.
         if output_format is not None:
             conn.execute(
                 "UPDATE skill_pool SET output_format = ? "
@@ -1896,6 +1999,43 @@ def _backfill_skill_structured_fields(conn: sqlite3.Connection) -> None:
                 "UPDATE skill_pool SET constraints = ? "
                 "WHERE name = ? AND constraints IS NULL",
                 (constraints, name),
+            )
+
+
+def _backfill_data_visualization_feature(conn: sqlite3.Connection) -> None:
+    """사용자 요청(2026-11-18, "excel 파일 등 수치가 담긴 데이터를
+    입력받아, 실제 계산을 하고 그래프 출력 등이 가능하도록... 전담
+    팀을 구성해") — `reference_pipeline_seeds.seed()`가 새 스킬
+    '데이터시각화가이드'/도구 '차트 생성기'는 INSERT OR IGNORE로
+    매 기동마다 만들지만, 아래 두 가지는 "이미 존재하는 행을 수정"
+    하는 작업이라 그 INSERT 전용 루프로는 못 한다 — 둘 다 멱등(이미
+    반영돼 있으면 아무 것도 안 함)이라 매 기동 무조건 호출해도 안전:
+
+    1. '데이터분석가이드'와 같은 패턴으로 `output_format`을 채운다
+       (`_backfill_skill_structured_fields()`는 컬럼이 막 생긴
+       시점에만 1회 호출되는 게이트가 있어, 이미 그 컬럼이 있는
+       기존 설치에선 영원히 안 불린다 — 이 함수가 대신 채운다).
+    2. 기존 '데이터 분석가' Agent(`agent_pool`)의 `skill_tags`에
+       '데이터시각화가이드'를 추가한다 — `AGENT_SPECS`는 role_name이
+       이미 있으면 skip(seed 자체가 "덮어쓰지 않음" 원칙)이라, 이미
+       이 Agent가 있는 기존 설치는 `AGENT_SPECS`의 새 skill_tags가
+       반영되지 않는다."""
+    conn.execute(
+        "UPDATE skill_pool SET output_format = "
+        "'Chart.js 설정(JSON)을 그대로 담은 ```chart 코드펜스 — "
+        "그래프를 말로 서술하지 않는다.' "
+        "WHERE name = '데이터시각화가이드' AND output_format IS NULL"
+    )
+    row = conn.execute(
+        "SELECT id, skill_tags FROM agent_pool WHERE role_name = '데이터 분석가'"
+    ).fetchone()
+    if row is not None:
+        tags = json.loads(row["skill_tags"])
+        if "데이터시각화가이드" not in tags:
+            tags.append("데이터시각화가이드")
+            conn.execute(
+                "UPDATE agent_pool SET skill_tags = ? WHERE id = ?",
+                (json.dumps(tags, ensure_ascii=False), row["id"]),
             )
 
 
@@ -2420,6 +2560,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         _backfill_skill_tool_category(conn)
     if is_new_output_format_column:
         _backfill_skill_structured_fields(conn)
+    _backfill_data_visualization_feature(conn)
     # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
     # (종류 구분 가능) 초기화하여 정리") — 시드가 전부 끝난 뒤에만
     # 돌려야 한다(위 show_in_conversation 백필과 같은 이유 — 레퍼런스

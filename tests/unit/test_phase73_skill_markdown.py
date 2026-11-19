@@ -113,12 +113,14 @@ def test_skill_knowledge_text_appends_labeled_lines_when_new_fields_present(
 # 품질을 낼 수 있도록 개선해줘") ----------
 
 
-def test_backfill_populates_exactly_40_of_54_skills_on_fresh_db():
-    """근거가 있는 40개(백필로 끌어올린 기존 39개 + 2026-11-17에
-    "스킬생성가이드"를 처음부터 구조화 필드와 함께 시드한 1개)만
-    채우고, 외부 skill 정의를 가리키는 포인터뿐인 14개(agent-evaluator
-    절차 스킬 대부분)는 근거 없이 지어내지 않도록 의도적으로 NULL로
-    남긴다."""
+def test_backfill_populates_exactly_41_of_55_skills_on_fresh_db():
+    """근거가 있는 41개(백필로 끌어올린 기존 39개 + 2026-11-17에
+    "스킬생성가이드"를 처음부터 구조화 필드와 함께 시드한 1개 + 2026-
+    11-18 "excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프 출력
+    등이 가능하도록... 전담 팀을 구성해"로 "데이터시각화가이드"를
+    처음부터 구조화 필드와 함께 시드한 1개)만 채우고, 외부 skill
+    정의를 가리키는 포인터뿐인 14개(agent-evaluator 절차 스킬 대부분)는
+    근거 없이 지어내지 않도록 의도적으로 NULL로 남긴다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     db.init_schema(conn)  # 멱등성 확인(여러 번 불러도 같은 결과)
@@ -126,7 +128,7 @@ def test_backfill_populates_exactly_40_of_54_skills_on_fresh_db():
     rows = conn.execute(
         "SELECT name, output_format, examples, constraints FROM skill_pool"
     ).fetchall()
-    assert len(rows) == 54
+    assert len(rows) == 55
     structured = [
         r["name"]
         for r in rows
@@ -134,8 +136,9 @@ def test_backfill_populates_exactly_40_of_54_skills_on_fresh_db():
         or r["examples"] is not None
         or r["constraints"] is not None
     ]
-    assert len(structured) == 40
+    assert len(structured) == 41
     assert "스킬생성가이드" in structured
+    assert "데이터시각화가이드" in structured
     still_null = {r["name"] for r in rows} - set(structured)
     assert still_null == {
         "abtest-decision-workflow",

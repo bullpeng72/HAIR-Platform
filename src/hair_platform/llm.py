@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from hair_platform import audit, pool_registry
+from hair_platform import audit, pool_registry, tool_calling
 
 DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-5",
@@ -165,6 +165,185 @@ def call_llm(
     raise ValueError(f"지원하지 않는 provider입니다: {provider!r}")
 
 
+def call_llm_with_tools(
+    provider: str,
+    model: str,
+    system: str,
+    prompt: str,
+    tools: list,
+    *,
+    timeout_seconds: float | None = None,
+    max_iterations: int = tool_calling.MAX_TOOL_CALL_ITERATIONS,
+) -> str:
+    """사용자 요청(2026-11-18, "...Skill, tool 사용 제약을 없애고...
+    엔터프라이즈 환경 적용이 가능한 수준의 확실한 개선 방안을 도출해줘"
+    개선축 A, 적용 범위 사용자 확인 "Ollama 포함 전체 provider 적용") —
+    CrewAI의 Agent/Task/Tool 루프 없이, provider 3종이 각자 지원하는
+    네이티브 함수 호출(tool-calling) API로 같은 역량을 준다. `tools`는
+    `tool_calling.resolve_callable_tools()`가 돌려준 CrewAI Tool
+    객체 목록(실행은 `.run(**kwargs)`를 그대로 재사용 — 중복 구현 없음).
+
+    `tools`가 비어 있으면 도구 호출 라운드트립 자체를 돌지 않고 바로
+    `call_llm()`과 동일하게 1턴만 호출한다(불필요한 복잡도 없음,
+    호출부가 매번 "도구가 있는지" 분기할 필요가 없도록 이 함수 안에서
+    처리)."""
+    if not tools:
+        return call_llm(provider, model, system, prompt, timeout_seconds=timeout_seconds)
+    if provider == "anthropic":
+        return _call_anthropic_with_tools(
+            model, system, prompt, tools, timeout_seconds, max_iterations
+        )
+    if provider == "openai":
+        return _call_openai_with_tools(
+            model, system, prompt, tools, timeout_seconds, max_iterations
+        )
+    if provider == "ollama":
+        return _call_ollama_with_tools(
+            model, system, prompt, tools, timeout_seconds, max_iterations
+        )
+    raise ValueError(f"지원하지 않는 provider입니다: {provider!r}")
+
+
+_TOOL_CALL_LIMIT_EXCEEDED_MESSAGE = (
+    "도구 호출을 반복하다 최대 횟수에 도달해 중단했습니다 — 지금까지의 "
+    "도구 호출 결과를 참고해 이어서 직접 답변해주세요."
+)
+
+
+def _call_anthropic_with_tools(
+    model: str,
+    system: str,
+    prompt: str,
+    tools: list,
+    timeout_seconds: float | None,
+    max_iterations: int,
+) -> str:
+    import anthropic
+
+    client = anthropic.Anthropic(timeout=timeout_seconds or _CLOUD_LLM_TIMEOUT_SECONDS)
+    tool_schemas = [tool_calling.tool_schema_anthropic(t) for t in tools]
+    tools_by_name = {t.name: t for t in tools}
+    messages: list = [{"role": "user", "content": prompt}]
+    for _ in range(max_iterations):
+        resp = client.messages.create(
+            model=model,
+            max_tokens=_ANTHROPIC_MAX_OUTPUT_TOKENS,
+            system=system,
+            messages=messages,
+            tools=tool_schemas,
+        )
+        if resp.stop_reason != "tool_use":
+            return "".join(b.text for b in resp.content if b.type == "text")
+        messages.append({"role": "assistant", "content": resp.content})
+        tool_results = []
+        for block in resp.content:
+            if block.type == "tool_use":
+                result = tool_calling.run_tool(tools_by_name, block.name, block.input)
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    }
+                )
+        messages.append({"role": "user", "content": tool_results})
+    return _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
+
+
+def _call_openai_with_tools(
+    model: str,
+    system: str,
+    prompt: str,
+    tools: list,
+    timeout_seconds: float | None,
+    max_iterations: int,
+) -> str:
+    import json
+
+    import openai
+
+    client = openai.OpenAI(timeout=timeout_seconds or _CLOUD_LLM_TIMEOUT_SECONDS)
+    tool_schemas = [tool_calling.tool_schema_openai(t) for t in tools]
+    tools_by_name = {t.name: t for t in tools}
+    messages: list = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": prompt},
+    ]
+    for _ in range(max_iterations):
+        resp = client.chat.completions.create(
+            model=model, messages=messages, tools=tool_schemas
+        )
+        msg = resp.choices[0].message
+        if not msg.tool_calls:
+            return msg.content or ""
+        messages.append(msg.model_dump(exclude_unset=True))
+        for tc in msg.tool_calls:
+            try:
+                args = json.loads(tc.function.arguments)
+            except (json.JSONDecodeError, TypeError):
+                # 모델이 인자를 유효한 JSON으로 못 만든 경우 — 도구
+                # 실행을 아예 건너뛰지 않고, 그 사실을 결과로 돌려줘
+                # 모델이 다음 턴에 스스로 고쳐 재시도할 기회를 준다.
+                args = None
+            result = (
+                tool_calling.run_tool(tools_by_name, tc.function.name, args)
+                if args is not None
+                else "도구 호출 인자가 올바른 JSON이 아닙니다 — 다시 시도하세요."
+            )
+            messages.append(
+                {"role": "tool", "tool_call_id": tc.id, "content": result}
+            )
+    return _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
+
+
+def _call_ollama_with_tools(
+    model: str,
+    system: str,
+    prompt: str,
+    tools: list,
+    timeout_seconds: float | None,
+    max_iterations: int,
+) -> str:
+    """Ollama는 OpenAI 호환 `tools` 스키마를 `/api/chat`이 받는다(설치된
+    모델이 함수 호출을 지원해야 함 — 지원 안 하면 `tool_calls` 없이
+    그냥 일반 답변만 오므로, 아래 로직이 자연스럽게 1턴 응답으로
+    끝난다 — 별도 감지 코드가 필요 없다)."""
+    import httpx
+
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    tool_schemas = [tool_calling.tool_schema_openai(t) for t in tools]
+    tools_by_name = {t.name: t for t in tools}
+    messages: list = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": prompt},
+    ]
+    for _ in range(max_iterations):
+        resp = httpx.post(
+            f"{base_url}/api/chat",
+            json={
+                "model": model,
+                "messages": messages,
+                "tools": tool_schemas,
+                "stream": False,
+            },
+            timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        msg = data["message"]
+        tool_calls = msg.get("tool_calls")
+        if not tool_calls:
+            return msg.get("content", "")
+        messages.append(msg)
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            raw_args = fn.get("arguments")
+            args = raw_args if isinstance(raw_args, dict) else {}
+            result = tool_calling.run_tool(tools_by_name, fn.get("name", ""), args)
+            messages.append({"role": "tool", "content": result})
+    return _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
+
+
 # 사용자 보고(2026-10-18, "@자율 개발 크루" 품질 분석 중 실측) — QA
 # 기능테스터/품질 관리자처럼 긴 대화 맥락을 받아 표가 많은 긴 응답을
 # 만드는 Agent가 OpenAI SDK **기본** 타임아웃(600초)에 걸려 "timed out"
@@ -274,7 +453,39 @@ def _call_ollama(
         # `pollConversationJob()`/`pollExecutionJob()` 참고).
         timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        # 사용자 보고(2026-11-18, "데이터분석가이드 스킬 사용시 '400
+        # Bad Request' 오류") — 실측 재현 결과 스킬 자체와는 무관했다
+        # (Ollama 서버 로그: "request (33806 tokens) exceeds the
+        # available context size (32768 tokens)") — 대화가 길어져
+        # 로드된 모델의 컨텍스트 한도(llama-server `-c` 옵션)를
+        # 넘기면 어떤 스킬/멘션을 썼든 똑같이 터진다. 그런데
+        # `raise_for_status()`가 올리는 예외는 "Client error '400
+        # Bad Request' for url '...'" 뿐이고, Ollama가 응답 바디에
+        # 실어 보낸 진짜 원인(`error` 필드)은 읽지도 않고 버려지고
+        # 있었다 — 사용자에게는 원인을 전혀 알 수 없는 메시지만
+        # 남았다. 이 필드를 읽어 예외 메시지에 포함시킨다(호출부
+        # 전부 `except Exception`으로 받아 `str(exc)`를 그대로
+        # 사용자에게 보여주므로, 여기서 고치면 전부 혜택을 본다).
+        detail = None
+        try:
+            detail = resp.json().get("error")
+        except Exception:  # noqa: BLE001 — 응답 바디가 JSON이 아닐 수도 있음
+            pass
+        if detail:
+            hint = (
+                " — 대화가 길어져 이 모델의 컨텍스트 한도를 넘었습니다. "
+                "대화를 요약해 새로 시작하거나, 첨부 자료를 줄이거나, "
+                "더 넓은 컨텍스트를 지원하는 모델로 바꿔보세요."
+                if "context size" in detail
+                else ""
+            )
+            raise RuntimeError(
+                f"Ollama 요청 실패(HTTP {resp.status_code}): {detail}{hint}"
+            ) from exc
+        raise
     return resp.json()["message"]["content"]
 
 

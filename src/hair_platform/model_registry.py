@@ -100,6 +100,7 @@ def list_models(conn: sqlite3.Connection, provider: str | None = None) -> list[d
             "name": r["name"],
             "is_active": bool(r["is_active"]),
             "optimization_tiers": json.loads(r["optimization_tiers"] or "[]"),
+            "context_window": r["context_window"],
             "latest_benchmark": latest_by_model.get(r["id"]),
         }
         for r in rows
@@ -140,6 +141,41 @@ def set_optimization_tiers(
         model_id,
         before={"optimization_tiers": json.loads(row["optimization_tiers"] or "[]")},
         after={"optimization_tiers": normalized},
+    )
+    conn.commit()
+
+
+def set_context_window(
+    conn: sqlite3.Connection, actor_id: int, model_id: int, context_window: int | None
+) -> None:
+    """사용자 요청(2026-11-18, "...엔터프라이즈 환경 적용이 가능한 수준의
+    확실한 개선 방안을 도출해줘" 개선축 B) — 이 모델이 실제로 받아들이는
+    토큰 한도를 admin이 등록한다. `token_budget.resolve_context_window()`
+    가 `_build_transcript()`에서 이 값을 읽어 프롬프트가 한도를 넘기기
+    **전에** 미리 잘라낸다(지금까지는 모델이 빈 응답/오류를 내고서야
+    알 수 있었다 — 2026-11-18 실측: 첨부파일 19KB 하나만으로 로컬 모델
+    32,768토큰 한도를 넘겨 15분을 돌고도 빈 응답). `None`(초기화)이면
+    `token_budget.DEFAULT_CONTEXT_WINDOW_BY_PROVIDER`의 provider별
+    보수적 기본값으로 폴백한다."""
+    if context_window is not None and context_window <= 0:
+        raise ValueError("context_window_must_be_positive")
+    row = conn.execute(
+        "SELECT * FROM model_registry WHERE id = ?", (model_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("model_not_found")
+    conn.execute(
+        "UPDATE model_registry SET context_window = ? WHERE id = ?",
+        (context_window, model_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "model_registry_context_window_changed",
+        "model_registry",
+        model_id,
+        before={"context_window": row["context_window"]},
+        after={"context_window": context_window},
     )
     conn.commit()
 

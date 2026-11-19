@@ -38,6 +38,7 @@ from hair_platform import (
     id_scheme,
     llm,
     pool_registry,
+    tool_calling,
     vectorstore,
     websearch,
 )
@@ -342,13 +343,34 @@ def execute_agent(
         )
     else:
         timeout_seconds = None
-    output = llm.call_llm(
-        resolved_provider,
-        resolved_model,
-        system,
-        augmented_prompt,
-        timeout_seconds=timeout_seconds,
+    # Tool 호출 제약 해소(2026-11-18, 개선축 A, 사용자 요청 "...Skill,
+    # tool 사용 제약을 없애고... 엔터프라이즈 환경 적용이 가능한 수준의
+    # 확실한 개선 방안을 도출해줘", 적용 범위 "Ollama 포함 전체 provider
+    # 적용") — 단일 Agent 멘션도 "기본 AI"(`conversations.
+    # run_default_ai_job()`)와 똑같이 CrewAI 루프 없이 provider 네이티브
+    # 함수 호출로 native/custom_python 도구를 실제로 호출할 수 있게
+    # 한다(`agent_id`를 넘겨 `agent_tool_links`로 명시 연결된 도구까지
+    # 포함 — skill 기반 매칭만 보는 "기본 AI"보다 범위가 넓다).
+    callable_tools = tool_calling.resolve_callable_tools(
+        conn, skills, agent_id=agent_id
     )
+    if callable_tools:
+        output = llm.call_llm_with_tools(
+            resolved_provider,
+            resolved_model,
+            system,
+            augmented_prompt,
+            callable_tools,
+            timeout_seconds=timeout_seconds,
+        )
+    else:
+        output = llm.call_llm(
+            resolved_provider,
+            resolved_model,
+            system,
+            augmented_prompt,
+            timeout_seconds=timeout_seconds,
+        )
     # 중간에 끊긴 것으로 보이면 이어서 완성시킨다(`_looks_truncated()`
     # 모듈 docstring 참고) — 최대 `_MAX_CONTINUATION_ATTEMPTS`번까지만
     # 시도해, 같은 이유로 매번 또 끊기는 드문 경우에도 무한히 돌지

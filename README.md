@@ -99,8 +99,9 @@ Agent라고 다른 대우를 받지 않는다.
   의존관계)를 제안받아 한 번에 배치로 생성할 수도 있다.
 
 ### 5. 지식 쌓아서 Agent가 찾아보게 하기
-- "지식 베이스" 탭(admin/manager)에서 로컬 파일(.md/.pdf/.html)을
-  올리거나 텍스트를 직접 입력하면 영구적으로 색인된다 — 색인되면
+- "지식 베이스" 탭(admin/manager)에서 로컬 파일(.md/.pdf/.html/.csv/
+  .xlsx/.docx/.pptx)을 올리거나 텍스트를 직접 입력하면 영구적으로
+  색인된다 — 색인되면
   "지식검색" 스킬을 가진 모든 Agent가 대화창·CrewAI 실행 양쪽에서
   찾아낸다.
 - 대화창·협업 워크스페이스에서 올리는 참고자료는 **그 1회만 쓰는
@@ -176,7 +177,7 @@ pytest tests/ -q        # 골든셋 932건 통과(오프라인, 실제 LLM 호�
 | `llm` | `pip install -e ".[llm]"` | 실제 Anthropic/OpenAI API로 Agent를 실행할 때(Ollama는 API 키 없이 기본 의존성만으로 동작) | anthropic, openai |
 | `crewai` | `pip install -e ".[crewai]"` | 여러 Agent를 실제 CrewAI Crew로 협업시킬 때("Crew 빌더"/파이프라인) | crewai, litellm |
 | `mcp` | `pip install -e ".[mcp]"` | Agent에 외부 MCP 도구 서버를 연결할 때 | crewai-tools[mcp], mcp(`<2.0` 고정 — 아래 참고) |
-| `documents` | `pip install -e ".[documents]"` | 대화창/지식 베이스에서 `.pdf`/`.html` 파일을 업로드할 때(`.md`/`.txt`는 추가 설치 불필요) | pypdf, beautifulsoup4 |
+| `documents` | `pip install -e ".[documents]"` | 대화창/지식 베이스에서 `.pdf`/`.html`/`.xlsx`/`.docx`/`.pptx` 파일을 업로드할 때(`.md`/`.txt`/`.csv`는 추가 설치 불필요) | pypdf, beautifulsoup4, openpyxl, python-docx, python-pptx |
 | `dev` | `pip install -e ".[dev]"` | 테스트/린트/포맷터를 돌릴 때 | pytest, black, ruff |
 | `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents` 전부) | 위 extras 전부 |
 
@@ -302,11 +303,12 @@ tier로 분류해 모델을 추천한다(Web UI "모델 레지스트리"/"⚡ �
   바꿔주면 장문 산출물 검색 품질이 더 좋다.
 
 대화창·협업 워크스페이스(업무 실행)·지식 베이스 세 곳 중 어디서든
-`.pdf`/`.html` 파일을 업로드하려면(`.md`/`.txt`는 추가 설치 없이 바로
-동작 — 셋 다 같은 `documents.extract_text()`를 공유한다):
+`.pdf`/`.html`/`.xlsx`/`.docx`/`.pptx` 파일을 업로드하려면(`.md`/`.txt`/
+`.csv`는 추가 설치 없이 바로 동작 — 셋 다 같은 `documents.
+extract_text()`를 공유한다):
 
 ```bash
-pip install -e ".[documents]"              # pypdf·beautifulsoup4 설치
+pip install -e ".[documents]"              # pypdf·beautifulsoup4·openpyxl·python-docx·python-pptx 설치
 ```
 
 "실시간웹검색" 스킬(Tavily, 대화창·Crew 실행 양쪽에서 동작하는 실시간
@@ -429,7 +431,7 @@ src/hair_platform/
   vectorstore.py     # 지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
   graphquery.py      # 관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
   websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(Crew 전용). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)
-  documents.py       # 외부 자료(.md/.pdf/.html) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
+  documents.py       # 외부 자료(.md/.txt/.csv/.html/.pdf/.xlsx/.docx/.pptx) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
   pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화 + 개발업무/일반업무 category 분류, CrewAI Tool 조립
   data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호) + 운영 데이터 공장 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 초기화, `hair reset-data`)
   deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)

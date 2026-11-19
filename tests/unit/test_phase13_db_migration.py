@@ -153,3 +153,91 @@ def test_gc97_list_agent_pool_endpoint_survives_pre_migration_db(client_and_conn
     assert resp.status_code == 200
     row = next(a for a in resp.json() if a["role_name"] == "마이그레이션 이전 데이터")
     assert row["framework"] == "stub"
+
+
+# ---------- 2026-11-19, "에이전틱 실행엔진"에 맞춰 TOOL/SKILL/AGENT/
+# PIPELINE/TEAM 정비 — 기존 hierarchical 설정을 sequential로 전환 ----------
+
+
+def test_existing_dev_crew_team_with_stale_manager_label_migrates_to_sequential_graph_engine():
+    """"구현" 단계가 2026-11-07에 sequential_relay로 전환된 뒤에도, 그
+    전에 생성된 "자율 개발 크루" 팀은 옛 hierarchical 설정(default_
+    process='hierarchical', 매니저 지정)과 옛 role_label("4단계:
+    매니저(hierarchical 위임 리드)")이 그대로 남아 있을 수 있다 —
+    재기동 시 sequential + 신규 그래프 엔진으로 전환되고 role_label도
+    바로잡혀야 한다."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+
+    manager_agent = conn.execute(
+        "SELECT id FROM agent_pool WHERE role_name = '개발 계획 수립가'"
+    ).fetchone()
+    assert manager_agent is not None
+
+    cur = conn.execute(
+        "INSERT INTO teams (name, description, is_active, status, default_process, "
+        "default_manager_agent_id) VALUES ('자율 개발 크루', '', 1, 'active', "
+        "'hierarchical', ?)",
+        (manager_agent["id"],),
+    )
+    team_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO team_members (team_id, member_type, member_id, role_label) "
+        "VALUES (?, 'agent', ?, ?)",
+        (
+            team_id,
+            manager_agent["id"],
+            "3단계: 개발 계획 수립 / 4단계: 매니저(hierarchical 위임 리드)",
+        ),
+    )
+    conn.commit()
+
+    # 서버 재시작 시 실제로 벌어지는 일 — 다시 돌려도 안전해야 한다.
+    db.init_schema(conn)
+
+    team = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    assert team["default_process"] == "sequential"
+    assert team["default_manager_agent_id"] is None
+    assert team["use_graph_engine"] == 1
+    assert team["pipeline_template_id"] is not None
+
+    member = conn.execute(
+        "SELECT role_label FROM team_members WHERE team_id = ? AND member_id = ?",
+        (team_id, manager_agent["id"]),
+    ).fetchone()
+    assert member["role_label"] == "3단계: 개발 계획 수립"
+
+
+def test_dev_crew_team_with_admin_customized_label_is_not_auto_converted():
+    """관리자가 이미 role_label을 직접 손봤다면(옛 stale 문구와 더 이상
+    일치하지 않음) hierarchical 설정은 건드리지 않는다 — 다른 마이그
+    레이션들과 같은 안전장치(의도적으로 되돌린 값을 다시 덮어쓰지
+    않음)."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+
+    manager_agent = conn.execute(
+        "SELECT id FROM agent_pool WHERE role_name = '개발 계획 수립가'"
+    ).fetchone()
+    assert manager_agent is not None
+
+    cur = conn.execute(
+        "INSERT INTO teams (name, description, is_active, status, default_process, "
+        "default_manager_agent_id) VALUES ('자율 개발 크루', '', 1, 'active', "
+        "'hierarchical', ?)",
+        (manager_agent["id"],),
+    )
+    team_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO team_members (team_id, member_type, member_id, role_label) "
+        "VALUES (?, 'agent', ?, '관리자가 직접 적은 라벨')",
+        (team_id, manager_agent["id"]),
+    )
+    conn.commit()
+
+    db.init_schema(conn)
+
+    team = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    assert team["default_process"] == "hierarchical"
+    assert team["default_manager_agent_id"] == manager_agent["id"]
+    assert team["use_graph_engine"] == 0

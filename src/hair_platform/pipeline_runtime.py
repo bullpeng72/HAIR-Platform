@@ -1389,6 +1389,11 @@ def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[
                 "status": run["status"],
                 "current_stage_seq": run["current_stage_seq"],
                 "cancel_requested": bool(run["cancel_requested"]),
+                # 사용자 요청(2026-11-18, "다음 개선 진행해줘") — 이 run이
+                # 기존 엔진인지 신규 LangGraph 엔진(`execution_graph.py`)
+                # 인지 화면에서 구분할 수 있게 노출한다(`run["engine"]`,
+                # 기본 `'legacy'`).
+                "engine": run["engine"],
                 "created_at": run["created_at"],
                 "finished_at": run["finished_at"],
                 "stage_results": [

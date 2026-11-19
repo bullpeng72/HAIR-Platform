@@ -1,4 +1,5 @@
-"""외부 자료(마크다운/PDF/HTML) 업로드 → VectorDB 색인.
+"""외부 자료(마크다운/텍스트/CSV/HTML/PDF/Excel/Word/PowerPoint) 업로드
+→ VectorDB 색인.
 
 사용자 요청(2026-10-26, "대화창 및 에이전트로 구성된 업무에서 외부
 자료(마크다운, pdf, html) 등을 입력받을 수 있도록 개선해줘") — 지금까지
@@ -28,7 +29,35 @@ import sqlite3
 
 from hair_platform import audit, vectorstore
 
-SUPPORTED_EXTENSIONS = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf"}
+SUPPORTED_EXTENSIONS = {
+    ".md", ".markdown", ".txt", ".html", ".htm", ".pdf",
+    ".csv", ".xlsx", ".docx", ".pptx",
+}
+
+# 사용자 요청(2026-11-18, "자료 업로드 형식으로 csv, excel, word,
+# powerpoint를 포함하도록 개선 방안을 제안해줘" → "구현 시작") —
+# 기본 상한은 기존 10MB를 그대로 유지한다(텍스트 위주 포맷은 이걸로
+# 충분). PPTX만 예외 — 텍스트 비중은 작아도 슬라이드 이미지 때문에
+# 파일 자체가 쉽게 커지므로 더 넉넉하게 둔다(그래도 이미지 자체는
+# 추출하지 않는다 — 텍스트만).
+DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_UPLOAD_BYTES_BY_EXTENSION = {
+    ".pptx": 25 * 1024 * 1024,
+}
+
+# XLSX는 파일 바이트 크기와 추출된 텍스트 분량이 비례하지 않는다 —
+# 작은 파일도 셀이 빽빽하면 텍스트로는 크게 불어날 수 있다. 바이트
+# 상한과 별개로 시트당 행 수를 직접 제한한다. 초과분은 조용히
+# 버리지 않고 "이하 N행 생략"을 명시한다(숫자를 지어내지 않는다는
+# 이 코드베이스의 기존 원칙과 같은 이유 — 잘렸다는 사실 자체를
+# 숨기면 안 된다).
+_MAX_XLSX_ROWS_PER_SHEET = 5000
+
+
+def max_upload_bytes(filename: str) -> int:
+    """`app.py`의 세 업로드 경로(지식 베이스/대화 첨부/Task 실행
+    참고자료)가 공유하는 확장자별 상한 조회."""
+    return MAX_UPLOAD_BYTES_BY_EXTENSION.get(_extension(filename), DEFAULT_MAX_UPLOAD_BYTES)
 
 
 def extract_text(filename: str, raw_bytes: bytes) -> str:
@@ -46,11 +75,19 @@ def extract_text(filename: str, raw_bytes: bytes) -> str:
 
     if ext in (".md", ".markdown", ".txt"):
         text = raw_bytes.decode("utf-8", errors="replace")
+    elif ext == ".csv":
+        text = _extract_csv_text(raw_bytes)
     elif ext in (".html", ".htm"):
         text = _extract_html_text(raw_bytes)
-    else:
-        assert ext == ".pdf"
+    elif ext == ".pdf":
         text = _extract_pdf_text(raw_bytes)
+    elif ext == ".xlsx":
+        text = _extract_xlsx_text(raw_bytes)
+    elif ext == ".docx":
+        text = _extract_docx_text(raw_bytes)
+    else:
+        assert ext == ".pptx"
+        text = _extract_pptx_text(raw_bytes)
 
     text = text.strip()
     if not text:
@@ -61,6 +98,26 @@ def extract_text(filename: str, raw_bytes: bytes) -> str:
 def _extension(filename: str) -> str:
     idx = filename.rfind(".")
     return filename[idx:].lower() if idx >= 0 else ""
+
+
+# 사용자 요청(2026-11-18, 위와 동일) — 한국 사용자가 Excel에서
+# "CSV(쉼표로 분리)"로 내보내면 기본 인코딩이 UTF-8이 아니라
+# cp949(Windows) 또는 euc-kr인 경우가 흔하다. `.md`/`.txt`처럼
+# UTF-8로만 디코드하면 한글이 깨진다 — 실패하면 조용히 깨진 채로
+# 넘기지 않고 순서대로 재시도한다.
+_CSV_ENCODING_CANDIDATES = ("utf-8", "cp949", "euc-kr")
+
+
+def _extract_csv_text(raw_bytes: bytes) -> str:
+    for encoding in _CSV_ENCODING_CANDIDATES:
+        try:
+            return raw_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    # 셋 다 실패하면 마지막엔 깨진 문자를 티 나게 바꿔서라도 보여준다
+    # (완전히 포기하지 않음 — 나머지 포맷들과 같은 "실패를 숨기지
+    # 않는다" 원칙).
+    return raw_bytes.decode("utf-8", errors="replace")
 
 
 _HTML_BLOCK_TAGS = (
@@ -120,6 +177,223 @@ def _extract_pdf_text(raw_bytes: bytes) -> str:
 
     reader = PdfReader(BytesIO(raw_bytes))
     return "\n\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def _extract_xlsx_text(raw_bytes: bytes) -> str:
+    try:
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise ValueError(
+            "documents_extra_not_installed: Excel 파일을 읽으려면 "
+            '`pip install -e ".[documents]"`로 openpyxl을 설치하세요'
+        ) from exc
+
+    # read_only=True — 전체를 메모리에 안 올리고 행 단위로 스트리밍
+    # (대용량 시트에도 안전). data_only=True — 수식이 아니라 마지막
+    # 계산된 값을 읽는다(수식 문자열 자체는 텍스트로서 의미가 없음).
+    workbook = load_workbook(BytesIO(raw_bytes), data_only=True, read_only=True)
+    sections: list[str] = []
+    for sheet in workbook.worksheets:
+        lines: list[str] = [f"[시트: {sheet.title}]"]
+        row_count = 0
+        for row in sheet.iter_rows(values_only=True):
+            if all(cell is None for cell in row):
+                continue  # 완전히 빈 행은 건너뛴다(표 중간 여백 등).
+            row_count += 1
+            if row_count > _MAX_XLSX_ROWS_PER_SHEET:
+                continue
+            lines.append(" | ".join("" if c is None else str(c) for c in row))
+        if row_count > _MAX_XLSX_ROWS_PER_SHEET:
+            lines.append(f"...(이하 {row_count - _MAX_XLSX_ROWS_PER_SHEET}행 생략)")
+        sections.append("\n".join(lines))
+    workbook.close()
+    return "\n\n".join(sections)
+
+
+# 사용자 요청(2026-11-18, "...메모리를 활용하는 방안 등을 고려해
+# 엔터프라이즈 환경 적용이 가능한 수준의 확실한 개선 방안을 도출해줘"
+# 개선축 C, "업로드 시 숫자 열 자동 감지해 사전 계산") — 숫자 열이
+# 있는 표(CSV/XLSX)는 `conversation_memory.search()`의 청크 검색만으론
+# "합계가 얼마야" 같은 질문에 약하다(관련 청크를 찾아도 그 안의 일부
+# 행만 보임 — 전체 합계는 전체 행을 다 봐야 계산 가능). 업로드 시점에
+# 열별로 합계·평균 등을 실제로 계산해두면, 이후 질문에서 LLM이 암산할
+# 필요 없이 이미 계산된 값을 그대로 인용할 수 있다 — "수치 데이터
+# 분석기" 도구와 같은 계산(`statistics` 모듈)이지만, Tool 호출 루프가
+# 없는 경로(기본 AI 등)에서도 항상 쓸 수 있도록 업로드 시점에 미리
+# 계산해 저장해두는 방식이다.
+_MIN_NUMERIC_VALUES_FOR_SUMMARY = 2
+
+# 실측 버그(2026-11-18, "용돈 관리.xlsx"의 "날짜" 열이 "10.12"/"10.13"
+# 형태로 저장돼 있어 `float("10.12")`가 그대로 성공해 날짜를 합계·평균
+# 내는 무의미한 요약("날짜 합계=30.37")이 나왔다) — ① 열 이름에 날짜/
+# 시간을 뜻하는 단어가 있으면 숫자로 파싱되더라도 제외하고, ② 열 이름이
+# 애매해도 값 대부분이 "10.12"/"2026-01-01" 같은 날짜형 패턴이면 역시
+# 제외한다(둘 중 하나만 걸려도 제외 — 날짜를 숫자로 잘못 집계하는 쪽이
+# 숫자 열 하나를 놓치는 쪽보다 훨씬 나쁘다).
+_DATE_LIKE_COLUMN_NAME_RE = re.compile(
+    r"(날짜|일자|연월일|년월일|date|time|시간|timestamp)", re.IGNORECASE
+)
+_DATE_LIKE_VALUE_RE = re.compile(
+    r"^\d{1,4}[.\-/]\d{1,2}([.\-/]\d{1,4})?$"
+)
+
+
+def _looks_like_date_value(cell) -> bool:
+    import datetime
+
+    if isinstance(cell, (datetime.date, datetime.datetime)):
+        return True
+    return isinstance(cell, str) and bool(_DATE_LIKE_VALUE_RE.match(cell.strip()))
+
+
+def _summarize_numeric_columns(header: list, data_rows: list[list]) -> str | None:
+    import statistics
+
+    parts: list[str] = []
+    for col_idx, raw_name in enumerate(header):
+        col_name = str(raw_name).strip() if raw_name not in (None, "") else f"{col_idx + 1}열"
+        if _DATE_LIKE_COLUMN_NAME_RE.search(col_name):
+            continue
+        values: list[float] = []
+        is_numeric_column = True
+        date_like_count = 0
+        cell_count = 0
+        for row in data_rows:
+            if col_idx >= len(row):
+                continue
+            cell = row[col_idx]
+            if cell is None or (isinstance(cell, str) and not cell.strip()):
+                continue
+            cell_count += 1
+            if _looks_like_date_value(cell):
+                date_like_count += 1
+            try:
+                values.append(float(cell))
+            except (TypeError, ValueError):
+                is_numeric_column = False
+                break
+        if (
+            not is_numeric_column
+            or len(values) < _MIN_NUMERIC_VALUES_FOR_SUMMARY
+            or (cell_count > 0 and date_like_count / cell_count > 0.5)
+        ):
+            continue
+        stdev_part = (
+            f", 표준편차={round(statistics.stdev(values), 2)}" if len(values) >= 2 else ""
+        )
+        parts.append(
+            f"{col_name}(n={len(values)}): 합계={round(sum(values), 2)}, "
+            f"평균={round(statistics.mean(values), 2)}, 최소={min(values)}, "
+            f"최대={max(values)}{stdev_part}"
+        )
+    if not parts:
+        return None
+    return "자동 계산된 열별 요약(실제 계산값 — 추측 아님) — " + " / ".join(parts)
+
+
+def _csv_numeric_summary(raw_bytes: bytes) -> str | None:
+    import csv
+    import io
+
+    text = _extract_csv_text(raw_bytes)
+    rows = list(csv.reader(io.StringIO(text)))
+    if len(rows) < _MIN_NUMERIC_VALUES_FOR_SUMMARY + 1:
+        return None
+    header, *data_rows = rows
+    return _summarize_numeric_columns(header, data_rows)
+
+
+def _xlsx_numeric_summary(raw_bytes: bytes) -> str | None:
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(BytesIO(raw_bytes), data_only=True, read_only=True)
+    sections: list[str] = []
+    for sheet in workbook.worksheets:
+        rows = [
+            list(row)
+            for row in sheet.iter_rows(values_only=True)
+            if not all(cell is None for cell in row)
+        ]
+        if len(rows) < _MIN_NUMERIC_VALUES_FOR_SUMMARY + 1:
+            continue
+        header, *data_rows = rows
+        summary = _summarize_numeric_columns(list(header), data_rows)
+        if summary:
+            sections.append(f"[시트: {sheet.title}] {summary}")
+    workbook.close()
+    return "\n\n".join(sections) if sections else None
+
+
+def extract_numeric_summary(filename: str, raw_bytes: bytes) -> str | None:
+    """CSV/XLSX에만 적용 — 그 외 포맷이거나 숫자 열이 하나도 없으면
+    `None`(근거 없이 요약을 지어내지 않는다, Gate A-G의 "정직한
+    not_measured" 원칙과 동일)."""
+    ext = _extension(filename)
+    if ext == ".csv":
+        return _csv_numeric_summary(raw_bytes)
+    if ext == ".xlsx":
+        return _xlsx_numeric_summary(raw_bytes)
+    return None
+
+
+def _extract_docx_text(raw_bytes: bytes) -> str:
+    try:
+        from io import BytesIO
+
+        from docx import Document
+    except ImportError as exc:
+        raise ValueError(
+            "documents_extra_not_installed: Word 파일을 읽으려면 "
+            '`pip install -e ".[documents]"`로 python-docx를 설치하세요'
+        ) from exc
+
+    doc = Document(BytesIO(raw_bytes))
+    sections: list[str] = []
+    paragraphs = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    if paragraphs:
+        sections.append(paragraphs)
+    # 표는 본문과 순서가 뒤섞이지 않고 별도 블록으로 뒤에 모은다
+    # (python-docx의 기본 API는 본문 흐름 속 표의 정확한 삽입 위치를
+    # 안 주므로, 순서를 억지로 재구성하기보다 명확히 구분해 보여준다).
+    for i, table in enumerate(doc.tables, 1):
+        rows = [
+            " | ".join(cell.text.strip() for cell in row.cells)
+            for row in table.rows
+        ]
+        if any(rows):
+            sections.append(f"[표 {i}]\n" + "\n".join(rows))
+    return "\n\n".join(sections)
+
+
+def _extract_pptx_text(raw_bytes: bytes) -> str:
+    try:
+        from io import BytesIO
+
+        from pptx import Presentation
+    except ImportError as exc:
+        raise ValueError(
+            "documents_extra_not_installed: PowerPoint 파일을 읽으려면 "
+            '`pip install -e ".[documents]"`로 python-pptx를 설치하세요'
+        ) from exc
+
+    prs = Presentation(BytesIO(raw_bytes))
+    sections: list[str] = []
+    for i, slide in enumerate(prs.slides, 1):
+        slide_lines: list[str] = []
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                slide_lines.append(shape.text_frame.text.strip())
+        if slide.has_notes_slide:
+            notes = slide.notes_slide.notes_text_frame.text.strip()
+            if notes:
+                slide_lines.append(f"[발표자 노트] {notes}")
+        if slide_lines:
+            sections.append(f"[{i}번 슬라이드]\n" + "\n".join(slide_lines))
+    return "\n\n".join(sections)
 
 
 # 사용자 요청(2026-11-03, "RAG 검색 품질 향상... 우선순위를 정해

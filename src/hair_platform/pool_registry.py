@@ -676,10 +676,10 @@ NO_TOOL_LOOP_GUARD = (
 def unsupported_realtime_skill_names(
     conn: sqlite3.Connection, skills: list[str]
 ) -> list[str]:
-    """`skills` 중 실시간 검색/조회를 의도한(`augmentation_mode`가
+    """`skills` 중 실제 도구 연결을 의도한(`augmentation_mode`가
     `'tool'`/`'always'`이고 `default_tool_pool_ids`가 비지 않은) 스킬
-    인데, 그 도구가 `kind='native'`가 아닌(`mcp_remote`/`mcp_stdio`)
-    것들의 이름을 반환한다.
+    인데, 그 도구가 `kind`가 `mcp_remote`/`mcp_stdio`인 것들의 이름을
+    반환한다.
 
     사용자 요청(2026-10-22, "일반웹검색 스킬 점검해줘" 조사 결과) —
     `resolve_static_augmentation_targets()`는 그런 스킬을 조용히
@@ -687,8 +687,25 @@ def unsupported_realtime_skill_names(
     CrewAI Agent 루프가 없는 호출부(`conversations.run_default_ai_job()`)
     에서 이런 스킬을 고르면 모델이 "검색하겠습니다"라고 의도만 서술하고
     끝나는 것처럼 보인다(실측 확인된 버그 리포트) — 호출부가 이 함수로
-    해당 여부를 미리 알아 사용자에게 "이 스킬은 대화창에서 실시간 검색이
-    안 되고 Team 실행에서만 동작한다"고 알릴 수 있게 한다."""
+    해당 여부를 미리 알아 사용자에게 "이 스킬은 대화창에서 그 도구가
+    실제로 호출되지 않고 Team 실행에서만 동작한다"고 알릴 수 있게 한다.
+
+    이름과 달리 "realtime"(검색)에 한정되지 않는다 — 사용자 보고
+    (2026-11-18, "데이터분석가이드 스킬 사용시 '실시간 외부 검색
+    도구가 연결돼 있지만...' 경고가 뜬다") 이후 호출부의 안내 문구를
+    도구 종류를 단정하지 않게 고쳤다 — "데이터분석가이드"에 연결된
+    "수치 데이터 분석기"는 검색이 아니라 계산 도구인데도 이 함수
+    자체의 판정(그때는 `kind != 'native'`)은 여전히 정확히 맞았다.
+
+    재조정(2026-11-18, "...Skill, tool 사용 제약을 없애고... 엔터프라이즈
+    환경 적용이 가능한 수준의 확실한 개선 방안을 도출해줘" 개선축 A,
+    적용 범위 "Ollama 포함 전체 provider 적용") — `tool_calling.py`가
+    "기본 AI"/"단일 Agent 멘션" 양쪽에 네이티브 함수 호출 루프를 추가해
+    `custom_python` 도구도 이제 실제로 호출된다(native와 동급). 그래서
+    `custom_python`을 "불가능" 목록에서 뺀다 — `mcp_stdio`/`mcp_remote`
+    만 여전히 이 경로에서 호출 불가능하다(ExitStack 기반 접속 수명
+    관리가 이 1회성 호출 경로에 아직 통합 안 됨, `tool_calling.py`
+    모듈 독스트링 "범위에서 의도적으로 뺀 것" 참고)."""
     if not skills:
         return []
     placeholders = ",".join("?" for _ in skills)
@@ -705,7 +722,7 @@ def unsupported_realtime_skill_names(
                 "SELECT kind FROM tool_pool WHERE id = ? AND is_active = 1",
                 (tool_id,),
             ).fetchone()
-            if trow is not None and trow["kind"] != "native":
+            if trow is not None and trow["kind"] in ("mcp_stdio", "mcp_remote"):
                 names.append(row["name"])
                 break
     return names

@@ -310,6 +310,12 @@ class TeamDefaultsUpdate(BaseModel):
     default_process: CrewProcess | None = None
     pipeline_template_id: int | None = None
     default_manager_agent_id: int | None = None
+    # 사용자 요청(2026-11-18, "다음 개선 진행해줘" → conversations.py
+    # 통합) — `pipeline_template_id`로 연결된 팀의 `@팀멘션` 실행을
+    # 신규 LangGraph 엔진(`execution_graph.py`)으로 opt-in 전환한다.
+    # `pipeline_template_id`가 연결 안 된 팀에는 효과 없음(검증 쪽은
+    # `teams.update_team_defaults()` 참고).
+    use_graph_engine: bool | None = None
 
 
 class TeamMemberAdd(BaseModel):
@@ -729,6 +735,13 @@ class PipelineStageReorder(BaseModel):
 
 class PipelineExecuteRequest(BaseModel):
     pipeline_template_id: int
+    # 사용자 요청(2026-11-18, "langgraph + langgraph-checkpoint-sqlite...
+    # 진행해줘" → "다음 개선 진행해줘") — LangGraph 기반 신규 실행엔진
+    # (`execution_graph.py`)으로 돌릴지 선택하는 opt-in 플래그. 기본
+    # `False`(기존 `pipeline_runtime.py` 엔진, 전부 무변화) — 이 엔진은
+    # 아직 `single`/`sequential_relay`만 지원해(`parallel_delegated`
+    # 템플릿이면 즉시 400) 모든 템플릿에 안전하게 켤 수 있는 건 아니다.
+    use_graph_engine: bool = False
 
 
 class KnowledgeIndexRequest(BaseModel):
@@ -905,6 +918,18 @@ class ModelOptimizationTiersUpdate(BaseModel):
     optimization_tiers: list[
         Literal["deep_reasoning", "precision_fast", "standard"]
     ] = []
+
+
+class ModelContextWindowUpdate(BaseModel):
+    """사용자 요청(2026-11-18, "...엔터프라이즈 환경 적용이 가능한
+    수준의 확실한 개선 방안을 도출해줘" 개선축 B) — 이 모델이 실제로
+    받아들이는 토큰 한도. `token_budget.py`가 `_build_transcript()`
+    에서 이 값을 읽어 프롬프트가 한도를 넘기기 전에 미리 잘라낸다.
+    `None`(초기화)이면 provider별 보수적 기본값으로 폴백한다 — Ollama는
+    로컬 서버 실행 플래그로 결정되는 값이라 admin이 직접 등록해야
+    정확해진다(예: `-c 32768`로 띄웠으면 32768)."""
+
+    context_window: int | None = None
 
 
 class EmbeddingConfigUpdate(BaseModel):

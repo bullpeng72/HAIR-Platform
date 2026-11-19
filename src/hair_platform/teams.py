@@ -184,6 +184,7 @@ def get_team(conn: sqlite3.Connection, team_id: int) -> dict | None:
         "brief_id": row["brief_id"],
         "completed_at": row["completed_at"],
         "pipeline_template_id": row["pipeline_template_id"],
+        "use_graph_engine": bool(row["use_graph_engine"]),
         "default_process": row["default_process"],
         "default_manager_agent_id": row["default_manager_agent_id"],
         "members": [_member_row_to_dict(m) for m in members],
@@ -232,7 +233,12 @@ def update_team_defaults(
     # 1회성 마이그레이션으로 세팅됐다(`db.py`의 `_sync_dev_crew_pipeline_
     # integration()`). 이제 어느 팀이든 이 필드로 직접 연결할 수 있게
     # 일반화한다.
-    allowed = {"default_process", "default_manager_agent_id", "pipeline_template_id"}
+    allowed = {
+        "default_process",
+        "default_manager_agent_id",
+        "pipeline_template_id",
+        "use_graph_engine",
+    }
     unknown = set(fields) - allowed
     if unknown:
         raise ValueError(f"unsupported_fields:{sorted(unknown)}")
@@ -244,6 +250,7 @@ def update_team_defaults(
             "default_process": team["default_process"],
             "default_manager_agent_id": team["default_manager_agent_id"],
             "pipeline_template_id": team["pipeline_template_id"],
+            "use_graph_engine": bool(team["use_graph_engine"]),
         }
     if (
         "default_process" in fields
@@ -258,6 +265,35 @@ def update_team_defaults(
         not in active_agent_member_ids(conn, team_id)
     ):
         raise ValueError("manager_must_be_active_agent_member_of_team")
+    # 사용자 요청(2026-11-19, "conversations.py 통합" 원래 큰 그림
+    # 마무리 — "CrewAI hierarchical 모드 신규 팀 생성 차단") — 외부
+    # 조사(2026-11-18)로 확인된 CrewAI hierarchical 모드 자체의 신뢰성
+    # 문제("매니저가 위임 안 하고 직접 다 해버린다")가 이 세션에서
+    # "자율 개발 크루"로 실제로 재현된 적도 있다(`manager_agent_id_
+    # for_team()` 주석 참고). 이미 hierarchical인 팀(이미 매니저가
+    # 지정돼 있거나 `default_process='hierarchical'`)은 계속 매니저를
+    # 바꾸거나 유지할 수 있다 — 이번 정책은 **새로 hierarchical로
+    # 전환하는 것만** 막는다(앞으로만 적용, 기존 팀은 안 건드림).
+    # sequential_relay 기반 파이프라인(+ 신규 그래프 엔진)이 이제
+    # 안정적인 대안이라 그쪽으로 유도한다.
+    wants_hierarchical = (
+        fields.get("default_process") == "hierarchical"
+        or ("default_manager_agent_id" in fields and fields["default_manager_agent_id"] is not None)
+    )
+    if wants_hierarchical:
+        # `manager_agent_id_for_team()`은 명시적 플래그뿐 아니라
+        # `role_label` 문자열 추정 폴백까지 같이 본다 — 이미 "매니저"
+        # role_label 멤버가 있어 사실상 hierarchical로 동작 중인 팀이
+        # 명시적 플래그로 "전환"하는 건 새로 hierarchical이 되는 게
+        # 아니라 기존 동작을 더 안정적인 방식으로 굳히는 것이므로
+        # 막지 않는다.
+        already_hierarchical = (
+            team["default_process"] == "hierarchical"
+            or team["default_manager_agent_id"] is not None
+            or manager_agent_id_for_team(conn, team_id) is not None
+        )
+        if not already_hierarchical:
+            raise ValueError("hierarchical_mode_blocked_for_new_teams")
     if "pipeline_template_id" in fields and fields["pipeline_template_id"] is not None:
         template = conn.execute(
             "SELECT id, is_active FROM pipeline_templates WHERE id = ?",
@@ -267,6 +303,22 @@ def update_team_defaults(
             raise ValueError("pipeline_template_not_found")
         if not template["is_active"]:
             raise ValueError("pipeline_template_inactive")
+    if fields.get("use_graph_engine"):
+        # 신규 LangGraph 실행엔진(`execution_graph.py`)으로 전환하려면
+        # 이 팀이 이미 파이프라인에 연결돼 있어야 하고(이 호출에서
+        # 새로 연결하는 경우도 포함), 그 템플릿이 이 엔진이 아직
+        # 지원 안 하는 `parallel_delegated` 단계를 포함하면 안 된다 —
+        # 조용히 다르게 동작하는 대신 설정 시점에 바로 거부한다.
+        # LangGraph import는 `use_graph_engine=True`를 실제로 켤
+        # 때만 일어난다(`graph` extra가 선택적 의존성).
+        effective_template_id = fields.get(
+            "pipeline_template_id", team["pipeline_template_id"]
+        )
+        if effective_template_id is None:
+            raise ValueError("use_graph_engine_requires_pipeline_template")
+        from hair_platform import execution_graph
+
+        execution_graph.validate_template_supported(conn, effective_template_id)
 
     set_clauses = [f"{key} = ?" for key in fields]
     values = list(fields.values()) + [team_id]
@@ -285,11 +337,13 @@ def update_team_defaults(
     )
     conn.commit()
     updated = conn.execute(
-        "SELECT default_process, default_manager_agent_id, pipeline_template_id "
-        "FROM teams WHERE id = ?",
+        "SELECT default_process, default_manager_agent_id, pipeline_template_id, "
+        "use_graph_engine FROM teams WHERE id = ?",
         (team_id,),
     ).fetchone()
-    return dict(updated)
+    result = dict(updated)
+    result["use_graph_engine"] = bool(result["use_graph_engine"])
+    return result
 
 
 def delete_team(conn: sqlite3.Connection, actor_id: int, team_id: int) -> None:

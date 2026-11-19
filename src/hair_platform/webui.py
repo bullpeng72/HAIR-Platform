@@ -3344,11 +3344,11 @@ async function renderConversationDetail(conversationId, containerId) {
     // 둘 다 한 번의 "전송" 클릭으로 올라간다. 멘션 감지는 여전히
     // 입력창 텍스트에만 걸린다(첨부 파일 내용은 별도 메시지라 전과
     // 동일하게 멘션 오탐 걱정이 없다).
-    '<input type="file" id="conv-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf" style="display:none">' +
+    '<input type="file" id="conv-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf,.csv,.xlsx,.docx,.pptx" style="display:none">' +
     '<button type="button" class="small" id="conv-file-btn" title="자료 첨부(.md/.txt/.html/.pdf) — 전송 시 함께 올라갑니다">\U0001f4ce 자료</button>' +
     '<span class="muted" id="conv-pending-file-name" style="font-size:0.85rem"></span>' +
     '<button type="button" class="small danger" id="conv-pending-file-remove" style="display:none">자료 제거</button>' +
-    '<button class="primary" type="submit">전송</button>' +
+    '<button class="primary" type="submit" id="conv-send-btn">전송</button>' +
     '</form>' +
     '</section>';
 
@@ -3445,12 +3445,24 @@ async function renderConversationDetail(conversationId, containerId) {
   }
   pendingFileRemoveBtn.addEventListener("click", _clearPendingAttachment);
 
+  // 사용자 보고(2026-11-19, 스크린샷 — 첨부/메시지가 2번씩 찍힘) 원인
+  // 수정 — 제출 핸들러가 비동기(업로드→전송→새로고침)인데 그동안
+  // 아무 것도 막지 않아, 응답이 오기 전에 "전송"을 한 번 더 누르거나
+  // 입력창에서 Enter를 두 번 치면 핸들러가 겹쳐 돌면서 아직 안 비워진
+  // 입력값·첨부가 그대로 두 번째 요청으로 또 나갔다(지워지는 시점이
+  // 첫 요청들이 전부 끝난 **뒤**라 그 사이엔 막을 게 없었음). 제출
+  // 버튼을 요청이 끝날 때까지 비활성화해 막는다.
+  let isSubmittingConvMessage = false;
   document.getElementById("conv-message-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    if (isSubmittingConvMessage) return;
     const input = document.getElementById("conv-message-input");
     const content = input.value.trim();
     if (!content && !pendingAttachmentFile) return;
     const skill = document.getElementById("conv-skill-select").value || undefined;
+    isSubmittingConvMessage = true;
+    const sendBtn = document.getElementById("conv-send-btn");
+    if (sendBtn) sendBtn.disabled = true;
     try {
       // 첨부가 있으면 먼저 올린다(멘션 감지가 걸리지 않는 별도
       // 메시지로 남음 — 첨부 글 안에 우연히 "@참가자이름"이 있어도
@@ -3481,6 +3493,10 @@ async function renderConversationDetail(conversationId, containerId) {
       // 늦게 끝나는 Job 때문에 못 보고 기다리지 않게.
       if (result) _watchConversationJobs(conversationId, result.triggered_jobs, participants, conv);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
+    finally {
+      isSubmittingConvMessage = false;
+      if (sendBtn) sendBtn.disabled = false;
+    }
   });
 
   document.getElementById("conv-file-btn").addEventListener("click", () => {
@@ -4308,7 +4324,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 자리로 옮겼다. 선택 사항이라 안 붙여도 기존처럼 그냥 실행된다.
   const executeBtnHtml =
     agentPickerHtml +
-    '<input type="file" id="ws-execute-attachment" accept=".md,.markdown,.txt,.html,.htm,.pdf" style="display:none">' +
+    '<input type="file" id="ws-execute-attachment" accept=".md,.markdown,.txt,.html,.htm,.pdf,.csv,.xlsx,.docx,.pptx" style="display:none">' +
     '<button type="button" class="small" id="ws-execute-attach-btn" title="이번 실행에만 쓸 참고자료 첨부(선택, 저장 안 됨)">\U0001f4ce 참고자료</button>' +
     '<span class="muted" id="ws-execute-attachment-name"></span> ' +
     '<button class="small" id="ws-execute-agent-btn"' + (executeDisabled ? " disabled" : "") + '>' +
@@ -4443,7 +4459,9 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     }).join("");
     return '<details class="card" open><summary>' +
       esc(run.pipeline_template_name || "파이프라인") + " — " +
-      esc(PIPELINE_RUN_STATUS_LABEL[run.status] || run.status) + "</summary>" +
+      esc(PIPELINE_RUN_STATUS_LABEL[run.status] || run.status) +
+      (run.engine === "graph" ? ' <span class="muted" title="LangGraph 실행엔진(신규) — 서버 재시작에도 중단 지점부터 정확히 재개됩니다">⚡신규엔진</span>' : "") +
+      "</summary>" +
       pipelineBreadcrumbHtml(run) +
       GATE_LEGEND_HTML +
       '<ul class="job-progress-list">' + rows + "</ul>" +
@@ -4457,6 +4475,18 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       pipelineTemplates.map(t => '<option value="' + t.id + '">' + esc(t.name) + " (" + t.stage_count + "단계)</option>").join("") +
       '</select>' +
       '<button class="small" id="ws-execute-pipeline-btn">파이프라인 실행(비용 발생)</button>' +
+      // 사용자 요청(2026-11-18, "langgraph... 다음 개선 진행해줘") —
+      // 새 LangGraph 실행엔진(opt-in, `use_graph_engine`)을 API
+      // 호출 없이 화면에서 직접 켤 수 있게 한다. 단계 중 하나라도
+      // `parallel_delegated`(위임형)면 백엔드가 즉시 400으로 거부
+      // 하므로 — 어떤 템플릿이 해당하는지 미리 가려내는 대신, 그
+      // 경우의 에러 메시지를 그대로 보여준다(클라이언트 쪽에
+      // 단계 모드 데이터를 새로 안 끌어와도 됨 — 과설계 방지).
+      '<label class="muted" style="display:block;margin-top:0.3rem">' +
+      '<input type="checkbox" id="ws-pipeline-use-graph-engine"> ' +
+      '신규 실행엔진(LangGraph) 사용 — 서버 재시작에도 중단 지점부터 ' +
+      '정확히 재개됩니다. "위임형(parallel_delegated)" 단계가 있는 ' +
+      '템플릿은 아직 지원하지 않습니다.</label>' +
       '<p class="muted">선택한 파이프라인의 1단계부터 순서대로 진행됩니다 — "사람 승인 필요"로 표시된 단계가 아니면 Gate 기준 통과 시 자동으로 다음 단계로 넘어갑니다.</p>'
     // 사용자 요청(2026-11-17, "Human Agency Scale... 코파일럿... 실행
     // 중단 요청" → "구현 시작") — 진행 중인 실행에 "중단 요청" 버튼을
@@ -4703,9 +4733,11 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       if (!(await confirmModal(
         "이 파이프라인을 처음부터 끝까지 실행합니다 — 단계마다 실제 LLM API를 호출해 비용이 발생하고, 참여자·재시도가 많을수록 누적 비용이 커질 수 있습니다. 계속할까요?"
       ))) return;
+      const useGraphEngineBox = document.getElementById("ws-pipeline-use-graph-engine");
       try {
         await api("POST", "/api/tasks/" + taskId + "/execute-pipeline", {
           pipeline_template_id: templateId,
+          use_graph_engine: !!(useGraphEngineBox && useGraphEngineBox.checked),
         });
         showMsg("global-msg", "파이프라인 실행을 시작했습니다.", "ok");
         renderCollabWorkspace(taskId, containerId);
@@ -7716,15 +7748,26 @@ async function renderTeams(content) {
 
   const teamDefaultsFormHtml = (t) => {
     const activeAgentMembers = activeAgentMembersOf(t);
+    // 사용자 요청(2026-11-19, "CrewAI hierarchical 모드 신규 팀 생성
+    // 차단") — 이미 hierarchical인 팀(이미 매니저가 지정됐거나
+    // default_process가 이미 hierarchical)은 계속 쓸 수 있지만, 새로
+    // hierarchical로 전환하는 건 서버가 막는다(`teams.update_team_
+    // defaults()` 참고) — 백엔드가 400으로 거부하기 전에 UI에서도
+    // 같은 경계를 보여준다.
+    const alreadyHierarchical = t.default_process === "hierarchical" || t.default_manager_agent_id !== null;
+    const hierarchicalDisabledAttr = alreadyHierarchical ? "" : " disabled";
+    const hierarchicalTitle = alreadyHierarchical
+      ? ""
+      : ' title="CrewAI hierarchical 모드의 신뢰성 문제로 새 팀은 더는 전환할 수 없습니다 — sequential_relay 기반 파이프라인을 쓰세요"';
     return '<form class="inline" data-team-defaults-form="' + t.id + '" style="margin-top:0.5rem;flex-wrap:wrap">' +
       '<label>기본 process ' +
       '<select data-default-process>' +
       '<option value="">(미지정)</option>' +
       '<option value="sequential"' + (t.default_process === "sequential" ? " selected" : "") + '>sequential</option>' +
-      '<option value="hierarchical"' + (t.default_process === "hierarchical" ? " selected" : "") + '>hierarchical</option>' +
+      '<option value="hierarchical"' + (t.default_process === "hierarchical" ? " selected" : "") + hierarchicalDisabledAttr + hierarchicalTitle + '>hierarchical' + (alreadyHierarchical ? "" : "(신규 전환 불가)") + '</option>' +
       '</select></label>' +
-      '<label>기본 매니저 ' +
-      '<select data-default-manager' + (activeAgentMembers.length ? "" : " disabled") + '>' +
+      '<label' + hierarchicalTitle + '>기본 매니저 ' +
+      '<select data-default-manager' + (activeAgentMembers.length && alreadyHierarchical ? "" : " disabled") + '>' +
       '<option value="">(미지정 — 자동 추정)</option>' +
       activeAgentMembers.map(a => '<option value="' + a.id + '"' +
         (t.default_manager_agent_id === a.id ? " selected" : "") + '>' + agentDisplayLabel(a) + " (#" + a.id + ")</option>").join("") +
@@ -8292,6 +8335,18 @@ async function renderModelRegistry(content) {
       esc(_OPTIMIZATION_TIER_LABELS[t]) + "</label>"
     ).join("") +
     '<button class="small" data-save-optimization-tiers="' + m.id + '">저장</button>';
+  // 사용자 요청(2026-11-18, "...엔터프라이즈 환경 적용이 가능한 수준의
+  // 확실한 개선 방안을 도출해줘" 개선축 B) — 이 모델이 실제로 받아들이는
+  // 토큰 한도를 admin이 직접 등록한다(`token_budget.py`가 `_build_
+  // transcript()`에서 이 값을 읽어 프롬프트가 한도를 넘기기 전에 미리
+  // 잘라낸다). Ollama는 로컬 서버 실행 플래그(`-c 32768` 등)로 결정되는
+  // 값이라 플랫폼이 자동으로 알 수 없다 — 비워두면 provider별 보수적
+  // 기본값으로 폴백한다(Anthropic 200K/OpenAI 128K/Ollama 8K).
+  const contextWindowHtml = (m) =>
+    '<input type="number" min="1" step="1" class="mr-context-window" ' +
+    'data-model-id="' + m.id + '" placeholder="미등록(기본값 사용)" ' +
+    'value="' + (m.context_window || "") + '" style="width:8rem">' +
+    '<button class="small" data-save-context-window="' + m.id + '">저장</button>';
   // 사용자 요청(2026-11-12, "ollama, openai 등 프로바이더의 모델 성능
   // Test하고 결과 표시, 티어 추천 기능") — 고정 테스트 프롬프트 1건을
   // 실제로 호출해 속도(글자/초)를 재고, 그 속도만으로 tier를
@@ -8318,10 +8373,11 @@ async function renderModelRegistry(content) {
   const providerTableHtml = (provider) => {
     const rows = byProvider(provider);
     return "<h3>" + providerLabel[provider] + "</h3>" +
-      table(["모델명", "상태", "최적화 Tier 매핑", "성능 테스트", "동작"], rows.map(m => [
+      table(["모델명", "상태", "최적화 Tier 매핑", "컨텍스트 한도(토큰)", "성능 테스트", "동작"], rows.map(m => [
         esc(m.name),
         m.is_active ? "활성" : "비활성",
         tierMappingHtml(m),
+        contextWindowHtml(m),
         benchmarkHtml(m),
         '<div class="actions">' +
           '<button class="small" data-toggle-model-active="' + m.id + '" data-active="' + (m.is_active ? "0" : "1") + '">' +
@@ -8444,6 +8500,20 @@ async function renderModelRegistry(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  content.querySelectorAll("[data-save-context-window]").forEach(btn => {
+    btn.onclick = async () => {
+      const modelId = btn.dataset.saveContextWindow;
+      const input = content.querySelector('.mr-context-window[data-model-id="' + modelId + '"]');
+      const raw = input.value.trim();
+      try {
+        await api("PATCH", "/api/model-registry/" + modelId + "/context-window", {
+          context_window: raw === "" ? null : Number(raw),
+        });
+        showMsg("global-msg", "컨텍스트 한도를 저장했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
   content.querySelectorAll("[data-run-benchmark]").forEach(btn => {
     btn.onclick = async () => {
       if (!(await confirmModal("이 모델에 실제로 테스트 프롬프트 1건을 보내 응답 속도를 측정합니다 — 클라우드 provider는 실제 API 비용이 발생합니다(Ollama는 로컬 연산이라 무료). 계속할까요?"))) return;
@@ -8562,11 +8632,11 @@ async function renderKnowledgeBase(content) {
     helpBox(
       '<ul class="muted help-list">' +
       '<li>여기 올린 자료는 대화와 무관하게 전체 시스템에서 공유됩니다 — "지식검색" 스킬을 가진 모든 Agent가 검색할 수 있습니다(대화창·AI 에이전트 관리에서 올린 파일도 똑같은 곳에 쌓입니다).</li>' +
-      '<li>지원 형식: .md / .markdown / .txt / .html / .htm / .pdf (최대 10MB).</li>' +
+      '<li>지원 형식: .md / .markdown / .txt / .html / .htm / .pdf / .csv / .xlsx / .docx (각 최대 10MB) / .pptx(최대 25MB). 엑셀은 시트당 5,000행까지만 읽습니다(초과분은 "생략" 표시).</li>' +
       '</ul>'
     ) +
     '<form class="inline" id="kd-upload-form">' +
-    '<input type="file" id="kd-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf" required>' +
+    '<input type="file" id="kd-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf,.csv,.xlsx,.docx,.pptx" required>' +
     '<button type="submit" class="small primary">업로드·색인</button>' +
     '</form>' +
     table(["파일명", "업로더", "글자수", "조각수", "업로드일", "동작"], knowledgeDocs.map(d => [
@@ -10471,7 +10541,7 @@ const MANUAL_MARKDOWN = [
 '  예를 들어 실시간 정보가 필요한 질문이면 "**실시간웹검색**"을 골라두세요 — Tavily로 실제 웹 검색을 한 뒤 그 결과를 참고해 답합니다(서버에 `TAVILY_API_KEY` 설정이 먼저 돼 있어야 합니다 — 관리자에게 문의). "**지식검색**"(VectorDB)·"**일반웹검색**"·"**최신정보필수확인**"·"**딥리서치**"·"**AI업계동향브리핑**" 등 조사 성격의 스킬은 전부 답변에 **출처(제목·URL 또는 참고한 과거 산출물의 식별자)를 반드시 밝히도록** 되어 있습니다 — 출처가 안 보이는 답변이 오면 스킬이 실제로 그라운딩됐는지부터 의심해보세요.',
 '  **멘션을 하나라도 넣으면 이 선택은 자동으로 비워집니다** — 멘션이 있으면 그 호출이 우선이고, 스킬 선택은 "아무도 안 불렀을 때(기본 AI가 답할 때) 어떤 지식/도구로 그라운딩할지"를 고르는 용도이기 때문입니다.',
 '- **메시지 입력창** — **`@`를 입력**하면 사람·Agent·Team 검색 자동완성이 뜹니다. 아직 이 대화에 초대 안 된 대상도 검색되고, 목록에서 고르면 **그 자리에서 자동으로 초대된 뒤** 멘션이 끼워 넣어집니다(따로 "참가자 초대" 화면을 거칠 필요가 없습니다).',
-'- **📎 자료 버튼** — 로컬 파일(`.md`/`.markdown`/`.txt`/`.html`/`.htm`/`.pdf`)을 고르면 버튼 옆에 파일명이 뜨며 **보류 상태로 대기**합니다(바로 올라가지 않음, "자료 제거"로 취소 가능). 이 상태에서 메시지를 적고 **"전송"**을 눌러야 — 입력한 메시지가 있으면 그 메시지가 먼저, 첨부 내용은 바로 이어서 별도 메시지로 — 한 번에 같이 올라갑니다(메시지 없이 첨부만 보내도 됩니다). **이 대화에만 1회성으로 쓰이고 영구 저장되지 않습니다**(어디에도 파일 자체나 텍스트가 남지 않는 휘발성 설계 — 영구 보관하려는 자료는 8절 메뉴 지도의 "도구/스킬 Pool"이 아니라 admin/manager의 "지식 베이스" 관리 기능을 따로 써야 합니다).',
+'- **📎 자료 버튼** — 로컬 파일(`.md`/`.markdown`/`.txt`/`.html`/`.htm`/`.pdf`/`.csv`/`.xlsx`/`.docx`/`.pptx`)을 고르면 버튼 옆에 파일명이 뜨며 **보류 상태로 대기**합니다(바로 올라가지 않음, "자료 제거"로 취소 가능). 이 상태에서 메시지를 적고 **"전송"**을 눌러야 — 입력한 메시지가 있으면 그 메시지가 먼저, 첨부 내용은 바로 이어서 별도 메시지로 — 한 번에 같이 올라갑니다(메시지 없이 첨부만 보내도 됩니다). **이 대화에만 1회성으로 쓰이고 영구 저장되지 않습니다**(어디에도 파일 자체나 텍스트가 남지 않는 휘발성 설계 — 영구 보관하려는 자료는 8절 메뉴 지도의 "도구/스킬 Pool"이 아니라 admin/manager의 "지식 베이스" 관리 기능을 따로 써야 합니다).',
 '',
 '### 3단계 — 멘션으로 누구를 부를지 정하고 메시지 전송',
 '',

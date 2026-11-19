@@ -17,9 +17,10 @@ Team은 워커별 메시지 각각, skill 조회해 모델에 일을 시킴, 멘
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
-from hair_platform import conversations, db
+from hair_platform import agent_runtime, conversations, db
 
 
 def _login(client, username, password):
@@ -256,6 +257,110 @@ def test_gc_agent_mention_suppresses_default_ai(client_and_conn):
     assert messages[1]["author_type"] == "agent"
     assert messages[1]["author_id"] == agent_id
     assert messages[1]["content"] == "에이전트 답변"
+
+
+def test_gc_agent_mention_with_custom_python_skill_has_no_warning(
+    client_and_conn,
+):
+    """사용자 요청(2026-11-18, "...Skill, tool 사용 제약을 없애고...
+    엔터프라이즈 환경 적용이 가능한 수준의 확실한 개선 방안을 도출해줘"
+    개선축 A) 구현 이후 — 단일 Agent 멘션도 "기본 AI"와 똑같이 이제
+    provider 네이티브 함수 호출로 custom_python 도구를 실제 호출한다
+    (`agent_runtime.execute_agent()` 내부의 `tool_calling.
+    resolve_callable_tools()` 호출). 그래서 "구조적 제약" 경고가 더는
+    붙지 않아야 한다(`pool_registry.unsupported_realtime_skill_
+    names()`가 custom_python을 더는 "불가능"으로 안 봄) — 이 HTTP
+    레벨 테스트는 `execute_agent()` 자체를 모킹해 경고 메커니즘만
+    검증한다(실제 도구 호출 자체는 아래 `test_execute_agent_with_
+    custom_python_skill_calls_real_tool`이 더 낮은 레벨에서 검증)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "(?, '[\"데이터분석가이드\"]', 'active')",
+        ("데이터 분석 Agent",),
+    )
+    conn.commit()
+    agent_id = cur.lastrowid
+
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "멘션방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "agent", "participant_id": agent_id},
+    )
+
+    with patch(
+        "hair_platform.agent_runtime.execute_agent", return_value="계산했습니다"
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@데이터 분석 Agent 평균 계산해줘"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    messages = client.get(f"/api/conversations/{conv_id}/messages").json()
+    content = messages[-1]["content"]
+    assert "구조적 제약" not in content
+    assert content == "계산했습니다"
+
+
+def test_execute_agent_with_custom_python_skill_calls_real_tool(client_and_conn):
+    """`execute_agent()` 레벨에서 직접 검증 — "데이터분석가이드" 스킬을
+    가진 Agent는 `tool_calling.resolve_callable_tools()`로 "수치 데이터
+    분석기"를 찾아 `llm.call_llm_with_tools()`에 넘겨야 한다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
+        "(?, '[\"데이터분석가이드\"]', 'active')",
+        ("데이터 분석 Agent",),
+    )
+    conn.commit()
+    agent_id = cur.lastrowid
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+
+    with patch(
+        "hair_platform.llm.call_llm_with_tools", return_value="평균은 20입니다"
+    ) as mock_call, patch("hair_platform.llm.call_llm") as mock_call_no_tools:
+        output = agent_runtime.execute_agent(
+            conn, agent_id, admin_id, "10, 20, 30의 평균을 계산해줘"
+        )
+
+    assert output == "평균은 20입니다"
+    mock_call.assert_called_once()
+    mock_call_no_tools.assert_not_called()
+    tools_arg = mock_call.call_args[0][4]
+    assert len(tools_arg) == 1
+    assert tools_arg[0].name == "custom_tool_13"
+
+
+def test_gc_agent_mention_without_unsupported_skill_has_no_warning(client_and_conn):
+    """회귀 가드 — skill_tags가 비어 있거나 native 도구만 쓰는 Agent는
+    지금까지처럼 경고 없이 그대로 응답해야 한다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent_id = _make_agent(conn)
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "멘션방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "agent", "participant_id": agent_id},
+    )
+
+    with patch(
+        "hair_platform.agent_runtime.execute_agent", return_value="일반 답변"
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "@테스트 Agent 이거 봐줘"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    messages = client.get(f"/api/conversations/{conv_id}/messages").json()
+    assert messages[-1]["content"] == "일반 답변"
 
 
 def test_gc_uninvited_agent_mention_warns_in_default_ai_reply(client_and_conn):
@@ -535,6 +640,86 @@ def test_gc_team_mention_skips_manager_with_no_output(client_and_conn):
     messages = client.get(f"/api/conversations/{conv_id}/messages").json()
     agent_messages = [m for m in messages if m["author_type"] == "agent"]
     assert len(agent_messages) == 0  # 매니저는 산출물이 없어 메시지가 안 생긴다
+
+
+def test_gc_team_mention_without_manager_resolves_platform_default_provider(
+    client_and_conn,
+):
+    """버그 수정(2026-11-18, 신규 "데이터 분석·시각화 전담팀" 라이브
+    검증 중 실측) — 매니저 없는 팀은 `run_crew()`에 provider/model을
+    전혀 안 넘겨 admin이 설정한 플랫폼 공통 기본 LLM(`platform_llm_
+    config`)을 무시하고 ANTHROPIC_API_KEY/OPENAI_API_KEY 자동판별로
+    떨어졌다(그 키들이 없는 환경에서는 그대로 실패). 매니저가 있는
+    팀은 이미 매니저 자신의 provider/model을 명시적으로 넘기고
+    있었다 — 매니저 없는 팀도 같은 원리로 플랫폼 공통 기본값을
+    명시적으로 풀어 넘겨야 한다."""
+    client, conn = client_and_conn
+    conn.execute(
+        "INSERT INTO platform_llm_config (id, provider, model) "
+        "VALUES (1, 'ollama', 'llama3')"
+    )
+    conn.commit()
+    _login(client, "admin1", "adminpass")
+    agent1 = _make_agent(conn, "워커1")
+    team_id = _make_team_with_agent(conn, agent1, "무매니저팀")
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "team", "participant_id": team_id},
+    )
+
+    crew_result = {
+        "agents": [{"agent_id": agent1, "role_name": "워커1", "output": "답변"}],
+        "token_usage": {},
+        "delegation_count": 0,
+    }
+    with patch(
+        "hair_platform.crew_runtime.run_crew", return_value=crew_result
+    ) as mock_crew:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "@무매니저팀 안녕"}
+        )
+        assert resp.status_code == 201, resp.text
+        mock_crew.assert_called_once()
+        assert mock_crew.call_args.kwargs["provider"] == "ollama"
+        assert mock_crew.call_args.kwargs["model"] == "llama3"
+
+
+def test_gc_team_mention_without_manager_or_platform_default_leaves_provider_none(
+    client_and_conn,
+):
+    """회귀 가드 — 플랫폼 공통 기본값이 설정 안 돼 있으면(기존 환경과
+    동일) 이 수정 이후에도 provider/model을 여전히 None으로 넘겨
+    기존처럼 환경변수/API 키 자동판별에 맡긴다(순수 추가적 수정이라
+    기존 동작을 바꾸지 않는다)."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent1 = _make_agent(conn, "워커1")
+    team_id = _make_team_with_agent(conn, agent1, "무매니저팀")
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+    client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "team", "participant_id": team_id},
+    )
+
+    crew_result = {
+        "agents": [{"agent_id": agent1, "role_name": "워커1", "output": "답변"}],
+        "token_usage": {},
+        "delegation_count": 0,
+    }
+    with patch(
+        "hair_platform.crew_runtime.run_crew", return_value=crew_result
+    ) as mock_crew, patch(
+        "hair_platform.llm._auto_detect", return_value="anthropic"
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "@무매니저팀 안녕"}
+        )
+        assert resp.status_code == 201, resp.text
+        mock_crew.assert_called_once()
+        assert mock_crew.call_args.kwargs["provider"] == "anthropic"
 
 
 def test_gc_team_mention_routes_hierarchical_when_team_has_manager_role_label(
@@ -1118,6 +1303,44 @@ def test_gc_mcp_remote_skill_warns_instead_of_faking_search(client_and_conn):
     assert "검색하겠습니다" in messages[-1]["content"]
 
 
+def test_gc_default_ai_custom_python_skill_calls_real_tool_no_warning(
+    client_and_conn,
+):
+    """사용자 요청(2026-11-18, "...Skill, tool 사용 제약을 없애고...
+    엔터프라이즈 환경 적용이 가능한 수준의 확실한 개선 방안을 도출해줘"
+    개선축 A) 구현 이후 — "데이터분석가이드"에 연결된 "수치 데이터
+    분석기"(custom_python)는 이제 "기본 AI" 경로에서도 provider
+    네이티브 함수 호출로 실제 호출된다(`tool_calling.
+    resolve_callable_tools()` → `llm.call_llm_with_tools()`). 더 이상
+    "구조적 제약" 경고가 붙지 않아야 하고(`pool_registry.
+    unsupported_realtime_skill_names()`가 custom_python을 더는
+    "불가능"으로 안 봄), 호출부가 `call_llm()`이 아니라 `call_llm_
+    with_tools()`를 도구 목록과 함께 써야 한다."""
+    client, _conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
+
+    with patch(
+        "hair_platform.llm.call_llm_with_tools", return_value="계산했습니다: 평균 20"
+    ) as mock_call, patch("hair_platform.llm.call_llm") as mock_call_no_tools:
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "이 숫자들의 증감률 계산해줘", "skill": "데이터분석가이드"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    mock_call.assert_called_once()
+    mock_call_no_tools.assert_not_called()
+    tools_arg = mock_call.call_args[0][4]
+    assert len(tools_arg) == 1
+    assert tools_arg[0].name == "custom_tool_13"  # "수치 데이터 분석기"
+
+    messages = client.get(f"/api/conversations/{conv_id}/messages").json()
+    content = messages[-1]["content"]
+    assert "구조적 제약" not in content
+    assert "계산했습니다: 평균 20" in content
+
+
 # ---------- 참가자 초대(조직 전체 검색) ----------
 
 
@@ -1213,3 +1436,141 @@ def test_gc_default_ai_sees_recent_conversation_history(client_and_conn):
         assert "첫 질문" in prompt
         assert "첫 응답" in prompt
         assert "두번째 질문" in prompt
+
+
+# ---------- Gate 품질확인 — 기본 AI/단일 Agent 멘션 (2026-11-19) ----------
+
+
+def test_gc_default_ai_response_is_gate_scored(client_and_conn):
+    """조사로 확인된 공백 수정 — "기본 AI" 응답은 지금까지 Gate A-G
+    측정이 전혀 없었다(Team 멘션 Crew 경로만 있었음). `llm.call_llm()`
+    을 모킹해도 `agent_evaluation.run_and_score()`는 순수 로컬 휴리스틱
+    이라 실제 네트워크 호출 없이 그대로 측정된다."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "Gate 측정방"}).json()[
+        "id"
+    ]
+
+    with patch(
+        "hair_platform.llm.call_llm",
+        return_value="충분히 길고 구조화된 답변입니다. 요청하신 내용을 검토했습니다.",
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages", json={"content": "질문입니다"}
+        )
+        assert resp.status_code == 201, resp.text
+
+    message = conn.execute(
+        "SELECT * FROM conversation_messages WHERE conversation_id = ? "
+        "AND author_type = 'agent' ORDER BY id DESC LIMIT 1",
+        (conv_id,),
+    ).fetchone()
+    assert message["gate_scores"] is not None
+    gate_scores = json.loads(message["gate_scores"])
+    assert gate_scores
+
+
+def test_gc_agent_mention_response_is_gate_scored(client_and_conn):
+    """단일 Agent 멘션도 같은 공백이 있었다(`execute_agent()`를
+    `run_and_score()`로 감싸지 않음) — Task 기반 실행 경로
+    (`deliverables.execute_agent_for_task()`)는 이미 측정하고 있었던
+    것과 대비된다."""
+    client, conn = client_and_conn
+    _login(client, "admin1", "adminpass")
+    agent_id = _make_agent(conn, "Gate측정 Agent")
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "Gate 측정 멘션방"}).json()[
+        "id"
+    ]
+    resp = client.post(
+        f"/api/conversations/{conv_id}/participants",
+        json={"participant_type": "agent", "participant_id": agent_id},
+    )
+    assert resp.status_code == 201, resp.text
+
+    with patch(
+        "hair_platform.agent_runtime.execute_agent",
+        return_value="충분히 길고 구조화된 답변입니다. 요청하신 내용을 검토했습니다.",
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": f"@Gate측정 Agent 이거 봐줘"},
+        )
+        assert resp.status_code == 201, resp.text
+
+    message = conn.execute(
+        "SELECT * FROM conversation_messages WHERE conversation_id = ? "
+        "AND author_type = 'agent' ORDER BY id DESC LIMIT 1",
+        (conv_id,),
+    ).fetchone()
+    assert message["gate_scores"] is not None
+    gate_scores = json.loads(message["gate_scores"])
+    assert gate_scores
+
+
+# ---------- 2026-11-19, 사용자 보고 "ollama 실행되지 않고 있는데...
+# 실행 중이 표시됨" — 서버 재시작으로도 안 풀리는 conversation_jobs
+# 먹통 상태 ----------
+
+
+def test_reap_orphaned_conversation_jobs_marks_stuck_running_jobs_as_failed(
+    client_and_conn,
+):
+    """`deliverables.reap_orphaned_execution_jobs()`/`pipeline_runtime.
+    reap_orphaned_pipeline_runs()`와 같은 갭 — 서버가 실행 도중 죽으면
+    (강제 재시작 등) `run_default_ai_job()` 등의 예외 핸들러 자체가
+    프로세스와 함께 죽어 `conversation_jobs.status='running'`이 영원히
+    남는다. 직접 호출로 정리되는지 확인."""
+    client, conn = client_and_conn
+    _login(client, "member1", "memberpass")
+    conv_id = client.post("/api/conversations", json={"title": "먹통방"}).json()["id"]
+
+    # 프로세스가 죽어 'running'으로 멈춘 상황을 흉내낸다.
+    conn.execute(
+        "INSERT INTO conversation_jobs (conversation_id, trigger_type, status) "
+        "VALUES (?, 'skill', 'running')",
+        (conv_id,),
+    )
+    conn.commit()
+
+    reaped = conversations.reap_orphaned_conversation_jobs(conn)
+    assert reaped == 1
+    row = conn.execute(
+        "SELECT status, error FROM conversation_jobs WHERE conversation_id = ?",
+        (conv_id,),
+    ).fetchone()
+    assert row["status"] == "failed"
+    assert row["error"]
+
+
+def test_reap_orphaned_conversation_jobs_runs_on_app_startup():
+    """`create_app()` 기동 경로에도 실제로 연결돼 있는지 별도 DB
+    파일로 확인."""
+    import tempfile
+
+    from hair_platform import db as db_mod
+    from hair_platform.app import create_app
+
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        setup_conn = db_mod.get_connection(tmp.name)
+        db_mod.init_schema(setup_conn)
+        setup_conn.execute(
+            "INSERT INTO users (username, password_hash, role) VALUES ('u', 'h', 'admin')"
+        )
+        setup_conn.execute(
+            "INSERT INTO conversations (title, created_by) VALUES ('방', 1)"
+        )
+        setup_conn.execute(
+            "INSERT INTO conversation_jobs (conversation_id, trigger_type, status) "
+            "VALUES (1, 'auto_reply', 'running')"
+        )
+        setup_conn.commit()
+        setup_conn.close()
+
+        app = create_app(tmp.name)
+        conn = app.state.db
+        row = conn.execute(
+            "SELECT status FROM conversation_jobs WHERE id = 1"
+        ).fetchone()
+        assert row["status"] == "failed"

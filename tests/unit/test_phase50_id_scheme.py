@@ -56,10 +56,10 @@ def test_assign_code_different_segments_number_independently():
     pyexec_code = id_scheme.assign_code(
         conn, "tool_pool", cur.lastrowid, id_scheme.TOOL_KIND_SEGMENT["custom_python"]
     )
-    # 기존 레퍼런스 PYEXEC 7개(Spec EARS 린터~수치 데이터 분석기, 2026-
-    # 11-11 추가) 다음 번호라 008이어야 한다 — NATIVE/MCPSTDIO/MCPRMT
-    # 세그먼트 번호와는 무관.
-    assert pyexec_code == "TUL-PYEXEC-008"
+    # 기존 레퍼런스 PYEXEC 8개(Spec EARS 린터~차트 생성기, 2026-11-18
+    # 추가) 다음 번호라 009여야 한다 — NATIVE/MCPSTDIO/MCPRMT 세그먼트
+    # 번호와는 무관.
+    assert pyexec_code == "TUL-PYEXEC-009"
 
 
 def test_assign_code_unknown_tool_kind_or_skill_mode_raises():
@@ -97,18 +97,21 @@ def test_init_schema_assigns_codes_to_all_reference_rows():
     # 추가(12 → 13), Skill 2종(딥리서치/AI업계동향브리핑) 추가(51 → 53).
     # 2026-11-17 "주어진 업무를 잘 처리할 수 있는 skill을 생성하는
     # skill을 추가해줘"로 Skill "스킬생성가이드" 1개 추가(53 → 54).
+    # 2026-11-18 "excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프
+    # 출력 등이 가능하도록... 전담 팀을 구성해"로 Tool "차트 생성기" 1개
+    # 추가(13 → 14), Skill "데이터시각화가이드" 1개 추가(54 → 55).
     assert len(agent_codes) == 26
     assert all(c is not None for c in agent_codes)
     assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 26종 전원 레퍼런스
     assert len(set(agent_codes)) == 26  # 전부 유일
 
-    assert len(tool_codes) == 13
+    assert len(tool_codes) == 14
     assert all(c is not None for c in tool_codes)
-    assert len(set(tool_codes)) == 13
+    assert len(set(tool_codes)) == 14
 
-    assert len(skill_codes) == 54
+    assert len(skill_codes) == 55
     assert all(c is not None for c in skill_codes)
-    assert len(set(skill_codes)) == 54
+    assert len(set(skill_codes)) == 55
 
 
 def test_init_schema_tool_codes_reflect_kind():
@@ -182,7 +185,7 @@ def test_reset_and_reassign_codes_wipes_then_reassigns_deterministically():
 
     counts = id_scheme.reset_and_reassign_codes(conn)
 
-    assert counts == {"agent_pool": 26, "tool_pool": 13, "skill_pool": 54}
+    assert counts == {"agent_pool": 26, "tool_pool": 14, "skill_pool": 55}
     after = {
         table: [
             r["code"]

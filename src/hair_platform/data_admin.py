@@ -374,6 +374,16 @@ def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None
 # 순서를 강제하지 않는다(`db.py`의 `_migrate_tool_pool_custom_python_
 # kind()`와 같은 선례 — 대량 작업에서 FK를 한 번만 잠깐 끄는 쪽이 수십
 # 개 테이블의 삭제 순서를 일일이 맞추는 것보다 훨씬 덜 깨지기 쉽다).
+# 사용자 요청(2026-11-18, "데이터 초기화에 팀 삭제 되지 않도록 개선") —
+# "데이터 분석·시각화 전담팀"은 바로 위 2026-11-10 결정("팀은 재시드
+# 안 되니 지워도 된다")의 예외다 — 핵심 플랫폼 역량(실제 계산/차트
+# 도구를 `@Team 멘션`으로 호출하는 유일한 경로, 지난 턴들에서 라이브로
+# 검증)이라 "자율 개발 크루"가 한 번 삭제됐을 때처럼 또 수동으로
+# 다시 만들어야 하는 상황을 피한다. 이름 기준으로 보호한다(팀은
+# 코드/고유 식별자가 없어 이름이 유일한 식별 수단) — 다른 팀(관리자가
+# 직접 만든 TF팀 등)은 여전히 2026-11-10 결정 그대로 초기화 대상이다.
+_FACTORY_RESET_PROTECTED_TEAM_NAMES: tuple[str, ...] = ("데이터 분석·시각화 전담팀",)
+
 _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "knowledge_chunks",
     "agent_evaluations",
@@ -385,9 +395,8 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "job_items",
     "jobs",
     "deliverables",
-    "team_members",
-    "teams",
     "conversation_jobs",
+    "conversation_knowledge_chunks",
     "conversation_messages",
     "conversation_participants",
     "conversations",
@@ -412,7 +421,9 @@ def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
     """ "공장 초기화" — 운영 중 쌓인 데이터를 전부 지우고, Agent/Tool/
     Skill/파이프라인 템플릿은 그대로 둔다(위 모듈 독스트링 참고). 팀
     (teams/team_members)은 2026-11-10부터 삭제 대상이다(재시드되지
-    않는 데이터라 Agent 등과 같은 보존 근거가 없음, 바로 위 주석 참고).
+    않는 데이터라 Agent 등과 같은 보존 근거가 없음, 바로 위 주석 참고)
+    — 단 `_FACTORY_RESET_PROTECTED_TEAM_NAMES`에 이름이 있는 팀(현재
+    "데이터 분석·시각화 전담팀")은 2026-11-18 결정으로 예외다.
     Agent 자체는 남기되 실행하면서 쌓인 휘발성 필드(비용·성과점수·
     provider/model·마지막 산출물)는 초기값으로 되돌린다 — `source_
     job_item_id`는 `job_items`를 지우므로 먼저 NULL로 비운다(이 파일
@@ -432,6 +443,16 @@ def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
         )
         for table in _FACTORY_RESET_WIPE_TABLES:
             counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
+        placeholders = ",".join("?" * len(_FACTORY_RESET_PROTECTED_TEAM_NAMES))
+        counts["team_members"] = conn.execute(
+            f"DELETE FROM team_members WHERE team_id NOT IN "
+            f"(SELECT id FROM teams WHERE name IN ({placeholders}))",
+            _FACTORY_RESET_PROTECTED_TEAM_NAMES,
+        ).rowcount
+        counts["teams"] = conn.execute(
+            f"DELETE FROM teams WHERE name NOT IN ({placeholders})",
+            _FACTORY_RESET_PROTECTED_TEAM_NAMES,
+        ).rowcount
         conn.commit()
     finally:
         conn.execute(

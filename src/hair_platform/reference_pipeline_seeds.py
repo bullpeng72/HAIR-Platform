@@ -127,6 +127,80 @@ DATA_ANALYZER_SOURCE = """def tool_fn(query: str) -> str:
     return '입력에 "series"(시계열 비교) 또는 "values"(단순 통계) 중 하나가 있어야 합니다.'
 """
 
+# 사용자 요청(2026-11-18, "excel 파일 등 수치가 담긴 데이터를 입력
+# 받아, 실제 계산을 하고 그래프 출력 등이 가능하도록... 전담 팀을
+# 구성해") — "수치 데이터 분석기"가 실제 계산을, 이 도구는 그 결과를
+# 실제로 그릴 수 있는 형태로 바꾼다. 서버에 matplotlib/numpy가 없고
+# (샌드박스가 stdlib-only, `sandbox.py` 확인) 이미지 렌더링 경로도
+# 전혀 없는 대신, `webui.py`가 이미 마크다운 ```chart 코드펜스를
+# Chart.js config JSON으로 파싱해 `<canvas>`에 그리는 메커니즘을
+# 갖고 있다(`webui.py`의 `_markedRenderer.code` — lang이 "chart"면
+# `<canvas data-chart-config="...">`를 내고 `new Chart(canvas,
+# JSON.parse(...))`를 호출) — 이 도구는 그 메커니즘이 바로 소비할 수
+# 있는 JSON 문자열을 돌려주기만 하면 된다(이미지 생성 불필요).
+# Agent는 이 결과를 그대로 ```chart 펜스에 넣어 보여주면 된다 —
+# 축/색상 등 Chart.js 문법을 LLM이 직접 작성하다 틀리는 위험을 없앤다.
+# `_CUSTOM_TOOL_MAX_OUTPUT_CHARS=4000`(pool_registry.py) 안에 안전하게
+# 들어가도록 포인트 수를 제한한다.
+CHART_GENERATOR_SOURCE = """def tool_fn(query: str) -> str:
+    import json
+
+    allowed_types = ("bar", "line", "pie", "doughnut", "radar")
+    max_points = 30
+
+    try:
+        payload = json.loads(query)
+    except (json.JSONDecodeError, ValueError):
+        return (
+            '입력은 JSON 문자열이어야 합니다: '
+            '{"chart_type": "bar", "title": "월별 매출", '
+            '"labels": ["1월", "2월"], "series": {"매출": [100, 150]}}'
+        )
+
+    chart_type = payload.get("chart_type")
+    if chart_type not in allowed_types:
+        return f"chart_type은 {list(allowed_types)} 중 하나여야 합니다."
+
+    labels = payload.get("labels")
+    if not isinstance(labels, list) or not labels:
+        return "labels는 비어 있지 않은 배열이어야 합니다."
+    if len(labels) > max_points:
+        return f"labels가 너무 많습니다(최대 {max_points}개) — 구간을 줄이거나 집계해주세요."
+
+    series = payload.get("series")
+    if not isinstance(series, dict) or not series:
+        return 'series는 {"계열이름": [숫자, ...]} 형태의 비어 있지 않은 객체여야 합니다.'
+
+    datasets = []
+    for series_name, values in series.items():
+        if not isinstance(values, list):
+            return f'series["{series_name}"]은 숫자 배열이어야 합니다.'
+        if len(values) != len(labels):
+            return (
+                f'series["{series_name}"]의 길이({len(values)})가 '
+                f'labels 길이({len(labels)})와 다릅니다 — 반드시 같아야 합니다.'
+            )
+        try:
+            nums = [float(v) for v in values]
+        except (TypeError, ValueError):
+            return f'series["{series_name}"]에 숫자가 아닌 값이 섞여 있습니다.'
+        datasets.append({"label": str(series_name), "data": nums})
+
+    title = str(payload.get("title") or "")
+    config = {
+        "type": chart_type,
+        "data": {
+            "labels": [str(label) for label in labels],
+            "datasets": datasets,
+        },
+        "options": {
+            "responsive": True,
+            "plugins": {"title": {"display": bool(title), "text": title}},
+        },
+    }
+    return json.dumps(config, ensure_ascii=False)
+"""
+
 # (name, description, function_source, timeout_seconds)
 TOOL_SPECS: list[tuple[str, str, str, int]] = [
     (
@@ -171,6 +245,12 @@ TOOL_SPECS: list[tuple[str, str, str, int]] = [
         DATA_ANALYZER_SOURCE,
         10,
     ),
+    (
+        "차트 생성기",
+        "레이블·계열별 숫자 배열을 입력받아 Chart.js 설정(JSON)을 생성한다 — 반환값을 그대로 ```chart 코드펜스에 넣으면 화면에 실제 그래프(막대/선/파이/도넛/레이더)로 렌더링된다. LLM이 축·색상 등 Chart.js 문법을 직접 작성하다 틀리는 위험을 없앤다.",
+        CHART_GENERATOR_SOURCE,
+        10,
+    ),
 ]
 
 # (skill_name, description, tool_name) — tool_name은 위 TOOL_SPECS의 name과 매칭해 default_tool_pool_ids를 채운다.
@@ -209,6 +289,11 @@ TOOL_SKILL_SPECS: list[tuple[str, str, str]] = [
         "데이터분석가이드",
         "시계열 또는 숫자 목록 데이터에서 합계·평균·증감률·표준편차를 실제로 계산한 뒤, 그 결과를 근거로 인사이트 문장을 도출한다 — 계산되지 않은 숫자를 서술로 지어내지 않는다.",
         "수치 데이터 분석기",
+    ),
+    (
+        "데이터시각화가이드",
+        "레이블·계열 숫자 데이터를 '차트 생성기'로 실제 Chart.js 설정을 생성한 뒤, 그 결과를 ```chart 코드펜스에 그대로 넣어 실제 그래프로 보여준다 — 그래프를 텍스트로 서술하거나 Chart.js 문법을 직접 지어 쓰지 않는다.",
+        "차트 생성기",
     ),
 ]
 
@@ -548,7 +633,7 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     # → "바로 구현해줘") ---
     (
         "데이터 분석가",
-        ["데이터분석가이드", "지식검색"],
+        ["데이터분석가이드", "데이터시각화가이드", "지식검색"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2},
     ),
     (
@@ -588,10 +673,15 @@ DEV_CREW_TEAM_DESCRIPTION = (
     '재구성"). 대화에서 `@자율 개발 크루`로 멘션하면 이 파이프라인이 '
     "그대로 실행된다(`conversations.run_team_mention_job()` 참고) — "
     "아래 멤버 구성은 그 7단계 전체에 참여하는 13개 역할이다. "
-    "Crew 빌더/팀 Agent 실행 화면에서 수동으로 hierarchical Crew를 "
-    "돌리는 기존 방식도 하위 호환으로 계속 쓸 수 있다(그땐 13명 전원이 "
-    "한 번에 참여하는 단일 Crew가 된다 — 단계별 Gate 검증은 파이프라인 "
-    "경로에만 있다)."
+    "7단계 전부 `single`/`sequential_relay` 모드라(2026-11-07, '구현' "
+    "단계도 전환 완료) `teams.use_graph_engine=1`로 설정하면 신규 "
+    "LangGraph 실행엔진으로도 돌릴 수 있다 — 서버 재시작에도 중단 "
+    "지점부터 정확히 재개된다. Crew 빌더/팀 Agent 실행 화면에서 "
+    "수동으로 Crew를 직접 돌리는 기존 방식도 하위 호환으로 계속 쓸 "
+    "수 있다(그땐 13명 전원이 한 번에 참여하는 단일 Crew가 된다 — "
+    "단계별 Gate 검증은 파이프라인 경로에만 있다). hierarchical "
+    "(매니저 위임) 모드는 신뢰성 문제로 신규 전환이 막혀 있다 — "
+    "이미 그렇게 설정돼 있던 팀만 계속 쓸 수 있다."
 )
 # 사용자 요청(2026-10-28, "파이프라인의 에이전트 구성과 흐름을 참조해
 # 팀 관리의 '#3 자율 개발 크루'의 구성과 업무 흐름을... 재구성") —
@@ -605,9 +695,16 @@ DEV_CREW_TEAM_MEMBER_SPECS: list[tuple[str, str]] = [
     ("요구사항 분석가", "1단계: 요구분석/계획 확정(사람 승인 1회)"),
     ("AA", "2단계: 설계(아키텍처)"),
     ("DA", "2단계: 설계(데이터 모델)"),
+    # 사용자 요청(2026-11-19, "'에이전틱 실행엔진'에 맞춰... 정비해줘.
+    # 정비시 기존에 설정된 hierarchical을 배제, sequential 방식으로
+    # 해도 좋아") — "4단계: 매니저(hierarchical 위임 리드)" 문구는
+    # 2026-11-07에 "구현" 단계가 `parallel_delegated`에서
+    # `sequential_relay`로 전환된 뒤로 더는 사실이 아니다 — 이 역할은
+    # "구현" 단계 참여자 목록에도 더 이상 없고(3단계 "개발 계획 수립"
+    # 에만 참여), 위임을 지휘하는 매니저 개념 자체가 그 단계에 없다.
     (
         "개발 계획 수립가",
-        "3단계: 개발 계획 수립 / 4단계: 매니저(hierarchical 위임 리드)",
+        "3단계: 개발 계획 수립",
     ),
     ("백엔드 개발자", "4단계: 구현(백엔드)"),
     ("프론트엔드 개발자", "4단계: 구현(프론트엔드)"),

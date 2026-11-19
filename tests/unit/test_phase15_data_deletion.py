@@ -733,6 +733,54 @@ def test_reset_to_factory_state_wipes_teams(client_and_conn):
     assert conn.execute("SELECT COUNT(*) AS c FROM teams").fetchone()["c"] == 0
 
 
+def test_reset_to_factory_state_protects_named_team_from_deletion(client_and_conn):
+    """사용자 요청(2026-11-18, "데이터 초기화에 팀 삭제 되지 않도록
+    개선") — "데이터 분석·시각화 전담팀"은 위 2026-11-10 결정("팀은
+    재시드 안 되니 지워도 된다")의 예외다(`data_admin._FACTORY_RESET_
+    PROTECTED_TEAM_NAMES`). 보호 대상이 아닌 다른 팀("테스트 팀")은
+    여전히 그대로 지워져야 한다 — 보호가 이름 하나에만 정확히 scoped
+    됐는지가 이 테스트의 핵심."""
+    _client, conn = client_and_conn
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE username = 'admin1'"
+    ).fetchone()["id"]
+    agent_id = conn.execute("SELECT id FROM agent_pool LIMIT 1").fetchone()["id"]
+    protected_team_id = teams.create_team(conn, admin_id, "데이터 분석·시각화 전담팀")
+    teams.add_team_member(conn, admin_id, protected_team_id, "agent", agent_id)
+    other_team_id = teams.create_team(conn, admin_id, "테스트 팀")
+    teams.add_team_member(conn, admin_id, other_team_id, "agent", agent_id)
+
+    data_admin.reset_to_factory_state(conn)
+
+    protected = conn.execute(
+        "SELECT COUNT(*) AS c FROM teams WHERE id = ?", (protected_team_id,)
+    ).fetchone()["c"]
+    assert protected == 1
+    protected_members = conn.execute(
+        "SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?",
+        (protected_team_id,),
+    ).fetchone()["c"]
+    assert protected_members == 1
+
+    other = conn.execute(
+        "SELECT COUNT(*) AS c FROM teams WHERE id = ?", (other_team_id,)
+    ).fetchone()["c"]
+    assert other == 0
+    other_members = conn.execute(
+        "SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?", (other_team_id,)
+    ).fetchone()["c"]
+    assert other_members == 0
+
+    # 재기동(init_schema)에도 보호 대상 팀은 그대로 남아 있어야 한다.
+    db.init_schema(conn)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM teams WHERE id = ?", (protected_team_id,)
+        ).fetchone()["c"]
+        == 1
+    )
+
+
 def test_reset_to_factory_state_wipes_operational_tables(client_and_conn):
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")

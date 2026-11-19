@@ -377,6 +377,76 @@ def test_gc71_ollama_standard_timeout_is_longer_than_cloud():
     assert mock_post.call_args.kwargs["timeout"] == llm.OLLAMA_LLM_TIMEOUT_SECONDS
 
 
+def test_ollama_400_surfaces_actual_error_detail_from_response_body():
+    """사용자 보고(2026-11-18, "데이터분석가이드 스킬 사용시 '400 Bad
+    Request' 오류") — 실측 재현 결과 스킬과는 무관하게 대화가 길어져
+    Ollama의 컨텍스트 한도를 넘긴 것이 원인이었는데, `raise_for_status()`
+    가 올리는 예외는 "Client error '400 Bad Request' for url '...'"
+    뿐이라 원인을 전혀 알 수 없었다. Ollama가 응답 바디에 실어 보낸
+    `error` 필드를 읽어 예외 메시지에 포함시켜야 한다."""
+    import httpx
+    from unittest.mock import MagicMock
+
+    from hair_platform import llm
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 400
+    fake_resp.json.return_value = {
+        "error": "request (33806 tokens) exceeds the available context "
+        "size (32768 tokens), try increasing it"
+    }
+    fake_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "400", request=MagicMock(), response=fake_resp
+    )
+    with patch("httpx.post", return_value=fake_resp):
+        with pytest.raises(RuntimeError) as exc_info:
+            llm._call_ollama("아무모델", "system", "prompt")
+    message = str(exc_info.value)
+    assert "33806 tokens" in message
+    assert "32768 tokens" in message
+    assert "컨텍스트 한도" in message  # 사용자가 바로 원인을 알 수 있는 한글 안내
+
+
+def test_ollama_non_context_error_surfaces_detail_without_context_hint():
+    import httpx
+    from unittest.mock import MagicMock
+
+    from hair_platform import llm
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 500
+    fake_resp.json.return_value = {"error": "model not found"}
+    fake_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "500", request=MagicMock(), response=fake_resp
+    )
+    with patch("httpx.post", return_value=fake_resp):
+        with pytest.raises(RuntimeError) as exc_info:
+            llm._call_ollama("아무모델", "system", "prompt")
+    message = str(exc_info.value)
+    assert "model not found" in message
+    assert "컨텍스트 한도" not in message  # 문맥과 무관한 오류엔 그 안내를 붙이지 않는다
+
+
+def test_ollama_error_without_json_body_falls_back_to_original_exception():
+    """응답 바디가 JSON이 아니면(혹은 `error` 필드가 없으면) 원래
+    `httpx.HTTPStatusError`를 그대로 올린다 — 조용히 삼키지 않는다."""
+    import httpx
+    from unittest.mock import MagicMock
+
+    from hair_platform import llm
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 502
+    fake_resp.json.side_effect = ValueError("not json")
+    original_error = httpx.HTTPStatusError(
+        "Client error 502", request=MagicMock(), response=fake_resp
+    )
+    fake_resp.raise_for_status.side_effect = original_error
+    with patch("httpx.post", return_value=fake_resp):
+        with pytest.raises(httpx.HTTPStatusError):
+            llm._call_ollama("아무모델", "system", "prompt")
+
+
 def test_gc68_execute_endpoint_rbac_and_status_codes(client_and_conn):
     client, conn = client_and_conn
     cur = conn.execute(
