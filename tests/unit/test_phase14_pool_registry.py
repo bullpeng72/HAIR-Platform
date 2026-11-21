@@ -23,16 +23,16 @@ def test_gc108_init_schema_seeds_default_vectordb_graphdb_pools():
     매핑이 데이터로도 그대로 살아있어야 기존 동작이 안 깨진다.
     `init_schema()`를 두 번 불러도 중복 생성되지 않아야 한다(멱등성).
 
-    **정정(2026-10-06)**: 원래 "vectordb"/"지식검색", "관계조회"/"관계질의" 두
+    **정정(2026-10-06)**: 원래 "vectordb"/"내부지식검색", "조직배정관계조회"/"관계질의" 두
     쌍 다 별칭으로 있었으나, "필요 스킬" 자동완성 중복 리포트로 각각
-    "지식검색"/"관계조회" 하나로 통합했다."""
+    "내부지식검색"/"조직배정관계조회" 하나로 통합했다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     db.init_schema(conn)  # 멱등성 확인
 
     tools = pool_registry.list_tools(conn)
     tool_names = {t["name"] for t in tools}
-    native_names = {"VectorDB 지식검색", "GraphDB 관계조회"}
+    native_names = {"VectorDB 내부지식검색", "GraphDB 조직배정관계조회"}
     assert native_names <= tool_names
     for t in tools:
         if t["name"] in native_names:
@@ -41,7 +41,7 @@ def test_gc108_init_schema_seeds_default_vectordb_graphdb_pools():
 
     skills = pool_registry.list_skills(conn)
     skill_names = {s["name"] for s in skills}
-    vectordb_graphdb_names = {"지식검색", "관계조회"}
+    vectordb_graphdb_names = {"내부지식검색", "조직배정관계조회"}
     assert vectordb_graphdb_names <= skill_names
     assert "vectordb" not in skill_names
     assert "관계질의" not in skill_names
@@ -267,7 +267,7 @@ def test_gc112_link_and_unlink_agent_tool(client_and_conn):
     conn.commit()
 
     tools = {t["name"]: t["id"] for t in pool_registry.list_tools(conn)}
-    vectordb_tool_id = tools["VectorDB 지식검색"]
+    vectordb_tool_id = tools["VectorDB 내부지식검색"]
 
     with pytest.raises(ValueError):
         pool_registry.link_agent_tool(conn, admin_id, 999999, vectordb_tool_id)
@@ -288,7 +288,7 @@ def test_gc112_link_and_unlink_agent_tool(client_and_conn):
 def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     client_and_conn,
 ):
-    """`resolve_pool_tools()`가 (1) skill_pool 매칭(예: "관계조회" 스킬 →
+    """`resolve_pool_tools()`가 (1) skill_pool 매칭(예: "조직배정관계조회" 스킬 →
     GraphDB 도구)과 (2) 명시적 `agent_tool_links`(스킬과 무관하게 추가한
     도구)를 합쳐서 돌려주는지 확인한다. 비활성화된 도구는 매칭돼도
     빠져야 한다."""
@@ -300,19 +300,19 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('관계분석 Agent', '[\"관계조회\"]', 'active')"
+        "('관계분석 Agent', '[\"조직배정관계조회\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
 
     tools_by_name = {t["name"]: t["id"] for t in pool_registry.list_tools(conn)}
-    graphdb_tool_id = tools_by_name["GraphDB 관계조회"]
-    vectordb_tool_id = tools_by_name["VectorDB 지식검색"]
+    graphdb_tool_id = tools_by_name["GraphDB 조직배정관계조회"]
+    vectordb_tool_id = tools_by_name["VectorDB 내부지식검색"]
 
     # graphdb 스킬 매칭만으로 GraphDB 도구가 나온다(명시적 연결 없이도).
     with ExitStack() as stack:
         tools = pool_registry.resolve_pool_tools(
-            conn, stack, ["관계조회"], agent_id=agent_id
+            conn, stack, ["조직배정관계조회"], agent_id=agent_id
         )
     assert [t.name for t in tools] == ["org_relationship_query"]
 
@@ -320,7 +320,7 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     pool_registry.link_agent_tool(conn, admin_id, agent_id, vectordb_tool_id)
     with ExitStack() as stack:
         tools = pool_registry.resolve_pool_tools(
-            conn, stack, ["관계조회"], agent_id=agent_id
+            conn, stack, ["조직배정관계조회"], agent_id=agent_id
         )
     tool_names = {t.name for t in tools}
     assert tool_names == {"org_relationship_query", "knowledge_base_search"}
@@ -329,7 +329,7 @@ def test_gc113_resolve_pool_tools_combines_skill_match_and_explicit_link(
     pool_registry.set_tool_active(conn, admin_id, graphdb_tool_id, False)
     with ExitStack() as stack:
         tools = pool_registry.resolve_pool_tools(
-            conn, stack, ["관계조회"], agent_id=agent_id
+            conn, stack, ["조직배정관계조회"], agent_id=agent_id
         )
     assert [t.name for t in tools] == ["knowledge_base_search"]
 
@@ -481,8 +481,8 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     # "실시간 뉴스 검색(Tavily, 최근 7일)" 1개(= 12 + 1 = 13) + 2026-11-18
     # ("excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프 출력 등이
     # 가능하도록... 전담 팀을 구성해")로 추가된 "차트 생성기" 1개
-    # (= 13 + 1 = 14).
-    assert len(resp.json()) == 14
+    # (= 13 + 1 = 14) + 2026-11-21 "스킬·도구 목록 조회"(스킬생성용) 1개(= 15).
+    assert len(resp.json()) == 15
 
     # 사용자 결정(2026-09-29, "(a) MCP 종류만 admin 전용으로 좁히기") —
     # 매니저는 mcp_remote/mcp_stdio 등록이 이제 403이다. native는
@@ -536,8 +536,8 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 55
-    )  # 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 일반웹검색 1 +
+        len(resp.json()) == 62
+    )  # (+1: 2026-11-20 "프레젠테이션작성") 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 일반웹검색 1 +
     # 실시간웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복
     # 통합으로 제거됨. 2026-10-26 "대화에서 외부 검색이 가능한 방법을
     # 제안해줘"로 실시간웹검색(Tavily)을 추가하고, 같은 날 "도구/skill
@@ -565,9 +565,9 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     # 제공해 주는 Skill 추가")로 "딥리서치"/"AI업계동향브리핑" 2개 추가
     # (= 51 + 2 = 53).
     # + 2026-11-17("주어진 업무를 잘 처리할 수 있는 skill을 생성하는
-    # skill을 추가해줘")로 "스킬생성가이드" 1개 추가(= 53 + 1 = 54).
+    # skill을 추가해줘")로 "스킬생성" 1개 추가(= 53 + 1 = 54).
     # + 2026-11-18("excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프
-    # 출력 등이 가능하도록... 전담 팀을 구성해")로 "데이터시각화가이드"
+    # 출력 등이 가능하도록... 전담 팀을 구성해")로 "데이터시각화"
     # 1개 추가(= 54 + 1 = 55).
 
     resp = client.post(
@@ -608,7 +608,7 @@ def test_gc_show_in_conversation_defaults_true_but_backfill_hides_non_native_too
     db.init_schema(conn)
     skills = {s["name"]: s for s in pool_registry.list_skills(conn)}
 
-    for name in ("지식검색", "관계조회", "실시간웹검색"):
+    for name in ("내부지식검색", "조직배정관계조회", "실시간웹검색"):
         assert skills[name]["show_in_conversation"] is True
 
     hidden = {
@@ -642,7 +642,7 @@ def test_gc_skill_pool_names_conversation_filter(client_and_conn):
     assert resp.status_code == 200
     conv_names = resp.json()
     assert "일반웹검색" not in conv_names  # 대화창 드롭다운은 숨김 스킬을 뺀다.
-    assert "지식검색" in conv_names
+    assert "내부지식검색" in conv_names
     # 2026-11-11 "스킬과 도구를 SW개발업무와 일반업무로 구분하고 필터링"
     # → "개발업무 Skill의 경우 Default로 대화창에 보이지 않도록 설정
     # 하고, 필요시 노출하도록" — tdd-ai-workflow-checklist는
@@ -699,7 +699,7 @@ def test_gc115_run_crew_resolves_tools_from_data_driven_skill_pool_not_hardcoded
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('관계분석 Agent', '[\"관계조회\"]', 'active')"
+        "('관계분석 Agent', '[\"조직배정관계조회\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()

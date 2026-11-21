@@ -1,4 +1,4 @@
-"""VectorDB 기반 지식검색 Agent의 임베딩 저장/검색 — 사용자 요청
+"""VectorDB 기반 내부지식검색 Agent의 임베딩 저장/검색 — 사용자 요청
 (2026-09-26, 3차).
 
 별도 벡터DB 서버(Pinecone·Chroma 서버 모드 등)를 두지 않고, 이미 있는
@@ -14,7 +14,7 @@ SQLite(`knowledge_chunks`)에 임베딩을 JSON으로 저장하고 검색은 애
 `@멘션`에서 "Error code: 401 - ... Missing credentials"로 크래시)** —
 `embed_text()`가 `provider` 생략 시 무조건 `"openai"`로 하드코딩돼
 있었다. 이 Agent의 LLM provider는 `ollama`(OPENAI_API_KEY 없음)인데,
-skill_tags에 "지식검색"가 있어 `agent_runtime.retrieve_context()`가 매
+skill_tags에 "내부지식검색"가 있어 `agent_runtime.retrieve_context()`가 매
 실행마다 `vectorstore.search()`(→`embed_text()`)를 호출했고, OpenAI
 키가 없는 이 환경에서는 Agent 자신의 provider와 무관하게 항상 즉시
 크래시했다(네트워크 호출 전, 클라이언트 생성 단계에서 실패해 0.2초
@@ -245,16 +245,32 @@ _MAX_EMBED_CHARS_BY_MODEL: dict[str, int] = {
 _DEFAULT_MAX_EMBED_CHARS = 350
 
 
+# 토큰 → 글자 보수 환산 비율 — 위 표의 실측 기준(512토큰→350자 ≈ 0.68,
+# 8192토큰→6000자 ≈ 0.73) 중 더 보수적인 쪽.
+_EMBED_CHARS_PER_TOKEN = 0.68
+_MIN_EMBED_CHARS = 100
+
+
 def _truncate_for_embedding(text: str, model: str) -> str:
-    limit = _MAX_EMBED_CHARS_BY_MODEL.get(model, _DEFAULT_MAX_EMBED_CHARS)
+    limit = max_embed_chars(model)
     return text[-limit:] if len(text) > limit else text
 
 
 def max_embed_chars(model: str) -> int:
     """`documents.py`가 업로드 파일을 모델 한도에 맞는 청크로 쪼갤 때 쓰는
-    글자수 한도 — `_truncate_for_embedding()`과 같은 표를 그대로 노출만
-    한다. 색인 시점에 조용히 잘리는 대신(`index_text()`가 그대로 하듯),
-    청크를 미리 이 한도 이내로 나눠서 내용이 안 버려지게 한다."""
+    글자수 한도. 색인 시점에 조용히 잘리는 대신(`index_text()`가 그대로 하듯),
+    청크를 미리 이 한도 이내로 나눠서 내용이 안 버려지게 한다.
+
+    하드코딩 점검 3번(2026-11-21) — admin이 모델 레지스트리에 그 임베딩 모델의
+    "컨텍스트 한도(토큰)"를 등록했으면 거기서 계산한다(우선). 위 표는 등록값이
+    없을 때의 폴백이고, 표에도 없는 모델은 가장 짧은 쪽(350자)으로 가정한다 —
+    예전엔 표에 없는 긴 문맥 모델(예: bge-m3, 8192토큰)도 350자로 잘려 검색 품질이
+    이유도 모른 채 떨어졌다."""
+    from hair_platform import model_options
+
+    registered = model_options.context_window_for(model)
+    if registered:
+        return max(_MIN_EMBED_CHARS, int(registered * _EMBED_CHARS_PER_TOKEN))
     return _MAX_EMBED_CHARS_BY_MODEL.get(model, _DEFAULT_MAX_EMBED_CHARS)
 
 
@@ -398,6 +414,8 @@ def search(
                 "id": row["id"],
                 "text": row["text"],
                 "source_agent_id": row["source_agent_id"],
+                "source_document_id": row["source_document_id"],
+                "created_at": row["created_at"],
                 "score": cosine_score,
                 "_blended_score": blended_score,
             }
@@ -407,6 +425,72 @@ def search(
     for item in top:
         del item["_blended_score"]
     return top
+
+
+# 사용자 요청(2026-11-20, "내부지식검색 스킬이 ... 유사한 답을 내주도록,
+# 또한 출처를 포함하도록 개선해줘") — 예전엔 청크 본문 뒤에 `[청크#번호]`
+# 만 붙여, 모델이 출처를 밝히더라도 "청크#8" 같은 내부 ID만 남아 사람이
+# 원문을 찾아갈 수 없었고, 인용 형식에 대한 지시도 없어 출처 표기가
+# 빠지기 일쑤였다. 청크마다 사람이 읽을 수 있는 출처명(지식 베이스 문서
+# 제목 / 산출물을 만든 Agent)과 색인일을 붙이고, 답변 형식(문장별 인용 +
+# 마지막 "출처" 절 + 근거 없는 내용 추측 금지)을 명시한다.
+_KNOWLEDGE_CITATION_GUIDE = (
+    "[지식베이스 답변 규칙]\n"
+    "1. 아래 검색 결과에 있는 내용만 근거로 답하고, 결과에 없는 내용은 "
+    "추측하지 말고 '지식베이스에 해당 내용이 없습니다'라고 밝히세요.\n"
+    "2. 정의 → 핵심 원칙 → 세부 내용(필요하면 표) → 한 줄 요약 순서로 "
+    "구조화해 설명하세요.\n"
+    "3. 근거로 쓴 문장·표 행 끝에 [청크#번호]를 붙이세요.\n"
+    "4. 답변 마지막에 '## 출처' 절을 두고, 실제로 인용한 청크만 "
+    "'- [청크#번호] 출처명 (색인일)' 형식으로 나열하세요."
+)
+
+
+def _knowledge_source_label(conn: sqlite3.Connection, hit: dict) -> str:
+    if hit.get("source_document_id"):
+        row = conn.execute(
+            "SELECT d.filename, ks.source_label, ks.decided_at "
+            "FROM documents d LEFT JOIN knowledge_submissions ks ON ks.id = d.submission_id "
+            "WHERE d.id = ?",
+            (hit["source_document_id"],),
+        ).fetchone()
+        if row is not None and row["source_label"]:
+            # 제출 → admin 결재로 등록된 지식(2026-11-20) — 원 출처와 승인일까지.
+            approved_on = (row["decided_at"] or "")[:10] or "승인일 미상"
+            return f"지식 '{row['filename']}' — {row['source_label']}, {approved_on} 승인"
+        if row is not None:
+            return f"지식 베이스 문서 '{row['filename']}'"
+    if hit.get("source_agent_id"):
+        row = conn.execute(
+            "SELECT code, name, role_name FROM agent_pool WHERE id = ?",
+            (hit["source_agent_id"],),
+        ).fetchone()
+        if row is not None:
+            who = row["name"] or row["role_name"]
+            return f"Agent '{who}'({row['code'] or '-'}) 산출물"
+    # 본문 첫 마크다운 제목을 출처명으로 쓴다(대화 메시지를 2026-11-20
+    # 이전 방식으로 색인해 출처 메타데이터가 없는 청크 — 예: "# Human-AI
+    # Agent 협업: 기술·시장·솔루션·방법론 조사").
+    for line in (hit.get("text") or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            return f"'{stripped.lstrip('#').strip()}'"
+    return "직접 색인된 지식"
+
+
+def format_hits_with_sources(conn: sqlite3.Connection, hits: list[dict]) -> str:
+    blocks = []
+    for h in hits:
+        indexed_on = (h.get("created_at") or "")[:10] or "날짜 미상"
+        blocks.append(
+            f"### [청크#{h['id']}] 출처: {_knowledge_source_label(conn, h)} "
+            f"(색인일 {indexed_on})\n{h['text']}"
+        )
+    return (
+        _KNOWLEDGE_CITATION_GUIDE
+        + "\n\n지식베이스 검색 결과:\n\n"
+        + "\n\n".join(blocks)
+    )
 
 
 def as_crewai_tool(
@@ -434,7 +518,7 @@ def as_crewai_tool(
     # 한글만으로 된 이름("지식 베이스 검색")은 이 과정에서 완전히 빈
     # 문자열이 돼 `validate_function_name()`이 즉시 예외를 던진다 — Tool
     # Pool/감사로그에 보이는 한글 이름(`tool_pool.name` = "VectorDB
-    # 지식검색")은 건드리지 않고, LLM에 실제로 전달되는 함수명만 ASCII로
+    # 내부지식검색")은 건드리지 않고, LLM에 실제로 전달되는 함수명만 ASCII로
     # 바꾼다(설명은 그대로 한글 docstring에 남겨 LLM이 용도를 이해하게 함).
     @tool("knowledge_base_search")
     def search_knowledge_base(query: str) -> str:
@@ -443,7 +527,7 @@ def as_crewai_tool(
         hits = search(conn, query, top_k=top_k, min_score=min_score)
         if not hits:
             return "관련된 과거 산출물을 찾지 못했습니다."
-        return "\n".join(f"- {h['text']}" for h in hits)
+        return format_hits_with_sources(conn, hits)
 
     return search_knowledge_base
 

@@ -83,7 +83,7 @@ Agent라고 다른 대우를 받지 않는다.
   있다. Agent가 스스로 초안을 원 요구사항과 대조해 검토·수정하는
   "자가검토" 옵션도 있다. 성공한 조합은 팀이나 파이프라인 단계로
   저장(승격)할 수 있다.
-- 과거 산출물 검색(지식검색)·조직 관계 질의(관계조회)·실시간 웹
+- 과거 산출물 검색(내부지식검색)·조직 관계 질의(조직배정관계조회)·실시간 웹
   검색(Tavily)이 Agent가 필요하면 스스로 판단해 호출하는 도구로
   이미 연결돼 있고, MCP로 외부 도구를 추가 연결할 수도 있다.
 
@@ -102,7 +102,7 @@ Agent라고 다른 대우를 받지 않는다.
 - "지식 베이스" 탭(admin/manager)에서 로컬 파일(.md/.pdf/.html/.csv/
   .xlsx/.docx/.pptx)을 올리거나 텍스트를 직접 입력하면 영구적으로
   색인된다 — 색인되면
-  "지식검색" 스킬을 가진 모든 Agent가 대화창·CrewAI 실행 양쪽에서
+  "내부지식검색" 스킬을 가진 모든 Agent가 대화창·CrewAI 실행 양쪽에서
   찾아낸다.
 - 대화창·협업 워크스페이스에서 올리는 참고자료는 **그 1회만 쓰는
   휘발성 첨부**다 — 영구 보관하려면 지식 베이스에 올려야 한다.
@@ -295,7 +295,7 @@ tier로 분류해 모델을 추천한다(Web UI "모델 레지스트리"/"⚡ �
   2000초/Ollama 5400초). 대화창에서 실시간 응답을 기다리는 용도라면
   7B~14B급으로, 그보다 큰 모델은 파이프라인처럼 비동기로 도는
   배치성 작업에 쓰는 걸 권장한다.
-- **임베딩(지식검색/VectorDB) 모델**: 코드 기본값은 `mxbai-embed-large:latest`
+- **임베딩(내부지식검색/VectorDB) 모델**: 코드 기본값은 `mxbai-embed-large:latest`
   인데, 이는 "이미 받아져 있던 모델"이라서 고른 값일 뿐 성능상 최선은
   아니다 — 컨텍스트 한도가 **512토큰뿐**이라 조금만 긴 문서도 많이
   잘려나간다. `nomic-embed-text`(8192토큰, 16배 더 넓음)를 대신 받아서
@@ -428,8 +428,8 @@ src/hair_platform/
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
   crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임 + 다이어그램 + 자가검토)
   crew_history.py    # Crew 실행 이력(crew_runs) — 팀/즉석 실행의 진행상태·협업다이어그램·토큰사용량 영구 저장
-  vectorstore.py     # 지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
-  graphquery.py      # 관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
+  vectorstore.py     # 내부지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
+  graphquery.py      # 조직배정관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
   websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(Crew 전용). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)
   documents.py       # 외부 자료(.md/.txt/.csv/.html/.pdf/.xlsx/.docx/.pptx) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
   pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화 + 개발업무/일반업무 category 분류, CrewAI Tool 조립

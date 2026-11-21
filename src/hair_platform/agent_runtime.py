@@ -5,10 +5,10 @@
 배치된 Agent에게 구체적인 업무를 맡기고 결과를 받는 경로다. 이게 있어야
 "생성만 되고 일은 안 하는 레코드"가 아니라 실제로 호출해 쓸 수 있는 Agent가 된다.
 
-사용자 요청(2026-09-26, 3차) — `skill_tags`에 "지식검색"
-또는 "관계조회"가 있으면 LLM을 부르기 전에 각각 `vectorstore.search()`(임베딩
+사용자 요청(2026-09-26, 3차) — `skill_tags`에 "내부지식검색"
+또는 "조직배정관계조회"가 있으면 LLM을 부르기 전에 각각 `vectorstore.search()`(임베딩
 검색, 추가 비용 발생)·`graphquery.context_for_prompt()`(SQL 조회, 비용 없음)로
-검색 결과를 프롬프트에 덧붙인다(RAG) — 이게 "지식검색 Agent"·"관계분석
+검색 결과를 프롬프트에 덧붙인다(RAG) — 이게 "내부지식검색 Agent"·"관계분석
 Agent"의 실제 동작이다. 관계분석 쪽은 경계를 지키기 위해 `graphquery.py`
 자체가 성과 데이터를 절대 SELECT하지 않는다.
 
@@ -17,7 +17,7 @@ API(가능한 무료)를... 추가해줘")로 "외부검색" skill_tags도
 같은 방식으로 지원했다 — `websearch.context_for_prompt()`(Wikipedia
 검색, API 키 불필요·무료)로 VectorDB/GraphDB가 못 다루는 "조직 밖
 일반 지식"을 보강했다. ("websearch"/"vectordb"/"관계질의"는 각각
-"외부검색"/"지식검색"/"관계조회"와 완전히 같은 뜻의 별칭이었으나 자동완성
+"외부검색"/"내부지식검색"/"조직배정관계조회"와 완전히 같은 뜻의 별칭이었으나 자동완성
 중복 리포트로 2026-10-06에 한쪽으로 통합됨.) **이후(2026-10-26, "도구/
 skill에서 동작하지 않는 검색은 삭제해줘")** Wikimedia가 이 배포 환경의
 IP를 지속 차단해 "외부검색"은 시드에서 빠졌고, 같은 역할을 "실시간
@@ -37,20 +37,24 @@ from hair_platform import (
     graphquery,
     id_scheme,
     llm,
+    pool_catalog,
     pool_registry,
     tool_calling,
     vectorstore,
     websearch,
 )
 
-VECTORDB_SKILL_TAGS = {"지식검색"}
-GRAPHDB_SKILL_TAGS = {"관계조회"}
+VECTORDB_SKILL_TAGS = {"내부지식검색"}
+GRAPHDB_SKILL_TAGS = {"조직배정관계조회"}
 
 
 def augment_with_retrieval(
-    conn: sqlite3.Connection, skills: list[str], prompt: str
+    conn: sqlite3.Connection,
+    skills: list[str],
+    prompt: str,
+    query: str | None = None,
 ) -> tuple[str, str | None]:
-    """skill_tags로 지식검색(VectorDB)/관계분석(GraphDB) Agent를 판별해
+    """skill_tags로 내부지식검색(VectorDB)/관계분석(GraphDB) Agent를 판별해
     검색 결과를 프롬프트에 덧붙인다. 해당 없으면 원본 그대로.
 
     **정정(2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록
@@ -66,7 +70,7 @@ def augment_with_retrieval(
     Tool 방식으로 대체했다.
 
     **반환값 확장(2026-09-29, Tool/Skill 활용 시나리오 라이브 실행에서
-    발견한 갭)**: 실제로 지식검색 Agent를 끝까지 돌려보니, 무엇이
+    발견한 갭)**: 실제로 내부지식검색 Agent를 끝까지 돌려보니, 무엇이
     검색·주입됐는지 사후에 확인할 방법이 어디에도 없었다 — 결재자가
     "이 답변이 실제 회사 규정을 근거로 했는지, 그냥 지어낸 건지"를
     검증할 수가 없는 데이터 흐름 공백이었다. `(augmented_prompt,
@@ -85,7 +89,11 @@ def augment_with_retrieval(
     동작하는 지점은 `crew_runtime.py`(진짜 Tool 호출 루프가 있는 경로) —
     `'always'`만 Task description에 강제로 끼워 넣고, `'tool'`은 여전히
     Agent 판단에 맡긴다."""
-    context = retrieve_context(conn, skills, prompt)
+    # `query`(2026-11-20) — 검색어를 프롬프트 전체와 분리한다. 대화 멘션은
+    # 프롬프트가 "대화록 + 첨부 + 지시문"으로 끝나는데, 임베딩 모델 한도
+    # (mxbai 350자)로 검색어의 **마지막 350자**만 남아 실제로는 지시문
+    # 꼬리로 검색되고 있었다(실측 — 질문의 "HITL"이 검색어에 없었음).
+    context = retrieve_context(conn, skills, query or prompt)
     if context is None:
         return prompt, None
     return f"{context}\n\n요청: {prompt}", context
@@ -108,9 +116,9 @@ def retrieve_context(
     ...return` 순서의 if-체인이라, native 스킬을 2개 이상 가진 Agent는
     먼저 매칭되는 **하나만** 쓰고 나머지는 전혀 조회하지 않았다
     (vectordb 결과가 있든 없든 동일 — 매칭되면 그 분기에서 무조건
-    return). 실제로 skill_tags에 "지식검색"+"외부검색"을 같이 가진 "외부
+    return). 실제로 skill_tags에 "내부지식검색"+"외부검색"을 같이 가진 "외부
     자료 조사가" Agent가 대화창 `@멘션`(도구 호출 루프가 없는
-    `execute_agent()` 경로)에서 "지식검색"에 가려 Wikipedia 검색이 한 번도
+    `execute_agent()` 경로)에서 "내부지식검색"에 가려 Wikipedia 검색이 한 번도
     안 불리는 걸 재현 확인했다. CrewAI 실제 Tool 루프(`resolve_pool_
     tools()`)는 애초에 매칭되는 도구를 전부 리스트로 붙여 Agent가
     스스로 고르므로 이 문제가 없다 — 이 단발 호출 경로만 if-체인
@@ -151,8 +159,7 @@ def retrieve_context(
         # 없었다(지어낼 수밖에 없는 구조). 청크 ID를 같이 노출해 실제
         # 인용이 가능하게 한다.
         sections.append(
-            "참고할 과거 산출물(각 항목 뒤 [청크#번호]가 출처 식별자):\n"
-            + "\n".join(f"- {h['text']} [청크#{h['id']}]" for h in hits)
+            vectorstore.format_hits_with_sources(conn, hits)
             if hits
             else "VectorDB에서 관련된 과거 산출물을 찾지 못했습니다."
         )
@@ -172,41 +179,18 @@ def retrieve_context(
         # 이 경로(대화 @멘션·스킬 드롭다운)에서도 "최근 N일 뉴스" 스킬이
         # 동작하도록 같은 방식으로 정적 주입한다.
         sections.append(websearch.tavily_news_context_for_prompt(query))
+    if pool_catalog.NATIVE_ID in native_ids:
+        # 스킬·도구 목록 조회(2026-11-21) — "스킬생성"이 중복 확인·도구 참조에 쓴다.
+        sections.append(pool_catalog.context_for_prompt(conn, query))
     if not sections:
         return None
     return "\n\n".join(sections)
 
 
-def index_knowledge(
-    conn: sqlite3.Connection,
-    agent_id: int,
-    actor_id: int,
-    text: str | None = None,
-    provider: str | None = None,
-    model: str | None = None,
-) -> int:
-    """이 Agent의 산출물(또는 지정한 text)을 임베딩해 지식검색 Agent가 찾을
-    수 있게 색인한다(비용 발생 — 항상 명시적 호출로만 일어난다)."""
-    agent = conn.execute(
-        "SELECT * FROM agent_pool WHERE id = ?", (agent_id,)
-    ).fetchone()
-    if agent is None:
-        raise ValueError("agent_not_found")
-    text_to_index = text or agent["last_output"]
-    if not text_to_index:
-        raise ValueError("no_text_to_index")
-
-    chunk_id = vectorstore.index_text(conn, agent_id, text_to_index, provider, model)
-    audit.record(
-        conn,
-        actor_id,
-        "agent_knowledge_indexed",
-        "knowledge_chunks",
-        chunk_id,
-        after={"source_agent_id": agent_id},
-    )
-    conn.commit()
-    return chunk_id
+# `index_knowledge()`(Agent `last_output` 즉시 색인)는 2026-11-20 지식베이스
+# 등록 체계 개편으로 삭제했다 — `knowledge_submissions.py` 참고. 과거에
+# 이 경로로 들어간 청크의 `knowledge_chunks.source_agent_id`는 하위 호환을
+# 위해 컬럼·조회 코드를 그대로 둔다.
 
 
 # 사용자 보고(2026-10-28)로 추가 — `llm.py`의 클라우드 기본 타임아웃(900초)
@@ -266,6 +250,7 @@ def execute_agent(
     model: str | None = None,
     *,
     retrieval_sink: dict | None = None,
+    retrieval_query: str | None = None,
 ) -> str:
     """온보딩된(status='active') Agent에게 프롬프트를 넘겨 실제로 일을 시킨다.
 
@@ -299,7 +284,25 @@ def execute_agent(
     resolved_provider, resolved_model = llm.resolve_provider_and_model(
         effective_provider, effective_model
     )
-    system = llm.system_prompt_for_role(conn, agent["role_name"], skills)
+    # 스킬 활용·품질 개선(2026-11-21, `skill_prompting.py`) — 조회 결과와 실제로
+    # 호출 가능한 도구를 먼저 정한 뒤, 그 조건에 맞는 시스템 프롬프트를 만든다(예전엔
+    # 도구가 붙어 있어도 "도구를 호출할 수 없다"는 안내가 항상 들어갔다). 요청과
+    # 관련 있는 스킬을 앞에 두려고 요청 문장도 넘긴다.
+    augmented_prompt, retrieved_context = augment_with_retrieval(
+        conn, skills, prompt, retrieval_query
+    )
+    callable_tools = tool_calling.resolve_callable_tools(
+        conn, skills, agent_id=agent_id
+    )
+    request_text = retrieval_query or prompt
+    system = llm.system_prompt_for_role(
+        conn,
+        agent["role_name"],
+        skills,
+        request=request_text,
+        callable_tools=callable_tools,
+        has_retrieval=retrieved_context is not None,
+    )
     # 사용자 요청(2026-10-26, "프레젠테이션 자료 작성자의 최종 결과를
     # HTML 형태로 생성되도록 개선해줘") — `agent_pool.expected_output`
     # (`PATCH .../persona`로 admin이 저장한 Agent별 기본 산출물 형식
@@ -309,9 +312,16 @@ def execute_agent(
     # admin이 persona 화면에서 "HTML로 작성" 같은 지시를 저장해도
     # @멘션으로 부르면 그 지시가 전혀 안 먹혀서 Crew 실행과 결과 형식이
     # 달라지는 비일관이 있었다. 설정돼 있으면 여기서도 똑같이 반영한다.
+    # 역할/인격(2026-11-21, "직접 호출 경로에서 적용되도록 개선") — 기대
+    # 산출물과 같은 이유로 admin이 직접 적은 목표·배경도 넣는다. 비어 있으면
+    # 넣지 않는다(자동 생성 값은 역할명·스킬로 만든 것이라 위 시스템
+    # 프롬프트에 이미 들어 있다).
+    if agent["goal"]:
+        system = system + f"\n\n목표: {agent['goal']}"
+    if agent["backstory"]:
+        system = system + f"\n\n배경: {agent['backstory']}"
     if agent["expected_output"]:
         system = system + f"\n\n기대 산출물 형식: {agent['expected_output']}"
-    augmented_prompt, retrieved_context = augment_with_retrieval(conn, skills, prompt)
     if retrieval_sink is not None:
         retrieval_sink["retrieved_context"] = retrieved_context
         # 사용자 요청(2026-10-13, "문서 내용에서 얻을 인사이트" → 재현
@@ -343,6 +353,19 @@ def execute_agent(
         )
     else:
         timeout_seconds = None
+    # 파인튜닝을 직접 호출에도 적용(2026-11-21) — 뜻이 같은 값만 옮긴다:
+    # temperature → 생성 옵션, max_execution_time → 호출 시간 제한,
+    # max_iter → 도구 호출 반복 상한. 나머지(max_rpm·max_retry_limit·
+    # 코드 실행·컨텍스트 자동 축소·max_reasoning_attempts)는 CrewAI 실행 루프
+    # 전용이라 Crew 실행에서만 쓰인다. 값이 없으면 호출 인자를 넘기지 않는다.
+    llm_extra: dict = {}
+    if tuning.get("temperature") is not None:
+        llm_extra["temperature"] = tuning["temperature"]
+    if tuning.get("max_execution_time"):
+        timeout_seconds = float(tuning["max_execution_time"])
+    tool_extra: dict = dict(llm_extra)
+    if tuning.get("max_iter"):
+        tool_extra["max_iterations"] = int(tuning["max_iter"])
     # Tool 호출 제약 해소(2026-11-18, 개선축 A, 사용자 요청 "...Skill,
     # tool 사용 제약을 없애고... 엔터프라이즈 환경 적용이 가능한 수준의
     # 확실한 개선 방안을 도출해줘", 적용 범위 "Ollama 포함 전체 provider
@@ -351,9 +374,6 @@ def execute_agent(
     # 함수 호출로 native/custom_python 도구를 실제로 호출할 수 있게
     # 한다(`agent_id`를 넘겨 `agent_tool_links`로 명시 연결된 도구까지
     # 포함 — skill 기반 매칭만 보는 "기본 AI"보다 범위가 넓다).
-    callable_tools = tool_calling.resolve_callable_tools(
-        conn, skills, agent_id=agent_id
-    )
     if callable_tools:
         output = llm.call_llm_with_tools(
             resolved_provider,
@@ -362,6 +382,7 @@ def execute_agent(
             augmented_prompt,
             callable_tools,
             timeout_seconds=timeout_seconds,
+            **tool_extra,
         )
     else:
         output = llm.call_llm(
@@ -370,6 +391,7 @@ def execute_agent(
             system,
             augmented_prompt,
             timeout_seconds=timeout_seconds,
+            **llm_extra,
         )
     # 중간에 끊긴 것으로 보이면 이어서 완성시킨다(`_looks_truncated()`
     # 모듈 docstring 참고) — 최대 `_MAX_CONTINUATION_ATTEMPTS`번까지만
@@ -388,8 +410,27 @@ def execute_agent(
             "완성하세요(펜스나 닫는 태그가 빠졌다면 그것도 포함해서 "
             f"마무리하세요):\n\n...(생략)...\n{output[-1500:]}",
             timeout_seconds=timeout_seconds,
+            **llm_extra,
         )
         output = output + continuation
+
+    # 자체 검토(2026-11-21, 파인튜닝 "품질 검토(자체 개선)" 켜짐) — 초안을 요청·스킬
+    # 기준·결과 품질 기준으로 한 번 점검해 고친 최종본으로 바꾼다. 실패하거나 결과가
+    # 이상하면(비었음·크게 짧아짐·끊김) 초안을 그대로 쓴다 — 검토가 응답을 막지 않는다.
+    if tuning.get("self_review") is True and output.strip():
+        output, review_status = _self_review(
+            conn,
+            agent,
+            skills,
+            request_text,
+            output,
+            resolved_provider,
+            resolved_model,
+            timeout_seconds,
+            llm_extra,
+        )
+        if retrieval_sink is not None:
+            retrieval_sink["self_review"] = review_status
 
     conn.execute(
         "UPDATE agent_pool SET last_output = ?, llm_provider = ?, llm_model = ? WHERE id = ?",
@@ -408,6 +449,43 @@ def execute_agent(
     return output
 
 
+def _self_review(
+    conn: sqlite3.Connection,
+    agent: sqlite3.Row,
+    skills: list[str],
+    request: str,
+    draft: str,
+    provider: str,
+    model: str,
+    timeout_seconds: float | None,
+    llm_extra: dict,
+) -> tuple[str, str]:
+    """(최종 출력, 상태) — 상태: applied(검토본 채택) / rejected(검토본이 기준
+    미달이라 초안 유지) / failed(호출 실패, 초안 유지)."""
+    from hair_platform import skill_prompting
+
+    knowledge = skill_prompting.knowledge_block(conn, skills, request)
+    if agent["expected_output"]:
+        knowledge += f"\n기대 산출물 형식: {agent['expected_output']}"
+    system = skill_prompting.self_review_system(
+        agent["role_name"], knowledge or "(스킬 지침 없음)"
+    )
+    try:
+        revised = llm.call_llm(
+            provider,
+            model,
+            system,
+            skill_prompting.self_review_prompt(request, draft),
+            timeout_seconds=timeout_seconds,
+            **llm_extra,
+        )
+    except Exception:  # noqa: BLE001 — 검토 실패가 응답을 막으면 안 된다
+        return draft, "failed"
+    if skill_prompting.accept_review(draft, revised) and not _looks_truncated(revised):
+        return revised.strip(), "applied"
+    return draft, "rejected"
+
+
 def set_model_config(
     conn: sqlite3.Connection,
     agent_id: int,
@@ -419,7 +497,8 @@ def set_model_config(
     """Agent별 기본 LLM provider/model(+ MCP 서버 설정)을 저장한다(비용
     없음 — 설정만 한다).
 
-    `model`을 안 주면 해당 provider의 기본 모델로 채운다(`llm.DEFAULT_MODELS`).
+    `model`을 안 주면 `llm.resolve_provider_and_model()`이 고른 기본 모델(플랫폼 기본 LLM →
+    모델 레지스트리 활성 모델 → 레지스트리가 비었을 때만 `llm.DEFAULT_MODELS`)로 채운다.
     `mcp_servers`는 `None`이면 기존 설정을 그대로 두고(부분 갱신), 리스트를
     주면(빈 리스트 포함) 그 값으로 덮어쓴다(2026-09-27).
     """

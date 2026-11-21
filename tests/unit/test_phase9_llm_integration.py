@@ -447,6 +447,38 @@ def test_ollama_error_without_json_body_falls_back_to_original_exception():
             llm._call_ollama("아무모델", "system", "prompt")
 
 
+def test_ollama_with_tools_400_also_surfaces_actual_error_detail():
+    """회귀 가드(2026-11-19, 사용자 보고 — 같은 바닥 메시지 재발) —
+    `_call_ollama_with_tools()`(개선축 A, Tool 호출 루프)는 자기만의
+    `resp.raise_for_status()`를 따로 호출하면서 `_call_ollama()`가
+    이미 받은 에러 상세 보강을 안 가져가, 도구를 쓰는 스킬에서 같은
+    컨텍스트 초과 상황이 다시 맨 "Client error '400 Bad Request'"로만
+    떴다. 두 함수가 같은 보강(`_raise_ollama_error_with_detail()`)을
+    공유해야 한다."""
+    import httpx
+    from unittest.mock import MagicMock
+
+    from hair_platform import llm
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 400
+    fake_resp.json.return_value = {
+        "error": "request (33806 tokens) exceeds the available context "
+        "size (32768 tokens), try increasing it"
+    }
+    fake_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "400", request=MagicMock(), response=fake_resp
+    )
+    with patch("httpx.post", return_value=fake_resp):
+        with pytest.raises(RuntimeError) as exc_info:
+            llm._call_ollama_with_tools(
+                "아무모델", "system", "prompt", [], None, 5
+            )
+    message = str(exc_info.value)
+    assert "33806 tokens" in message
+    assert "컨텍스트 한도" in message
+
+
 def test_gc68_execute_endpoint_rbac_and_status_codes(client_and_conn):
     client, conn = client_and_conn
     cur = conn.execute(

@@ -1,4 +1,4 @@
-"""Phase 76 — "차트 생성기" Tool + "데이터시각화가이드" Skill + 전담 팀
+"""Phase 76 — "차트 생성기" Tool + "데이터시각화" Skill + 전담 팀
 구성(사용자 요청, 2026-11-18, "excel 파일 등 수치가 담긴 데이터를
 입력받아, 실제 계산을 하고 그래프 출력 등이 가능하도록... 전담 팀을
 구성해 대화 및 업무 요청에서 활용할 수 있게 개선해줘").
@@ -7,7 +7,7 @@
 이미지 렌더링 경로도 없는 대신, `webui.py`가 이미 마크다운 ```chart
 코드펜스를 Chart.js config JSON으로 파싱해 `<canvas>`에 그리는 메커니즘을
 갖고 있다 — 이 Tool은 그 메커니즘이 바로 소비할 수 있는 JSON 문자열만
-돌려주면 된다. 기존 '데이터분석가이드'(실제 계산)와 짝을 이뤄 '데이터
+돌려주면 된다. 기존 '데이터분석'(실제 계산)와 짝을 이뤄 '데이터
 분석가' Agent가 계산+시각화를 한 Agent 안에서 모두 수행할 수 있게 한다.
 
 팀(teams/team_members)은 `reference_pipeline_seeds.seed()`가 의도적으로
@@ -85,7 +85,7 @@ def test_chart_generator_rejects_unsupported_chart_type():
         json.dumps({"chart_type": "scatter", "labels": ["a"], "series": {"x": [1]}}),
         config["timeout_seconds"],
     )
-    assert "chart_type" in out
+    assert "type은" in out  # 2026-11-21: "type"·"chart_type" 둘 다 받으므로 안내도 "type"
 
 
 def test_chart_generator_rejects_series_length_mismatch():
@@ -127,7 +127,7 @@ def test_chart_generator_rejects_invalid_json():
     assert "JSON" in out
 
 
-# ---------- 데이터시각화가이드(Skill) ----------
+# ---------- 데이터시각화(Skill) ----------
 
 
 def test_data_visualization_guide_skill_is_tool_mode_with_resolvable_tool():
@@ -135,7 +135,7 @@ def test_data_visualization_guide_skill_is_tool_mode_with_resolvable_tool():
     db.init_schema(conn)
     row = conn.execute(
         "SELECT augmentation_mode, default_tool_pool_ids, output_format "
-        "FROM skill_pool WHERE name = '데이터시각화가이드'"
+        "FROM skill_pool WHERE name = '데이터시각화'"
     ).fetchone()
     assert row["augmentation_mode"] == "tool"
     tool_ids = json.loads(row["default_tool_pool_ids"])
@@ -158,18 +158,18 @@ def test_data_analyst_agent_has_both_calculation_and_visualization_skills():
         "SELECT skill_tags FROM agent_pool WHERE role_name = '데이터 분석가'"
     ).fetchone()
     tags = json.loads(row["skill_tags"])
-    assert "데이터분석가이드" in tags
-    assert "데이터시각화가이드" in tags
+    assert "데이터분석" in tags
+    assert "데이터시각화" in tags
 
 
 def test_backfill_adds_visualization_skill_to_preexisting_agent_without_duplicating():
-    """회귀 가드 — 이미 '데이터 분석가'가 있고 '데이터시각화가이드'가
+    """회귀 가드 — 이미 '데이터 분석가'가 있고 '데이터시각화'가
     없는(이번 기능 이전 상태를 흉내 낸) DB에 `init_schema()`를 다시
     돌리면 멱등하게 추가되고, 또 한 번 더 돌려도 중복되지 않는다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     conn.execute(
-        "UPDATE agent_pool SET skill_tags = '[\"데이터분석가이드\", \"지식검색\"]' "
+        "UPDATE agent_pool SET skill_tags = '[\"데이터분석\", \"내부지식검색\"]' "
         "WHERE role_name = '데이터 분석가'"
     )
     conn.commit()
@@ -178,11 +178,32 @@ def test_backfill_adds_visualization_skill_to_preexisting_agent_without_duplicat
         "SELECT skill_tags FROM agent_pool WHERE role_name = '데이터 분석가'"
     ).fetchone()
     tags = json.loads(row["skill_tags"])
-    assert tags.count("데이터시각화가이드") == 1
+    assert tags.count("데이터시각화") == 1
 
     db.init_schema(conn)  # 한 번 더 — 여전히 중복 없음
     row = conn.execute(
         "SELECT skill_tags FROM agent_pool WHERE role_name = '데이터 분석가'"
     ).fetchone()
     tags = json.loads(row["skill_tags"])
-    assert tags.count("데이터시각화가이드") == 1
+    assert tags.count("데이터시각화") == 1
+
+
+def test_chart_generator_accepts_type_alias_and_null_gaps():
+    """2026-11-21 — 스킬 지침·```chart 간단 형식의 "type" 키와 빈 구간(null)을 받는다
+    (실측: "type"을 넣으면 "chart_type" 오류로 같은 호출을 13번 반복했다)."""
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    config = _chart_tool_config(conn)
+    out = pool_registry._run_custom_python_tool(
+        config["function_source"],
+        json.dumps(
+            {"type": "line", "labels": ["1분기", "2분기", "3분기"],
+             "series": {"실적": [42, 48, 55], "목표": [None, None, 52]}, "unit": "억 원"},
+            ensure_ascii=False,
+        ),
+        config["timeout_seconds"],
+    )
+    chart = json.loads(out)
+    assert chart["type"] == "line"
+    assert chart["data"]["datasets"][1]["data"] == [None, None, 52.0]
+    assert chart["options"]["scales"]["y"]["title"]["text"] == "억 원"

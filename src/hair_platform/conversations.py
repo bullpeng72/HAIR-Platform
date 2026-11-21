@@ -50,16 +50,19 @@ from hair_platform import (
     agent_evaluation,
     agent_runtime,
     audit,
+    context_policy,
     conversation_memory,
     crew_runtime,
     deliverables,
+    knowledge_submissions,
+    language_qa,
     llm,
     pipeline_runtime,
     pool_registry,
+    presentation_deck,
     teams,
     token_budget,
     tool_calling,
-    vectorstore,
 )
 
 _DEFAULT_SYSTEM_PROMPT = (
@@ -1099,7 +1102,7 @@ def _strip_large_code_fences(content: str) -> str:
 
     collapsed = _CODE_FENCE_RE.sub(_replace, content)
 
-    # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성가이드" 스킬로
+    # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성" 스킬로
     # 요청했는데 직전 메시지(프레젠테이션 자료 작성자가 만든 HTML)의
     # 색상표·구조를 그대로 베낀 결과가 나옴) — 실측 확인: 그 직전
     # 메시지는 응답이 중간에 끊겨 닫는 펜스(```)가 없었다. 위
@@ -1131,6 +1134,42 @@ def _strip_large_code_fences(content: str) -> str:
     return collapsed
 
 
+# `_build_transcript()`가 다른 소비처(system 프롬프트 등) 때문에 예산이
+# 0까지 줄어도 최신 사용자 메시지만큼은 항상 담기 위한 바닥 예산.
+_MIN_TRANSCRIPT_TOKENS = 1024
+# 컨텍스트 정책 'recent'(직전 1~2턴) — 현재 질문 + 직전 문답 1.5턴.
+_RECENT_MESSAGE_LIMIT = 4
+
+# 컨텍스트 정책 'none'(현재 질문만)일 때 `_ANTI_ANCHORING_NOTE` 대신 붙이는
+# 지시 — 앵커링할 과거 산출물이 애초에 없고, 코드 생성용 지시("완성된
+# 산출물(코드 전체 등)을 포함하라")가 질의응답을 제작 요청으로 오해하게
+# 만든 실측 사례(2026-11-20, 내부지식검색 "구체적인 작업 요청이 없다" 응답)가
+# 있었다.
+_STANDALONE_QUESTION_NOTE = (
+    "\n\n[중요] 위 질문 하나에 대해 답하세요. 이전 대화는 의도적으로 "
+    "제공하지 않았습니다 — 이전 대화가 없다는 이유로 되묻지 말고, 주어진 "
+    "자료를 근거로 바로 답하세요."
+)
+
+
+def _context_note(policy: dict) -> str:
+    return _STANDALONE_QUESTION_NOTE if policy["history"] == "none" else _ANTI_ANCHORING_NOTE
+
+
+def _transcript_reserve_tokens(latest_human_content: str | None, provider: str) -> int:
+    """첨부자료 메모리 검색(`conversation_memory.retrieve_context_for_
+    query()`)이 예산을 잡을 때 대화록 몫으로 미리 떼어 둘 토큰 수 —
+    최신 사용자 메시지 전체(최소 `_MIN_TRANSCRIPT_TOKENS`)와 고정
+    지시문(`_ANTI_ANCHORING_NOTE`). 메모리를 먼저 채운 뒤 대화록은
+    `_build_transcript(reserved_tokens=...)`로 남은 만큼만 채운다 —
+    둘 다 "입력 예산 전체"를 각자 따로 쓰던 이중 계산(2026-11-20
+    사용자 보고)을 막는다."""
+    return max(
+        _MIN_TRANSCRIPT_TOKENS,
+        token_budget.count_tokens(latest_human_content or "", provider),
+    ) + token_budget.count_tokens(_ANTI_ANCHORING_NOTE, provider)
+
+
 def _build_transcript(
     conn: sqlite3.Connection,
     conversation_id: int,
@@ -1139,10 +1178,17 @@ def _build_transcript(
     provider: str | None = None,
     model: str | None = None,
     reserved_tokens: int = 0,
+    history_mode: str = "full",
 ) -> str:
     """최근 N건 + (있으면) 그 이전 과거의 캐시된 요약을 이어붙인다(멀티턴
     대화 맥락). 모든 응답 경로(기본 AI/Agent 멘션/Team 멘션)가 이 함수
     하나를 공유한다.
+
+    `history_mode`(2026-11-20, 대화 컨텍스트 정책 — `context_policy.py`)
+    — 'full'은 위 기존 동작 그대로, 'recent'는 요약 없이 최근
+    `_RECENT_MESSAGE_LIMIT`건(직전 1~2턴), 'none'은 현재 질문(최신 사람
+    메시지) 하나만. 'recent'/'none'은 요약을 안 쓰므로 요약 생성 LLM
+    호출(`_ensure_context_summary`)도 일어나지 않는다.
 
     `provider`/`model`(사용자 요청, 2026-11-18, "...엔터프라이즈 환경
     적용이 가능한 수준의 확실한 개선 방안을 도출해줘" 개선축 B) — 넘기면
@@ -1154,18 +1200,33 @@ def _build_transcript(
     2026-11-18 사고(첨부파일 하나가 입력 전체를 거의 다 차지해 모델이
     답변을 생성할 토큰 여유가 하나도 안 남아 빈 응답을 낸 것)를 막는
     핵심 안전장치다."""
-    conv = conn.execute(
-        "SELECT llm_provider, llm_model, context_summary, context_summary_through_id "
-        "FROM conversations WHERE id = ?",
-        (conversation_id,),
-    ).fetchone()
-    summary = _ensure_context_summary(conn, conversation_id, conv) if conv else None
-
-    rows = conn.execute(
-        "SELECT author_type, content FROM conversation_messages "
-        "WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
-        (conversation_id, limit),
-    ).fetchall()
+    if history_mode == "none":
+        rows = conn.execute(
+            "SELECT author_type, content FROM conversation_messages "
+            "WHERE conversation_id = ? AND author_type = 'human' "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchall()
+        summary = None
+    elif history_mode == "recent":
+        rows = conn.execute(
+            "SELECT author_type, content FROM conversation_messages "
+            "WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+            (conversation_id, _RECENT_MESSAGE_LIMIT),
+        ).fetchall()
+        summary = None
+    else:
+        conv = conn.execute(
+            "SELECT llm_provider, llm_model, context_summary, context_summary_through_id "
+            "FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        summary = _ensure_context_summary(conn, conversation_id, conv) if conv else None
+        rows = conn.execute(
+            "SELECT author_type, content FROM conversation_messages "
+            "WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+            (conversation_id, limit),
+        ).fetchall()
     lines = [
         ("AI" if row["author_type"] == "agent" else "사용자")
         + ": "
@@ -1179,6 +1240,14 @@ def _build_transcript(
     budget = token_budget.input_budget_tokens(
         conn, provider, model or "", reserved_tokens=reserved_tokens
     )
+    # 버그 수정(2026-11-20, 사용자 보고 — "내부지식검색" 스킬 질의에 "구체적인
+    # 질문이 보이지 않는다"는 답만 옴) — system 프롬프트(내부지식검색 결과 +
+    # 첨부자료 메모리)가 입력 예산을 전부 차지하면 여기 예산이 0이 되고
+    # `fit_lines_to_budget()`이 ""를 돌려줘, 사용자 질문 없이 LLM이
+    # 호출됐다(경고도 없이). 대화록 없이는 모델이 무엇을 할지 알 수
+    # 없으므로, 최소한 최신 메시지가 들어갈 바닥 예산을 항상 보장한다
+    # (`_INPUT_BUDGET_RATIO`가 남겨 둔 출력 여유분 안에서 흡수되는 크기).
+    budget = max(budget, _MIN_TRANSCRIPT_TOKENS)
     return token_budget.fit_lines_to_budget(lines, provider, budget)
 
 
@@ -1188,11 +1257,18 @@ def create_message(
     actor_id: int,
     content: str,
     skill: str | None = None,
+    context_override: str | None = None,
 ) -> dict:
     """사용자 메시지를 저장하고, 어떤 트리거가 필요한지 판정까지만
     한다(실제 LLM 호출은 `app.py`가 `BackgroundTasks`로 스케줄 —
     Phase 3와 같은 2단계 패턴). `skill`이 있으면(사용자 결정 3)
-    명시적 요청이라 `ai_auto_reply` 설정과 무관하게 항상 트리거한다."""
+    명시적 요청이라 `ai_auto_reply` 설정과 무관하게 항상 트리거한다.
+
+    `context_override`(2026-11-20, 대화 컨텍스트 정책) — 'full'/'recent'/
+    'none'이면 이 메시지에 대한 응답에서 스킬 기본값 대신 그 값을 쓴다
+    (`context_policy.finalize()`). None이면 스킬(또는 Agent) 기본값."""
+    if context_override is not None and context_override not in context_policy.HISTORY_MODES:
+        raise ValueError("invalid_context_override")
     conv = get_conversation(conn, conversation_id)
     if conv is None:
         raise ValueError("conversation_not_found")
@@ -1209,8 +1285,8 @@ def create_message(
 
     cur = conn.execute(
         "INSERT INTO conversation_messages (conversation_id, author_type, author_id, "
-        "content, used_skill) VALUES (?, 'human', ?, ?, ?)",
-        (conversation_id, actor_id, content, skill),
+        "content, used_skill, context_override) VALUES (?, 'human', ?, ?, ?, ?)",
+        (conversation_id, actor_id, content, skill, context_override),
     )
     message_id = cur.lastrowid
     assert message_id is not None
@@ -1355,6 +1431,7 @@ def _finish_job_with_message(
     llm_provider: str | None = None,
     llm_model: str | None = None,
     gate_scores: dict | None = None,
+    applied_context_policy: dict | None = None,
 ) -> None:
     # 사용자 요청(2026-11-19, "다음 개선 진행해줘" → conversations.py
     # 통합) — `run_team_mention_job()`의 Crew 경로는 이미 `gate_scores`
@@ -1364,16 +1441,25 @@ def _finish_job_with_message(
     # `NULL`로 기존과 100% 동일.
     cur = conn.execute(
         "INSERT INTO conversation_messages (conversation_id, author_type, author_id, "
-        "content, used_skill, llm_provider, llm_model, gate_scores) "
-        "VALUES (?, 'agent', ?, ?, ?, ?, ?, ?)",
+        "content, used_skill, llm_provider, llm_model, gate_scores, context_policy) "
+        "VALUES (?, 'agent', ?, ?, ?, ?, ?, ?, ?)",
         (
             conversation_id,
             author_id,
-            content,
+            # HAIR 덱(2026-11-20, `presentation_deck.py`) — "프레젠테이션작성"
+            # 스킬 응답이면 디자인 시스템 CSS를 넣은 완전한 HTML 문서로 만든다
+            # (대화 화면이 iframe 슬라이드쇼로 보여 주고, 다운로드해도 혼자
+            # 열린다). 덱이 아니면 그대로.
+            presentation_deck.finalize(content),
             used_skill,
             llm_provider,
             llm_model,
             json.dumps(gate_scores, ensure_ascii=False) if gate_scores else None,
+            # 대화 컨텍스트 정책(2026-11-20) — 이 응답에 실제로 적용한 정책
+            # (화면 배지·감사·재현용). 안 넘기면 NULL(= 기존 동작 'full').
+            json.dumps(applied_context_policy, ensure_ascii=False)
+            if applied_context_policy
+            else None,
         ),
     )
     message_id = cur.lastrowid
@@ -1527,7 +1613,7 @@ def run_agent_mention_job(
     를 confirmed 배정 확인 없이 직접 호출한다(그 Agent 자신의 저장된
     provider/model을 그대로 쓴다)."""
     try:
-        # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성가이드" 스킬
+        # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성" 스킬
         # 요청이 직전 메시지의 프레젠테이션 스타일을 그대로 베낌) 조사
         # 중 발견 — 이 경로(단일 Agent 멘션)도 team_mention과 똑같이
         # `_build_transcript()`가 넘긴 과거 산출물에 앵커링될 위험을
@@ -1546,30 +1632,32 @@ def run_agent_mention_job(
             agent_llm_row["llm_provider"] if agent_llm_row else None,
             agent_llm_row["llm_model"] if agent_llm_row else None,
         )
-        transcript = _build_transcript(
-            conn,
-            conversation_id,
-            provider=budget_provider,
-            model=budget_model,
-            reserved_tokens=token_budget.count_tokens(
-                _ANTI_ANCHORING_NOTE, budget_provider
-            ),
-        )
         # 대화 메모리(2026-11-18, 개선축 C) — "기본 AI"와 같은 원칙, 이
         # 경로엔 별도 `system` 변수가 없어(`execute_agent()`가 내부에서
         # 직접 만듦) transcript 자체에 덧붙인다. 색인된 청크가 없으면
         # 비용 없이 바로 `None`.
-        last_human_for_memory = conn.execute(
-            "SELECT content FROM conversation_messages WHERE conversation_id = ? "
-            "AND author_type = 'human' ORDER BY id DESC LIMIT 1",
-            (conversation_id,),
-        ).fetchone()
-        memory_context = conversation_memory.retrieve_context_for_query(
-            conn,
-            conversation_id,
-            last_human_for_memory["content"] if last_human_for_memory else "",
-            provider=budget_provider,
-            model=budget_model,
+        last_human_for_memory = context_policy.latest_human_message(conn, conversation_id)
+        question = last_human_for_memory["content"] if last_human_for_memory else ""
+        # 대화 컨텍스트 정책(2026-11-20) — Agent에 덮어쓰기 값이 있으면 그것,
+        # 없으면 그 Agent 스킬들의 가장 포괄적인 값(`context_policy.for_agent`).
+        policy = context_policy.finalize(
+            context_policy.for_agent(conn, agent_id),
+            last_human_for_memory["context_override"] if last_human_for_memory else None,
+            question,
+        )
+        context_note = _context_note(policy)
+        search_query = context_policy.retrieval_query(conn, conversation_id, question, policy)
+        memory_context = (
+            conversation_memory.retrieve_context_for_query(
+                conn,
+                conversation_id,
+                search_query,
+                provider=budget_provider,
+                model=budget_model,
+                reserved_tokens=_transcript_reserve_tokens(question, budget_provider),
+            )
+            if policy["attachments"]
+            else None
         )
         memory_note = (
             (
@@ -1578,6 +1666,18 @@ def run_agent_mention_job(
             )
             if memory_context
             else ""
+        )
+        # 메모리를 먼저 확정하고 대화록은 그 나머지로 채운다(2026-11-20 —
+        # 예전엔 둘 다 입력 예산 전체를 각자 따로 써서 합계가 넘쳤다).
+        transcript = _build_transcript(
+            conn,
+            conversation_id,
+            provider=budget_provider,
+            model=budget_model,
+            reserved_tokens=token_budget.count_tokens(
+                context_note + memory_note, budget_provider
+            ),
+            history_mode=policy["history"],
         )
         sink: dict = {}
         # Gate 품질확인(2026-11-19, "다음 개선 진행해줘" → conversations.py
@@ -1597,8 +1697,9 @@ def run_agent_mention_job(
                 conn,
                 agent_id,
                 actor_id,
-                (transcript or "대화를 시작합니다.") + memory_note + _ANTI_ANCHORING_NOTE,
+                (transcript or "대화를 시작합니다.") + memory_note + context_note,
                 retrieval_sink=sink,
+                retrieval_query=search_query or None,
             ),
         )
         output = eval_result["output"]
@@ -1610,7 +1711,7 @@ def run_agent_mention_job(
         # (`unsupported_realtime_skill_names()`)가 이 경로엔 전혀
         # 없었다 — 멘션된 Agent의 skill_tags에 비-native 도구(mcp_*/
         # custom_python)가 연결된 스킬이 있어도 아무 경고 없이 LLM이
-        # 암산한 결과를 내놓고 있었다(예: "데이터분석가이드" 스킬을
+        # 암산한 결과를 내놓고 있었다(예: "데이터분석" 스킬을
         # 가진 Agent를 멘션해도 실제 "수치 데이터 분석기" 도구는 전혀
         # 호출되지 않음). 같은 경고를 여기도 붙인다 — 단, 안내 문구는
         # "Agent를 멘션하라"고 하지 않는다(지금 이미 Agent 멘션으로도
@@ -1629,6 +1730,14 @@ def run_agent_mention_job(
                 "답변했습니다(구조적 제약 — Team을 멘션해 CrewAI 실행으로 "
                 "돌려야 실제로 그 도구가 호출됩니다).\n\n" + output
             )
+        output = language_qa.repair_output(
+            conn,
+            output,
+            sink.get("llm_provider"),
+            sink.get("llm_model"),
+            actor_id,
+            "conversation_agent_mention",
+        )
         _finish_job_with_message(
             conn,
             job_id,
@@ -1639,6 +1748,7 @@ def run_agent_mention_job(
             llm_provider=sink.get("llm_provider"),
             llm_model=sink.get("llm_model"),
             gate_scores=eval_result["gate_scores"],
+            applied_context_policy=policy,
         )
     except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
         _fail_job(conn, job_id, actor_id, exc)
@@ -1808,6 +1918,10 @@ def run_team_mention_job(
             last_human_for_memory["content"] if last_human_for_memory else "",
             provider=budget_provider,
             model=budget_model,
+            reserved_tokens=_transcript_reserve_tokens(
+                last_human_for_memory["content"] if last_human_for_memory else "",
+                budget_provider,
+            ),
         )
         memory_note = (
             (
@@ -1824,7 +1938,7 @@ def run_team_mention_job(
                 provider=budget_provider,
                 model=budget_model,
                 reserved_tokens=token_budget.count_tokens(
-                    _ANTI_ANCHORING_NOTE, budget_provider
+                    _ANTI_ANCHORING_NOTE + memory_note, budget_provider
                 ),
             )
             or "대화를 시작합니다."
@@ -1863,7 +1977,7 @@ def run_team_mention_job(
                 (
                     conversation_id,
                     agent["agent_id"],
-                    agent["output"],
+                    presentation_deck.finalize(agent["output"]),
                     result.get("resolved_provider"),
                     result.get("resolved_model"),
                     gate_scores_json,
@@ -2037,33 +2151,33 @@ def save_message_as_deliverable(
 
 
 def save_message_as_knowledge(
-    conn: sqlite3.Connection, conversation_id: int, message_id: int, actor_id: int
-) -> int:
+    conn: sqlite3.Connection,
+    conversation_id: int,
+    message_id: int,
+    actor_id: int,
+    actor_role: str,
+) -> dict:
     """사용자 요청(2026-11-10, "대화에서 생성된 결과물을 지식으로 보내는
-    경로가 없음") — `save_message_as_deliverable()`과 같은 "사람이 남길
-    만하다고 판단한 메시지 하나만 명시적으로" 원칙을 그대로 따르되,
-    보내는 곳이 갤러리(deliverables) 대신 지식베이스(VectorDB,
-    `knowledge_chunks`)라는 점만 다르다. 임베딩 API를 실제로 호출하므로
-    비용이 발생한다(opt-in — 명시적으로 호출했을 때만, `agent_runtime.
-    index_knowledge()`와 동일한 전제)."""
+    경로가 없음")으로 생긴 경로 — 처음엔 admin/manager가 누르면 결재 없이
+    즉시 색인했다.
+
+    사용자 요청(2026-11-20, "지식 베이스는 admin 담당자가 문서로 등록하는
+    경우와 ... '지식베이스로 보내기' 및 admin 결재 후 등록되는 것으로
+    개선") — 이제 `knowledge_submissions.submit()`의 얇은 별칭이다:
+    참여자 누구나 제출하고, admin이 결재해야 색인된다(admin 본인 제출은
+    즉시 등록). 반환값의 `needs_registration`이 True면 호출자가 커밋 뒤
+    `knowledge_submissions.register_submission()`을 백그라운드로 건다.
+    화면은 `POST /api/knowledge-submissions`를 직접 쓰고, 이 함수는 기존
+    API 경로(`.../save-as-knowledge`) 호환용으로만 남긴다."""
     message = conn.execute(
-        "SELECT * FROM conversation_messages WHERE id = ? AND conversation_id = ?",
+        "SELECT id FROM conversation_messages WHERE id = ? AND conversation_id = ?",
         (message_id, conversation_id),
     ).fetchone()
     if message is None:
         raise ValueError("message_not_found")
-
-    chunk_id = vectorstore.index_text(conn, None, message["content"])
-    audit.record(
-        conn,
-        actor_id,
-        "conversation_message_indexed_as_knowledge",
-        "knowledge_chunks",
-        chunk_id,
-        after={"conversation_id": conversation_id, "message_id": message_id},
+    return knowledge_submissions.submit(
+        conn, actor_id, actor_role, "conversation_message", message_id
     )
-    conn.commit()
-    return chunk_id
 
 
 def _run_team_mention_via_pipeline(
@@ -2430,12 +2544,9 @@ def run_default_ai_job(
         provider, model = llm.resolve_provider_and_model(
             conv["llm_provider"], conv["llm_model"], conn=conn
         )
-        last_human = conn.execute(
-            "SELECT content FROM conversation_messages WHERE conversation_id = ? "
-            "AND author_type = 'human' ORDER BY id DESC LIMIT 1",
-            (conversation_id,),
-        ).fetchone()
+        last_human = context_policy.latest_human_message(conn, conversation_id)
         skills_for_augmentation: list[str] = []
+        system_role = "대화 참여자"
         if skill:
             skills_for_augmentation = [skill]
             system = deliverables.skill_grounded_system_prompt(
@@ -2448,6 +2559,7 @@ def run_default_ai_job(
             ).fetchone()
             if task is not None:
                 skills_for_augmentation = json.loads(task["required_skills"])
+                system_role = task["role_name"]
                 system = deliverables.skill_grounded_system_prompt(
                     conn, task["role_name"], skills_for_augmentation
                 )
@@ -2455,6 +2567,17 @@ def run_default_ai_job(
                 system = _DEFAULT_SYSTEM_PROMPT
         else:
             system = _DEFAULT_SYSTEM_PROMPT
+        # 대화 컨텍스트 정책(2026-11-20, `context_policy.py`) — 스킬 기본값
+        # (예: 내부지식검색 = 이전 대화 없음·첨부 미사용) + 이 메시지의 덮어쓰기
+        # + 후속 질문 자동 상향. 이후 검색어·첨부 메모리·대화록·지시문이
+        # 전부 이 정책을 따른다.
+        question = last_human["content"] if last_human is not None else ""
+        policy = context_policy.finalize(
+            context_policy.for_skills(conn, skills_for_augmentation),
+            last_human["context_override"] if last_human is not None else None,
+            question,
+        )
+        context_note = _context_note(policy)
         # 사용자 요청(2026-10-22, "일반웹검색 스킬 점검해줘" 조사 결과) —
         # 이 경로(agent_pool/CrewAI Tool 호출 루프가 전혀 없는 "기본 AI")는
         # 지금까지 skill_pool.description 텍스트만 주입하고 실제 조회를
@@ -2465,10 +2588,27 @@ def run_default_ai_job(
         # 그대로 두고 system에만 추가해, `augment_with_retrieval()`의
         # "요청: {prompt}" 포맷(단일 프롬프트 호출부 전용)을 건드리지
         # 않는다.
+        callable_tools: list = []
         if skills_for_augmentation:
-            query = last_human["content"] if last_human is not None else ""
+            query = context_policy.retrieval_query(
+                conn, conversation_id, question, policy
+            )
             retrieved_context = agent_runtime.retrieve_context(
                 conn, skills_for_augmentation, query
+            )
+            # 스킬 활용·품질 개선(2026-11-21, `skill_prompting.py`) — 조회 결과와
+            # 실제로 호출 가능한 도구를 정한 뒤 그 조건에 맞는 시스템 프롬프트로 다시
+            # 만든다(도구 안내가 사실과 맞고, 질문과 관련 있는 스킬이 앞에 온다).
+            callable_tools = tool_calling.resolve_callable_tools(
+                conn, skills_for_augmentation
+            )
+            system = deliverables.skill_grounded_system_prompt(
+                conn,
+                system_role,
+                skills_for_augmentation,
+                request=question,
+                callable_tools=callable_tools,
+                has_retrieval=bool(retrieved_context),
             )
             if retrieved_context:
                 # 사용자 보고(2026-11-17, "실시간웹검색 스킬로 대화를
@@ -2491,11 +2631,10 @@ def run_default_ai_job(
                 system = (
                     system
                     + "\n\n[실시간 조회 결과 — 아래 내용을 근거로 답변하세요. "
-                    "위에서 '도구를 호출할 수 없다'고 안내했지만, 이 검색은 "
-                    "시스템이 이미 대신 수행해 그 결과를 아래에 그대로 준 것입니다 "
-                    "— 당신이 도구를 직접 호출한 게 아니라는 이유로 '실시간 검색이 "
-                    "불가능한 환경'이라는 식의 변명이나 디스클레이머를 답변에 넣지 "
-                    "말고, 아래 내용을 실제 조사한 사실처럼 그대로 활용해 답하세요.]\n"
+                    "이 검색은 시스템이 이미 대신 수행해 그 결과를 아래에 그대로 준 "
+                    "것입니다 — '실시간 검색이 불가능한 환경'이라는 식의 변명이나 "
+                    "디스클레이머를 답변에 넣지 말고, 아래 내용을 실제 조사한 사실처럼 "
+                    "그대로 활용해 답하세요.]\n"
                     + retrieved_context
                 )
         # 대화 메모리(2026-11-18, 개선축 C) — 스킬 선택과 무관하게 항상
@@ -2505,9 +2644,24 @@ def run_default_ai_job(
         # `retrieve_context_for_query()`가 임베딩 호출 없이 바로 `None`을
         # 반환하므로, 첨부파일을 안 올린 평범한 대화는 비용/지연이 전혀
         # 늘지 않는다.
-        memory_query = last_human["content"] if last_human is not None else ""
-        memory_context = conversation_memory.retrieve_context_for_query(
-            conn, conversation_id, memory_query, provider=provider, model=model
+        memory_query = context_policy.retrieval_query(
+            conn, conversation_id, question, policy
+        )
+        memory_context = (
+            conversation_memory.retrieve_context_for_query(
+                conn,
+                conversation_id,
+                memory_query,
+                provider=provider,
+                model=model,
+                # system 프롬프트(스킬 그라운딩 + 내부지식검색 결과)와 대화록 몫을
+                # 먼저 빼고 남은 예산만 첨부자료에 쓴다(2026-11-20 사용자 보고
+                # — 첨부자료가 예산을 다 차지해 질문이 프롬프트에서 사라짐).
+                reserved_tokens=token_budget.count_tokens(system, provider)
+                + _transcript_reserve_tokens(question, provider),
+            )
+            if policy["attachments"]
+            else None
         )
         if memory_context:
             system = (
@@ -2517,7 +2671,7 @@ def run_default_ai_job(
                 "관련된 부분만 미리 찾아 드린 것입니다.]\n"
                 + memory_context
             )
-        # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성가이드" 스킬로
+        # 버그 수정(2026-11-13, 사용자 보고 — "제안서작성" 스킬로
         # 요청했는데 이 대화의 직전 메시지(다른 Agent가 만든 프레젠테이션
         # HTML)의 색상표·구조를 그대로 베낀 결과가 나옴) — "기본 AI"
         # 경로도 team_mention과 똑같이 `_build_transcript()`가 넘긴
@@ -2538,8 +2692,9 @@ def run_default_ai_job(
             provider=provider,
             model=model,
             reserved_tokens=token_budget.count_tokens(system, provider)
-            + token_budget.count_tokens(_ANTI_ANCHORING_NOTE, provider),
-        ) + _ANTI_ANCHORING_NOTE
+            + token_budget.count_tokens(context_note, provider),
+            history_mode=policy["history"],
+        ) + context_note
         # Tool 호출 제약 해소(2026-11-18, 개선축 A) — 이 경로("기본 AI")는
         # 지금까지 CrewAI Agent/Task/Tool 루프가 없어 custom_python/native
         # 도구를 실제로 호출할 수 없었다(native는 정적 텍스트 주입만,
@@ -2549,11 +2704,7 @@ def run_default_ai_job(
         # 있으면 provider 네이티브 함수 호출 루프(`llm.call_llm_with_
         # tools()`)로 돌린다 — 없으면(도구 없는 스킬/스킬 미선택) 기존과
         # 완전히 동일한 1턴 호출.
-        callable_tools = (
-            tool_calling.resolve_callable_tools(conn, skills_for_augmentation)
-            if skills_for_augmentation
-            else []
-        )
+        # (`callable_tools`는 위 스킬 블록에서 시스템 프롬프트를 만들 때 이미 정했다.)
         # Gate 품질확인(2026-11-19, "다음 개선 진행해줘" → conversations.py
         # 통합) — 단일 Agent 멘션과 같은 이유로 "기본 AI" 경로도 Gate
         # A-G 측정이 전혀 없었다. 경고 배너를 덧붙이기 전의 순수 LLM
@@ -2573,7 +2724,7 @@ def run_default_ai_job(
                 conn, skills_for_augmentation
             )
             if unsupported:
-                # 사용자 보고(2026-11-18, "데이터분석가이드 스킬 사용시
+                # 사용자 보고(2026-11-18, "데이터분석 스킬 사용시
                 # '실시간 외부 검색 도구가 연결돼 있지만...' 경고가
                 # 뜬다") — 이 경고는 "mcp_remote/mcp_stdio/custom_python
                 # 도구는 이 경로(CrewAI 루프 없음)에서 호출이 안 된다"는
@@ -2581,7 +2732,7 @@ def run_default_ai_job(
                 # unsupported_realtime_skill_names()` 참고), 문구가 그
                 # 도구를 전부 "실시간 외부 검색"이라고 단정해버렸다 —
                 # 만들어질 당시엔 실제로 전부 검색 도구(일반웹검색 등)
-                # 였지만, 이후 "데이터분석가이드"처럼 검색이 아니라
+                # 였지만, 이후 "데이터분석"처럼 검색이 아니라
                 # 계산(수치 데이터 분석기, 합계/평균/증감률 등)을 하는
                 # custom_python 도구도 생겨 더는 사실이 아니게 됐다.
                 # 어떤 종류의 도구든 맞는, 도구 종류를 단정하지 않는
@@ -2616,6 +2767,11 @@ def run_default_ai_job(
                     "대신 응답했습니다. 메시지창에서 @를 입력해 자동완성으로 초대한 "
                     "뒤 다시 멘션해 보세요.\n\n" + output
                 )
+        # 언어 품질 검사 + 자동 교정 1회(2026-11-20, `language_qa.py`) — 한국어
+        # 응답에 섞인 중국어·한자·깨진 글자를 같은 모델로 문장 단위 교정한다.
+        output = language_qa.repair_output(
+            conn, output, provider, model, actor_id, "conversation_default_ai"
+        )
         _finish_job_with_message(
             conn,
             job_id,
@@ -2627,6 +2783,7 @@ def run_default_ai_job(
             llm_provider=provider,
             llm_model=model,
             gate_scores=eval_result["gate_scores"],
+            applied_context_policy=policy,
         )
     except Exception as exc:  # noqa: BLE001
         _fail_job(conn, job_id, actor_id, exc, provider=provider)

@@ -215,6 +215,12 @@ def describe_subject(
             "content": row["output"],
             "content_type": "markdown",
         }
+    if subject_type == "knowledge_submission":
+        # 지식베이스 등록 결재(2026-11-20) — 지연 import: knowledge_submissions
+        # → deliverables → approvals 순환을 피한다.
+        from hair_platform import knowledge_submissions
+
+        return knowledge_submissions.describe_for_approval(conn, subject_id) or empty
     return empty
 
 
@@ -250,10 +256,13 @@ def list_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
             (user_id,),
         ).fetchall()
     elif role == "manager":
+        # 지식베이스 등록 결재(`knowledge_submission`, 2026-11-20)는 admin
+        # 전용이다 — approver_id가 비어 있어도 매니저에겐 안 보인다.
         rows = conn.execute(
             base_select
             + "WHERE a.status = 'pending' AND a.requested_by != ? "
-            "AND (a.approver_id IS NULL OR a.approver_id = ?) ORDER BY a.id ASC",
+            "AND (a.approver_id IS NULL OR a.approver_id = ?) "
+            "AND a.subject_type != 'knowledge_submission' ORDER BY a.id ASC",
             (user_id, user_id),
         ).fetchall()
     else:

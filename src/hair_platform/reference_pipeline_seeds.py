@@ -142,7 +142,78 @@ DATA_ANALYZER_SOURCE = """def tool_fn(query: str) -> str:
 # 축/색상 등 Chart.js 문법을 LLM이 직접 작성하다 틀리는 위험을 없앤다.
 # `_CUSTOM_TOOL_MAX_OUTPUT_CHARS=4000`(pool_registry.py) 안에 안전하게
 # 들어가도록 포인트 수를 제한한다.
+# 2026-11-21 개정 — 스킬 지침·```chart 간단 형식의 "type" 키와 빈 구간(null)을 받는다.
+# 실측: 프레젠테이션 Agent가 지침대로 "type"을 넣자 이 도구가 "chart_type" 오류를 내
+# 같은 호출을 13번 반복했다. 아래 V1은 기존 DB의 도구를 안전하게 교체(시드 원본 그대로일
+# 때만)하기 위한 직전 원본이다(`db._upgrade_chart_generator_tool`).
 CHART_GENERATOR_SOURCE = """def tool_fn(query: str) -> str:
+    import json
+
+    allowed_types = ("bar", "line", "pie", "doughnut", "radar")
+    max_points = 30
+
+    try:
+        payload = json.loads(query)
+    except (json.JSONDecodeError, ValueError):
+        return (
+            '입력은 JSON 문자열이어야 합니다: '
+            '{"type": "bar", "title": "월별 매출", '
+            '"labels": ["1월", "2월"], "series": {"매출": [100, 150]}, "unit": "억 원"}'
+        )
+    if not isinstance(payload, dict):
+        return "입력은 JSON 객체여야 합니다."
+
+    # "type"과 "chart_type" 둘 다 받는다(스킬 지침·```chart 간단 형식은 "type").
+    chart_type = payload.get("chart_type") or payload.get("type")
+    if chart_type not in allowed_types:
+        return f"type은 {list(allowed_types)} 중 하나여야 합니다."
+
+    labels = payload.get("labels")
+    if not isinstance(labels, list) or not labels:
+        return "labels는 비어 있지 않은 배열이어야 합니다."
+    if len(labels) > max_points:
+        return f"labels가 너무 많습니다(최대 {max_points}개) — 구간을 줄이거나 집계해주세요."
+
+    series = payload.get("series")
+    if not isinstance(series, dict) or not series:
+        return 'series는 {"계열이름": [숫자, ...]} 형태의 비어 있지 않은 객체여야 합니다.'
+
+    datasets = []
+    for series_name, values in series.items():
+        if not isinstance(values, list):
+            return f'series["{series_name}"]은 숫자 배열이어야 합니다.'
+        if len(values) != len(labels):
+            return (
+                f'series["{series_name}"]의 길이({len(values)})가 '
+                f'labels 길이({len(labels)})와 다릅니다 — 반드시 같아야 합니다.'
+            )
+        try:
+            # null은 값이 없는 구간(예: 목표가 없는 분기) — 차트에서 빈칸으로 그린다.
+            nums = [None if v is None else float(v) for v in values]
+        except (TypeError, ValueError):
+            return f'series["{series_name}"]에 숫자가 아닌 값이 섞여 있습니다(빈 구간은 null).'
+        datasets.append({"label": str(series_name), "data": nums})
+
+    title = str(payload.get("title") or "")
+    unit = str(payload.get("unit") or "")
+    options = {
+        "responsive": True,
+        "plugins": {"title": {"display": bool(title), "text": title}},
+    }
+    if unit and chart_type not in ("pie", "doughnut"):
+        options["scales"] = {"y": {"beginAtZero": True, "title": {"display": True, "text": unit}}}
+    config = {
+        "type": chart_type,
+        "data": {
+            "labels": [str(label) for label in labels],
+            "datasets": datasets,
+        },
+        "options": options,
+    }
+    return json.dumps(config, ensure_ascii=False)
+"""
+
+CHART_GENERATOR_SOURCE_V1 = """def tool_fn(query: str) -> str:
     import json
 
     allowed_types = ("bar", "line", "pie", "doughnut", "radar")
@@ -286,12 +357,12 @@ TOOL_SKILL_SPECS: list[tuple[str, str, str]] = [
         "테스트 케이스 기계적 도출",
     ),
     (
-        "데이터분석가이드",
+        "데이터분석",
         "시계열 또는 숫자 목록 데이터에서 합계·평균·증감률·표준편차를 실제로 계산한 뒤, 그 결과를 근거로 인사이트 문장을 도출한다 — 계산되지 않은 숫자를 서술로 지어내지 않는다.",
         "수치 데이터 분석기",
     ),
     (
-        "데이터시각화가이드",
+        "데이터시각화",
         "레이블·계열 숫자 데이터를 '차트 생성기'로 실제 Chart.js 설정을 생성한 뒤, 그 결과를 ```chart 코드펜스에 그대로 넣어 실제 그래프로 보여준다 — 그래프를 텍스트로 서술하거나 Chart.js 문법을 직접 지어 쓰지 않는다.",
         "차트 생성기",
     ),
@@ -312,7 +383,7 @@ KNOWLEDGE_SKILL_SPECS: list[tuple[str, str]] = [
         "커밋 메시지와 PR 설명을 팀 컨벤션(무엇을/왜 바꿨는지 명확히, 요약 + 근거 구조)에 맞게 작성한다.",
     ),
     (
-        "문서작성가이드",
+        "문서작성",
         "README·설계 문서·API 레퍼런스 등 프로젝트 문서를 팀의 문서화 스타일(용어 통일, 예시 포함, 간결한 구조)에 맞게 작성·검토한다.",
     ),
     (
@@ -328,7 +399,7 @@ KNOWLEDGE_SKILL_SPECS: list[tuple[str, str]] = [
         "3C(자사·고객·경쟁사), 4P(제품·가격·유통·판촉), SWOT(강점·약점·기회·위협) 분석 프레임워크로 시장·제품·전략을 구조적으로 진단한다 — 각 범주를 빠짐없이 채우고, 추측이 아니라 조사된 근거를 바탕으로 작성한다.",
     ),
     (
-        "기획서작성가이드",
+        "기획서작성",
         "기획서는 배경(왜 필요한가)·목표(무엇을 달성하는가)·실행계획(어떻게·누가·언제)·예산·리스크와 대응방안 순으로 구성한다 — 의사결정자가 한 번에 핵심을 파악하도록 결론을 앞에 둔다. 실행 가능한 전체 소스 코드를 작성하지 않는다 — 구현은 개발 역할의 몫이고, 기획서는 요구사항·설계 방향·완료 기준(완료를 어떻게 확인할지)까지만 제시한다. 핵심 로직을 설명해야 하면 의사코드나 10줄 이내의 짧은 예시 스니펫만 쓴다.",
     ),
     (
@@ -345,11 +416,11 @@ KNOWLEDGE_SKILL_SPECS: list[tuple[str, str]] = [
         "기획 접수 → 요구사항 확정 → 설계 승인 → 개발 착수 → QA → 인수까지 단계별 진행 상태·담당 Agent·블로커를 추적한다. 각 단계 전환 전에 산출물이 HITL 승인을 받았는지 확인하고, 막힌 단계가 있으면 원인과 다음 조치를 명시한다 — 스스로 산출물을 만들지 않고 전체 진행을 조율·보고하는 역할이다.",
     ),
     (
-        "아키텍처설계가이드",
+        "아키텍처설계",
         "애플리케이션 아키텍처는 모듈 경계(무엇을 한 모듈로 묶을지) → 모듈 간 인터페이스(어떤 데이터를 어떻게 주고받을지) → 기술 스택 선정(왜 그 기술인지 대안과 비교) 순으로 설계한다 — 요구사항/스펙에 없는 기능을 임의로 추가하지 않고, 구현 난이도가 아니라 요구사항 충족을 기준으로 모듈을 나눈다.",
     ),
     (
-        "데이터모델설계가이드",
+        "데이터모델설계",
         "데이터 모델은 요구사항에서 다뤄지는 엔티티와 그 속성을 먼저 나열 → 엔티티 간 관계(1:1/1:N/N:M)를 정의 → 정규화 수준을 결정 → 조회 패턴(어떤 질의가 자주 발생하는지)에 맞춰 인덱스/비정규화 여부를 검토하는 순서로 진행한다 — ERD와 함께 왜 그 구조를 택했는지 근거를 남긴다.",
     ),
     (
@@ -357,33 +428,33 @@ KNOWLEDGE_SKILL_SPECS: list[tuple[str, str]] = [
         "아키텍처 설계 산출물을 받아 독립적으로 개발 가능한 모듈 단위로 쪼개고, 모듈 간 의존성(어떤 모듈이 먼저 끝나야 다른 모듈을 시작할 수 있는지)을 표시한 뒤, 병렬로 진행 가능한 모듈은 서로 다른 개발자 Agent에 배분한다 — 배분 결과에는 각 모듈의 담당자·선행 조건·완료 기준이 포함돼야 한다.",
     ),
     (
-        "프론트엔드구현가이드",
+        "프론트엔드구현",
         "프론트엔드 구현은 UI 기획(화면 흐름·컴포넌트 목록)을 먼저 확인하고, 컴포넌트 단위로 상태·이벤트 흐름을 분리하며, 접근성(키보드 조작·대비)과 반응형(화면 크기 대응)을 기본으로 고려한다 — 디자인에 없는 화면/동작을 임의로 추가하지 않는다.",
     ),
     (
-        "UIUX기획가이드",
+        "UIUX기획",
         "UI/UX 기획은 사용자 시나리오(누가 어떤 목적으로 어떤 순서로 쓰는지) → 화면 흐름도(어떤 화면에서 어떤 화면으로 이동하는지) → 화면별 구성 요소와 인터랙션(클릭/입력 시 어떻게 반응하는지) 순으로 정리한다 — 요구사항/스펙에 없는 화면·기능을 임의로 추가하지 않는다.",
     ),
     (
-        "테스트계획설계가이드",
+        "테스트계획설계",
         "테스트 계획은 테스트 범위(무엇을 테스트하고 무엇은 제외하는지) → 테스트 전략(단위/통합/E2E 중 어디에 집중할지) → 요구사항별 테스트 케이스(정상 케이스·예외 케이스·경계값) 순으로 작성한다 — 테스트 케이스는 실행 전 단계 산출물이라, 이 역할은 케이스를 설계만 하고 직접 실행(QA 기능테스터의 역할)하지 않는다.",
     ),
     (
-        "품질인수기준가이드",
+        "품질인수기준",
         "프로젝트 전체 품질/인수 기준은 Gate A-G 점수·테스트 커버리지·미해결 결함 심각도를 종합해 판정한다 — 개별 모듈이 통과해도 전체 인수 기준(예: 치명적 결함 0건, 핵심 요구사항 커버리지 100%)을 못 채우면 배포 불가로 판정하고, 무엇이 부족한지 구체적으로 남긴다.",
     ),
     # --- "자율 개발 크루"(10인 개발자 풀, 2026-10-14) ---
     (
-        "데이터인프라구현가이드",
+        "데이터인프라구현",
         "데이터/인프라 구현은 DA가 설계한 ERD·스키마를 실제 마이그레이션/DDL로 옮기고, 배포 파이프라인(CI/CD)·환경 변수·인프라 설정을 구성한다 — 설계에 없는 테이블/컬럼을 임의로 추가하지 않고, 스키마 변경은 마이그레이션 이력으로 남긴다.",
     ),
     # --- 제안서/실적서 작성(2026-11-11) ---
     (
-        "제안서작성가이드",
+        "제안서작성",
         "제안서(RFP 대응·수주 제안)는 과제 이해(발주처가 요구하는 것) → 차별화 포인트(경쟁사 대비 우리만의 강점) → 수행 방안(구체적 실행 계획) → 일정/비용 → 기대효과 순으로 구성한다 — 기획서(내부 실행계획 문서)와 달리 '왜 우리를 선택해야 하는가'를 명시적으로 답해야 하고, 평가 기준(배점표)이 주어졌으면 항목별로 빠짐없이 대응한다.",
     ),
     (
-        "실적서작성가이드",
+        "실적서작성",
         "실적서(KPI·성과 보고)는 목표 대비/전기(전년·전분기 등) 대비 수치표 → 달성·미달 원인 분석 → 차기 계획 순으로 구성한다 — C-level 보고서(경영진 요약 중심)와 달리 수치 비교표가 본문의 핵심이며, 분석되지 않은 숫자를 서술로 지어내지 않고 데이터 분석 결과를 그대로 인용한다.",
     ),
 ]
@@ -400,7 +471,7 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
         "스펙 작성자",
         [
             "spec-driven-artifacts",
-            "문서작성가이드",
+            "문서작성",
             "요구사항검증",
             "실패모드도출",
         ],
@@ -408,7 +479,7 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ),
     (
         "코드베이스 분석가",
-        ["지식검색", "관계조회", "설계결정기록"],
+        ["내부지식검색", "조직배정관계조회", "설계결정기록"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
     ),
     (
@@ -474,40 +545,46 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
         # 대체했다 — Wikimedia가 이 배포 환경 IP를 지속 차단 중이라
         # 역할 자체가 무력화돼 있었다(db.py의 `_seed_default_pools()`
         # 주석 참고).
-        ["실시간웹검색", "일반웹검색", "지식검색"],
+        ["실시간웹검색", "일반웹검색", "내부지식검색"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
     ),
     (
         "3C4P SWOT 분석가",
-        ["전략분석프레임워크", "프레임워크템플릿생성", "지식검색"],
+        ["전략분석프레임워크", "프레임워크템플릿생성", "내부지식검색"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.4},
     ),
     (
         "기획서 작성자",
         [
-            "기획서작성가이드",
-            "문서작성가이드",
+            "기획서작성",
+            "문서작성",
             "커버리지체크",
+            "데이터시각화",
         ],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.4},
     ),
     (
         "사업전략 수립가",
-        ["사업전략수립", "전략분석프레임워크", "지식검색"],
+        ["사업전략수립", "전략분석프레임워크", "내부지식검색", "데이터시각화"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.5},
     ),
     (
         "C-level 보고서 작성자",
         [
             "경영보고서작성",
-            "문서작성가이드",
+            "문서작성",
             "커버리지체크",
+            "데이터시각화",
         ],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2},
     ),
     (
         "프레젠테이션 자료 작성자",
-        ["발표자료구성", "경영보고서작성"],
+        # "프레젠테이션작성"(2026-11-20) — HAIR 덱 디자인 시스템으로 HTML
+        # 발표자료를 쓴다(`presentation_deck.py`). 신규 설치에만 적용된다
+        # (이미 있는 Agent의 skill_tags는 시드가 덮어쓰지 않는다).
+        # "데이터시각화"(2026-11-21) — 덱 안 차트(`<div class="hair-chart">`).
+        ["발표자료구성", "경영보고서작성", "프레젠테이션작성", "데이터시각화"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.4},
     ),
     # --- 기획→개발 실행 파이프라인(PM·아키텍처·개발계획·UI·QA, 2026-10-14) ---
@@ -526,12 +603,12 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ),
     (
         "AA",
-        ["아키텍처설계가이드", "설계결정기록"],
+        ["아키텍처설계", "설계결정기록"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
     ),
     (
         "DA",
-        ["데이터모델설계가이드", "설계결정기록", "관계조회"],
+        ["데이터모델설계", "설계결정기록", "조직배정관계조회"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2},
     ),
     (
@@ -545,7 +622,7 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
         # "장애회고" 추가 — "백엔드 개발자" 항목의 주석 참고
         # (2026-10-27 품질 감사).
         [
-            "프론트엔드구현가이드",
+            "프론트엔드구현",
             "tdd-ai-workflow-checklist",
             "커밋메시지작성",
             "장애회고",
@@ -574,7 +651,7 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
         # "장애회고" 추가 — "백엔드 개발자" 항목의 주석 참고
         # (2026-10-27 품질 감사).
         [
-            "데이터인프라구현가이드",
+            "데이터인프라구현",
             "tdd-ai-workflow-checklist",
             "커밋메시지작성",
             "장애회고",
@@ -588,20 +665,20 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
         [
             "tdd-ai-workflow-checklist",
             "커밋메시지작성",
-            "프론트엔드구현가이드",
+            "프론트엔드구현",
             "장애회고",
         ],
         {"temperature": 0.2, "max_retry_limit": 3},
     ),
     (
         "UI 기획자",
-        ["UIUX기획가이드", "문서작성가이드"],
+        ["UIUX기획", "문서작성"],
         {"temperature": 0.4},
     ),
     (
         "테스트 계획 수립가",
         [
-            "테스트계획설계가이드",
+            "테스트계획설계",
             "테스트케이스도출",
             "요구사항검증",
         ],
@@ -610,7 +687,7 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     (
         "품질 관리자",
         [
-            "품질인수기준가이드",
+            "품질인수기준",
             "harness-gate-ci",
             "gate-improvement-loop",
             "evidence-based-gate-fix",
@@ -633,17 +710,17 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     # → "바로 구현해줘") ---
     (
         "데이터 분석가",
-        ["데이터분석가이드", "데이터시각화가이드", "지식검색"],
+        ["데이터분석", "데이터시각화", "내부지식검색"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2},
     ),
     (
         "제안서 작성자",
-        ["제안서작성가이드", "문서작성가이드", "실시간웹검색"],
+        ["제안서작성", "문서작성", "실시간웹검색", "데이터시각화"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.4},
     ),
     (
         "실적 보고서 작성자",
-        ["실적서작성가이드", "경영보고서작성", "문서작성가이드"],
+        ["실적서작성", "경영보고서작성", "문서작성", "데이터시각화"],
         {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.2},
     ),
 ]

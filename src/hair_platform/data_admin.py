@@ -400,6 +400,7 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "conversation_messages",
     "conversation_participants",
     "conversations",
+    "knowledge_submissions",
     "documents",
     "task_dependencies",
     "task_participants",

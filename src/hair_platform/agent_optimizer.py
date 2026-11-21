@@ -83,6 +83,55 @@ def _tier_for_known_tuning(tuning: dict) -> str:
     return TIER_STANDARD
 
 
+# 한글 키워드(2026-11-21) — 스킬·역할 이름이 대부분 한글이다. 영문 규칙과 같은 기준:
+# 분석·설계·전략처럼 깊게 생각해야 하는 일 → 심층추론, 구현·검증처럼 정확하고 빠르게
+# 반복하는 일 → 정밀·신속, 작성·정리·조율 → 표준.
+_KOREAN_KEYWORD_RULES: list[tuple[str, str]] = [
+    ("분석", TIER_DEEP_REASONING),
+    ("전략", TIER_DEEP_REASONING),
+    ("설계", TIER_DEEP_REASONING),
+    ("기획", TIER_DEEP_REASONING),
+    ("요구사항", TIER_DEEP_REASONING),
+    ("아키텍처", TIER_DEEP_REASONING),
+    ("리서치", TIER_DEEP_REASONING),
+    ("조사", TIER_DEEP_REASONING),
+    ("사업성", TIER_DEEP_REASONING),
+    ("프레임워크", TIER_DEEP_REASONING),
+    ("스펙", TIER_DEEP_REASONING),
+    ("구현", TIER_PRECISION_FAST),
+    ("개발", TIER_PRECISION_FAST),
+    ("코드", TIER_PRECISION_FAST),
+    ("테스트", TIER_PRECISION_FAST),
+    ("검증", TIER_PRECISION_FAST),
+    ("리뷰", TIER_PRECISION_FAST),
+    ("점검", TIER_PRECISION_FAST),
+    ("품질", TIER_PRECISION_FAST),
+    ("커밋", TIER_PRECISION_FAST),
+    ("보안", TIER_PRECISION_FAST),
+    ("작성", TIER_STANDARD),
+    ("보고", TIER_STANDARD),
+    ("문서", TIER_STANDARD),
+    ("발표", TIER_STANDARD),
+    ("카피", TIER_STANDARD),
+    ("정리", TIER_STANDARD),
+    ("조율", TIER_STANDARD),
+    ("회의록", TIER_STANDARD),
+]
+# 표가 같으면 더 신중한 쪽(심층추론 > 정밀·신속 > 표준)을 고른다 — 과소 배정보다
+# 과대 배정이 결과 품질 면에서 안전하다.
+_TIER_TIEBREAK = [TIER_STANDARD, TIER_PRECISION_FAST, TIER_DEEP_REASONING]
+
+
+def _tier_votes(role_name: str, skill_tags: list[str]) -> dict[str, int]:
+    votes: dict[str, int] = {}
+    for text in [role_name, *skill_tags]:
+        lower = text.lower()
+        for keyword, tier in (*_SKILL_KEYWORD_RULES, *_KOREAN_KEYWORD_RULES):
+            if keyword in lower:
+                votes[tier] = votes.get(tier, 0) + 1
+    return votes
+
+
 def classify_role(role_name: str, skill_tags: list[str]) -> tuple[str, dict, str]:
     """(tier, 추천 tuning_config, 분류 근거) — 근거는 "known_role"/
     "skill_heuristic"/"default_fallback" 중 하나."""
@@ -90,11 +139,14 @@ def classify_role(role_name: str, skill_tags: list[str]) -> tuple[str, dict, str
     if known is not None:
         return _tier_for_known_tuning(known), dict(known), "known_role"
 
-    for tag in skill_tags:
-        tag_lower = tag.lower()
-        for keyword, tier in _SKILL_KEYWORD_RULES:
-            if keyword in tag_lower:
-                return tier, dict(_TIER_DEFAULT_TUNING[tier]), "skill_heuristic"
+    # 하드코딩 점검 2번(2026-11-21) — 예전엔 영문 키워드(`_SKILL_KEYWORD_RULES`)만
+    # 있어, 이름표(`_KNOWN_ROLE_TUNING`)에 없는 새 역할은 한글 스킬명이 하나도 걸리지
+    # 않아 전부 "표준"으로 떨어졌다. 역할명·스킬명 전체에서 한글·영문 키워드를
+    # 세어 가장 많이 걸린 tier로 고른다(첫 매칭 하나로 정하지 않는다).
+    votes = _tier_votes(role_name, skill_tags)
+    if votes:
+        tier = max(votes, key=lambda t: (votes[t], _TIER_TIEBREAK.index(t)))
+        return tier, dict(_TIER_DEFAULT_TUNING[tier]), "skill_heuristic"
 
     # 구현 계열 키워드(implementation/workflow/checklist 등)나 아무 매칭도
     # 없는 경우 — 보수적으로 "정밀하되 빠르게"를 기본값으로 둔다(이 플랫폼의
@@ -219,12 +271,16 @@ def recommend_model(
     # 포함) 이름 패턴 추정을 거치지 않고 항상 최우선 후보가 된다. 매핑된
     # 모델이 하나도 없으면(기존 동작 100% 유지) 이름 패턴 추정+tier
     # 선호 등급(`_pattern_sort_key`)으로 폴백한다.
-    def rank_key(m: dict) -> tuple[int, int, int]:
+    def rank_key(m: dict) -> tuple[int, int, int, int]:
         is_unmapped = 0 if tier in (m.get("optimization_tiers") or []) else 1
+        # 하드코딩 점검 2번(2026-11-21) — 이름 패턴 추정보다 실제 측정값을 먼저
+        # 본다: 성능 테스트가 이 tier를 추천한 모델을 앞에 둔다(admin 매핑 다음 순위).
+        bench = m.get("latest_benchmark") or {}
+        benchmark_mismatch = 0 if bench.get("recommended_tier") == tier else 1
         pattern_primary, pattern_secondary = _pattern_sort_key(
             m["provider"], m["name"], tier, preference
         )
-        return (is_unmapped, pattern_primary, pattern_secondary)
+        return (is_unmapped, benchmark_mismatch, pattern_primary, pattern_secondary)
 
     # 사용자 요청(2026-10-26, "모델 추천의 경우 모델 레지스트리에 등록된
     # 모델을 선택할 수 있도록 해줘") — "가장 적합한 모델 1개"만이 아니라

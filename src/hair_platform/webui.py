@@ -17,6 +17,8 @@ from __future__ import annotations
 import html
 import json
 
+from hair_platform import presentation_deck
+
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -489,6 +491,35 @@ INDEX_HTML = """<!DOCTYPE html>
   .confirm-modal-box { background: var(--color-surface); color: var(--color-text); border-radius: 8px; width: 100%; max-width: 420px; padding: 1.25rem; box-sizing: border-box; box-shadow: 0 8px 28px rgba(0,0,0,0.3); }
   .confirm-modal-text { margin: 0 0 1rem; font-size: 0.9rem; white-space: pre-wrap; }
   .confirm-modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+  /* 에이전트 설정 창(2026-11-21, "설정 관련 UI 개선(설정 줄 나눔 포함)") —
+     "동작" 칸 안의 접힘 패널에 입력란 20여 개가 가로로 흘러 뒤섞이던 것을
+     넓은 창으로 옮기고, 구역별 제목 + "이름 | 입력 | 설명" 한 줄씩으로 정리한다. */
+  .as-box { max-width: 760px; max-height: 88vh; display: flex; flex-direction: column; padding: 0; }
+  .as-head { display: flex; align-items: center; gap: 0.5rem; padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--color-border); }
+  .as-head h3 { margin: 0; flex: 1; font-size: 1.05rem; }
+  .as-body { overflow-y: auto; padding: 0 1.25rem 1rem; }
+  .as-msg:empty { display: none; }
+  .as-msg { padding: 0.5rem 1.25rem 0; }
+  .as-section { padding: 0.85rem 0; border-bottom: 1px solid var(--color-border); }
+  .as-section:last-child { border-bottom: none; }
+  .as-section h4 { margin: 0 0 0.25rem; font-size: 0.95rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+  .as-section > p.muted { margin: 0 0 0.6rem; }
+  .as-sub { margin: 0.7rem 0 0.35rem; font-size: 0.85rem; font-weight: 600; display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+  .as-scope { font-size: 0.72rem; font-weight: 500; padding: 0.05rem 0.4rem; border-radius: 999px; border: 1px solid var(--color-border-strong); color: var(--color-muted); }
+  .as-row { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); gap: 0.15rem 0.75rem; align-items: start; margin-bottom: 0.5rem; }
+  .as-row > .as-label { padding-top: 0.35rem; font-size: 0.88rem; }
+  .as-row > .as-label code { display: block; font-size: 0.72rem; color: var(--color-muted); background: none; padding: 0; }
+  .as-row > .as-ctl { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; min-width: 0; }
+  .as-row > .as-ctl input:not([type=checkbox]), .as-row > .as-ctl select { width: auto; min-width: 8rem; max-width: 100%; box-sizing: border-box; }
+  .as-row > .as-ctl input.as-wide { flex: 1 1 14rem; width: auto; box-sizing: border-box; }
+  .as-row > .as-ctl textarea { width: 100%; box-sizing: border-box; }
+  .as-row > .as-hint { grid-column: 2; font-size: 0.78rem; color: var(--color-muted); }
+  .as-save { display: flex; justify-content: flex-end; margin-top: 0.4rem; }
+  .as-save button { width: auto; }
+  @media (max-width: 640px) {
+    .as-row { grid-template-columns: minmax(0, 1fr); }
+    .as-row > .as-hint { grid-column: 1; }
+  }
 
   /* Phase 5(사용자 요청, 2026-09-28, "반응형만 포함(내 업무/알림 확인용)")
      — 이 앱은 고정 1100px 레이아웃(과거 다크모드 회귀 회피와 같은 이유로
@@ -519,7 +550,7 @@ INDEX_HTML = """<!DOCTYPE html>
 <script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="__CHART_JS_URL__"></script>
 <!-- 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — "팀 관리"
      화면에서 멤버 구조(순차 릴레이/매니저 위임)를 실행 전에도 보고
      드래그로 순서를 바꿀 수 있게 한다. Drawflow: vanilla JS, 의존성
@@ -746,7 +777,15 @@ function _renderMarkdown(raw) {
   // 중…"에서 멈춘 전례가 실제로 있었다 — 여기서 잡아 평문 폴백으로
   // 내려가고, 화면 자체는 계속 열리게 한다.
   try {
-    return DOMPurify.sanitize(marked.parse(_fixBoldMarkdown(raw)));
+    // 사용자 보고(2026-11-19, 스크린샷 — "AI 에이전트 관리" 목록만 폰트·
+    // 글자색이 다른 메뉴 테이블과 다름) — 원인: Agent "최근 산출물"이
+    // `<style>`(`* {margin:0;padding:0}`, `html, body {font-family…}` 등)을
+    // 담은 HTML 문서였는데, 마크다운 경로는 iframe이 아니라 앱 DOM에
+    // 직접 들어가므로 그 전역 스타일이 페이지 전체로 새어 나갔다.
+    // 마크다운 미리보기에서 `<style>`은 절대 앱 전체에 적용되면 안 되므로
+    // 여기서 일괄 제거한다(HTML 결과물은 `contentType === "html"`의
+    // 샌드박스 iframe 경로로 그대로 보인다).
+    return DOMPurify.sanitize(marked.parse(_fixBoldMarkdown(raw)), { FORBID_TAGS: ["style"] });
   } catch (e) {
     console.error("markdown rendering failed, falling back to plain text:", e);
     return "<p>" + esc(raw).replace(/\\n/g, "<br>") + "</p>";
@@ -860,16 +899,67 @@ function _activateRichBlocks(root) {
   _selfAndDescendants(root, "canvas[data-chart-config]").forEach(canvas => {
     if (typeof Chart === "undefined" || Chart.getChart(canvas)) return;
     try {
-      new Chart(canvas, JSON.parse(canvas.dataset.chartConfig));
+      new Chart(canvas, _chartConfigFromSpec(JSON.parse(canvas.dataset.chartConfig)));
     } catch (e) {
       canvas.insertAdjacentHTML("afterend", '<p class="muted">차트 설정을 해석하지 못했습니다: ' + esc(e.message) + "</p>");
     }
   });
 }
+// ```chart 간단 형식(2026-11-21, "데이터 시각화 스킬을 에이전트에 적극 활용") —
+// {"type","title","labels","series":{"이름":[…]},"unit"}을 Chart.js 설정으로 바꾼다.
+// Chart.js 전체 설정({type, data, …} — '차트 생성기' 도구 결과)은 그대로 쓴다. 모델이
+// 도구 없이 직접 써도 틀리기 어려운 형식이라 대화·업무 실행 경로에서도 차트가 나온다.
+const _CHART_PALETTE = ["#3b5bdb", "#868e96", "#20c997", "#f59f00", "#e64980", "#7048e8"];
+function _chartConfigFromSpec(spec) {
+  if (!spec || typeof spec !== "object") throw new Error("JSON 객체가 아닙니다");
+  if (spec.data && spec.type) {
+    // 전체 설정('차트 생성기' 결과)에 색이 없으면 플랫폼 팔레트를 채운다(기본 회색·연파랑 대신).
+    const rd = spec.type === "pie" || spec.type === "doughnut";
+    (spec.data.datasets || []).forEach((d, i) => {
+      if (!d.backgroundColor) {
+        d.backgroundColor = rd
+          ? (spec.data.labels || []).map((_, j) => _CHART_PALETTE[j % _CHART_PALETTE.length])
+          : _CHART_PALETTE[i % _CHART_PALETTE.length];
+      }
+      if (!d.borderColor) d.borderColor = rd ? "#fff" : _CHART_PALETTE[i % _CHART_PALETTE.length];
+    });
+    return spec;
+  }
+  const type = spec.type || spec.chart_type || "bar";
+  const labels = Array.isArray(spec.labels) ? spec.labels : [];
+  const series = spec.series && typeof spec.series === "object" ? spec.series : {};
+  const names = Object.keys(series);
+  if (!labels.length || !names.length) throw new Error("labels와 series가 필요합니다");
+  const round = type === "pie" || type === "doughnut";
+  const datasets = names.map((name, i) => {
+    const color = _CHART_PALETTE[i % _CHART_PALETTE.length];
+    return {
+      label: name, data: series[name], borderWidth: 2, tension: 0.25, pointRadius: 3, fill: false,
+      backgroundColor: round ? labels.map((_, j) => _CHART_PALETTE[j % _CHART_PALETTE.length]) : color,
+      borderColor: round ? "#fff" : color,
+    };
+  });
+  return {
+    type, data: { labels, datasets },
+    options: {
+      responsive: true,
+      // 도넛·파이 기본 비율은 1:1이라 넓은 본문에서 화면을 가득 채웠다 — 막대·선과 같은 2:1로.
+      aspectRatio: 2,
+      plugins: {
+        legend: { display: round || names.length > 1 },
+        title: { display: !!spec.title, text: spec.title },
+      },
+      scales: round ? {} : { y: { beginAtZero: true, title: { display: !!spec.unit, text: spec.unit } } },
+    },
+  };
+}
 new MutationObserver(mutations => {
   for (const m of mutations) {
     for (const node of m.addedNodes) {
-      if (node.nodeType === 1) _activateRichBlocks(node);
+      if (node.nodeType === 1) {
+        _activateRichBlocks(node);
+        _queueKnowledgeButtons(node);
+      }
     }
   }
 }).observe(document.body, { childList: true, subtree: true });
@@ -1043,6 +1133,22 @@ function _buildArtifactParts(raw, contentType, rawForStorage) {
 // 결과·샌드박스 미리보기·근거 블록 등은 원본 데이터가 없거나 수정이
 // 의미가 없는 이력성 데이터라 이 옵션을 쓰지 않는다).
 // `rawForStorage`(선택) — `_buildArtifactParts()` 주석 참고.
+// 덱 클래스 점검(2026-11-21) — HTML 발표자료(덱)가 디자인 시스템에 없는 클래스를 쓰면
+// 그 부분은 서식 없이 보인다(실측: hair-bignum·hair-bullets). 정의된 클래스 목록은
+// 서버(`presentation_deck.defined_classes()`)가 페이지에 넣어 준다 — 목록을 여기 따로
+// 적지 않는다.
+const _DECK_CLASSES = new Set(__DECK_CLASSES_JSON__);
+function _deckLintHtml(raw, contentType) {
+  if (contentType !== "html" || typeof raw !== "string" || !/class\\s*=\\s*["'][^"']*\\bhair-deck\\b/.test(raw)) return "";
+  const unknown = new Set();
+  for (const m of raw.matchAll(/\\bclass\\s*=\\s*["']([^"']*)["']/gi)) {
+    for (const c of m[1].split(/\\s+/)) if (c && !_DECK_CLASSES.has(c)) unknown.add(c);
+  }
+  if (!unknown.size) return "";
+  const list = Array.from(unknown).slice(0, 8).join(", ") + (unknown.size > 8 ? " 외 " + (unknown.size - 8) + "개" : "");
+  return '<p class="muted deck-lint" style="margin:0.3rem 0">⚠ 덱 디자인에 없는 클래스 ' + unknown.size +
+    '개가 쓰여 그 부분은 기본 서식으로 보입니다: ' + esc(list) + ' — "AI에게 다시 요청"으로 고치거나 다시 생성하세요.</p>';
+}
 function renderContent(raw, contentType, editTarget, rawForStorage) {
   const artifactId = "artifact-" + (++_artifactSeq);
   const { effectiveRaw, previewHtml } = _buildArtifactParts(raw, contentType, rawForStorage);
@@ -1147,7 +1253,7 @@ function renderContent(raw, contentType, editTarget, rawForStorage) {
 
   return (
     '<div class="artifact-block" data-artifact-id="' + artifactId + '"' + editAttrs + '>' +
-    toolbarHtml +
+    toolbarHtml + _deckLintHtml(effectiveRaw, contentType) +
     '<div class="artifact-preview" id="' + artifactId + '-preview">' + previewHtml + '</div>' +
     editHtml +
     '<textarea class="artifact-raw-store" id="' + artifactId + '-raw" style="display:none" aria-hidden="true">' +
@@ -1165,6 +1271,52 @@ function _setSkillSelectDisplay(value, label) {
   const btn = document.getElementById("conv-skill-select-btn");
   if (hidden) hidden.value = value;
   if (btn) btn.textContent = (label || "스킬 선택 안 함") + " ▾";
+  _renderContextChip();
+}
+
+// 대화 컨텍스트 정책(2026-11-20, 서버 `context_policy.py`) — 입력창
+// "이전 대화" 칩과 응답 배지가 공유하는 표시 문구.
+let _skillContextPolicies = {};
+const _HISTORY_MODE_LABEL = { full: "전체", recent: "최근만", none: "사용 안 함" };
+const _CONTEXT_CYCLE = ["", "full", "recent", "none"];
+
+function _renderContextChip() {
+  const btn = document.getElementById("conv-context-btn");
+  const hidden = document.getElementById("conv-context-select");
+  if (!btn || !hidden) return;
+  const skill = (document.getElementById("conv-skill-select") || {}).value || "";
+  const skillPolicy = _skillContextPolicies[skill];
+  const defaultMode = skillPolicy ? skillPolicy.history : "full";
+  btn.textContent = hidden.value
+    ? "이전 대화: " + _HISTORY_MODE_LABEL[hidden.value]
+    : "이전 대화: 기본(" + _HISTORY_MODE_LABEL[defaultMode] + ")";
+  btn.classList.toggle("primary", !!hidden.value);
+}
+
+document.addEventListener("click", (ev) => {
+  if (!ev.target.closest("[data-context-cycle]")) return;
+  const hidden = document.getElementById("conv-context-select");
+  if (!hidden) return;
+  const next = (_CONTEXT_CYCLE.indexOf(hidden.value) + 1) % _CONTEXT_CYCLE.length;
+  hidden.value = _CONTEXT_CYCLE[next];
+  _renderContextChip();
+});
+
+function _conversationContextBadge(m) {
+  if (m.author_type !== "agent" || !m.context_policy) return "";
+  let p;
+  try { p = JSON.parse(m.context_policy); } catch (e) { return ""; }
+  if (p.history === "full" && p.attachments !== false && p.source !== "override") return "";
+  const text = p.source === "auto"
+    ? "후속 질문 → 최근 대화 포함"
+    : "이전 대화 " + _HISTORY_MODE_LABEL[p.history] + (p.source === "override" ? "(직접 지정)" : "");
+  const tip = {
+    none: "이전 대화를 넣지 않고 현재 질문만으로 답했습니다(스킬 기본값 또는 직접 지정).",
+    recent: "직전 1~2턴만 참고해 답했습니다.",
+    full: "최근 10건과 요약을 참고해 답했습니다.",
+  }[p.history] + (p.attachments === false ? " 첨부 자료는 쓰지 않았습니다." : "");
+  return ' <span class="gate-badge gate-na" title="' + escAttr(tip) + '">' + esc(text) +
+    (p.attachments === false ? " · 첨부 미사용" : "") + '</span>';
 }
 
 // 사용자 요청(2026-11-16, "html 수정에 소스 수정이 아닌 Editor 도입이
@@ -1495,18 +1647,10 @@ document.addEventListener("click", async (ev) => {
       });
     return;
   }
-  const saveKnowledgeBtn = ev.target.closest("[data-save-knowledge]");
-  if (saveKnowledgeBtn) {
-    const [convId, msgId] = saveKnowledgeBtn.dataset.saveKnowledge.split(":");
-    withBusy(saveKnowledgeBtn, "보내는 중…", () =>
-      api("POST", "/api/conversations/" + convId + "/messages/" + msgId + "/save-as-knowledge")
-    )
-      .then(() => {
-        showMsg("global-msg", "지식베이스로 보냈습니다 — RAG 검색에서 바로 찾을 수 있습니다.", "ok");
-        saveKnowledgeBtn.textContent = "보냄";
-        saveKnowledgeBtn.disabled = true;
-      })
-      .catch((e) => showMsg("global-msg", e.message, "error"));
+  const submitKnowledgeBtn = ev.target.closest("[data-submit-knowledge]");
+  if (submitKnowledgeBtn) {
+    const [sourceType, sourceId] = submitKnowledgeBtn.dataset.submitKnowledge.split(":");
+    openKnowledgeSubmitModal(sourceType, Number(sourceId), submitKnowledgeBtn);
     return;
   }
   // 사용자 요청(2026-10-14, "각 메뉴의 목록 기능에 필터/소트 기능을
@@ -1773,6 +1917,9 @@ function showMsg(elId, text, kind) {
   }
   if (!text) { el.innerHTML = ""; return; }
   el.innerHTML = '<div class="msg ' + (kind || "ok") + '">' + esc(text) + "</div>";
+  // 에이전트 설정 창이 열려 있으면 창 안에도 보여준다(페이지 상단 메시지는 창에 가려진다).
+  const asMsg = elId === "global-msg" && document.getElementById("agent-settings-msg");
+  if (asMsg) asMsg.innerHTML = el.innerHTML;
   if (elId === "global-msg") {
     _globalMsgTimer = setTimeout(() => { el.innerHTML = ""; }, kind === "error" ? 8000 : 4000);
   }
@@ -1827,6 +1974,146 @@ function confirmModal(message, { danger = false } = {}) {
   });
 }
 
+/* ---------- 지식베이스 등록(제출 → admin 결재 → 등록) ---------- */
+// 사용자 요청(2026-11-20, "지식 베이스는 admin 담당자가 문서로 등록하는
+// 경우와 대화 및 업무배정을 통해 생성된 산출물 중 '지식베이스로 보내기'
+// 및 admin 결재 후 등록되는 것으로 개선") — 대화 메시지·산출물 카드가
+// 같은 버튼/모달/배지를 공유한다(`knowledge_submissions.py` 참고).
+function knowledgeSubmitButton(sourceType, sourceId) {
+  return '<button type="button" class="small" data-submit-knowledge="' +
+    sourceType + ":" + sourceId + '">지식베이스로 보내기</button>';
+}
+
+// 버튼이 DOM에 붙을 때마다(대화·갤러리·업무 화면 어디서든) 모아 뒀다가
+// 원본 종류별로 한 번에 최신 제출 상태를 조회해 버튼 문구를 바꾼다 —
+// 화면마다 따로 배선할 필요가 없도록 전역 MutationObserver에서 부른다.
+let _knowledgeButtonQueue = [];
+let _knowledgeButtonTimer = null;
+function _queueKnowledgeButtons(root) {
+  const found = root.matches && root.matches("[data-submit-knowledge]")
+    ? [root]
+    : Array.from(root.querySelectorAll ? root.querySelectorAll("[data-submit-knowledge]") : []);
+  if (!found.length) return;
+  _knowledgeButtonQueue.push(...found);
+  clearTimeout(_knowledgeButtonTimer);
+  _knowledgeButtonTimer = setTimeout(_decorateKnowledgeButtons, 80);
+}
+
+const _KNOWLEDGE_BUTTON_STATES = {
+  pending: { text: "지식 결재 대기", disabled: true },
+  registering: { text: "지식 등록 중", disabled: true },
+  registered: { text: "지식 등록됨 · 갱신 요청", disabled: false },
+  failed: { text: "지식 등록 실패", disabled: true },
+  rejected: { text: "지식베이스로 보내기(반려됨)", disabled: false },
+};
+
+async function _decorateKnowledgeButtons() {
+  const buttons = _knowledgeButtonQueue.filter(b => b.isConnected);
+  _knowledgeButtonQueue = [];
+  const byType = {};
+  for (const b of buttons) {
+    const [type, id] = b.dataset.submitKnowledge.split(":");
+    (byType[type] = byType[type] || []).push([id, b]);
+  }
+  for (const [type, entries] of Object.entries(byType)) {
+    let statuses;
+    try {
+      statuses = await api("GET", qs("/api/knowledge-submissions/status", {
+        source_type: type, ids: entries.map(e => e[0]).join(","),
+      }));
+    } catch (e) {
+      continue;  // 배지는 부가 정보 — 조회 실패해도 버튼 자체는 그대로 동작
+    }
+    for (const [id, btn] of entries) _applyKnowledgeButtonState(btn, statuses[id]);
+  }
+}
+
+function _applyKnowledgeButtonState(btn, st) {
+  const state = st && _KNOWLEDGE_BUTTON_STATES[st.status];
+  if (!state) {
+    btn.textContent = "지식베이스로 보내기";
+    btn.disabled = false;
+    btn.title = "";
+    return;
+  }
+  btn.textContent = state.text;
+  btn.disabled = state.disabled;
+  const tips = ["'" + st.title + "' — " + label(st.status)];
+  if (st.reject_reason) tips.push("반려 사유: " + st.reject_reason);
+  if (st.error) tips.push("오류: " + st.error);
+  btn.title = tips.join("\\n");
+}
+
+async function _knowledgePreview(sourceType, sourceId, allowCode) {
+  try {
+    return await api("POST", "/api/knowledge-submissions/preview", {
+      source_type: sourceType, source_id: sourceId, allow_code: allowCode,
+    });
+  } catch (e) {
+    if (!allowCode && /allow_code/.test(e.message)) {
+      const ok = await confirmModal("코드 산출물은 기본적으로 지식베이스 대상이 아닙니다. 그래도 보낼까요?");
+      return ok ? _knowledgePreview(sourceType, sourceId, true) : null;
+    }
+    throw e;
+  }
+}
+
+async function openKnowledgeSubmitModal(sourceType, sourceId, btn) {
+  let pv;
+  try {
+    pv = await _knowledgePreview(sourceType, sourceId, false);
+  } catch (e) {
+    showMsg("global-msg", e.message, "error");
+    return;
+  }
+  if (!pv) return;
+  const allowCode = pv.content_type === "code";
+  const notice = pv.requires_approval
+    ? "admin 결재 후 지식베이스에 등록됩니다. 등록되면 <b>전사 공개 지식</b>이 되어 \\"내부지식검색\\" 스킬로 누구나 검색할 수 있습니다 — 기밀·개인정보가 없는지 확인하세요."
+    : "admin 권한으로 <b>결재 없이 바로 등록</b>됩니다. 등록되면 전사 공개 지식이 됩니다.";
+  const overlay = document.createElement("div");
+  overlay.className = "confirm-modal-overlay";
+  overlay.innerHTML =
+    '<div class="confirm-modal-box" style="max-width:720px">' +
+    '<h3 style="margin-top:0">지식베이스로 보내기' + (pv.is_update ? ' <span class="gate-badge gate-warn">기존 지식 갱신 요청</span>' : '') + '</h3>' +
+    '<p class="muted" style="margin:0 0 0.6rem">출처: ' + esc(pv.source_label) + '</p>' +
+    '<label class="muted">제목<input id="ks-title" value="' + escAttr(pv.title) + '" maxlength="80" style="width:100%;box-sizing:border-box;margin:0.2rem 0 0.6rem"></label>' +
+    '<label class="muted">설명(선택 — 결재자에게 등록 이유를 알려주세요)<textarea id="ks-note" rows="2" maxlength="2000" style="width:100%;box-sizing:border-box;margin:0.2rem 0 0.6rem"></textarea></label>' +
+    '<div class="muted">등록될 내용 미리보기(' + pv.content_snapshot.length.toLocaleString() + '자' +
+    (pv.content_type === "html" ? " — HTML에서 본문 텍스트만 추출" : "") + ')</div>' +
+    '<div style="max-height:280px;overflow:auto;border:1px solid var(--color-border, #cbd5e1);border-radius:6px;padding:0.5rem;margin:0.2rem 0 0.6rem">' +
+    renderContent(pv.content_snapshot, pv.content_type === "code" ? "code" : "markdown") + '</div>' +
+    '<p class="muted" style="font-size:0.85rem">' + notice + '</p>' +
+    '<div class="confirm-modal-actions">' +
+    '<button type="button" class="small" data-ks-cancel>취소</button>' +
+    '<button type="button" class="small primary" data-ks-ok>' + (pv.requires_approval ? "결재 요청" : "바로 등록") + '</button>' +
+    '</div></div>';
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("[data-ks-cancel]").onclick = close;
+  overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
+  const okBtn = overlay.querySelector("[data-ks-ok]");
+  okBtn.onclick = async () => {
+    try {
+      const sub = await withBusy(okBtn, "보내는 중…", () => api("POST", "/api/knowledge-submissions", {
+        source_type: sourceType,
+        source_id: sourceId,
+        title: overlay.querySelector("#ks-title").value.trim() || null,
+        note: overlay.querySelector("#ks-note").value.trim() || null,
+        allow_code: allowCode,
+      }));
+      close();
+      showMsg("global-msg", pv.requires_approval
+        ? "지식 등록을 요청했습니다 — admin 결재 후 지식베이스에 등록됩니다."
+        : "지식베이스 등록을 시작했습니다 — 잠시 후 내부지식검색에서 찾을 수 있습니다.", "ok");
+      if (btn) _applyKnowledgeButtonState(btn, { status: sub.status, title: sub.title });
+    } catch (e) {
+      showMsg("global-msg", e.message, "error");
+    }
+  };
+  overlay.querySelector("#ks-title").focus();
+}
+
 const LABELS = {
   human: "사람", agent: "AI 에이전트", team: "팀", pipeline: "파이프라인",
   brief: "업무 요청", assignment: "배정", deliverable: "결과물", human_pool: "사람 인력", agent_pool: "AI 에이전트",
@@ -1846,6 +2133,9 @@ const LABELS = {
   task_dependencies: "의존관계", tasks: "업무",
   // (2026-10-21, "Agent 직접 생성") — agent_pool.framework 표시용.
   manual: "직접 생성",
+  // (2026-11-20, 지식베이스 등록 체계 개편) — 제출 → admin 결재 → 등록.
+  knowledge_submission: "지식 등록", conversation_message: "대화 메시지",
+  registering: "등록 중", registered: "등록됨", withdrawn: "회수됨", removed: "삭제됨",
 };
 function label(v) { return LABELS[v] || v; }
 
@@ -3165,14 +3455,13 @@ function _renderConversationMessage(m, participants, conv) {
     ? ' <button type="button" class="small" data-save-deliverable="' +
       m.conversation_id + ':' + m.id + '">갤러리로 보내기</button>'
     : '';
-  // 이 메시지를 지식베이스(VectorDB)에 색인 — 실제 임베딩 API를
-  // 호출해 비용이 발생하므로(agent_runtime.index_knowledge()/
-  // POST .../index-knowledge와 동일 전제) admin/manager 전용으로
-  // 좁힌다. 갤러리 저장(비용 없는 단순 텍스트 복사)과는 권한 범위가
-  // 다르다.
-  const knowledgeBtn = conv && ME && ["admin", "manager"].includes(ME.role)
-    ? ' <button type="button" class="small" data-save-knowledge="' +
-      m.conversation_id + ':' + m.id + '">지식베이스로 보내기</button>'
+  // 사용자 요청(2026-11-20, 지식베이스 등록 체계 개편) — 이전엔 admin/
+  // manager가 누르면 즉시 색인했다(결재 없음). 이제 참여자 누구나(열람
+  // 전용 제외) "제출"하고, admin 결재 후에만 색인된다(임베딩 비용도
+  // 승인 뒤에만 발생). 버튼 문구/상태는 `_decorateKnowledgeButtons()`가
+  // 최신 제출 상태로 바꿔 준다.
+  const knowledgeBtn = conv && ME && ME.role !== "viewer"
+    ? ' ' + knowledgeSubmitButton("conversation_message", m.id)
     : '';
   const isFullHtmlDoc = _looksLikeFullHtmlDocument(m.content);
   const contentType = isFullHtmlDoc ? "html" : undefined;
@@ -3193,7 +3482,7 @@ function _renderConversationMessage(m, participants, conv) {
     '<div class="muted"><span class="msg-avatar ' + avatarClass + '">' +
     esc(_conversationAuthorInitial(who)) + '</span>' +
     '<strong class="' + whoClass + '">' + who + '</strong>' + skillBadge +
-    _conversationGateBadge(m) + _conversationDelegationBadge(m) + _conversationSingleShotBadge(m) + ' · ' + esc(fmtTime(m.created_at)) +
+    _conversationGateBadge(m) + _conversationDelegationBadge(m) + _conversationSingleShotBadge(m) + _conversationContextBadge(m) + ' · ' + esc(fmtTime(m.created_at)) +
     saveBtn + knowledgeBtn + deleteBtn + '</div>' +
     '<div>' + renderContent(bodyContent, contentType, editTarget, m.content) + '</div>' +
     '</div>';
@@ -3216,6 +3505,10 @@ async function renderConversationDetail(conversationId, containerId) {
       "GET",
       "/api/skill-pool/names?conversation=true" + (_convShowDevSkills ? "&include_dev=true" : "")
     );
+    // 대화 컨텍스트 정책(2026-11-20) — "이전 대화" 칩이 스킬 기본값을 보여준다.
+    try {
+      _skillContextPolicies = await api("GET", "/api/skill-pool/context-policies");
+    } catch (e) { _skillContextPolicies = {}; }
     // 사용자 요청(2026-10-19, "대화를 닫고 다시 연 상태에서 아직 결과
     // 완료 전인 상황에서 작업 중임을 알려주는 메시지가 출력되는지") —
     // 이 대화를 열 때마다 아직 안 끝난 Job이 있는지 직접 확인한다
@@ -3330,6 +3623,13 @@ async function renderConversationDetail(conversationId, containerId) {
     skillNames.map(s => '<li data-skill-select-option="' + esc(s) + '">' + esc(s) + '</li>').join("") +
     '</ul>' +
     '</div>' +
+    // 대화 컨텍스트 정책(2026-11-20) — 이번 메시지에만 적용되는 "이전
+    // 대화" 범위. 기본은 스킬 기본값(내부지식검색 = 사용 안 함 등), 클릭할
+    // 때마다 기본 → 전체 → 최근 → 사용 안 함으로 바뀐다. 전송하면 다시
+    // 기본으로 돌아간다(대화 단위가 아니라 메시지 단위 예외).
+    '<input type="hidden" id="conv-context-select" value="">' +
+    '<button type="button" class="small" id="conv-context-btn" data-context-cycle ' +
+    'title="이 메시지에 대한 응답에서 이전 대화를 얼마나 참고할지 — 클릭해 바꾸기"></button>' +
     '<div class="mention-wrap" style="position:relative;flex:1;min-width:200px">' +
     '<div id="conv-message-highlight" aria-hidden="true"></div>' +
     '<input id="conv-message-input" placeholder="메시지(@참가자이름으로 호출 가능)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
@@ -3452,6 +3752,7 @@ async function renderConversationDetail(conversationId, containerId) {
   // 입력값·첨부가 그대로 두 번째 요청으로 또 나갔다(지워지는 시점이
   // 첫 요청들이 전부 끝난 **뒤**라 그 사이엔 막을 게 없었음). 제출
   // 버튼을 요청이 끝날 때까지 비활성화해 막는다.
+  _renderContextChip();
   let isSubmittingConvMessage = false;
   document.getElementById("conv-message-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -3479,9 +3780,12 @@ async function renderConversationDetail(conversationId, containerId) {
       if (content) {
         const payload = { content };
         if (skill) payload.skill = skill;
+        const contextOverride = document.getElementById("conv-context-select").value;
+        if (contextOverride) payload.context_override = contextOverride;
         result = await api("POST", "/api/conversations/" + conversationId + "/messages", payload);
       }
       input.value = "";
+      document.getElementById("conv-context-select").value = "";
       _setSkillSelectDisplay("", "");
       mentionMirror.sync();
       await refreshConversationMessages(conversationId, participants, conv);
@@ -3639,7 +3943,9 @@ async function renderInbox(content) {
       // #12"만 보여줘 뭘 승인하는지 결재 탭을 또 열어야 알 수 있었다.
       // `/api/inbox`가 이제 task_role_name/resource_name도 주므로
       // (`approvals.describe_subject()`) 그대로 보여준다.
-      const detail = item.task_id != null
+      const detail = item.subject_type === "knowledge_submission" && item.resource_name
+        ? esc(item.resource_name)
+        : item.task_id != null
         ? "#" + item.task_id + " " + esc(item.task_role_name || "") +
           (item.resource_name ? " · " + esc(label(item.resource_type)) + " " + esc(item.resource_name) : "")
         : esc(label(item.subject_type)) + " #" + item.subject_id;
@@ -3814,6 +4120,9 @@ async function _renderGalleryFiltered(content, filters) {
         '<p>' + esc(r.preview || "(내용 없음)") + '</p>' +
         '<div class="gallery-card-actions">' +
         '<a href="/deliverables/' + r.id + '/view" target="_blank" rel="noopener">새 탭에서 보기</a>' +
+        // 승인된 산출물만 지식베이스 후보(2026-11-20) — 업무 결재와 지식
+        // 결재는 별개라, 업무에서 승인 안 된 초안은 보내지 못한다.
+        (r.status === "approved" && ME.role !== "viewer" ? " " + knowledgeSubmitButton("deliverable", r.id) : "") +
         (canDelete ? ' <button class="small danger" data-gallery-delete="' + r.id + '">삭제</button>' : '') +
         '</div>' +
         '</div>';
@@ -4222,7 +4531,9 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     return '<div class="deliverable-card ' + side + '">' +
     '<div class="muted">' + esc(label(d.author_type)) + " · " + esc(label(d.status)) + " · " + esc(fmtTime(d.created_at)) + " " + gateBadge + '</div>' +
     '<div>' + renderContent(d.content, d.content_type, deliverableEditTarget) + '</div>' +
-    '<div class="actions"><button class="small" data-download-deliverable="' + d.id + '">다운로드</button></div>' +
+    '<div class="actions"><button class="small" data-download-deliverable="' + d.id + '">다운로드</button>' +
+    (d.status === "approved" && ME.role !== "viewer" ? knowledgeSubmitButton("deliverable", d.id) : "") +
+    '</div>' +
     evidenceBlock +
     promptBlock +
     decideActions +
@@ -6142,12 +6453,20 @@ function approvalTable(rows, withActions, personColumn) {
   headers.push("단계", "상태", "내용");
   if (withActions) headers.push("동작");
   return table(headers, rows.map(a => {
+    // 지식 등록(2026-11-20) — 대화에서 온 제출은 업무가 없는 게 정상이고
+    // (지워진 게 아님), 대상 이름(resource_name)에 이미 "지식 등록 — '제목'
+    // (출처)"가 다 들어 있다.
+    const isKnowledge = a.subject_type === "knowledge_submission";
     const taskCell = a.task_id != null
       ? "#" + a.task_id + " " + esc(a.task_role_name || "")
-      : '<span class="muted">(지워진 ' + esc(label(a.subject_type)) + " #" + a.subject_id + ")</span>";
-    const resourceCell = a.resource_name
-      ? esc(label(a.subject_type)) + ": " + esc(label(a.resource_type)) + " " + esc(a.resource_name)
-      : esc(label(a.subject_type));
+      : isKnowledge && a.resource_name
+        ? '<span class="muted">-</span>'
+        : '<span class="muted">(지워진 ' + esc(label(a.subject_type)) + " #" + a.subject_id + ")</span>";
+    const resourceCell = isKnowledge && a.resource_name
+      ? esc(a.resource_name)
+      : a.resource_name
+        ? esc(label(a.subject_type)) + ": " + esc(label(a.resource_type)) + " " + esc(a.resource_name)
+        : esc(label(a.subject_type));
     const contentCell = a.content
       ? '<button type="button" class="small" data-approval-content-toggle="' + a.id + '">내용 보기</button>'
       : '<span class="muted">-</span>';
@@ -6163,6 +6482,8 @@ function approvalTable(rows, withActions, personColumn) {
         row.push(a.approved_by_username ? esc(a.approved_by_username) : '<span class="muted">-</span>');
       } else if (a.approver_id != null) {
         row.push(esc(a.approver_username || ("#" + a.approver_id)));
+      } else if (isKnowledge) {
+        row.push('<span class="muted">Admin</span>');
       } else {
         row.push('<span class="muted">미지정(Admin/매니저 누구나)</span>');
       }
@@ -6171,7 +6492,7 @@ function approvalTable(rows, withActions, personColumn) {
     if (withActions) {
       row.push(a.status === "pending"
         ? '<div class="actions">' +
-          '<input placeholder="사유(선택)" data-decide-reason-for="' + a.id + '" style="width:120px">' +
+          '<input placeholder="' + (isKnowledge ? "사유(반려 시 필수)" : "사유(선택)") + '" data-decide-reason-for="' + a.id + '" style="width:120px">' +
           '<button class="small" data-decide="' + a.id + '" data-approve="1">승인</button>' +
           '<button class="small danger" data-decide="' + a.id + '" data-approve="0">반려</button></div>'
         : "");
@@ -6212,9 +6533,11 @@ async function renderJobs(content) {
     '<section class="card"><h2>AI 에이전트 생성</h2>' +
     '<form class="inline" id="job-form">' +
     '<select id="job-brief-id" required style="width:220px">' + briefOptionsHtml + '</select>' +
-    '<select id="job-framework"><option value="stub">stub(무료 스텁)</option>' +
+    // 기본 선택(2026-11-21, 하드코딩 점검 5번) — 예전엔 첫 항목인 stub(자리표시자만
+    // 만들고 아무것도 검증하지 않음)이 기본이었다. 실제로 쓰는 방식(crewai)을 기본으로.
+    '<select id="job-framework"><option value="crewai" selected>crewai(실제 CrewAI Agent)</option>' +
     '<option value="simple_llm">simple_llm(1회 LLM 호출)</option>' +
-    '<option value="crewai">crewai(실제 CrewAI Agent)</option></select>' +
+    '<option value="stub">stub(등록만 — LLM 호출·검증 없음)</option></select>' +
     '<select id="job-provider"><option value="">provider 자동 판별</option>' +
     '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
     '<option value="ollama">Ollama(로컬)</option></select>' +
@@ -6225,7 +6548,7 @@ async function renderJobs(content) {
       '<ul class="muted help-list">' +
       '<li><b>stub</b>(무료): LLM을 전혀 호출하지 않는 규칙 기반 스텁입니다 — 역할명·스킬로 자리표시자 산출물만 만들고 즉시 끝납니다. 조직도/배정 흐름만 비용 없이 채워보고 싶을 때 씁니다.</li>' +
       '<li><b>simple_llm</b>(비용 발생): 실제 LLM API를 딱 한 번만 호출해 "이 역할이 처음 맡을 산출물 하나"를 받아옵니다. CrewAI 같은 프레임워크 오버헤드 없이 가장 가벼운 실제 호출입니다.</li>' +
-      '<li><b>crewai</b>(비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 지식검색/관계조회 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 실행" 탭에서 바로 협업시킬 Agent를 만들 때 씁니다.</li>' +
+      '<li><b>crewai</b>(비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 내부지식검색/조직배정관계조회 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 실행" 탭에서 바로 협업시킬 Agent를 만들 때 씁니다.</li>' +
       '<li>만든 Agent는 이 탭이 아니라 "AI 에이전트 관리" 탭에서 온보딩 승인(pending_onboarding → active) 후에야 실제 업무 배정·실행에 쓸 수 있습니다.</li>' +
       '<li><b>중복 방지</b>: 같은 할 일(역할)에 이미 생성된 Agent가 있으면 새 Agent를 만들지 않고 기존 것을 재사용합니다 — 이 경우 "AI 에이전트 관리"에 새 행이 안 생기는데, 결과에 "재사용" 배지와 안내가 표시됩니다. 새 Agent를 만들려면 다른 할 일을 고르세요.</li>' +
       '</ul>'
@@ -6668,48 +6991,132 @@ function _renderOptimizeRecommendation(agentId, rec, source) {
   html += "</div>";
   return html;
 }
+// ---------- 에이전트 설정 창(2026-11-21) ----------
+// 한 줄 = 이름(+기술명) | 입력 | 설명. 입력란 id는 그대로라 저장 핸들러는 바뀌지 않는다.
+function _asRow(label, code, controlHtml, hint) {
+  return '<div class="as-row"><div class="as-label">' + label + (code ? '<code>' + code + '</code>' : '') + '</div>' +
+    '<div class="as-ctl">' + controlHtml + '</div>' +
+    (hint ? '<div class="as-hint">' + hint + '</div>' : '') + '</div>';
+}
+function _asSection(title, scopeBadges, intro, body) {
+  return '<section class="as-section"><h4>' + title + (scopeBadges || "") + '</h4>' +
+    (intro ? '<p class="muted">' + intro + '</p>' : '') + body + '</section>';
+}
+const _AS_SCOPE_ALL = '<span class="as-scope" title="대화 @멘션·업무 실행·실행 버튼(직접 호출)과 Crew 실행 모두">모든 실행</span>';
+const _AS_SCOPE_CREW = '<span class="as-scope" title="팀 Agent 실행·파이프라인·Crew 실행">Crew 실행 전용</span>';
+const _AS_SCOPE_MENTION = '<span class="as-scope" title="대화에서 @멘션했을 때">대화 @멘션</span>';
+
 function tuningFormHtml(a) {
   const t = a.tuning_config || {};
-  const num = (id, value, placeholder) =>
+  const num = (id, value, placeholder, extra) =>
     '<input type="number" id="' + id + '" value="' + (value === undefined || value === null ? "" : value) +
-    '" placeholder="' + placeholder + '" style="width:5rem">';
-  return '<details><summary>파인튜닝</summary>' +
-    '<div class="inline" style="flex-wrap:wrap">' +
-    '<label>max_iter ' + num("tune-maxiter-" + a.id, t.max_iter, "기본값") + '</label>' +
-    '<label>max_rpm ' + num("tune-maxrpm-" + a.id, t.max_rpm, "무제한") + '</label>' +
-    '<label>max_execution_time(초) ' + num("tune-maxtime-" + a.id, t.max_execution_time, "무제한") + '</label>' +
-    '<label>max_retry_limit ' + num("tune-maxretry-" + a.id, t.max_retry_limit, "기본값") + '</label>' +
-    '<label>temperature <input type="number" step="0.1" min="0" max="2" id="tune-temp-' + a.id +
-    '" value="' + (t.temperature ?? "") + '" placeholder="기본값" style="width:5rem">' +
-    '<small style="display:block;color:#888">Anthropic은 0~1만 허용 — 1 초과는 OpenAI/Ollama 전용으로 두세요</small></label>' +
-    '<label>reasoning ' + _tuneTriStateHtml("tune-reasoning-" + a.id, t.reasoning ?? null) + '</label>' +
-    '<label>max_reasoning_attempts ' + num("tune-maxreasonattempts-" + a.id, t.max_reasoning_attempts, "무제한(reasoning 켰을 때만 의미 있음)") + '</label>' +
-    '<label>코드 실행 허용 ' + _tuneTriStateHtml("tune-codeexec-" + a.id, t.allow_code_execution ?? null) + '</label>' +
-    '<label>컨텍스트 자동 축소 ' + _tuneTriStateHtml("tune-respectctx-" + a.id, t.respect_context_window ?? null) + '</label>' +
-    '<button class="small" data-set-tuning="' + a.id + '">파인튜닝 저장</button>' +
-    '</div></details>';
+    '" placeholder="' + placeholder + '" ' + (extra || "") + '>';
+  const common =
+    _asRow("창의성(온도)", "temperature",
+      num("tune-temp-" + a.id, t.temperature, "모델 기본값", 'step="0.1" min="0" max="2"'),
+      "낮을수록 일관된 답, 높을수록 다양한 답. Anthropic은 최대 1까지만 받아 1을 넘으면 1로 맞춰 보냅니다.") +
+    _asRow("실행 시간 제한(초)", "max_execution_time",
+      num("tune-maxtime-" + a.id, t.max_execution_time, "기본값", 'min="1"'),
+      "한 번 실행에 쓸 수 있는 최대 시간입니다. 직접 호출에서는 LLM 응답 대기 한도로 쓰입니다.") +
+    _asRow("최대 반복 횟수", "max_iter",
+      num("tune-maxiter-" + a.id, t.max_iter, "기본값", 'min="1"'),
+      "직접 호출에서는 도구 호출을 주고받는 최대 횟수, Crew 실행에서는 생각·행동 반복 상한입니다.") +
+    _asRow("추론 모드", "reasoning",
+      _tuneTriStateHtml("tune-reasoning-" + a.id, t.reasoning ?? null),
+      "켜면 Crew 실행에서 먼저 계획을 세우고, 직접 호출에서는 시간 제한을 넉넉하게 늘립니다(실행 시간 제한을 따로 정하면 그 값이 우선).") +
+    _asRow("품질 검토(자체 개선)", "self_review",
+      _tuneTriStateHtml("tune-selfreview-" + a.id, t.self_review ?? null),
+      "켜면 대화 @멘션·업무 실행에서 초안을 스킬 기준과 품질 기준으로 한 번 더 점검해 고친 최종본을 냅니다. LLM 호출이 한 번 더 들어가 응답이 그만큼 늦어집니다(Crew 실행에는 적용되지 않음). 보고서·제안서처럼 품질이 중요한 Agent에 권장합니다.");
+  const crewOnly =
+    _asRow("분당 최대 호출 수", "max_rpm", num("tune-maxrpm-" + a.id, t.max_rpm, "무제한", 'min="1"'), "") +
+    _asRow("재시도 횟수", "max_retry_limit", num("tune-maxretry-" + a.id, t.max_retry_limit, "기본값", 'min="0"'), "오류가 났을 때 다시 시도하는 횟수입니다.") +
+    _asRow("추론 시도 횟수", "max_reasoning_attempts", num("tune-maxreasonattempts-" + a.id, t.max_reasoning_attempts, "무제한", 'min="1"'), "추론 모드를 켰을 때만 의미가 있습니다.") +
+    _asRow("코드 실행 허용", "allow_code_execution", _tuneTriStateHtml("tune-codeexec-" + a.id, t.allow_code_execution ?? null), "") +
+    _asRow("컨텍스트 자동 축소", "respect_context_window", _tuneTriStateHtml("tune-respectctx-" + a.id, t.respect_context_window ?? null),
+      "실행 도중 모델 한도를 넘으면 앞부분을 요약해 계속합니다. 보내기 전에 자르는 기준은 모델 레지스트리의 ‘컨텍스트 한도’입니다.");
+  return _asSection("파인튜닝", "",
+    "LLM 가중치 재학습이 아니라 실행 동작 설정입니다. 비워 두면 기본값을 씁니다. 같은 항목을 모델 레지스트리에서도 정했다면 여기(에이전트) 값이 우선합니다.",
+    '<div class="as-sub">공통 설정' + _AS_SCOPE_ALL + '</div>' + common +
+    '<div class="as-sub">Crew 실행 설정' + _AS_SCOPE_CREW + '</div>' + crewOnly +
+    '<div class="as-save"><button class="small" data-set-tuning="' + a.id + '">파인튜닝 저장</button></div>');
 }
 
-// 사용자 요청(2026-10-20, "CrewAI 에이전트... role, goal, backstory,
-// tool... 상세조정하고 수정하기 위한 고급 에이전트 관리 기능") —
-// 지금까지 `Agent.goal`/`backstory`는 역할명+스킬로 매번 자동 생성됐고
-// `Task.expected_output`은 플랫폼 전역 하드코딩 문구 하나뿐이었다.
-// 비워두면 그대로 자동 생성(하위 호환) — `effective_*`(서버가 미리
-// 계산해 보내주는 "지금 실제로 적용 중인 값")를 placeholder로 보여줘
-// 뭐가 쓰이고 있는지 먼저 보이게 한다.
+// 역할/인격(2026-10-20 도입, 2026-11-21부터 직접 호출에도 적용) — 비워두면
+// 역할명·스킬로 자동 생성한 값(placeholder로 보여줌)을 쓴다.
 function personaFormHtml(a) {
-  const field = (id, label, stored, effective) =>
-    '<label style="display:block;margin-top:0.4rem">' + label + '<br>' +
-    '<textarea id="' + id + '" rows="3" style="width:100%;box-sizing:border-box;margin-top:0.2rem" ' +
-    'placeholder="비워두면 자동 생성: ' + escAttr(effective || "") + '">' + esc(stored || "") + '</textarea></label>';
-  return '<details><summary>역할/인격(goal·backstory·expected_output)</summary>' +
-    '<p class="muted">CrewAI Crew 실행(팀 Agent 실행·파이프라인·Crew 실행)에만 적용됩니다 — "실행(일 시키기)" 단독 호출에는 적용되지 않습니다(파인튜닝과 같은 범위). 빈 칸으로 저장하면 그 항목만 자동 생성으로 되돌아갑니다.</p>' +
-    field("persona-goal-" + a.id, "Goal(목표)", a.goal, a.effective_goal) +
-    field("persona-backstory-" + a.id, "Backstory(배경)", a.backstory, a.effective_backstory) +
-    field("persona-expected-" + a.id, "Expected Output(기대 산출물)", a.expected_output, a.effective_expected_output) +
-    '<button class="small" data-set-persona="' + a.id + '" style="margin-top:0.4rem">역할/인격 저장</button>' +
-    '</details>';
+  const field = (id, label, code, stored, effective, hint) =>
+    _asRow(label, code,
+      '<textarea id="' + id + '" rows="3" placeholder="비워두면 자동 생성: ' + escAttr(effective || "") + '">' + esc(stored || "") + '</textarea>', hint);
+  return _asSection("역할/인격", _AS_SCOPE_ALL,
+    "직접 적은 값은 대화 @멘션·업무 실행에서는 시스템 프롬프트에, Crew 실행에서는 Agent·Task 정의에 들어갑니다. 빈 칸으로 저장하면 그 항목만 자동 생성으로 돌아갑니다.",
+    field("persona-goal-" + a.id, "목표", "goal", a.goal, a.effective_goal, "") +
+    field("persona-backstory-" + a.id, "배경", "backstory", a.backstory, a.effective_backstory, "") +
+    field("persona-expected-" + a.id, "기대 산출물", "expected_output", a.expected_output, a.effective_expected_output, "결과물의 형식·분량 지시(예: ‘HTML 발표자료로 작성’).") +
+    '<div class="as-save"><button class="small" data-set-persona="' + a.id + '">역할/인격 저장</button></div>');
 }
+
+// 대화 컨텍스트 정책(2026-11-20) — 이 Agent를 대화에서 `@멘션`했을 때의
+// 이전 대화/첨부 사용. "스킬 기본"이면 Agent 스킬들 중 가장 포괄적인 값.
+function contextPolicyFormHtml(a) {
+  const eff = a.effective_context_policy || { history: "full", attachments: true };
+  const historyOptions = [["", "스킬 기본"], ["full", "전체(최근 10건+요약)"], ["recent", "최근 1~2턴"], ["none", "사용 안 함"]]
+    .map(([v, t]) => '<option value="' + v + '"' + ((a.history_mode || "") === v ? " selected" : "") + '>' + t + '</option>').join("");
+  const attachKey = a.use_attachments === null || a.use_attachments === undefined ? "" : (a.use_attachments ? "1" : "0");
+  const attachOptions = [["", "스킬 기본"], ["1", "사용"], ["0", "사용 안 함"]]
+    .map(([v, t]) => '<option value="' + v + '"' + (attachKey === v ? " selected" : "") + '>' + t + '</option>').join("");
+  return _asSection("대화 컨텍스트", _AS_SCOPE_MENTION,
+    '현재 적용: 이전 대화 <b>' + esc(_HISTORY_MODE_LABEL[eff.history]) + '</b> · 첨부 <b>' + (eff.attachments ? "사용" : "사용 안 함") + '</b>. ' +
+    '"스킬 기본"이면 이 Agent 스킬들 중 맥락이 가장 많이 필요한 쪽을 따릅니다. 대화에서 메시지마다 "이전 대화" 칩으로 바꿀 수도 있습니다(그 값이 가장 우선).',
+    _asRow("이전 대화", "", '<select id="ctx-history-' + a.id + '">' + historyOptions + '</select>', "") +
+    _asRow("첨부 자료", "", '<select id="ctx-attach-' + a.id + '">' + attachOptions + '</select>', "") +
+    '<div class="as-save"><button class="small" data-set-context-policy="' + a.id + '">대화 컨텍스트 저장</button></div>');
+}
+
+// 설정 창 열기 — 행 안에 숨겨 렌더링한 설정 본문(#agent-settings-<id>)을 창으로
+// 옮긴다(버튼에 걸린 저장 핸들러가 그대로 따라온다). 저장 후 목록이 다시 그려지면
+// `_reattachAgentSettings()`가 새 본문으로 바꿔 끼워 창과 입력값을 유지한다.
+let _agentSettingsOpenId = null;
+function openAgentSettings(agentId, title) {
+  closeAgentSettings();
+  const body = document.getElementById("agent-settings-" + agentId);
+  if (!body) return;
+  _agentSettingsOpenId = String(agentId);
+  const overlay = document.createElement("div");
+  overlay.className = "confirm-modal-overlay";
+  overlay.id = "agent-settings-overlay";
+  overlay.innerHTML =
+    '<div class="confirm-modal-box as-box" role="dialog" aria-modal="true">' +
+    '<div class="as-head"><h3></h3><button type="button" class="small" data-as-close>닫기</button></div>' +
+    '<div class="as-msg" id="agent-settings-msg"></div>' +
+    '<div class="as-body"></div></div>';
+  overlay.querySelector("h3").textContent = "⚙ " + title + " 설정";
+  overlay.querySelector(".as-body").appendChild(body);
+  body.hidden = false;
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay || ev.target.closest("[data-as-close]")) closeAgentSettings();
+  });
+  document.body.appendChild(overlay);
+}
+function closeAgentSettings() {
+  const overlay = document.getElementById("agent-settings-overlay");
+  if (overlay) overlay.remove();
+  _agentSettingsOpenId = null;
+}
+function _reattachAgentSettings() {
+  const overlay = document.getElementById("agent-settings-overlay");
+  if (!overlay) return;
+  const fresh = document.getElementById("agent-settings-" + _agentSettingsOpenId);
+  const holder = overlay.querySelector(".as-body");
+  if (!fresh || fresh.closest("#agent-settings-overlay")) { if (!fresh) closeAgentSettings(); return; }
+  const scroll = holder.scrollTop;
+  holder.innerHTML = "";
+  holder.appendChild(fresh);
+  fresh.hidden = false;
+  holder.scrollTop = scroll;
+}
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && document.getElementById("agent-settings-overlay")) closeAgentSettings();
+});
 
 async function renderAgentPool(content) {
   const agents = await api("GET", "/api/agent-pool");
@@ -6729,8 +7136,8 @@ async function renderAgentPool(content) {
     '<li>신규 Agent는 전부 pending_onboarding 상태로 생기고, <b>온보딩 승인</b>을 눌러야 active가 돼 "인력 검색"·매칭 후보로 노출됩니다.</li>' +
     '<li><b>오프보딩</b>(active→deprecated)은 이 화면에서 되돌릴 버튼이 없습니다 — 다시 쓰려면 관리자가 API/DB를 직접 손대야 합니다.</li>' +
     '<li><b>모델 설정</b>은 이 에이전트가 기본으로 쓸 LLM provider/model을 저장만 합니다(비용 없음).</li>' +
-    '<li><b>실행</b>은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 지식검색이 있으면 지식검색(RAG), 관계조회가 있으면 관계분석 방식으로 자동 동작합니다.</li>' +
-    '<li><b>지식베이스로 보내기</b>는 이 에이전트의 산출물을 임베딩해 지식검색 에이전트가 찾을 수 있게 저장합니다(비용 발생).</li>' +
+    '<li><b>실행</b>은 온보딩된(활성) 에이전트에게 실제로 업무를 맡깁니다 — 설정해둔 모델(없으면 전역 기본값)로 실제 API를 호출하므로 비용이 발생합니다. 스킬에 내부지식검색이 있으면 내부지식검색(RAG), 조직배정관계조회가 있으면 관계분석 방식으로 자동 동작합니다.</li>' +
+    '<li>에이전트 결과물을 지식베이스에 남기려면 <b>대화 메시지</b>나 <b>승인된 산출물</b>(갤러리·업무 화면)에서 "지식베이스로 보내기"를 누르세요 — admin 결재 후 등록됩니다.</li>' +
     '<li><b>MCP 서버(JSON)</b>에 예: [{"url":"http://localhost:8000/mcp","transport":"streamable-http"}] 형태로 넣으면 "Crew 실행" 시 이 Agent에 실제 MCP 도구가 붙습니다 — 빈 칸으로 두고 저장하면 기존 설정을 그대로 둡니다.</li>' +
     '<li><b>도구 연결</b>은 아래에서 "도구/스킬 Pool"에 등록된 도구를 골라 연결하면, 스킬 매칭과 무관하게 그 Agent에 도구가 하나 더 붙습니다.</li>' +
     // 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정하고... AI
@@ -6742,8 +7149,9 @@ async function renderAgentPool(content) {
     // 우선 쓰이게 한다(지정 안 하면 기존처럼 역할명 그대로 — 100% 하위
     // 호환).
     '<li><b>이름</b>은 선택 입력입니다 — 지정하면 매칭 결과·Crew 실행·팀 멤버·결재·인박스·채팅 @멘션 등 이 Agent가 보이는 모든 화면에서 역할명 대신 그 이름이 먼저 보입니다. 비워서 저장하면 다시 역할명으로 돌아갑니다.</li>' +
-    '<li><b>파인튜닝</b>은 실제 LLM 가중치 재학습이 아니라 CrewAI Agent/LLM의 동작 파라미터(반복 횟수·분당 호출 제한·실행 시간 제한·재시도 횟수·temperature·reasoning·코드 실행 허용·컨텍스트 윈도우 자동 축소)를 저장합니다 — <b>framework가 crewai인 Agent가 "Crew 실행"에 투입될 때만</b> 반영되고, stub/simple_llm Agent나 생성 직후 단일 실행에는 적용되지 않습니다. 비워두면 CrewAI 기본값을 그대로 씁니다.</li>' +
-    '<li><b>역할/인격(goal·backstory·expected_output)</b>은 지금까지 역할명·스킬로 매번 자동 생성되던 CrewAI Agent의 목표·배경과, 플랫폼 공통 문구였던 기대 산출물을 Agent별로 직접 덮어씁니다 — 파인튜닝과 같은 범위(Crew 실행 전용)이고, 비워두면 역시 자동 생성으로 돌아갑니다.</li>' +
+    '<li><b>⚙ 설정</b>을 누르면 설정 창이 열립니다. 구역마다 적용 범위 표시가 있습니다 — <b>모든 실행</b>(대화 @멘션·업무 실행·실행 버튼과 Crew 실행), <b>Crew 실행 전용</b>, <b>대화 @멘션</b>.</li>' +
+    '<li><b>파인튜닝</b>은 LLM 가중치 재학습이 아니라 실행 동작 설정입니다. 온도·실행 시간 제한·최대 반복 횟수·추론 모드는 모든 실행에, 분당 호출 수·재시도·코드 실행·컨텍스트 자동 축소는 Crew 실행에만 적용됩니다. 비워두면 기본값을 씁니다.</li>' +
+    '<li><b>역할/인격(목표·배경·기대 산출물)</b>은 역할명·스킬로 자동 생성되던 값을 Agent별로 직접 덮어씁니다 — 모든 실행에 적용되고, 비워두면 자동 생성으로 돌아갑니다.</li>' +
     '<li><b>삭제</b>(관리자 전용)는 레코드를 완전히 지웁니다(되돌릴 수 없음) — 확정된(confirmed) 배정이 있으면 막힙니다.</li>' +
     '</ul>'
     ) +
@@ -6775,60 +7183,63 @@ async function renderAgentPool(content) {
       }
       if (canExecute && a.status === "active") {
         actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
-        // "지식 색인"만 남긴다 — 이 Agent 자신의 산출물을 "지식
-        // 베이스"(전역·영구)로 승격하는 기능이라 Agent 화면이 맞는
-        // 자리다. 반면 "참고자료 업로드"(2026-10-26, 1차)는 업무 맥락이
-        // 없는 이 화면에 있던 게 원래 문제였다 — 사용자 분석(2026-10-26,
-        // 2차, "A안 + B안")으로 "업무 실행 1회성 참고자료는 저장 없이
-        // 그 실행에만 첨부돼야 한다"가 정리돼, 실제 업무 맥락이 있는
-        // 협업 워크스페이스의 "AI 에이전트 실행" 카드로 옮기고 여기서는
-        // 없앴다(`renderCollabWorkspace()`의 `ws-execute-attach-btn`
-        // 참고).
-        actions += '<button class="small" data-index-knowledge="' + a.id + '">지식베이스로 보내기</button>';
+        // 사용자 요청(2026-11-20, 지식베이스 등록 체계 개편) — 여기 있던
+        // "지식베이스로 보내기"(Agent의 `last_output`을 결재 없이 즉시
+        // 색인)는 삭제했다. 그 값은 어느 경로든 "마지막 출력 하나"라
+        // 승인 여부·출처를 보장할 수 없었다 — Agent 결과물은 대화 메시지나
+        // 승인된 산출물에서 "지식베이스로 보내기"(admin 결재) 경로로만
+        // 지식이 된다.
       }
+      // ⚙ 설정(2026-11-21 개편) — 구역별 한 줄씩 정리한 본문을 행 안에 숨겨 두고,
+      // 버튼을 누르면 넓은 설정 창으로 연다(`openAgentSettings`).
       let settings = "";
       if (canExecute) {
-        settings +=
-          '<span class="pair"><input placeholder="이름(비우면 역할명으로)" id="name-' + a.id + '" value="' + escAttr(a.name || "") + '" style="width:140px">' +
-          '<button class="small" data-set-name="' + a.id + '">이름 저장</button></span>';
-      }
-      if (isAdmin) {
-        settings +=
-          '<span class="pair"><input type="number" step="0.01" placeholder="비용" id="cost-' + a.id + '">' +
-          '<button class="small" data-set-cost="' + a.id + '">비용입력</button></span>' +
-          '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="ascore-' + a.id + '">' +
-          '<button class="small" data-set-ascore="' + a.id + '">점수입력</button></span>';
-      }
-      if (canExecute) {
         const providers = ["anthropic", "openai", "ollama"];
-        settings += '<select id="provider-' + a.id + '">' +
-          providers.map(p => '<option value="' + p + '"' + (p === a.llm_provider ? " selected" : "") + ">" + p + "</option>").join("") +
-          "</select>" +
-          modelSelectHtml("model-" + a.id) +
-          '<input placeholder="MCP 서버(JSON, 비우면 유지)" id="mcp-' + a.id + '" value="' + esc(a.mcp_servers && a.mcp_servers.length ? JSON.stringify(a.mcp_servers) : "").replace(/"/g, "&quot;") + '">' +
-          '<button class="small" data-set-model="' + a.id + '">모델 설정</button>';
-      }
-      if (canExecute) {
+        settings += _asSection("기본", "", "",
+          _asRow("이름", "", '<input class="as-wide" placeholder="비우면 역할명으로 표시" id="name-' + a.id + '" value="' + escAttr(a.name || "") + '">' +
+            '<button class="small" data-set-name="' + a.id + '">이름 저장</button>', "") +
+          _asRow("LLM", "provider / model",
+            '<select id="provider-' + a.id + '">' +
+            providers.map(p => '<option value="' + p + '"' + (p === a.llm_provider ? " selected" : "") + ">" + p + "</option>").join("") +
+            "</select>" + modelSelectHtml("model-" + a.id),
+            "현재: " + (a.llm_provider ? esc(a.llm_provider) + " / " + esc(a.llm_model || "") : "전역 기본값") +
+            ". 생성 옵션(top_k·top_p)은 모델 레지스트리에서 모델별로 정합니다.") +
+          _asRow("MCP 서버", "JSON",
+            '<input class="as-wide" placeholder="예: [{&quot;url&quot;:&quot;http://localhost:8000/mcp&quot;,&quot;transport&quot;:&quot;streamable-http&quot;}]" id="mcp-' + a.id + '" value="' +
+            esc(a.mcp_servers && a.mcp_servers.length ? JSON.stringify(a.mcp_servers) : "").replace(/"/g, "&quot;") + '">',
+            "비우고 저장하면 기존 설정을 유지합니다. Crew 실행 때 이 Agent에 MCP 도구가 붙습니다.") +
+          '<div class="as-save"><button class="small" data-set-model="' + a.id + '">모델 설정 저장</button></div>');
         const toolOptions = tools.length
           ? tools.map(t => '<option value="' + t.id + '">' + esc(t.name) + " (#" + t.id + ")" +
               (a.linked_tool_ids.includes(t.id) ? " — 연결됨" : "") + '</option>').join("")
           : '<option value="">(등록된 도구 없음)</option>';
-        settings +=
-          '<select id="linktool-' + a.id + '">' + toolOptions + '</select>' +
-          '<span class="pair"><button class="small" data-link-tool="' + a.id + '">연결</button>' +
-          '<button class="small" data-unlink-tool="' + a.id + '">해제</button></span>' +
-          '<span class="muted">연결된 도구: ' + (a.linked_tool_ids.length
-            ? a.linked_tool_ids.map(id => esc(toolNameById[id] || ("#" + id))).join(", ")
-            : "없음(스킬 기반 자동 연결은 별도)") + '</span>';
-      }
-      if (canExecute) {
+        settings += _asSection("도구 연결", "", "",
+          _asRow("도구", "",
+            '<select id="linktool-' + a.id + '">' + toolOptions + '</select>' +
+            '<button class="small" data-link-tool="' + a.id + '">연결</button>' +
+            '<button class="small" data-unlink-tool="' + a.id + '">해제</button>',
+            "연결됨: " + (a.linked_tool_ids.length
+              ? a.linked_tool_ids.map(id => esc(toolNameById[id] || ("#" + id))).join(", ")
+              : "없음(스킬 기반 자동 연결은 별도)")));
         settings += tuningFormHtml(a);
         settings += personaFormHtml(a);
-        settings += '<div><button class="small" data-recommend-optimize="' + a.id +
-          '">⚡ 최적화 추천</button><div id="optimize-result-' + a.id + '"></div></div>';
+        settings += contextPolicyFormHtml(a);
+      }
+      if (isAdmin) {
+        settings += _asSection("운영 지표", '<span class="as-scope">관리자</span>', "",
+          _asRow("비용", "", '<input type="number" step="0.01" placeholder="현재 ' + esc(String(a.cost_estimate ?? "-")) + '" id="cost-' + a.id + '">' +
+            '<button class="small" data-set-cost="' + a.id + '">비용 입력</button>', "") +
+          _asRow("성과점수(수동)", "0~1", '<input type="number" step="0.01" min="0" max="1" placeholder="현재 ' +
+            (a.performance_score === null ? "-" : esc(String(a.performance_score))) + '" id="ascore-' + a.id + '">' +
+            '<button class="small" data-set-ascore="' + a.id + '">점수 입력</button>', ""));
+      }
+      if (canExecute) {
+        settings += _asSection("최적화 추천", "", "역할·스킬을 보고 등록된 모델 중 알맞은 모델과 파인튜닝 값을 추천합니다(규칙 기반, 비용 없음).",
+          '<div><button class="small" data-recommend-optimize="' + a.id + '">⚡ 최적화 추천</button><div id="optimize-result-' + a.id + '"></div></div>');
       }
       if (settings) {
-        actions += '<details><summary>⚙ 설정</summary><div class="inline" style="flex-wrap:wrap;align-items:center">' + settings + '</div></details>';
+        actions += '<button class="small" data-open-agent-settings="' + a.id + '" data-agent-title="' + escAttr(a.name || a.role_name || ("#" + a.id)) + '">⚙ 설정</button>' +
+          '<div id="agent-settings-' + a.id + '" hidden>' + settings + '</div>';
       }
       // 사용자 보고(2026-10-14, "최근 산출물도 전체화면/복사 가능한
       // 형태로 개선") — `last_output`은 보통 수백~수천 자짜리 실제
@@ -6838,7 +7249,12 @@ async function renderAgentPool(content) {
       // 똑같이 `renderContent()`(Claude Artifact 스타일 — 복사·전체화면
       // 버튼은 전역 위임으로 이미 연결돼 있어 추가 배선 불필요)로
       // 렌더링한다.
-      const output = a.last_output ? renderContent(a.last_output) : '<span class="muted">-</span>';
+      // 완성된 HTML 문서(발표자료 등)는 마크다운이 아니라 샌드박스
+      // iframe으로 렌더링한다 — 앱 DOM에 직접 넣으면 그 안의 `<style>`이
+      // 이 목록 테이블 전체의 폰트/색을 덮어쓴다(2026-11-19 사용자 보고).
+      const output = a.last_output
+        ? renderContent(a.last_output, _looksLikeFullHtmlDocument(a.last_output) ? "html" : undefined)
+        : '<span class="muted">-</span>';
       const llmInfo = a.llm_provider ? esc(a.llm_provider) + "/" + esc(a.llm_model || "") : "-";
       // Phase 3 aggregate_agent_score() — 관리자 수동 점수와 별도로,
       // 이 Agent가 만든 산출물들의 실측 Gate A-G/TCR 평균을 보여준다
@@ -6905,6 +7321,9 @@ async function renderAgentPool(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  content.querySelectorAll("[data-open-agent-settings]").forEach(btn => {
+    btn.onclick = () => openAgentSettings(btn.dataset.openAgentSettings, btn.dataset.agentTitle);
+  });
   content.querySelectorAll("[data-set-cost]").forEach(btn => {
     btn.onclick = async () => {
       const v = document.getElementById("cost-" + btn.dataset.setCost).value;
@@ -6949,6 +7368,7 @@ async function renderAgentPool(content) {
         max_reasoning_attempts: numOrNull("tune-maxreasonattempts-" + id),
         allow_code_execution: triOrNull("tune-codeexec-" + id),
         respect_context_window: triOrNull("tune-respectctx-" + id),
+        self_review: triOrNull("tune-selfreview-" + id),
       };
       try {
         await api("PATCH", "/api/agent-pool/" + id + "/tuning", payload);
@@ -6968,6 +7388,21 @@ async function renderAgentPool(content) {
       try {
         await api("PATCH", "/api/agent-pool/" + id + "/persona", payload);
         showMsg("global-msg", "역할/인격 설정을 저장했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-set-context-policy]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.setContextPolicy;
+      const history = document.getElementById("ctx-history-" + id).value;
+      const attach = document.getElementById("ctx-attach-" + id).value;
+      try {
+        await api("PATCH", "/api/agent-pool/" + id + "/context-policy", {
+          history_mode: history || null,
+          use_attachments: attach === "" ? null : attach === "1",
+        });
+        showMsg("global-msg", "대화 컨텍스트 설정을 저장했습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
@@ -7005,15 +7440,6 @@ async function renderAgentPool(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
-  content.querySelectorAll("[data-index-knowledge]").forEach(btn => {
-    btn.onclick = async () => {
-      if (!(await confirmModal("이 에이전트의 최근 산출물을 임베딩해 색인합니다(실제 임베딩 API 호출 — 비용 발생). 계속할까요?"))) return;
-      try {
-        await withBusy(btn, "보내는 중…", () => api("POST", "/api/agent-pool/" + btn.dataset.indexKnowledge + "/index-knowledge", {}));
-        showMsg("global-msg", "지식베이스로 보냈습니다 — RAG 검색에서 바로 찾을 수 있습니다.", "ok");
-      } catch (e) { showMsg("global-msg", e.message, "error"); }
-    };
-  });
   content.querySelectorAll("[data-link-tool]").forEach(btn => {
     btn.onclick = async () => {
       const id = btn.dataset.linkTool;
@@ -7038,6 +7464,8 @@ async function renderAgentPool(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  // 저장 핸들러를 모두 붙인 뒤에 열린 설정 창의 본문을 새 것으로 바꿔 끼운다.
+  _reattachAgentSettings();
 }
 
 /* ---------- LLM 설정 최적화(일괄) ---------- */
@@ -7585,6 +8013,19 @@ async function renderPoolRegistry(content) {
         (s.category === "sw_dev"
           ? '<p class="muted" style="margin-top:0.2rem">⚠ 분류가 "개발업무"라 이 체크박스를 켜도 대화창 드롭다운에는 default로 안 뜹니다 — 대화창의 "개발업무 스킬도 보기" 체크박스를 켠 사용자에게만 보입니다.</p>'
           : "") +
+        // 대화 컨텍스트 정책(2026-11-20) — 이 스킬로 대화할 때의 기본값.
+        '<div style="margin-top:0.6rem"><b>대화 컨텍스트 기본값</b> ' +
+        '<span class="muted">(대화에서 이 스킬로 물을 때 — 사용자가 메시지마다 "이전 대화" 칩으로 바꿀 수 있음)</span><br>' +
+        '<label class="muted">이전 대화 <select id="spe-history-mode">' +
+        [["full", "전체(최근 10건+요약)"], ["recent", "최근 1~2턴"], ["none", "사용 안 함(현재 질문만)"]]
+          .map(([v, t]) => '<option value="' + v + '"' + (s.history_mode === v ? " selected" : "") + '>' + t + '</option>').join("") +
+        '</select></label> ' +
+        '<label class="muted"><input type="checkbox" id="spe-use-attachments"' + (s.use_attachments ? " checked" : "") + '> 대화 첨부 자료 사용</label></div>' +
+        // 스킬 포함 관계(2026-11-20) — 이 스킬을 쓸 때 함께 적용할 스킬.
+        // 예: 제안서작성 → 프레젠테이션작성(슬라이드 형식·디자인 규칙을 가져온다).
+        '<label style="display:block;margin-top:0.6rem"><b>함께 적용할 스킬</b> ' +
+        '<span class="muted">(쉼표로 구분 — 이 스킬을 고르면 그 스킬의 지침·출력 형식·제약사항도 함께 프롬프트에 들어갑니다)</span>' +
+        '<input id="spe-includes" value="' + escAttr((s.includes || []).join(", ")) + '" placeholder="예: 프레젠테이션작성" style="width:100%;box-sizing:border-box"></label>' +
         '<div class="actions" style="margin-top:0.6rem"><button class="primary" type="submit">저장</button>' +
         '<button class="small" type="button" id="skill-edit-cancel">취소</button></div>';
       btn.closest("tr").insertAdjacentHTML(
@@ -7608,6 +8049,9 @@ async function renderPoolRegistry(content) {
             output_format: tr.querySelector("#spe-output-format").value || null,
             examples: tr.querySelector("#spe-examples").value || null,
             constraints: tr.querySelector("#spe-constraints").value || null,
+            history_mode: tr.querySelector("#spe-history-mode").value,
+            use_attachments: tr.querySelector("#spe-use-attachments").checked,
+            includes: tr.querySelector("#spe-includes").value.split(",").map(x => x.trim()).filter(Boolean),
           });
           showMsg("global-msg", "스킬을 수정했습니다.", "ok");
           refresh();
@@ -8347,6 +8791,19 @@ async function renderModelRegistry(content) {
     'data-model-id="' + m.id + '" placeholder="미등록(기본값 사용)" ' +
     'value="' + (m.context_window || "") + '" style="width:8rem">' +
     '<button class="small" data-save-context-window="' + m.id + '">저장</button>';
+  // 모델별 생성 옵션(2026-11-21, "특정 모델만을 위한 하드코딩은 없도록") —
+  // top_k/top_p를 모델마다 등록한다. 비우면 보내지 않는다(그 모델의 기본값).
+  // OpenAI는 top_k를 지원하지 않아 입력란을 두지 않는다.
+  const samplingOptionsHtml = (m) => {
+    const o = m.sampling_options || {};
+    const topK = m.provider === "openai" ? "" :
+      '<input type="number" min="1" step="1" class="mr-top-k" data-model-id="' + m.id + '" placeholder="top_k" ' +
+      'value="' + (o.top_k ?? "") + '" style="width:5.5rem" title="top_k — 비우면 모델 기본값">';
+    return topK +
+      '<input type="number" min="0.01" max="1" step="0.01" class="mr-top-p" data-model-id="' + m.id + '" placeholder="top_p" ' +
+      'value="' + (o.top_p ?? "") + '" style="width:5.5rem" title="top_p(0~1) — 비우면 모델 기본값">' +
+      '<button class="small" data-save-sampling-options="' + m.id + '">저장</button>';
+  };
   // 사용자 요청(2026-11-12, "ollama, openai 등 프로바이더의 모델 성능
   // Test하고 결과 표시, 티어 추천 기능") — 고정 테스트 프롬프트 1건을
   // 실제로 호출해 속도(글자/초)를 재고, 그 속도만으로 tier를
@@ -8373,11 +8830,12 @@ async function renderModelRegistry(content) {
   const providerTableHtml = (provider) => {
     const rows = byProvider(provider);
     return "<h3>" + providerLabel[provider] + "</h3>" +
-      table(["모델명", "상태", "최적화 Tier 매핑", "컨텍스트 한도(토큰)", "성능 테스트", "동작"], rows.map(m => [
+      table(["모델명", "상태", "최적화 Tier 매핑", "컨텍스트 한도(토큰)", "생성 옵션", "성능 테스트", "동작"], rows.map(m => [
         esc(m.name),
         m.is_active ? "활성" : "비활성",
         tierMappingHtml(m),
         contextWindowHtml(m),
+        samplingOptionsHtml(m),
         benchmarkHtml(m),
         '<div class="actions">' +
           '<button class="small" data-toggle-model-active="' + m.id + '" data-active="' + (m.is_active ? "0" : "1") + '">' +
@@ -8514,6 +8972,23 @@ async function renderModelRegistry(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  content.querySelectorAll("[data-save-sampling-options]").forEach(btn => {
+    btn.onclick = async () => {
+      const modelId = btn.dataset.saveSamplingOptions;
+      const k = content.querySelector('.mr-top-k[data-model-id="' + modelId + '"]');
+      const p = content.querySelector('.mr-top-p[data-model-id="' + modelId + '"]');
+      const kRaw = k ? k.value.trim() : "";
+      const pRaw = p ? p.value.trim() : "";
+      try {
+        await api("PATCH", "/api/model-registry/" + modelId + "/sampling-options", {
+          top_k: kRaw === "" ? null : Number(kRaw),
+          top_p: pRaw === "" ? null : Number(pRaw),
+        });
+        showMsg("global-msg", "생성 옵션을 저장했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
   content.querySelectorAll("[data-run-benchmark]").forEach(btn => {
     btn.onclick = async () => {
       if (!(await confirmModal("이 모델에 실제로 테스트 프롬프트 1건을 보내 응답 속도를 측정합니다 — 클라우드 provider는 실제 API 비용이 발생합니다(Ollama는 로컬 연산이라 무료). 계속할까요?"))) return;
@@ -8554,8 +9029,61 @@ async function renderModelRegistry(content) {
 let _kbChunkOffset = 0;
 const _KB_CHUNK_LIMIT = 20;
 
+// 지식 등록 요청 목록의 상태 필터(2026-11-20) — 화면을 다시 그려도 유지.
+let _kbSubmissionFilter = "pending";
+const _KB_SUBMISSION_FILTERS = [
+  ["pending", "승인 대기"], ["registering", "등록 중"], ["registered", "등록됨"],
+  ["rejected", "반려"], ["failed", "실패"], ["withdrawn", "회수"], ["", "전체"],
+];
+
+function _knowledgeSubmissionsSection(submissions) {
+  const counts = {};
+  submissions.forEach(s => { counts[s.status] = (counts[s.status] || 0) + 1; });
+  const rows = submissions.filter(s => !_kbSubmissionFilter || s.status === _kbSubmissionFilter);
+  const isAdmin = ME.role === "admin";
+  const filterBar = '<div class="inline" style="margin-bottom:0.5rem;gap:0.3rem;flex-wrap:wrap">' +
+    _KB_SUBMISSION_FILTERS.map(([value, text]) => {
+      const n = value ? (counts[value] || 0) : submissions.length;
+      return '<button type="button" class="small' + (_kbSubmissionFilter === value ? " primary" : "") +
+        '" data-kb-sub-filter="' + value + '">' + text + " " + n + '</button>';
+    }).join("") + '</div>';
+  const actionsFor = (s) => {
+    let html = "";
+    if (s.status === "pending" && isAdmin) html += '<button class="small" data-goto-approvals>결재 화면으로</button>';
+    if (s.status === "pending" && s.submitted_by === ME.id) html += '<button class="small" data-kb-sub-withdraw="' + s.id + '">회수</button>';
+    if (s.status === "failed" && isAdmin) html += '<button class="small" data-kb-sub-retry="' + s.id + '">재시도</button>';
+    return html ? '<div class="actions">' + html + '</div>' : '<span class="muted">-</span>';
+  };
+  const decisionCell = (s) => {
+    if (s.status === "rejected") return esc(s.decided_by_username || "") + " · 사유: " + esc(s.reject_reason || "");
+    if (s.status === "failed") return '<span class="muted">' + esc(s.error || "") + '</span>';
+    if (s.decided_by_username) return esc(s.decided_by_username) + " · " + esc(fmtTime(s.decided_at));
+    return '<span class="muted">-</span>';
+  };
+  return '<section class="card"><h2>지식 등록 요청</h2>' +
+    helpBox(
+      '<ul class="muted help-list">' +
+      '<li>대화 메시지·승인된 산출물의 "지식베이스로 보내기"로 들어온 요청입니다 — admin이 <b>결재</b> 탭에서 승인해야 지식베이스에 등록(임베딩)됩니다. 반려할 때는 사유가 필요합니다.</li>' +
+      '<li>등록되는 내용은 <b>제출 시점의 스냅샷</b>입니다 — 원본 메시지/산출물을 나중에 고치거나 지워도 등록된 지식은 바뀌지 않습니다. 바뀐 내용을 반영하려면 원본에서 다시 보내면 "갱신 요청"이 되고, 승인 시 기존 지식을 대체합니다.</li>' +
+      '<li>admin이 직접 보낸 건과 아래 "지식 자료실"/"텍스트 직접 입력"은 결재 없이 바로 등록됩니다.</li>' +
+      '</ul>'
+    ) +
+    filterBar +
+    table(["ID", "제목", "출처", "제출자", "상태", "제출일", "처리", "동작"], rows.map(s => [
+      s.id,
+      esc(s.title) + (s.supersedes_id ? ' <span class="gate-badge gate-warn">갱신</span>' : ''),
+      esc(s.source_label),
+      esc(s.submitted_by_username || ("#" + s.submitted_by)),
+      esc(label(s.status)),
+      esc(fmtTime(s.created_at)),
+      decisionCell(s),
+      actionsFor(s),
+    ])) +
+    '</section>';
+}
+
 async function renderKnowledgeBase(content) {
-  const [embeddingConfig, ragSearchConfig, knowledgeDocs, chunkStats, chunkPage, graphStats, relationships] = await Promise.all([
+  const [embeddingConfig, ragSearchConfig, knowledgeDocs, chunkStats, chunkPage, graphStats, relationships, knowledgeSubmissions] = await Promise.all([
     api("GET", "/api/embedding-config"),
     api("GET", "/api/rag-search-config"),
     api("GET", "/api/documents"),
@@ -8563,6 +9091,7 @@ async function renderKnowledgeBase(content) {
     api("GET", qs("/api/knowledge-chunks", { limit: _KB_CHUNK_LIMIT, offset: _kbChunkOffset })),
     api("GET", "/api/graph/stats"),
     api("GET", "/api/graph/relationships"),
+    api("GET", "/api/knowledge-submissions"),
   ]);
 
   const modelBreakdown = chunkStats.by_model.length
@@ -8575,12 +9104,15 @@ async function renderKnowledgeBase(content) {
     String(c.text.length),
     esc(c.embedding_provider) + "/" + esc(c.embedding_model),
     esc(fmtTime(c.created_at)),
-    '<button class="small danger" data-delete-chunk="' + c.id + '">삭제</button>',
+    ME.role === "admin"
+      ? '<button class="small danger" data-delete-chunk="' + c.id + '">삭제</button>'
+      : '<span class="muted">-</span>',
   ]);
   const pageStart = chunkPage.total ? _kbChunkOffset + 1 : 0;
   const pageEnd = Math.min(_kbChunkOffset + _KB_CHUNK_LIMIT, chunkPage.total);
 
   content.innerHTML =
+    _knowledgeSubmissionsSection(knowledgeSubmissions) +
     // 사용자 요청(2026-10-26, "embedding 모델 설정 기능을 구현해줘
     // (하드코딩 하지않도록)") — 원래 "모델 레지스트리" 탭에 있었으나,
     // VectorDB/GraphDB 관리 기능이 이 탭으로 모이면서 함께 옮겼다
@@ -8588,7 +9120,7 @@ async function renderKnowledgeBase(content) {
     '<section class="card"><h2>임베딩 모델 설정(VectorDB 검색용)</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>"지식검색" 스킬을 가진 Agent가 과거 산출물을 검색할 때 쓰는 임베딩 provider/모델입니다 — 채팅용 모델과는 별개입니다.</li>' +
+      '<li>"내부지식검색" 스킬을 가진 Agent가 과거 산출물을 검색할 때 쓰는 임베딩 provider/모델입니다 — 채팅용 모델과는 별개입니다.</li>' +
       '<li>서로 다른 모델로 만든 벡터는 비교하지 않으므로(의미 공간이 다름) 시스템 전체에 하나만 설정합니다. 바꾸면 그 이전에 다른 모델로 색인된 과거 산출물은 더 이상 검색되지 않습니다(다시 색인해야 함).</li>' +
       '<li>설정한 적이 없으면 자동판별(OPENAI_API_KEY가 있으면 openai, 없으면 로컬 ollama) 결과를 보여줍니다 — 아래 폼으로 저장하면 그걸 명시적으로 고정합니다.</li>' +
       '<li>provider를 고르면 그 provider가 실제로 보유한 임베딩 모델 목록을 자동으로 불러와 "모델 선택" 드롭다운에 채워줍니다(Ollama는 로컬 서버, OpenAI는 API 키로 조회 — 과금 없는 카탈로그 조회입니다). 드롭다운에서 고르면 아래 모델명 칸에 그대로 채워집니다 — 목록에 없는 이름이 필요하면 그 칸에 직접 입력해도 됩니다.</li>' +
@@ -8631,33 +9163,44 @@ async function renderKnowledgeBase(content) {
     '<section class="card"><h2>지식 자료실(RAG 참고 자료 — 파일 업로드)</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>여기 올린 자료는 대화와 무관하게 전체 시스템에서 공유됩니다 — "지식검색" 스킬을 가진 모든 Agent가 검색할 수 있습니다(대화창·AI 에이전트 관리에서 올린 파일도 똑같은 곳에 쌓입니다).</li>' +
+      '<li>여기 올린 자료는 대화와 무관하게 전체 시스템에서 공유됩니다 — "내부지식검색" 스킬을 가진 모든 Agent가 검색할 수 있습니다(대화창·AI 에이전트 관리에서 올린 파일도 똑같은 곳에 쌓입니다).</li>' +
       '<li>지원 형식: .md / .markdown / .txt / .html / .htm / .pdf / .csv / .xlsx / .docx (각 최대 10MB) / .pptx(최대 25MB). 엑셀은 시트당 5,000행까지만 읽습니다(초과분은 "생략" 표시).</li>' +
       '</ul>'
     ) +
-    '<form class="inline" id="kd-upload-form">' +
-    '<input type="file" id="kd-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf,.csv,.xlsx,.docx,.pptx" required>' +
-    '<button type="submit" class="small primary">업로드·색인</button>' +
-    '</form>' +
-    table(["파일명", "업로더", "글자수", "조각수", "업로드일", "동작"], knowledgeDocs.map(d => [
+    // 직접 등록(업로드·텍스트 입력·삭제)은 admin 전용(2026-11-20 개편) —
+    // manager는 조회만 하고, 지식은 "지식베이스로 보내기"(결재)로 넣는다.
+    (ME.role === "admin"
+      ? '<form class="inline" id="kd-upload-form">' +
+        '<input type="file" id="kd-file-input" accept=".md,.markdown,.txt,.html,.htm,.pdf,.csv,.xlsx,.docx,.pptx" required>' +
+        '<button type="submit" class="small primary">업로드·색인</button>' +
+        '</form>'
+      : '<p class="muted">자료 직접 등록·삭제는 admin만 할 수 있습니다 — 지식을 추가하려면 대화 메시지나 승인된 산출물에서 "지식베이스로 보내기"를 쓰세요(admin 결재 후 등록).</p>') +
+    table(["파일명", "출처", "업로더", "글자수", "조각수", "업로드일", "동작"], knowledgeDocs.map(d => [
       esc(d.filename),
+      d.source_type === "submission"
+        ? "결재 등록(요청 #" + esc(d.submission_id) + ")"
+        : "직접 등록",
       esc(d.uploaded_by_username),
       String(d.char_count),
       String(d.chunk_count),
       esc(fmtTime(d.created_at)),
-      '<button class="small danger" data-delete-document="' + d.id + '">삭제</button>',
+      ME.role === "admin"
+        ? '<button class="small danger" data-delete-document="' + d.id + '">삭제</button>'
+        : '<span class="muted">-</span>',
     ])) +
     (knowledgeDocs.length ? "" : '<p class="muted">아직 올린 자료가 없습니다.</p>') +
     "</section>" +
-    // 신규 — 파일 없이 텍스트를 바로 붙여넣어 색인.
-    '<section class="card"><h2>텍스트 직접 입력</h2>' +
-    '<p class="muted">파일을 만들기 번거로운 짧은 메모·정책 요약 등을 그대로 붙여넣어 색인합니다. 파일 업로드와 같은 전역 VectorDB에 들어갑니다.</p>' +
-    '<form id="kb-text-form">' +
-    '<input id="kb-text-label" placeholder="라벨(예: 2026 휴가 정책 요약 — 비우면 &quot;직접 입력&quot;)" style="width:100%;box-sizing:border-box;margin-bottom:0.4rem">' +
-    '<textarea id="kb-text-body" placeholder="색인할 텍스트를 붙여넣으세요" rows="4" style="width:100%;box-sizing:border-box" required></textarea>' +
-    '<button type="submit" class="small primary" style="margin-top:0.4rem">저장·색인</button>' +
-    '</form>' +
-    "</section>" +
+    // 신규 — 파일 없이 텍스트를 바로 붙여넣어 색인(admin 전용, 위와 같은 이유).
+    (ME.role === "admin"
+      ? '<section class="card"><h2>텍스트 직접 입력</h2>' +
+        '<p class="muted">파일을 만들기 번거로운 짧은 메모·정책 요약 등을 그대로 붙여넣어 색인합니다. 파일 업로드와 같은 전역 VectorDB에 들어갑니다.</p>' +
+        '<form id="kb-text-form">' +
+        '<input id="kb-text-label" placeholder="라벨(예: 2026 휴가 정책 요약 — 비우면 &quot;직접 입력&quot;)" style="width:100%;box-sizing:border-box;margin-bottom:0.4rem">' +
+        '<textarea id="kb-text-body" placeholder="색인할 텍스트를 붙여넣으세요" rows="4" style="width:100%;box-sizing:border-box" required></textarea>' +
+        '<button type="submit" class="small primary" style="margin-top:0.4rem">저장·색인</button>' +
+        '</form>' +
+        "</section>"
+      : "") +
     // 신규 — 낱개 조각 조회/삭제 + 통계.
     '<section class="card"><h2>저장된 지식 조각(Chunk)</h2>' +
     '<p class="muted">전체 ' + chunkStats.total_chunks + '개 조각 · ' + chunkStats.total_characters + '자 · 모델별 ' + modelBreakdown + '</p>' +
@@ -8759,7 +9302,7 @@ async function renderKnowledgeBase(content) {
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
-  document.getElementById("kd-upload-form").addEventListener("submit", async (ev) => {
+  document.getElementById("kd-upload-form")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const fileInput = document.getElementById("kd-file-input");
     const file = fileInput.files && fileInput.files[0];
@@ -8786,7 +9329,38 @@ async function renderKnowledgeBase(content) {
     });
   });
 
-  document.getElementById("kb-text-form").addEventListener("submit", async (ev) => {
+  // 지식 등록 요청(2026-11-20) — 상태 필터/회수/재시도/결재 화면 이동.
+  content.querySelectorAll("[data-kb-sub-filter]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      _kbSubmissionFilter = btn.dataset.kbSubFilter;
+      refresh();
+    });
+  });
+  content.querySelectorAll("[data-goto-approvals]").forEach(btn => {
+    btn.addEventListener("click", () => selectTab("approvals"));
+  });
+  content.querySelectorAll("[data-kb-sub-withdraw]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!(await confirmModal("이 지식 등록 요청을 회수합니다. 계속할까요?"))) return;
+      try {
+        await api("POST", "/api/knowledge-submissions/" + btn.dataset.kbSubWithdraw + "/withdraw");
+        showMsg("global-msg", "회수했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  });
+  content.querySelectorAll("[data-kb-sub-retry]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      try {
+        await withBusy(btn, "재시도 중…", () =>
+          api("POST", "/api/knowledge-submissions/" + btn.dataset.kbSubRetry + "/retry"));
+        showMsg("global-msg", "다시 등록을 시작했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  });
+
+  document.getElementById("kb-text-form")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const text = document.getElementById("kb-text-body").value;
     const label = document.getElementById("kb-text-label").value;
@@ -10538,7 +11112,7 @@ const MANUAL_MARKDOWN = [
 '',
 '- **"개발업무 스킬도 보기" 체크박스**(기본값 꺼짐) — 바로 옆 스킬 선택 드롭다운에는 기본적으로 **일반업무**(기획·전략·자료조사·보고서·데이터분석·제안서·실적서 등) 스킬만 보입니다. 소프트웨어 개발/Gate 채점처럼 **개발업무**용 스킬은 완전히 없어진 게 아니라 "기본적으로 안 보이게" 숨겨뒀을 뿐이라 — 이 체크박스를 켜면 바로 보입니다. 일반 업무를 하는 사용자는 이 체크박스를 켤 일이 거의 없습니다(어느 스킬이 어느 분류인지는 "도구/스킬 Pool" 관리 화면에서 확인·변경할 수 있습니다 — admin/manager 전용, 8절 메뉴 지도에서 위치를 찾을 수 있습니다).',
 '- **스킬 선택 드롭다운**(기본값 "스킬 선택 안 함") — 비워두고 질문만 보내도 되지만, 멘션 없이 보내는 응답을 특정 스킬로 "그라운딩"하고 싶을 때 씁니다.',
-'  예를 들어 실시간 정보가 필요한 질문이면 "**실시간웹검색**"을 골라두세요 — Tavily로 실제 웹 검색을 한 뒤 그 결과를 참고해 답합니다(서버에 `TAVILY_API_KEY` 설정이 먼저 돼 있어야 합니다 — 관리자에게 문의). "**지식검색**"(VectorDB)·"**일반웹검색**"·"**최신정보필수확인**"·"**딥리서치**"·"**AI업계동향브리핑**" 등 조사 성격의 스킬은 전부 답변에 **출처(제목·URL 또는 참고한 과거 산출물의 식별자)를 반드시 밝히도록** 되어 있습니다 — 출처가 안 보이는 답변이 오면 스킬이 실제로 그라운딩됐는지부터 의심해보세요.',
+'  예를 들어 실시간 정보가 필요한 질문이면 "**실시간웹검색**"을 골라두세요 — Tavily로 실제 웹 검색을 한 뒤 그 결과를 참고해 답합니다(서버에 `TAVILY_API_KEY` 설정이 먼저 돼 있어야 합니다 — 관리자에게 문의). "**내부지식검색**"(VectorDB)·"**일반웹검색**"·"**최신정보필수확인**"·"**딥리서치**"·"**AI업계동향브리핑**" 등 조사 성격의 스킬은 전부 답변에 **출처(제목·URL 또는 참고한 과거 산출물의 식별자)를 반드시 밝히도록** 되어 있습니다 — 출처가 안 보이는 답변이 오면 스킬이 실제로 그라운딩됐는지부터 의심해보세요.',
 '  **멘션을 하나라도 넣으면 이 선택은 자동으로 비워집니다** — 멘션이 있으면 그 호출이 우선이고, 스킬 선택은 "아무도 안 불렀을 때(기본 AI가 답할 때) 어떤 지식/도구로 그라운딩할지"를 고르는 용도이기 때문입니다.',
 '- **메시지 입력창** — **`@`를 입력**하면 사람·Agent·Team 검색 자동완성이 뜹니다. 아직 이 대화에 초대 안 된 대상도 검색되고, 목록에서 고르면 **그 자리에서 자동으로 초대된 뒤** 멘션이 끼워 넣어집니다(따로 "참가자 초대" 화면을 거칠 필요가 없습니다).',
 '- **📎 자료 버튼** — 로컬 파일(`.md`/`.markdown`/`.txt`/`.html`/`.htm`/`.pdf`/`.csv`/`.xlsx`/`.docx`/`.pptx`)을 고르면 버튼 옆에 파일명이 뜨며 **보류 상태로 대기**합니다(바로 올라가지 않음, "자료 제거"로 취소 가능). 이 상태에서 메시지를 적고 **"전송"**을 눌러야 — 입력한 메시지가 있으면 그 메시지가 먼저, 첨부 내용은 바로 이어서 별도 메시지로 — 한 번에 같이 올라갑니다(메시지 없이 첨부만 보내도 됩니다). **이 대화에만 1회성으로 쓰이고 영구 저장되지 않습니다**(어디에도 파일 자체나 텍스트가 남지 않는 휘발성 설계 — 영구 보관하려는 자료는 8절 메뉴 지도의 "도구/스킬 Pool"이 아니라 admin/manager의 "지식 베이스" 관리 기능을 따로 써야 합니다).',
@@ -10567,7 +11141,7 @@ const MANUAL_MARKDOWN = [
 '각 메시지 줄에는 두 가지 "보내기" 버튼이 있습니다(대화의 모든 메시지가 자동으로 쌓이지 않고, 남길 만하다고 직접 고른 메시지만 보냅니다):',
 '',
 '- **갤러리로 보내기**(모든 참가자) — 이 메시지 하나를 결과물로 승격해 "갤러리" 탭에서 모아볼 수 있게 합니다(비용 없는 단순 저장).',
-'- **지식베이스로 보내기**(admin/manager 전용) — 이 메시지를 임베딩해 VectorDB에 색인합니다(실제 임베딩 API 호출 — 비용 발생). 색인된 내용은 이후 대화에서 스킬 선택 드롭다운의 "**지식검색**"를 고르거나, "지식검색" 스킬을 가진 Agent를 실행하면 실시간으로 검색돼 답변에 반영됩니다.',
+'- **지식베이스로 보내기**(admin/manager 전용) — 이 메시지를 임베딩해 VectorDB에 색인합니다(실제 임베딩 API 호출 — 비용 발생). 색인된 내용은 이후 대화에서 스킬 선택 드롭다운의 "**내부지식검색**"를 고르거나, "내부지식검색" 스킬을 가진 Agent를 실행하면 실시간으로 검색돼 답변에 반영됩니다.',
 '',
 '### 6단계 — (선택) 정식 절차로 넘기기',
 '',
@@ -10710,7 +11284,7 @@ const MANUAL_MARKDOWN = [
 '   - **stub**(무료): LLM 호출 없는 규칙 기반 자리표시자 — 흐름만 비용 없이 채워볼 때.',
 '   - **simple_llm**(비용 발생): 실제 LLM을 한 번만 호출하는 가장 가벼운 실제 Agent.',
 '   - **crewai**(비용 발생): 실제 CrewAI Agent로 만듭니다 — 이후 "Crew 빌더"/"팀 Agent 실행"/파이프라인에서 다른 Agent와 실제로 협업·위임할 수 있는 건 이 방식뿐입니다.',
-'     필요 스킬에 지식검색/관계조회 등이 있으면 관련 Tool이 생성 시점부터 자동으로 붙습니다.',
+'     필요 스킬에 내부지식검색/조직배정관계조회 등이 있으면 관련 Tool이 생성 시점부터 자동으로 붙습니다.',
 '3. 만든 Agent는 "**AI 에이전트 관리**"에서 **온보딩 승인**(온보딩 대기 → 활성)을 눌러야 실제 배정·실행·대화 호출에 쓸 수 있습니다.',
 '4. 같은 탭에서 Agent별로:',
 '   - **모델 설정**: 기본 LLM provider/model(비용 없음, 설정만 저장).',
@@ -10739,7 +11313,7 @@ const MANUAL_MARKDOWN = [
 '',
 '**마크다운으로 내보내기/가져오기** — 각 Skill 행의 "**내보내기**" 버튼을 누르면 그 Skill이 frontmatter(name/category/augmentation_mode/tool) + 섹션(`## 지침`/`## 출력 형식`/`## 예시`/`## 제약사항`) 규격의 `.md` 파일로 내려받아집니다. 같은 화면 아래 "**마크다운으로 스킬 가져오기**" 폼에서 그 규격의 `.md` 파일을 올리거나(파일을 고르면 frontmatter·섹션이 있는지 최소 형식을 먼저 점검해 보여줍니다) 직접 붙여넣은 뒤 "**등록하기**"를 누르면 새 Skill로 등록됩니다 — 이름이 이미 있으면 거부됩니다. 다른 환경에서 만든 Skill을 옮기거나, 텍스트 편집기로 여러 Skill을 한 번에 다듬을 때 씁니다.',
 '',
-'**"스킬생성가이드"** — "주어진 업무를 가장 잘 수행할 수 있는 새 Skill을 어떻게 설계할지" 안내하는 메타 Skill입니다(대화창 스킬 선택 드롭다운에서도 바로 쓸 수 있음). 어떤 업무를 처리할 Skill이 필요한지 설명하면, 위 "내보내기/가져오기"와 같은 규격의 마크다운으로 결과를 내놓습니다 — 그대로 복사해 "마크다운으로 스킬 가져오기"에 붙여넣으면 바로 등록할 수 있습니다. 단, 이 Skill 자체는 등록을 대신 해주지 않습니다(사람이 "등록하기"를 직접 눌러야 함) — 새 Skill이 실제로 조직에 추가되는 건 항상 사람의 확인을 거칩니다.',
+'**"스킬생성"** — "주어진 업무를 가장 잘 수행할 수 있는 새 Skill을 어떻게 설계할지" 안내하는 메타 Skill입니다(대화창 스킬 선택 드롭다운에서도 바로 쓸 수 있음). 어떤 업무를 처리할 Skill이 필요한지 설명하면, 위 "내보내기/가져오기"와 같은 규격의 마크다운으로 결과를 내놓습니다 — 그대로 복사해 "마크다운으로 스킬 가져오기"에 붙여넣으면 바로 등록할 수 있습니다. 단, 이 Skill 자체는 등록을 대신 해주지 않습니다(사람이 "등록하기"를 직접 눌러야 함) — 새 Skill이 실제로 조직에 추가되는 건 항상 사람의 확인을 거칩니다.',
 '',
 '<h2 id="pipeline">6. 파이프라인 — 단계형 자동 진행 엔진</h2>',
 '',
@@ -10797,7 +11371,7 @@ const MANUAL_MARKDOWN = [
 '| 7 | 최종 승인 판정 | 단독 | PM | 불필요(Gate 0.5, 반복 실패 시에만 에스컬레이션) |',
 '',
 '단계 구성·Gate 규칙·최소 HITL 원칙 전부 "소프트웨어 개발 파이프라인"과 완전히 동일한 엔진입니다 — 역할만 사업/기획 쪽으로 바뀐 것뿐입니다.',
-'**"데이터 분석가"**는 `데이터분석가이드` 스킬(실제 CrewAI Tool "수치 데이터 분석기" 연결)로 합계·평균·증감률·표준편차를 코드로 직접 계산합니다 — LLM이 숫자를 서술로 지어내지 않도록, 값이 부족하면(표준편차는 2개 미만, 증감률은 기준값 0) 추측 대신 계산 불가를 그대로 알립니다.',
+'**"데이터 분석가"**는 `데이터분석` 스킬(실제 CrewAI Tool "수치 데이터 분석기" 연결)로 합계·평균·증감률·표준편차를 코드로 직접 계산합니다 — LLM이 숫자를 서술로 지어내지 않도록, 값이 부족하면(표준편차는 2개 미만, 증감률은 기준값 0) 추측 대신 계산 불가를 그대로 알립니다.',
 '',
 '### 기본 제공 "제안서 작성 파이프라인"·"실적 보고 파이프라인"',
 '',
@@ -10882,6 +11456,13 @@ boot();
 </body>
 </html>
 """
+# 덱 클래스 점검용 목록 주입(2026-11-21) — 화면(`_deckLintHtml`)과 서버가 같은 원천을 쓴다.
+INDEX_HTML = INDEX_HTML.replace(
+    "__DECK_CLASSES_JSON__", json.dumps(presentation_deck.defined_classes())
+)
+# Chart.js 주소·버전도 한 곳(`presentation_deck.CHART_JS_URL`)에서 — 플랫폼 화면과 덱이 같은
+# 버전으로 그린다(2026-11-21 하드코딩 재점검: 두 곳에 같은 URL이 따로 적혀 있었다).
+INDEX_HTML = INDEX_HTML.replace("__CHART_JS_URL__", presentation_deck.CHART_JS_URL)
 
 
 def render_deliverable_view_page(deliverable: dict, task_role_name: str | None) -> str:

@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from hair_platform import agent_runtime
+from hair_platform import vectorstore
 
 
 def _login(client, username, password):
@@ -249,7 +249,7 @@ def test_gc132_admin_manager_can_view_but_not_write_deliverable(client_and_conn)
 def test_gc133_assist_injects_matching_skill_pool_description(client_and_conn):
     client, conn = client_and_conn
     _brief_id, task_id, _human_id = _setup_human_assignee_task(
-        client, conn, skills=["관계조회"]
+        client, conn, skills=["조직배정관계조회"]
     )
 
     _login(client, "member1", "memberpass")
@@ -258,7 +258,10 @@ def test_gc133_assist_injects_matching_skill_pool_description(client_and_conn):
     assert resp.status_code == 200, resp.text
     assert resp.json()["draft"] == "LLM 초안"
     system_arg = mock_call.call_args.args[2]
-    assert "GraphDB" in system_arg or "관계분석" in system_arg
+    # 스킬 설명이 그대로 주입되는지 — 2026-11-20 개명("관계조회" →
+    # "조직배정관계조회")과 함께 설명도 실제 기능(조직도·배정 현황 조회)
+    # 기준으로 바뀌었다.
+    assert "조직도" in system_arg and "배정 현황" in system_arg
 
 
 def test_gc134_member_cannot_choose_provider_manager_can(client_and_conn):
@@ -1351,10 +1354,10 @@ def test_gc189_execute_agent_records_and_exposes_retrieved_context(client_and_co
     `agent_execution_jobs.retrieved_context`에 남기고 job 조회 응답으로
     노출해야 한다."""
     client, conn = client_and_conn
-    _brief_id, task_id = _make_brief_and_task(client, "정책 문의 응답", ["지식검색"])
+    _brief_id, task_id = _make_brief_and_task(client, "정책 문의 응답", ["내부지식검색"])
     _login(client, "admin1", "adminpass")
     cur = conn.execute(
-        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[\"지식검색\"]', 'active')",
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[\"내부지식검색\"]', 'active')",
         ("정책 문의 응답",),
     )
     conn.commit()
@@ -1376,13 +1379,14 @@ def test_gc189_execute_agent_records_and_exposes_retrieved_context(client_and_co
     fake_client = _fake_openai_embeddings(
         {
             "원격근무는 3개월 수습 기간 중 사용할 수 없다": [1.0, 0.0],
-            "'정책 문의 응답' 업무를 수행하세요(필요 스킬: 지식검색).": [0.95, 0.05],
+            "'정책 문의 응답' 업무를 수행하세요(필요 스킬: 내부지식검색).": [0.95, 0.05],
         }
     )
     with patch("openai.OpenAI", return_value=fake_client):
-        agent_runtime.index_knowledge(
-            conn, agent_id, 1, "원격근무는 3개월 수습 기간 중 사용할 수 없다"
-        )
+        # 지식 시드 — `agent_runtime.index_knowledge()`는 2026-11-20에
+        # 삭제됐다(지식베이스 등록 체계 개편). 이 테스트의 관심사는 "실행
+        # 경로가 지식을 검색해 근거로 남기는가"라, 저수준 색인으로 바로 심는다.
+        vectorstore.index_text(conn, None, "원격근무는 3개월 수습 기간 중 사용할 수 없다")
 
     _login(client, "manager1", "managerpass")
     with (

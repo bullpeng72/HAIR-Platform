@@ -50,6 +50,7 @@ from hair_platform import (
     assignments,
     audit,
     brief_decompose_llm,
+    context_policy,
     conversations,
     cost,
     crew_history,
@@ -63,6 +64,7 @@ from hair_platform import (
     graphquery,
     inbox,
     jobs,
+    knowledge_submissions,
     llm,
     match_llm_judge,
     model_benchmark,
@@ -90,6 +92,7 @@ from hair_platform.auth import (
 )
 from hair_platform.models import (
     AdhocCrewExecuteRequest,
+    AgentContextPolicyUpdate,
     AgentCreateDirect,
     AgentExecuteRequest,
     AgentModelConfig,
@@ -119,7 +122,7 @@ from hair_platform.models import (
     GenerateRequest,
     HumanPoolCreate,
     HumanPoolUpdate,
-    KnowledgeIndexRequest,
+    KnowledgeSubmissionCreate,
     LoginRequest,
     ManagerUpdate,
     ManualKnowledgeTextCreate,
@@ -127,6 +130,7 @@ from hair_platform.models import (
     ModelContextWindowUpdate,
     ModelOptimizationTiersUpdate,
     ModelRegistryCreate,
+    ModelSamplingOptionsUpdate,
     PerformanceScoreRequest,
     PipelineExecuteRequest,
     PipelineStageCreate,
@@ -1752,7 +1756,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         `has_mentions=True`라 똑같이 막힌다)."""
         try:
             result = conversations.create_message(
-                conn, conversation_id, user["id"], payload.content, payload.skill
+                conn,
+                conversation_id,
+                user["id"],
+                payload.content,
+                payload.skill,
+                context_override=payload.context_override,
             )
         except ValueError as exc:
             if str(exc) == "conversation_not_found":
@@ -1868,24 +1877,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def save_conversation_message_as_knowledge_endpoint(
         conversation_id: int,
         message_id: int,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        background_tasks: BackgroundTasks,
+        user: sqlite3.Row = Depends(get_current_user),
     ):
-        """사용자 요청(2026-11-10, "대화에서 생성된 결과물을 지식으로
-        보내는 경로가 없음") — 대화 메시지 하나를 명시적으로 지식베이스
-        (VectorDB)에 색인한다. 실제 임베딩 API를 호출해 비용이 발생하므로
-        `POST /api/agent-pool/{id}/index-knowledge`와 동일하게 admin/
-        manager 전용으로 좁힌다(결과물로 저장은 참가자 전용이지만, 그건
-        비용이 없는 단순 텍스트 복사라 권한 범위가 다르다)."""
+        """대화 메시지를 지식베이스로 **제출**한다(2026-11-20 개편 — 이전엔
+        admin/manager가 누르면 결재 없이 즉시 색인했다). `POST /api/
+        knowledge-submissions`(source_type='conversation_message')와 같은
+        동작의 호환용 경로 — 참여자 누구나 제출하고 admin 결재 후 등록된다
+        (admin 본인 제출은 즉시 등록). 응답은 제출 건(`status` 포함)."""
         try:
-            chunk_id = conversations.save_message_as_knowledge(
-                conn, conversation_id, message_id, user["id"]
+            result = conversations.save_message_as_knowledge(
+                conn, conversation_id, message_id, user["id"], user["role"]
             )
         except ValueError as exc:
-            detail = {
-                "message_not_found": "메시지를 찾을 수 없습니다",
-            }.get(str(exc), str(exc))
-            raise HTTPException(status_code=404, detail=detail) from None
-        return {"chunk_id": chunk_id}
+            if str(exc) == "message_not_found":
+                raise HTTPException(
+                    status_code=404, detail="메시지를 찾을 수 없습니다"
+                ) from None
+            raise _knowledge_submission_http_error(exc) from None
+        except PermissionError as exc:
+            raise _knowledge_submission_http_error(exc) from None
+        if result.pop("needs_registration"):
+            background_tasks.add_task(
+                knowledge_submissions.register_submission, conn, result["id"]
+            )
+        return result
 
     @app.patch("/api/conversations/{conversation_id}/messages/{message_id}")
     def edit_conversation_message_endpoint(
@@ -2003,6 +2019,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # `/api/documents`는 이제 "지식 베이스"(admin/manager 전용 공통·
     # 영구 지식)만 다룬다.
     #
+    # 사용자 요청(2026-11-20, "지식 베이스는 admin 담당자가 문서로 등록하는
+    # 경우와 ... admin 결재 후 등록되는 것으로 개선") — 쓰기(업로드·텍스트
+    # 입력·문서/조각 삭제)는 **admin 전용**(경로 A "직접 등록")으로 좁혔다.
+    # manager는 조회만 하고, 지식을 넣으려면 경로 B(제출 → admin 결재)를
+    # 쓴다.
+    #
     # 사용자 요청(2026-11-18, "자료 업로드 형식으로 csv, excel, word,
     # powerpoint를 포함하도록" → "구현 시작") — 상한이 포맷마다 달라져
     # (`documents.max_upload_bytes()` 참고) 고정 10MB 상수 대신 파일명
@@ -2019,7 +2041,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/documents", status_code=201)
     async def upload_document(
         file: UploadFile,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         raw_bytes = await file.read()
         _reject_if_too_large(file.filename or "", raw_bytes)
@@ -2084,7 +2106,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.delete("/api/documents/{document_id}")
     def delete_document_endpoint(
         document_id: int,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         try:
             documents.delete_document(conn, user["id"], document_id)
@@ -2100,7 +2122,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/documents/text", status_code=201)
     def upload_document_text(
         payload: ManualKnowledgeTextCreate,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         """파일 없이 텍스트를 바로 붙여넣어 색인한다(`지식 자료실`의
         업로드와 같은 색인기, 추출 단계만 없음)."""
@@ -2126,7 +2148,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.delete("/api/knowledge-chunks/{chunk_id}")
     def delete_knowledge_chunk_endpoint(
         chunk_id: int,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         try:
             vectorstore.delete_chunk(conn, user["id"], chunk_id)
@@ -2135,6 +2157,156 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=404, detail="조각을 찾을 수 없습니다"
             ) from exc
         return {"id": chunk_id, "deleted": True}
+
+    # 사용자 요청(2026-11-20, 지식베이스 등록 체계 개편) — 경로 B
+    # "제출 → admin 결재 → 등록". 제출은 원본(대화/업무)의 참여자 누구나
+    # (viewer 제외) 할 수 있다 — 임베딩 비용은 admin 승인 뒤에만 생긴다.
+    _KNOWLEDGE_SUBMISSION_ERRORS: dict[str, tuple[int, str]] = {
+        "source_not_found": (404, "보낼 원본을 찾을 수 없습니다"),
+        "submission_not_found": (404, "지식 등록 요청을 찾을 수 없습니다"),
+        "deliverable_not_approved": (
+            400,
+            "승인된 산출물만 지식베이스로 보낼 수 있습니다",
+        ),
+        "code_requires_confirmation": (
+            400,
+            (
+                "코드 산출물은 기본적으로 지식베이스 대상이 아닙니다 — 그래도 "
+                "보내려면 allow_code를 켜세요"
+            ),
+        ),
+        "empty_after_preprocessing": (400, "등록할 본문 텍스트가 없습니다"),
+        "already_pending": (409, "이 원본은 이미 지식 등록 결재가 진행 중입니다"),
+        "submission_not_pending": (409, "결재 대기 중인 요청만 처리할 수 있습니다"),
+        "not_a_participant": (403, "이 대화/업무의 참여자만 보낼 수 있습니다"),
+        "viewer_cannot_submit": (403, "열람 전용 사용자는 보낼 수 없습니다"),
+        "not_the_submitter": (403, "본인이 제출한 요청만 회수할 수 있습니다"),
+    }
+
+    def _knowledge_submission_http_error(exc: Exception) -> HTTPException:
+        status_code, detail = _KNOWLEDGE_SUBMISSION_ERRORS.get(
+            str(exc), (400, str(exc))
+        )
+        return HTTPException(status_code=status_code, detail=detail)
+
+    @app.post("/api/knowledge-submissions", status_code=201)
+    def create_knowledge_submission(
+        payload: KnowledgeSubmissionCreate,
+        background_tasks: BackgroundTasks,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        try:
+            result = knowledge_submissions.submit(
+                conn,
+                user["id"],
+                user["role"],
+                payload.source_type,
+                payload.source_id,
+                title=payload.title,
+                note=payload.note,
+                allow_code=payload.allow_code,
+            )
+        except (ValueError, PermissionError) as exc:
+            raise _knowledge_submission_http_error(exc) from None
+        if result.pop("needs_registration"):
+            # admin 본인 제출 — 결재 없이 바로 색인(경로 A와 같은 권한).
+            background_tasks.add_task(
+                knowledge_submissions.register_submission, conn, result["id"]
+            )
+        return result
+
+    @app.get("/api/knowledge-submissions")
+    def list_knowledge_submissions(
+        status: str | None = None,
+        source_type: str | None = None,
+        source_id: int | None = None,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        return knowledge_submissions.list_submissions(
+            conn, user["id"], user["role"], status, source_type, source_id
+        )
+
+    @app.post("/api/knowledge-submissions/preview")
+    def preview_knowledge_submission(
+        payload: KnowledgeSubmissionCreate,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """제출 모달 — 저장 없이 등록될 텍스트(전처리 결과)를 미리 보여준다."""
+        try:
+            return knowledge_submissions.preview(
+                conn,
+                user["id"],
+                user["role"],
+                payload.source_type,
+                payload.source_id,
+                allow_code=payload.allow_code,
+            )
+        except (ValueError, PermissionError) as exc:
+            raise _knowledge_submission_http_error(exc) from None
+
+    # `/{submission_id}`보다 먼저 선언해야 "status"가 정수 경로로 잡히지 않는다.
+    @app.get("/api/knowledge-submissions/status")
+    def knowledge_submission_status(
+        source_type: str,
+        ids: str = "",
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """배지용 — `ids`는 쉼표 구분 원본 id 목록. `{원본id: 최신 상태}`."""
+        try:
+            id_list = [int(x) for x in ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="ids는 쉼표로 구분한 정수여야 합니다") from None
+        return knowledge_submissions.status_map(
+            conn, user["id"], user["role"], source_type, id_list
+        )
+
+    @app.get("/api/knowledge-submissions/{submission_id}")
+    def get_knowledge_submission(
+        submission_id: int,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        try:
+            row = knowledge_submissions.get_submission(conn, submission_id)
+        except ValueError as exc:
+            raise _knowledge_submission_http_error(exc) from None
+        if user["role"] != Role.ADMIN.value and row["submitted_by"] != user["id"]:
+            raise HTTPException(status_code=404, detail="지식 등록 요청을 찾을 수 없습니다")
+        return row
+
+    @app.post("/api/knowledge-submissions/{submission_id}/withdraw")
+    def withdraw_knowledge_submission(
+        submission_id: int,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        try:
+            return knowledge_submissions.withdraw(conn, submission_id, user["id"])
+        except (ValueError, PermissionError) as exc:
+            raise _knowledge_submission_http_error(exc) from None
+
+    @app.post("/api/knowledge-submissions/{submission_id}/retry")
+    def retry_knowledge_submission(
+        submission_id: int,
+        background_tasks: BackgroundTasks,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """임베딩 실패(`failed`)한 승인 건을 다시 색인한다(admin 전용 —
+        이미 결재를 통과한 건이므로 결재를 다시 거치지 않는다)."""
+        try:
+            row = knowledge_submissions.get_submission(conn, submission_id)
+        except ValueError as exc:
+            raise _knowledge_submission_http_error(exc) from None
+        if row["status"] != "failed":
+            raise HTTPException(status_code=409, detail="실패한 요청만 재시도할 수 있습니다")
+        conn.execute(
+            "UPDATE knowledge_submissions SET status = 'registering', error = NULL "
+            "WHERE id = ?",
+            (submission_id,),
+        )
+        conn.commit()
+        background_tasks.add_task(
+            knowledge_submissions.register_submission, conn, submission_id
+        )
+        return {**row, "status": "registering", "error": None}
 
     @app.get("/api/graph/relationships")
     def list_graph_relationships(
@@ -3106,6 +3278,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 # 보여야 "복수 에이전트 그룹"이 업무와 어떻게 이어지는지
                 # 알 수 있다).
                 "team_names": teams.team_names_for_agent(conn, row["id"]),
+                # 대화 컨텍스트 정책(2026-11-20) — NULL이면 스킬에서 계산.
+                "history_mode": row["history_mode"],
+                "use_attachments": None
+                if row["use_attachments"] is None
+                else bool(row["use_attachments"]),
+                "effective_context_policy": context_policy.for_agent(conn, row["id"]),
                 # 사용자 요청(2026-10-20, "고급 에이전트 관리") — 저장된
                 # 오버라이드(없으면 빈 문자열/None)와, 실제 Crew 실행에
                 # "지금 적용되는" 값을 구분해 둘 다 보여준다 — 후자는
@@ -3238,6 +3416,42 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": agent_id, **saved}
 
+    @app.patch("/api/agent-pool/{agent_id}/context-policy")
+    def set_agent_context_policy(
+        agent_id: int,
+        payload: AgentContextPolicyUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """대화 컨텍스트 정책(2026-11-20) — 이 Agent를 `@멘션`했을 때의
+        이전 대화/첨부 사용 덮어쓰기. `null`이면 스킬에서 계산(가장
+        포괄적인 값)으로 되돌린다. 권한은 persona/tuning과 같다."""
+        row = conn.execute("SELECT id FROM agent_pool WHERE id = ?", (agent_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Agent를 찾을 수 없습니다")
+        conn.execute(
+            "UPDATE agent_pool SET history_mode = ?, use_attachments = ? WHERE id = ?",
+            (
+                payload.history_mode,
+                None if payload.use_attachments is None else int(payload.use_attachments),
+                agent_id,
+            ),
+        )
+        audit.record(
+            conn,
+            user["id"],
+            "agent_context_policy_updated",
+            "agent_pool",
+            agent_id,
+            after=payload.model_dump(),
+        )
+        conn.commit()
+        return {
+            "id": agent_id,
+            "history_mode": payload.history_mode,
+            "use_attachments": payload.use_attachments,
+            "effective_context_policy": context_policy.for_agent(conn, agent_id),
+        }
+
     @app.get("/api/agent-pool/{agent_id}/optimize-recommendation")
     def get_agent_optimize_recommendation(
         agent_id: int,
@@ -3286,33 +3500,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
         admin 전용으로 좁힌다."""
         return agent_optimizer.recommend_all(conn)
 
-    @app.post("/api/agent-pool/{agent_id}/index-knowledge")
-    def index_agent_knowledge(
-        agent_id: int,
-        payload: KnowledgeIndexRequest,
-        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
-    ):
-        """이 Agent의 산출물(또는 지정 텍스트)을 임베딩해
-        지식검색 Agent(VectorDB)가 찾을 수 있게 색인한다. 실제 임베딩 API를
-        호출하므로 비용이 발생한다(opt-in — 명시적으로 호출했을 때만)."""
-        try:
-            chunk_id = agent_runtime.index_knowledge(
-                conn,
-                agent_id,
-                user["id"],
-                payload.text,
-                payload.provider,
-                payload.model,
-            )
-        except ValueError as exc:
-            detail = (
-                "Agent를 찾을 수 없습니다"
-                if str(exc) == "agent_not_found"
-                else "색인할 텍스트가 없습니다(text를 지정하거나 먼저 실행/생성하세요)"
-            )
-            status_code = 404 if str(exc) == "agent_not_found" else 400
-            raise HTTPException(status_code=status_code, detail=detail) from exc
-        return {"id": agent_id, "chunk_id": chunk_id}
+    # 사용자 요청(2026-11-20, 지식베이스 등록 체계 개편) — `POST /api/
+    # agent-pool/{id}/index-knowledge`(Agent `last_output`/임의 text를 결재
+    # 없이 즉시 색인)는 삭제했다. 지식베이스 입구는 admin 직접 등록
+    # (`/api/documents*`)과 제출 → admin 결재(`/api/knowledge-submissions`)
+    # 둘뿐이다.
 
     @app.get("/api/tool-pool")
     def list_tool_pool(
@@ -3492,6 +3684,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 skills = [s for s in skills if s["category"] != "sw_dev"]
         return [s["name"] for s in skills]
 
+    @app.get("/api/skill-pool/context-policies")
+    def list_skill_context_policies(
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """대화 컨텍스트 정책(2026-11-20) — 대화 입력창의 "이전 대화" 칩이
+        스킬을 고를 때 그 스킬 기본값을 보여주는 데 쓴다. `names`
+        엔드포인트처럼 모든 role에 이름 수준 정보만 노출한다."""
+        return {
+            s["name"]: {"history": s["history_mode"], "attachments": s["use_attachments"]}
+            for s in pool_registry.list_skills(conn)
+        }
+
     @app.post("/api/skill-pool", status_code=201)
     def create_skill_pool_entry(
         payload: SkillPoolCreate,
@@ -3510,6 +3714,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 payload.output_format,
                 payload.examples,
                 payload.constraints,
+                payload.includes,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3751,6 +3956,26 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 ) from exc
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": model_id, "context_window": payload.context_window}
+
+    @app.patch("/api/model-registry/{model_id}/sampling-options")
+    def set_model_registry_sampling_options(
+        model_id: int,
+        payload: ModelSamplingOptionsUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """모델별 생성 옵션(2026-11-21, "특정 모델만을 위한 하드코딩은 없도록")
+        — top_k/top_p. 빈 값은 보내지 않는다(그 모델의 기본값)."""
+        try:
+            saved = model_registry.set_sampling_options(
+                conn, user["id"], model_id, payload.model_dump(exclude_none=True)
+            )
+        except ValueError as exc:
+            if str(exc) == "model_not_found":
+                raise HTTPException(
+                    status_code=404, detail="모델을 찾을 수 없습니다"
+                ) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": model_id, "sampling_options": saved}
 
     @app.post("/api/model-registry/{model_id}/benchmark", status_code=201)
     def run_model_registry_benchmark(
@@ -4989,6 +5214,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=403, detail="지정된 승인자만 이 단계를 승인할 수 있습니다"
             )
+        if approval["subject_type"] == knowledge_submissions.SUBJECT_TYPE:
+            # 지식베이스 등록 결재(2026-11-20)는 admin 전용이다 — 매니저
+            # 결재 체인이 아니라 approver_id가 비어 있으므로 위 "지정된
+            # 승인자" 검사만으로는 매니저가 통과해 버린다.
+            if user["role"] != Role.ADMIN.value:
+                raise HTTPException(
+                    status_code=403, detail="지식 등록 결재는 Admin만 처리할 수 있습니다"
+                )
+            if not payload.approve and not (payload.reason or "").strip():
+                raise HTTPException(
+                    status_code=400, detail="지식 등록을 반려할 때는 사유를 입력하세요"
+                )
 
         new_status = "approved" if payload.approve else "rejected"
         subject_type = approval["subject_type"]
@@ -5011,6 +5248,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             new_pipeline_run_id = None
             new_pipeline_run_actor_id = None
             next_step_pending = False
+            knowledge_submission_to_register = None
             if payload.approve:
                 next_step_pending = approvals_mod.activate_next_step(
                     conn, subject_type, subject_id, approval["step"]
@@ -5054,6 +5292,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     deliverable_result = deliverables.resolve_deliverable_decision(
                         conn, subject_id, True
                     )
+                elif (
+                    not next_step_pending
+                    and subject_type == knowledge_submissions.SUBJECT_TYPE
+                ):
+                    knowledge_submissions.decide(
+                        conn, subject_id, user["id"], True, payload.reason
+                    )
+                    knowledge_submission_to_register = subject_id
                 elif not next_step_pending and subject_type == "pipeline_run_stage":
                     # 사용자 요청(2026-10-18, "최소 HITL/HOTL") — 계획
                     # 확정 체크포인트 또는 반복 실패 에스컬레이션을 사람이
@@ -5097,6 +5343,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 elif subject_type == "deliverable":
                     deliverable_result = deliverables.resolve_deliverable_decision(
                         conn, subject_id, False
+                    )
+                elif subject_type == knowledge_submissions.SUBJECT_TYPE:
+                    knowledge_submissions.decide(
+                        conn, subject_id, user["id"], False, payload.reason
                     )
                 elif subject_type == "pipeline_run_stage":
                     # 반려 = "다시 해와"(승인루프 스킬 안내와
@@ -5151,6 +5401,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except Exception:
             conn.rollback()
             raise
+        if knowledge_submission_to_register is not None:
+            # 승인된 지식 등록 — 임베딩은 오래 걸릴 수 있어 커밋 뒤
+            # 백그라운드에서 색인한다(`knowledge_submissions` 모듈 설명).
+            background_tasks.add_task(
+                knowledge_submissions.register_submission,
+                conn,
+                knowledge_submission_to_register,
+            )
         if pipeline_run_id is not None and pipeline_run_is_graph_engine:
             # 사용자 요청(2026-11-18, "결재함과 연결") — 이 run은 아직
             # `pipeline_runs.status`가 'paused_for_approval'인 채다(실제

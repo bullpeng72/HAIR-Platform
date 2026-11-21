@@ -55,6 +55,7 @@ from hair_platform import (
     audit,
     graphquery,
     llm,
+    model_options,
     pool_registry,
     teams,
     vectorstore,
@@ -188,9 +189,7 @@ def _static_augmentation(
     if "vectordb_search" in native_ids:
         hits = vectorstore.search(conn, description)
         if hits:
-            parts.append(
-                "참고할 과거 산출물:\n" + "\n".join(f"- {h['text']}" for h in hits)
-            )
+            parts.append(vectorstore.format_hits_with_sources(conn, hits))
     if "graphdb_query" in native_ids:
         parts.append(graphquery.context_for_prompt(conn))
     if "tavily_search" in native_ids:
@@ -280,6 +279,13 @@ def _crewai_llm(provider: str, model: str, temperature: float | None = None):
         else CREWAI_LLM_TIMEOUT_SECONDS
     )
     kwargs: dict[str, Any] = {"timeout": timeout_seconds}
+    # 모델별 생성 옵션(2026-11-21, `model_options.py`) — 모델 레지스트리에 admin이
+    # 등록한 값만 보낸다(특정 모델용 하드코딩 없음). provider가 받지 않는 키는
+    # `for_model`이 이미 걸러 낸다(예: OpenAI는 top_k 없음). top_p는 crewai LLM의
+    # 정식 인자, top_k는 추가 인자로 litellm에 그대로 전달된다.
+    # 우선순위: 모델 레지스트리(모델 공통) < 에이전트 튜닝(에이전트별) — 같은 키가
+    # 생기더라도 에이전트 값이 이기도록 에이전트 값을 나중에 넣는다.
+    kwargs.update(model_options.for_model(provider, model))
     if temperature is not None:
         kwargs["temperature"] = temperature
     if provider == "ollama":
@@ -357,12 +363,18 @@ def _agent_backstory(
     system_prompt_for_role()`과 같은 이유로 스킬 "이름"만 나열하던 것에
     `skill_pool.description`(절차/지식 안내문)을 덧붙인다 — CrewAI
     Agent 루프에서는 이게 `backstory`로 들어가 매 Task마다 참고된다."""
+    # 스킬 활용·품질 개선(2026-11-21, `skill_prompting.py`) — "소프트웨어 개발팀"
+    # 고정 문구를 빼고(전략·보고 Agent에도 붙었다), 직접 호출 경로와 같은 스킬 활용
+    # 원칙·결과 품질 기준을 붙인다. Crew 실행은 진짜 Tool 루프가 있어 도구 안내는
+    # 붙이지 않는다(CrewAI가 Tool 목록을 따로 준다).
+    from hair_platform import skill_prompting
+
     skill_text = ", ".join(skills) if skills else "특별히 명시된 스킬 없음"
-    backstory = f"소프트웨어 개발팀의 '{role_name}'로서 보유 역량은 {skill_text}이다."
+    backstory = f"'{role_name}' 역할의 숙련자로서 보유 역량은 {skill_text}이다."
     knowledge = pool_registry.skill_knowledge_text(conn, skills)
     return (
         f"{backstory}\n\n보유 역량 상세({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n"
-        f"{knowledge}"
+        f"{knowledge}\n\n{skill_prompting.SKILL_USAGE_PRINCIPLES}\n\n{skill_prompting.QUALITY_BAR}"
         if knowledge
         else backstory
     )
@@ -378,7 +390,7 @@ def crewai_agent_generator(
     """생성 시점에 실제 CrewAI Agent+Task+Crew(단일, sequential)를 구성해
     kickoff한다. `jobs.GeneratorFn`과 같은 시그니처라 그대로 갈아끼울 수 있다.
 
-    `conn`은 이 Agent가 지식검색/관계조회 스킬을 가졌을 때 실제 CrewAI
+    `conn`은 이 Agent가 내부지식검색/조직배정관계조회 스킬을 가졌을 때 실제 CrewAI
     Tool(`_skill_based_tools()`)을 붙이기 위해 필요하다(사용자 요청,
     2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘" —
     `GeneratorFn` 계약 자체에 conn을 추가해 생성 시점부터 이 Agent가
@@ -451,7 +463,11 @@ _CONTENT_TYPE_INSTRUCTIONS = {
     "요소 안에서 함께 명시하세요(바깥의 공통 글자색 변수에만 기대지 말 것) — "
     "밝은 배경엔 어두운 글자, 어두운 배경엔 밝은 글자를 써서 최소 WCAG AA "
     "기준(명암비 4.5:1 이상)을 지키고, 글자색과 배경색이 같거나 비슷한 "
-    "계열이 되지 않게 하세요.",
+    "계열이 되지 않게 하세요. "
+    # 덱 예외(2026-11-21) — HAIR 덱 발표자료는 디자인 시스템(플랫폼이 CSS를 넣음)을 쓰므로
+    # 위 "<style> 인라인" 지시와 충돌했다(실측: 덱 스킬을 가진 Agent가 자체 스타일을 썼다).
+    "단, HAIR 덱(<main class=\"hair-deck\">) 발표자료라면 <style>·<script>를 쓰지 말고 "
+    "정해진 클래스만 쓰세요 — 디자인과 차트 그리기는 플랫폼이 넣습니다.",
     "code": "결과물은 코드로 작성하세요. 전체를 ``` 코드 블록 안에 넣고, 필요하면 "
     "블록 앞뒤에 짧은 설명만 덧붙이세요.",
 }
@@ -603,6 +619,8 @@ def run_crew(
     def _agent_kwargs_for(row: sqlite3.Row) -> dict:
         tuning = json.loads(row["tuning_config"])
         temperature = tuning.pop("temperature", None)
+        # 품질 검토(자체 개선)는 직접 호출 경로 전용 — CrewAI Agent 인자가 아니다.
+        tuning.pop("self_review", None)
         tuning.setdefault("max_iter", DELEGATION_MAX_ITER)
         tuning["llm"] = (
             crew_llm
@@ -648,7 +666,7 @@ def run_crew(
         # 정정(2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘"):
         # 예전에는 여기서 `agent_runtime.augment_with_retrieval()`로 검색
         # 결과를 Task description에 무조건 끼워 넣었다(정적 주입). 이제는
-        # 위에서 지식검색/관계조회 스킬을 가진 Agent에게 진짜 CrewAI Tool을
+        # 위에서 내부지식검색/조직배정관계조회 스킬을 가진 Agent에게 진짜 CrewAI Tool을
         # 붙였으므로(augmentation_mode='tool'), description은 원문 그대로
         # 두고 **Agent가 스스로 도구 호출 여부를 판단**하게 한다 — 정적
         # 주입과 Tool 호출을 동시에 하면 검색 결과가 중복으로 들어가거나

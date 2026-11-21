@@ -119,6 +119,18 @@ def _run_item(
         sandbox_result = run_smoke_test_in_sandbox(generated)
         if not sandbox_result.ok:
             raise RuntimeError(sandbox_result.stderr or "smoke test failed")
+        # 하드코딩 점검 5번(2026-11-21) — smoke 테스트는 생성 결과 문자열을 샌드박스에서
+        # 출력해 보는 형식 확인일 뿐이고, Docker가 없으면 건너뛴다. 그런데도 결과에
+        # 아무 표시 없이 "succeeded"만 남아 실제로 검증된 것처럼 보였다. 무엇을 했는지
+        # 결과에 그대로 남긴다.
+        generated = {
+            **generated,
+            "smoke_test": (
+                "skipped: Docker가 없어 샌드박스 확인을 건너뜀"
+                if sandbox_result.skipped
+                else "format_only: 생성 결과 형식만 확인(동작 검증 아님)"
+            ),
+        }
 
         conn.execute(
             "UPDATE job_items SET status = 'succeeded', result = ?, error = NULL WHERE id = ?",

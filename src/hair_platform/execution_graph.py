@@ -83,6 +83,7 @@ from hair_platform import (
     crew_runtime,
     dashboard,
     deliverables,
+    presentation_deck,
 )
 from hair_platform import pipeline_runtime as pr
 
@@ -329,8 +330,10 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
             (
                 state["task_id"],
                 author_agent_id,
-                stage_output,
-                stage["output_content_type"],
+                # HAIR 덱(2026-11-20) — `pipeline_runtime`과 동일.
+                *presentation_deck.finalize_with_type(
+                    stage_output, stage["output_content_type"]
+                ),
                 deliverable_status,
             ),
         )

@@ -28,7 +28,15 @@ import json
 import sqlite3
 from contextlib import ExitStack
 
-from hair_platform import audit, graphquery, id_scheme, sandbox, vectorstore, websearch
+from hair_platform import (
+    audit,
+    graphquery,
+    id_scheme,
+    pool_catalog,
+    sandbox,
+    vectorstore,
+    websearch,
+)
 
 NATIVE_TOOL_FACTORIES = {
     "vectordb_search": vectorstore.as_crewai_tool,
@@ -44,6 +52,8 @@ NATIVE_TOOL_FACTORIES = {
     # Skill 추가") — 일반 검색과 별개로 Tavily의 `topic="news"`+`days`로
     # 실제 최신성을 보장하는 전용 경로.
     "tavily_news_search": websearch.as_tavily_news_crewai_tool,
+    # 스킬·도구 목록 조회(2026-11-21) — "스킬생성"이 중복 확인·도구 참조에 쓴다.
+    pool_catalog.NATIVE_ID: pool_catalog.as_crewai_tool,
 }
 
 
@@ -336,8 +346,11 @@ def create_skill(
     output_format: str | None = None,
     examples: str | None = None,
     constraints: str | None = None,
+    includes: list[str] | None = None,
 ) -> int:
-    """`output_format`/`examples`/`constraints`(2026-11-17, "skill을
+    """`includes`(2026-11-20) — 이 스킬을 쓸 때 함께 적용할 스킬 이름 목록.
+
+    `output_format`/`examples`/`constraints`(2026-11-17, "skill을
     정해진 섹션 규격을 참조해 구조화") — 외부 표준 Skill 포맷(frontmatter
     + 섹션)과 호환되는 선택 필드. 전부 생략하면 기존 동작과 100%
     동일(지금까지의 모든 호출부가 그렇다)."""
@@ -345,11 +358,12 @@ def create_skill(
         raise ValueError(f"unsupported_augmentation_mode:{augmentation_mode}")
     if category not in ("sw_dev", "general"):
         raise ValueError(f"unsupported_category:{category}")
+    validated_includes = _validated_includes(conn, name, includes)
     cur = conn.execute(
         "INSERT INTO skill_pool "
         "(name, description, default_tool_pool_ids, augmentation_mode, "
-        "show_in_conversation, category, output_format, examples, constraints) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "show_in_conversation, category, output_format, examples, constraints, includes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             name,
             description,
@@ -360,6 +374,7 @@ def create_skill(
             output_format,
             examples,
             constraints,
+            json.dumps(validated_includes, ensure_ascii=False),
         ),
     )
     skill_id = cur.lastrowid
@@ -404,6 +419,11 @@ def list_skills(conn: sqlite3.Connection, category: str | None = None) -> list[d
             "output_format": r["output_format"],
             "examples": r["examples"],
             "constraints": r["constraints"],
+            # 대화 컨텍스트 정책(2026-11-20, `context_policy.py`).
+            "history_mode": r["history_mode"],
+            "use_attachments": bool(r["use_attachments"]),
+            # 함께 적용할 스킬(2026-11-20, `skill_knowledge_text()` 참고).
+            "includes": json.loads(r["includes"] or "[]"),
         }
         for r in rows
     ]
@@ -434,6 +454,9 @@ def update_skill(
         "output_format",
         "examples",
         "constraints",
+        "history_mode",
+        "use_attachments",
+        "includes",
     }
     unknown = set(fields) - allowed
     if unknown:
@@ -445,6 +468,14 @@ def update_skill(
         return
     if "category" in fields and fields["category"] not in ("sw_dev", "general"):
         raise ValueError(f"unsupported_category:{fields['category']}")
+    if "history_mode" in fields and fields["history_mode"] not in ("full", "recent", "none"):
+        raise ValueError(f"unsupported_history_mode:{fields['history_mode']}")
+    if "use_attachments" in fields:
+        fields["use_attachments"] = 1 if fields["use_attachments"] else 0
+    if "includes" in fields:
+        fields["includes"] = json.dumps(
+            _validated_includes(conn, row["name"], fields["includes"]), ensure_ascii=False
+        )
     set_clauses = []
     values: list[object] = []
     for key, value in fields.items():
@@ -588,6 +619,22 @@ def resolve_static_augmentation_targets(
     return native_ids
 
 
+def _validated_includes(conn: sqlite3.Connection, name: str, includes: list[str] | None) -> list[str]:
+    """포함할 스킬 이름 검증 — 실제로 있는 스킬만, 자기 자신은 안 된다.
+    순서는 지키고 중복은 뺀다."""
+    cleaned: list[str] = []
+    for inc in includes or []:
+        inc = (inc or "").strip()
+        if not inc or inc in cleaned:
+            continue
+        if inc == name:
+            raise ValueError("include_self")
+        if conn.execute("SELECT 1 FROM skill_pool WHERE name = ?", (inc,)).fetchone() is None:
+            raise ValueError(f"unknown_included_skill:{inc}")
+        cleaned.append(inc)
+    return cleaned
+
+
 def skill_knowledge_text(conn: sqlite3.Connection, skills: list[str]) -> str:
     """`skill_tags`에 담긴 이름과 일치하는 `skill_pool.description`을
     모아 프롬프트에 그대로 끼워 넣을 수 있는 텍스트로 만든다.
@@ -617,15 +664,46 @@ def skill_knowledge_text(conn: sqlite3.Connection, skills: list[str]) -> str:
         return ""
     placeholders = ",".join("?" * len(skills))
     rows = conn.execute(
-        f"SELECT description, output_format, examples, constraints "
+        f"SELECT name, description, output_format, examples, constraints, includes "
         f"FROM skill_pool WHERE name IN ({placeholders})",
         skills,
     ).fetchall()
+    # 포함 관계(`skill_pool.includes`, 2026-11-20) — 고른 스킬이 함께 적용할
+    # 스킬(예: 제안서작성 → 프레젠테이션작성)을 뒤에 덧붙인다. 이미 고른
+    # 스킬은 중복하지 않고, 두 단계까지만 펼친다(순환 방지). 포함 스킬이
+    # 없으면 지금까지와 글자 하나 다르지 않게 같은 결과다.
+    # 넘겨받은 순서대로(2026-11-21) — 호출자(`skill_prompting.knowledge_block`)가
+    # 요청과 관련 있는 스킬을 앞에 두므로 DB 순서로 섞지 않는다.
+    order = {name: i for i, name in enumerate(skills)}
+    rows = sorted(rows, key=lambda r: order.get(r["name"], len(order)))
+    tagged: list[tuple[sqlite3.Row, str | None]] = [(r, None) for r in rows]
+    seen = {r["name"] for r in rows}
+    frontier = rows
+    for _depth in range(2):
+        wanted: list[tuple[str, str]] = []
+        for r in frontier:
+            for inc in json.loads(r["includes"] or "[]"):
+                if inc not in seen:
+                    seen.add(inc)
+                    wanted.append((inc, r["name"]))
+        if not wanted:
+            break
+        inc_rows = conn.execute(
+            f"SELECT name, description, output_format, examples, constraints, includes "
+            f"FROM skill_pool WHERE name IN ({','.join('?' * len(wanted))})",
+            [n for n, _ in wanted],
+        ).fetchall()
+        parent_of = dict(wanted)
+        tagged.extend((r, parent_of[r["name"]]) for r in inc_rows)
+        frontier = inc_rows
     lines = []
-    for r in rows:
+    for r, included_by in tagged:
         if not r["description"]:
             continue
-        lines.append(f"- {r['description']}")
+        # 스킬 이름을 앞에 붙인다(2026-11-21) — 이름 없이 지침만 나열하면 어느 출력
+        # 형식·제약사항이 어느 스킬 것인지 모델이 구분하지 못했다.
+        prefix = f"(함께 적용 — {included_by} 스킬이 포함) " if included_by else ""
+        lines.append(f"- [{r['name']}] {prefix}{r['description']}")
         if r["output_format"]:
             lines.append(f"  출력 형식: {r['output_format']}")
         if r["examples"]:
@@ -691,9 +769,9 @@ def unsupported_realtime_skill_names(
     실제로 호출되지 않고 Team 실행에서만 동작한다"고 알릴 수 있게 한다.
 
     이름과 달리 "realtime"(검색)에 한정되지 않는다 — 사용자 보고
-    (2026-11-18, "데이터분석가이드 스킬 사용시 '실시간 외부 검색
+    (2026-11-18, "데이터분석 스킬 사용시 '실시간 외부 검색
     도구가 연결돼 있지만...' 경고가 뜬다") 이후 호출부의 안내 문구를
-    도구 종류를 단정하지 않게 고쳤다 — "데이터분석가이드"에 연결된
+    도구 종류를 단정하지 않게 고쳤다 — "데이터분석"에 연결된
     "수치 데이터 분석기"는 검색이 아니라 계산 도구인데도 이 함수
     자체의 판정(그때는 `kind != 'native'`)은 여전히 정확히 맞았다.
 

@@ -36,31 +36,31 @@ def test_category_column_backfilled_correctly_on_fresh_db():
     assert skill_categories == {"sw_dev", "general"}
     sw_dev_count = sum(1 for s in skills if s["category"] == "sw_dev")
     general_count = sum(1 for s in skills if s["category"] == "general")
-    assert sw_dev_count + general_count == len(skills) == 55
+    assert sw_dev_count + general_count == len(skills) == 62  # +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21)
     # 2026-11-11 "SKL-NONE-023(승인루프)은 개발업무 Skill로 변경" —
     # 34 → 35, 17 → 16. 2026-11-17 "딥리서치 skill과... 최신(1주일)
     # 뉴스와 인사이트를 제공해 주는 Skill 추가"로 Skill 2종이 전부
     # category 기본값 'general'로 추가(16 → 18, sw_dev는 그대로 35).
     # 같은 날 "주어진 업무를 잘 처리할 수 있는 skill을 생성하는 skill을
-    # 추가해줘"로 "스킬생성가이드"가 category='general'로 추가(18 → 19).
+    # 추가해줘"로 "스킬생성"가 category='general'로 추가(18 → 19).
     # 2026-11-18 "SKL-NONE-021 스킬은 개발업무로 분류해줘"로
-    # "문서작성가이드"가 general → sw_dev로 재분류(35 → 36, 19 → 18).
+    # "문서작성"가 general → sw_dev로 재분류(35 → 36, 19 → 18).
     # 같은 날 "excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프
     # 출력 등이 가능하도록... 전담 팀을 구성해"로 Skill "데이터시각화
     # 가이드"가 category 기본값 'general'로 추가(18 → 19).
-    assert sw_dev_count == 36
-    assert general_count == 19
+    assert sw_dev_count == 39  # +3: 백엔드구현·API설계·보안점검(2026-11-21)
+    assert general_count == 23  # +1: 프레젠테이션작성(2026-11-20), +3: 카피라이팅·사업성분석·회의록정리(2026-11-21)
 
     tools = pool_registry.list_tools(conn)
     sw_dev_tool_count = sum(1 for t in tools if t["category"] == "sw_dev")
     general_tool_count = sum(1 for t in tools if t["category"] == "general")
-    assert sw_dev_tool_count + general_tool_count == len(tools) == 14
+    assert sw_dev_tool_count + general_tool_count == len(tools) == 15  # +1: 스킬·도구 목록 조회(2026-11-21)
     assert sw_dev_tool_count == 4
     # 2026-11-17 위와 같은 사용자 요청으로 Tool "실시간 뉴스 검색
     # (Tavily, 최근 7일)"이 category 기본값 'general'로 추가(8 → 9).
     # 2026-11-18 위와 같은 사용자 요청으로 Tool "차트 생성기"가 category
     # 기본값 'general'로 추가(9 → 10).
-    assert general_tool_count == 10
+    assert general_tool_count == 11  # +1: 스킬·도구 목록 조회(2026-11-21)
 
 
 @pytest.mark.parametrize(
@@ -71,9 +71,9 @@ def test_category_column_backfilled_correctly_on_fresh_db():
         "요구사항검증",
         "진행관리조율",
         "코드리뷰체크리스트",
-        "아키텍처설계가이드",
+        "아키텍처설계",
         "승인루프",
-        "문서작성가이드",
+        "문서작성",
     ],
 )
 def test_known_dev_skills_classified_as_sw_dev(name):
@@ -87,21 +87,21 @@ def test_known_dev_skills_classified_as_sw_dev(name):
 @pytest.mark.parametrize(
     "name",
     [
-        "지식검색",
-        "관계조회",
+        "내부지식검색",
+        "조직배정관계조회",
         "실시간웹검색",
         "커버리지체크",
         "전략분석프레임워크",
-        "데이터분석가이드",
-        "제안서작성가이드",
-        "실적서작성가이드",
+        "데이터분석",
+        "제안서작성",
+        "실적서작성",
     ],
 )
 def test_known_general_skills_classified_as_general(name):
     """커버리지체크는 개발 파이프라인에서 유래했지만 내용 자체가 도메인
     무관이라 'general'이어야 한다(Agent가 아니라 스킬 내용 기준 분류라는
     설계 확인). 승인루프는 사용자 재검토(2026-11-11, "SKL-NONE-023은
-    개발업무 Skill로 변경") 후, 문서작성가이드는 사용자 요청(2026-11-18,
+    개발업무 Skill로 변경") 후, 문서작성은 사용자 요청(2026-11-18,
     "SKL-NONE-021 스킬은 개발업무로 분류해줘") 후 각각 sw_dev로 옮겨 이
     목록에서 제외됐다 — `test_known_dev_skills_classified_as_sw_dev`
     참고."""
@@ -218,7 +218,7 @@ def test_skill_pool_names_conversation_excludes_sw_dev_by_default(client_and_con
     resp = client.get("/api/skill-pool/names?conversation=true")
     assert resp.status_code == 200
     names = resp.json()
-    assert "지식검색" in names  # general
+    assert "내부지식검색" in names  # general
     assert "harness-gate-ci" not in names  # sw_dev — default-off
 
 
@@ -231,7 +231,7 @@ def test_skill_pool_names_without_conversation_param_ignores_category(client_and
     resp = client.get("/api/skill-pool/names")
     assert resp.status_code == 200
     names = resp.json()
-    assert "지식검색" in names
+    assert "내부지식검색" in names
     assert "harness-gate-ci" in names  # conversation=false면 그대로 보임
 
 
@@ -246,7 +246,7 @@ def test_skill_pool_names_include_dev_only_matters_with_conversation(client_and_
     resp = client.get("/api/skill-pool/names?conversation=true&include_dev=true")
     assert resp.status_code == 200
     names = resp.json()
-    assert "지식검색" in names
+    assert "내부지식검색" in names
     assert "harness-gate-ci" in names  # include_dev=true로 다시 보임
 
 

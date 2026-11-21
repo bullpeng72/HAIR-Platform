@@ -69,6 +69,7 @@ from hair_platform import (
     crew_runtime,
     dashboard,
     deliverables,
+    presentation_deck,
     requirements_traceability_llm,
 )
 
@@ -1182,8 +1183,9 @@ def _execute_stage_attempt(
         (
             run["task_id"],
             author_agent_id,
-            stage_output,
-            stage["output_content_type"],
+            # HAIR 덱(2026-11-20) — 발표자료 단계 산출물이면 디자인 시스템을
+            # 넣은 HTML로 완성하고 content_type을 html로 바로잡는다.
+            *presentation_deck.finalize_with_type(stage_output, stage["output_content_type"]),
             deliverable_status,
         ),
     )

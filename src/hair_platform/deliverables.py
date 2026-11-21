@@ -76,8 +76,9 @@ from hair_platform import (
     content_validators,
     crew_history,
     crew_runtime,
+    language_qa,
     llm,
-    pool_registry,
+    presentation_deck,
     teams,
 )
 
@@ -1136,29 +1137,42 @@ _CONTENT_TYPE_INSTRUCTIONS = {
     "요소 안에서 함께 명시하세요(바깥의 공통 글자색 변수에만 기대지 말 것) — "
     "밝은 배경엔 어두운 글자, 어두운 배경엔 밝은 글자를 써서 최소 WCAG AA "
     "기준(명암비 4.5:1 이상)을 지키고, 글자색과 배경색이 같거나 비슷한 "
-    "계열이 되지 않게 하세요.",
+    "계열이 되지 않게 하세요. "
+    # 덱 예외(2026-11-21) — HAIR 덱 발표자료는 디자인 시스템(플랫폼이 CSS를 넣음)을 쓰므로
+    # 위 "<style> 인라인" 지시와 충돌했다(실측: 덱 스킬을 가진 Agent가 자체 스타일을 썼다).
+    "단, HAIR 덱(<main class=\"hair-deck\">) 발표자료라면 <style>·<script>를 쓰지 말고 "
+    "정해진 클래스만 쓰세요 — 디자인과 차트 그리기는 플랫폼이 넣습니다.",
     "code": "결과물은 코드로 작성하세요. 전체를 ``` 코드 블록 안에 넣고, 필요하면 "
     "블록 앞뒤에 짧은 설명만 덧붙이세요.",
 }
 
 
 def skill_grounded_system_prompt(
-    conn: sqlite3.Connection, role_name: str, required_skills: list[str]
+    conn: sqlite3.Connection,
+    role_name: str,
+    required_skills: list[str],
+    *,
+    request: str | None = None,
+    callable_tools: list | None = None,
+    has_retrieval: bool = False,
 ) -> str:
     """Agent의 skill_tags 매칭과 같은 조회 로직을 재사용하되, 도구를
     붙이는 대신 지식 텍스트를 프롬프트에 주입한다(`pool_registry.
     skill_knowledge_text()`로 공용화 — 2026-10-13, Agent 자율 실행
     경로에도 같은 지식 주입을 적용하면서 중복 로직을 하나로 모았다)."""
-    knowledge = pool_registry.skill_knowledge_text(conn, required_skills)
+    # 스킬 활용·품질 개선(2026-11-21) — Agent 경로와 같은 조합 규칙(`skill_prompting.
+    # compose`): 관련 스킬 우선·스킬 활용 원칙·결과 품질 기준·실제 조건에 맞는 도구 안내.
+    from hair_platform import skill_prompting
+
     base = llm.system_prompt_for_human_assist(role_name, required_skills)
-    if knowledge:
-        return (
-            base
-            + f"\n\n참고 지식({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n"
-            + knowledge
-            + f"\n\n{pool_registry.NO_TOOL_LOOP_GUARD}"
-        )
-    return base
+    return skill_prompting.compose(
+        base,
+        conn,
+        required_skills,
+        request=request,
+        callable_tools=callable_tools,
+        has_retrieval=has_retrieval,
+    )
 
 
 def assist(
@@ -1426,11 +1440,20 @@ def run_agent_execution_job(
                 retrieval_sink=retrieval_sink,
             ),
         )
+        # 언어 품질 검사 + 자동 교정 1회(2026-11-20, `language_qa.py`).
+        output = language_qa.repair_output(
+            conn,
+            eval_result["output"],
+            retrieval_sink.get("llm_provider"),
+            retrieval_sink.get("llm_model"),
+            actor_id,
+            "task_agent_execution",
+        )
 
         cur = conn.execute(
             "INSERT INTO deliverables (task_id, author_type, author_id, content, "
             "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
-            (task_id, agent_id, eval_result["output"], content_type),
+            (task_id, agent_id, *presentation_deck.finalize_with_type(output, content_type)),
         )
         deliverable_id = cur.lastrowid
         assert deliverable_id is not None
@@ -1716,7 +1739,7 @@ def _persist_partial_crew_outputs(
         cur = conn.execute(
             "INSERT INTO deliverables (task_id, author_type, author_id, content, "
             "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
-            (task_id, agent_id, output_raw, content_type),
+            (task_id, agent_id, *presentation_deck.finalize_with_type(output_raw, content_type)),
         )
         deliverable_id = cur.lastrowid
         assert deliverable_id is not None
@@ -1867,7 +1890,11 @@ def run_adhoc_crew_job(
             cur = conn.execute(
                 "INSERT INTO deliverables (task_id, author_type, author_id, content, "
                 "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
-                (task_id, agent["agent_id"], agent["output"], content_type),
+                (
+                    task_id,
+                    agent["agent_id"],
+                    *presentation_deck.finalize_with_type(agent["output"], content_type),
+                ),
             )
             deliverable_id = cur.lastrowid
             assert deliverable_id is not None
@@ -2027,7 +2054,11 @@ def run_team_crew_job(
             cur = conn.execute(
                 "INSERT INTO deliverables (task_id, author_type, author_id, content, "
                 "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
-                (task_id, agent["agent_id"], agent["output"], content_type),
+                (
+                    task_id,
+                    agent["agent_id"],
+                    *presentation_deck.finalize_with_type(agent["output"], content_type),
+                ),
             )
             deliverable_id = cur.lastrowid
             assert deliverable_id is not None

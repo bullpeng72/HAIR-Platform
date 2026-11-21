@@ -54,6 +54,15 @@ _OPENAI_NON_CHAT_KEYWORDS = (
 )
 
 
+def _refresh_model_cache(conn: sqlite3.Connection) -> None:
+    """레지스트리가 바뀌면 호출 지점이 쓰는 캐시(생성 옵션·기본 모델)를 다시 읽는다
+    (`model_options.refresh`) — 모델명 없이 호출할 때 고르는 기본 모델이 레지스트리와
+    어긋나지 않게 한다(2026-11-21, 하드코딩 점검 1번)."""
+    from hair_platform import model_options
+
+    model_options.refresh(conn)
+
+
 def create_model(
     conn: sqlite3.Connection, actor_id: int, provider: str, name: str
 ) -> int:
@@ -77,6 +86,7 @@ def create_model(
         after={"provider": provider, "name": name},
     )
     conn.commit()
+    _refresh_model_cache(conn)
     return model_id
 
 
@@ -101,6 +111,7 @@ def list_models(conn: sqlite3.Connection, provider: str | None = None) -> list[d
             "is_active": bool(r["is_active"]),
             "optimization_tiers": json.loads(r["optimization_tiers"] or "[]"),
             "context_window": r["context_window"],
+            "sampling_options": json.loads(r["sampling_options"] or "{}"),
             "latest_benchmark": latest_by_model.get(r["id"]),
         }
         for r in rows
@@ -143,6 +154,7 @@ def set_optimization_tiers(
         after={"optimization_tiers": normalized},
     )
     conn.commit()
+    _refresh_model_cache(conn)
 
 
 def set_context_window(
@@ -178,6 +190,41 @@ def set_context_window(
         after={"context_window": context_window},
     )
     conn.commit()
+    _refresh_model_cache(conn)
+
+
+def set_sampling_options(
+    conn: sqlite3.Connection, actor_id: int, model_id: int, options: dict | None
+) -> dict:
+    """사용자 요청(2026-11-21, "특정 모델만을 위한 하드코딩은 없도록 해줘") —
+    모델별 생성 옵션(top_k/top_p)을 admin이 등록한다. 모든 provider 호출
+    (`llm.py`)과 CrewAI(`crew_runtime._crewai_llm`)가 `model_options` 캐시로
+    이 값을 읽어 provider 형식에 맞게 보낸다. 빈 값이면 아무것도 보내지 않는다
+    (그 모델의 기본값). 반환값은 저장된(정규화된) 옵션."""
+    from hair_platform import model_options
+
+    cleaned = model_options.validate(options)
+    row = conn.execute(
+        "SELECT * FROM model_registry WHERE id = ?", (model_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("model_not_found")
+    conn.execute(
+        "UPDATE model_registry SET sampling_options = ? WHERE id = ?",
+        (json.dumps(cleaned), model_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "model_registry_sampling_options_changed",
+        "model_registry",
+        model_id,
+        before={"sampling_options": json.loads(row["sampling_options"] or "{}")},
+        after={"sampling_options": cleaned},
+    )
+    conn.commit()
+    model_options.set_cached(row["provider"], row["name"], cleaned)
+    return cleaned
 
 
 def set_model_active(
@@ -202,6 +249,7 @@ def set_model_active(
         after={"is_active": is_active},
     )
     conn.commit()
+    _refresh_model_cache(conn)
 
 
 def delete_model(conn: sqlite3.Connection, actor_id: int, model_id: int) -> None:
@@ -232,6 +280,7 @@ def delete_model(conn: sqlite3.Connection, actor_id: int, model_id: int) -> None
         after=None,
     )
     conn.commit()
+    _refresh_model_cache(conn)
 
 
 def fetch_available_models(provider: str) -> list[str]:

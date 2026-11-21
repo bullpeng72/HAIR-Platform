@@ -988,7 +988,7 @@ def test_gc106_run_crew_attaches_real_crewai_tool_for_graphdb_agent(client_and_c
     normal_agent = cur.lastrowid
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('관계분석 Agent', '[\"관계조회\"]', 'active')"
+        "('관계분석 Agent', '[\"조직배정관계조회\"]', 'active')"
     )
     graphdb_agent = cur.lastrowid
     conn.commit()
@@ -1024,7 +1024,7 @@ def test_gc107_crewai_agent_generator_attaches_vectordb_tool(client_and_conn):
     실제 CrewAI Tool이 붙는지 확인한다(사용자 요청, 2026-09-27 — "이미
     생성된 또는 생성하는 AI Agent"에서 둘 다 동작해야 한다는 요구).
     (원래 "vectordb" 별칭으로도 됐으나 자동완성 중복 정리로 2026-10-06에
-    "지식검색"로 통합됨.)"""
+    "내부지식검색"로 통합됨.)"""
     _client, conn = client_and_conn
     captured = {}
 
@@ -1034,7 +1034,7 @@ def test_gc107_crewai_agent_generator_attaches_vectordb_tool(client_and_conn):
 
     with patch("crewai.Crew.kickoff", new=_kickoff_capture):
         crew_runtime.crewai_agent_generator(
-            conn, "지식검색 Agent", ["지식검색"], provider="openai"
+            conn, "내부지식검색 Agent", ["내부지식검색"], provider="openai"
         )
 
     crew = captured["crew"]
@@ -1042,7 +1042,7 @@ def test_gc107_crewai_agent_generator_attaches_vectordb_tool(client_and_conn):
     assert "knowledge_base_search" in tool_names
 
 
-# ---------- vectorstore(VectorDB 지식검색 Agent) ----------
+# ---------- vectorstore(VectorDB 내부지식검색 Agent) ----------
 
 
 def _fake_openai_embeddings(vectors: dict[str, list[float]]):
@@ -1238,8 +1238,8 @@ def test_gc89_context_for_prompt_handles_empty_org(client_and_conn):
 
 
 def test_gc90_execute_agent_augments_prompt_for_vectordb_role(client_and_conn):
-    """(원래 "vectordb"/"지식검색" 두 별칭을 같이 넣어 테스트했으나, 자동완성
-    중복 정리로 2026-10-06에 "vectordb"가 "지식검색"로 통합돼 "지식검색" 하나만
+    """(원래 "vectordb"/"내부지식검색" 두 별칭을 같이 넣어 테스트했으나, 자동완성
+    중복 정리로 2026-10-06에 "vectordb"가 "내부지식검색"로 통합돼 "내부지식검색" 하나만
     남음.)"""
     _client, conn = client_and_conn
     admin_id = conn.execute(
@@ -1247,7 +1247,7 @@ def test_gc90_execute_agent_augments_prompt_for_vectordb_role(client_and_conn):
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('지식검색 Agent', '[\"지식검색\"]', 'active')"
+        "('내부지식검색 Agent', '[\"내부지식검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1286,7 +1286,7 @@ def test_gc91_execute_agent_augments_prompt_for_graphdb_role(client_and_conn):
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('관계분석 Agent', '[\"관계조회\"]', 'active')"
+        "('관계분석 Agent', '[\"조직배정관계조회\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1418,7 +1418,7 @@ def test_gc_retrieve_context_queries_all_matching_native_tools_not_just_first(
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부 자료 조사가', '[\"실시간웹검색\", \"지식검색\"]', 'active')"
+        "('외부 자료 조사가', '[\"실시간웹검색\", \"내부지식검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1456,7 +1456,7 @@ def test_gc_retrieve_context_exposes_vectordb_chunk_id_for_citation(client_and_c
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('지식검색가', '[\"지식검색\"]', 'active')"
+        "('내부지식검색가', '[\"내부지식검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1489,7 +1489,7 @@ def test_gc_retrieve_context_reports_vectordb_zero_hits_explicitly(client_and_co
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('지식검색가', '[\"지식검색\"]', 'active')"
+        "('내부지식검색가', '[\"내부지식검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1520,7 +1520,7 @@ def test_gc_retrieve_context_survives_vectordb_embedding_failure(client_and_conn
     ).fetchone()["id"]
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('외부 자료 조사가', '[\"실시간웹검색\", \"지식검색\"]', 'active')"
+        "('외부 자료 조사가', '[\"실시간웹검색\", \"내부지식검색\"]', 'active')"
     )
     agent_id = cur.lastrowid
     conn.commit()
@@ -1584,47 +1584,9 @@ def test_gc_retrieve_context_includes_tavily_realtime_search_in_conversation_pat
 
 
 # ---------- index-knowledge ----------
-
-
-def test_gc93_index_knowledge_endpoint(client_and_conn):
-    client, conn = client_and_conn
-    cur = conn.execute(
-        "INSERT INTO agent_pool (role_name, skill_tags, status, last_output) VALUES "
-        "('기획자', '[]', 'active', '기획서 산출물')"
-    )
-    agent_id = cur.lastrowid
-    conn.commit()
-
-    _login(client, "member1", "memberpass")
-    resp = client.post(f"/api/agent-pool/{agent_id}/index-knowledge", json={})
-    assert resp.status_code == 403
-
-    _login(client, "manager1", "managerpass")
-    resp = client.post("/api/agent-pool/999999/index-knowledge", json={})
-    assert resp.status_code == 404
-
-    fake_client = _fake_openai_embeddings({"기획서 산출물": [1.0, 0.0]})
-    with patch("openai.OpenAI", return_value=fake_client):
-        resp = client.post(f"/api/agent-pool/{agent_id}/index-knowledge", json={})
-    assert resp.status_code == 200
-    chunk = conn.execute(
-        "SELECT * FROM knowledge_chunks WHERE id = ?", (resp.json()["chunk_id"],)
-    ).fetchone()
-    assert chunk["text"] == "기획서 산출물"
-
-
-def test_gc94_index_knowledge_fails_clearly_with_no_text(client_and_conn):
-    client, conn = client_and_conn
-    cur = conn.execute(
-        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "('신규 Agent', '[]', 'active')"
-    )
-    agent_id = cur.lastrowid
-    conn.commit()
-
-    _login(client, "manager1", "managerpass")
-    resp = client.post(f"/api/agent-pool/{agent_id}/index-knowledge", json={})
-    assert resp.status_code == 400
+# gc93/gc94(Agent `last_output` 즉시 색인 엔드포인트)는 2026-11-20 지식베이스
+# 등록 체계 개편으로 엔드포인트와 함께 삭제했다 — 결재 없는 입구가 다시
+# 생기지 않는지는 `test_phase81_knowledge_submissions.py`가 검증한다.
 
 
 # ---------- Admin "지식 베이스" 탭(2026-10-26, "공통의 지식을 관리하기

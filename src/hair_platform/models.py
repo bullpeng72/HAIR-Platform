@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # 사용자 요청(2026-10-27, "사람의 경우 ID는 향후 사번 적용 예정으로
 # 8자리~12자리 입력 및 표시 가능해야 함") — HumanPoolCreate/Update
@@ -529,6 +529,10 @@ class AgentTuningConfig(BaseModel):
     allow_code_execution: bool | None = None
     respect_context_window: bool | None = None
     temperature: float | None = None
+    # 품질 검토(자체 개선, 2026-11-21) — 직접 호출 경로(대화 @멘션·업무 실행)에서
+    # 초안을 스킬 기준·결과 품질 기준으로 한 번 더 점검해 고친 최종본을 낸다.
+    # LLM 호출이 한 번 더 들어가 시간·비용이 늘어난다(`agent_runtime._self_review`).
+    self_review: bool | None = None
 
 
 class AgentPersonaConfig(BaseModel):
@@ -744,14 +748,16 @@ class PipelineExecuteRequest(BaseModel):
     use_graph_engine: bool = False
 
 
-class KnowledgeIndexRequest(BaseModel):
-    """지식검색 Agent(VectorDB)가 검색할 수 있도록 텍스트를
-    임베딩해 저장한다. `text`를 안 주면 그 Agent의 현재 `last_output`을
-    색인한다. 실제 임베딩 API를 호출하므로 비용이 발생한다(opt-in)."""
+class KnowledgeSubmissionCreate(BaseModel):
+    """지식베이스 등록 제출(2026-11-20, 경로 B "제출 → admin 결재 → 등록").
+    `title`을 비우면 본문 첫 제목 줄로 자동 채운다. code 산출물은
+    `allow_code=True`로 명시해야 제출된다(기본 제외)."""
 
-    text: str | None = None
-    provider: LlmProvider | None = None
-    model: str | None = None
+    source_type: Literal["conversation_message", "deliverable"]
+    source_id: int
+    title: str | None = Field(default=None, max_length=200)
+    note: str | None = Field(default=None, max_length=2000)
+    allow_code: bool = False
 
 
 class ConsentRequest(BaseModel):
@@ -862,6 +868,8 @@ class SkillPoolCreate(BaseModel):
     output_format: str | None = None
     examples: str | None = None
     constraints: str | None = None
+    # 함께 적용할 스킬 이름(2026-11-20) — 예: 제안서작성 → ["프레젠테이션작성"].
+    includes: list[str] = []
 
 
 class SkillPoolUpdate(BaseModel):
@@ -878,6 +886,10 @@ class SkillPoolUpdate(BaseModel):
     output_format: str | None = None
     examples: str | None = None
     constraints: str | None = None
+    # 대화 컨텍스트 정책(2026-11-20) — 이 스킬로 대화할 때의 기본값.
+    history_mode: Literal["full", "recent", "none"] | None = None
+    use_attachments: bool | None = None
+    includes: list[str] | None = None
 
 
 class SkillMarkdownImport(BaseModel):
@@ -918,6 +930,14 @@ class ModelOptimizationTiersUpdate(BaseModel):
     optimization_tiers: list[
         Literal["deep_reasoning", "precision_fast", "standard"]
     ] = []
+
+
+class ModelSamplingOptionsUpdate(BaseModel):
+    """모델별 생성 옵션(2026-11-21) — 비우면(None) 그 항목을 보내지 않는다.
+    OpenAI는 top_k를 지원하지 않아 저장돼도 호출에 포함하지 않는다."""
+
+    top_k: int | None = Field(default=None, ge=1, le=1000)
+    top_p: float | None = Field(default=None, gt=0.0, le=1.0)
 
 
 class ModelContextWindowUpdate(BaseModel):
@@ -996,6 +1016,17 @@ class ConversationMessageCreate(BaseModel):
 
     content: str
     skill: str | None = None
+    # 대화 컨텍스트 정책(2026-11-20, `context_policy.py`) — 이 메시지에
+    # 대한 응답에서만 스킬 기본값 대신 쓸 "이전 대화" 범위. 생략하면 기본값.
+    context_override: Literal["full", "recent", "none"] | None = None
+
+
+class AgentContextPolicyUpdate(BaseModel):
+    """Agent `@멘션` 시 이전 대화/첨부 사용 덮어쓰기(2026-11-20) —
+    `null`이면 그 Agent 스킬들에서 계산한 값(가장 포괄적인 값)을 쓴다."""
+
+    history_mode: Literal["full", "recent", "none"] | None = None
+    use_attachments: bool | None = None
 
 
 class ConversationModelUpdate(BaseModel):

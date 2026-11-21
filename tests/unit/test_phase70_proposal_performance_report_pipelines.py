@@ -140,7 +140,7 @@ def test_data_analysis_guide_skill_is_tool_mode_with_resolvable_tool():
     db.init_schema(conn)
     row = conn.execute(
         "SELECT augmentation_mode, default_tool_pool_ids FROM skill_pool "
-        "WHERE name = '데이터분석가이드'"
+        "WHERE name = '데이터분석'"
     ).fetchone()
     assert row["augmentation_mode"] == "tool"
     tool_ids = json.loads(row["default_tool_pool_ids"])

@@ -277,7 +277,7 @@ def test_gc_agent_mention_with_custom_python_skill_has_no_warning(
     _login(client, "admin1", "adminpass")
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "(?, '[\"데이터분석가이드\"]', 'active')",
+        "(?, '[\"데이터분석\"]', 'active')",
         ("데이터 분석 Agent",),
     )
     conn.commit()
@@ -306,14 +306,14 @@ def test_gc_agent_mention_with_custom_python_skill_has_no_warning(
 
 
 def test_execute_agent_with_custom_python_skill_calls_real_tool(client_and_conn):
-    """`execute_agent()` 레벨에서 직접 검증 — "데이터분석가이드" 스킬을
+    """`execute_agent()` 레벨에서 직접 검증 — "데이터분석" 스킬을
     가진 Agent는 `tool_calling.resolve_callable_tools()`로 "수치 데이터
     분석기"를 찾아 `llm.call_llm_with_tools()`에 넘겨야 한다."""
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES "
-        "(?, '[\"데이터분석가이드\"]', 'active')",
+        "(?, '[\"데이터분석\"]', 'active')",
         ("데이터 분석 Agent",),
     )
     conn.commit()
@@ -334,7 +334,10 @@ def test_execute_agent_with_custom_python_skill_calls_real_tool(client_and_conn)
     mock_call_no_tools.assert_not_called()
     tools_arg = mock_call.call_args[0][4]
     assert len(tools_arg) == 1
-    assert tools_arg[0].name == "custom_tool_13"
+    analyzer_id = conn.execute(
+        "SELECT id FROM tool_pool WHERE name = '수치 데이터 분석기'"
+    ).fetchone()[0]
+    assert tools_arg[0].name == f"custom_tool_{analyzer_id}"
 
 
 def test_gc_agent_mention_without_unsupported_skill_has_no_warning(client_and_conn):
@@ -897,7 +900,7 @@ def test_strip_large_code_fences_replaces_long_blocks_only():
 
 
 def test_strip_large_code_fences_handles_unclosed_fence_from_truncated_response():
-    """사용자 보고(2026-11-13, "제안서작성가이드 스킬 요청이 직전
+    """사용자 보고(2026-11-13, "제안서작성 스킬 요청이 직전
     메시지의 프레젠테이션 스타일을 그대로 베낌") — 실측 확인: 그
     직전 메시지는 응답이 중간에 끊겨 닫는 펜스(```)가 없었다. 기존
     정규식(`_CODE_FENCE_RE`)은 여는 펜스+닫는 펜스가 둘 다 있어야
@@ -971,7 +974,7 @@ def test_business_plan_writing_guide_forbids_full_source_code():
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     desc = conn.execute(
-        "SELECT description FROM skill_pool WHERE name = '기획서작성가이드'"
+        "SELECT description FROM skill_pool WHERE name = '기획서작성'"
     ).fetchone()["description"]
     assert "전체 소스 코드를 작성하지 않는다" in desc
     assert "구현은 개발 역할의 몫" in desc
@@ -1273,11 +1276,14 @@ def test_gc_native_skill_search_result_overrides_no_tool_loop_guard(client_and_c
         assert resp.status_code == 201, resp.text
         system_prompt = mock_call.call_args[0][2]
 
-    guard_idx = system_prompt.index("그 도구를 실제로 호출할 수 없습니다")
+    # 2026-11-21(`skill_prompting.tool_guidance`) — 모순을 정정 문구로 덮지 않고
+    # 처음부터 만들지 않는다: 검색이 실제로 수행됐으면 "도구를 호출할 수 없다"
+    # 가드 대신 "시스템이 미리 조회한 결과를 근거로 쓴다"는 안내가 들어간다.
+    assert "그 도구를 실제로 호출할 수 없습니다" not in system_prompt
+    guidance_idx = system_prompt.index("[조회 결과 사용]")
     override_idx = system_prompt.index("이 검색은 시스템이 이미 대신 수행해")
     result_idx = system_prompt.index("원격근무 설명")
-    # 정정 지시가 가드 뒤, 실제 검색 결과 바로 앞에 와야 모순이 풀린다.
-    assert guard_idx < override_idx < result_idx
+    assert guidance_idx < override_idx < result_idx
     assert "실시간 검색이 불가능한 환경" in system_prompt  # 금지 문구로 명시
 
 
@@ -1308,7 +1314,7 @@ def test_gc_default_ai_custom_python_skill_calls_real_tool_no_warning(
 ):
     """사용자 요청(2026-11-18, "...Skill, tool 사용 제약을 없애고...
     엔터프라이즈 환경 적용이 가능한 수준의 확실한 개선 방안을 도출해줘"
-    개선축 A) 구현 이후 — "데이터분석가이드"에 연결된 "수치 데이터
+    개선축 A) 구현 이후 — "데이터분석"에 연결된 "수치 데이터
     분석기"(custom_python)는 이제 "기본 AI" 경로에서도 provider
     네이티브 함수 호출로 실제 호출된다(`tool_calling.
     resolve_callable_tools()` → `llm.call_llm_with_tools()`). 더 이상
@@ -1325,7 +1331,7 @@ def test_gc_default_ai_custom_python_skill_calls_real_tool_no_warning(
     ) as mock_call, patch("hair_platform.llm.call_llm") as mock_call_no_tools:
         resp = client.post(
             f"/api/conversations/{conv_id}/messages",
-            json={"content": "이 숫자들의 증감률 계산해줘", "skill": "데이터분석가이드"},
+            json={"content": "이 숫자들의 증감률 계산해줘", "skill": "데이터분석"},
         )
         assert resp.status_code == 201, resp.text
 
@@ -1333,7 +1339,10 @@ def test_gc_default_ai_custom_python_skill_calls_real_tool_no_warning(
     mock_call_no_tools.assert_not_called()
     tools_arg = mock_call.call_args[0][4]
     assert len(tools_arg) == 1
-    assert tools_arg[0].name == "custom_tool_13"  # "수치 데이터 분석기"
+    analyzer_id = _conn.execute(
+        "SELECT id FROM tool_pool WHERE name = '수치 데이터 분석기'"
+    ).fetchone()[0]
+    assert tools_arg[0].name == f"custom_tool_{analyzer_id}"  # 도구 id는 시드 순서에 따라 바뀐다
 
     messages = client.get(f"/api/conversations/{conv_id}/messages").json()
     content = messages[-1]["content"]

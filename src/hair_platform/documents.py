@@ -2,10 +2,14 @@
 → VectorDB 색인.
 
 사용자 요청(2026-10-26, "대화창 및 에이전트로 구성된 업무에서 외부
-자료(마크다운, pdf, html) 등을 입력받을 수 있도록 개선해줘") — 지금까지
-`knowledge_chunks` 색인은 `agent_runtime.index_knowledge()` 하나뿐이고,
-그 함수는 이미 존재하는 Agent의 `last_output`(또는 명시한 텍스트)만
-받는다. 로컬 파일을 올리는 경로 자체가 없었다.
+자료(마크다운, pdf, html) 등을 입력받을 수 있도록 개선해줘") — 당시엔
+`knowledge_chunks` 색인이 `agent_runtime.index_knowledge()`(Agent의
+`last_output`만 받음) 하나뿐이라 로컬 파일을 올리는 경로 자체가 없었다.
+
+2026-11-20 지식베이스 등록 체계 개편 이후 입구는 둘뿐이다 — admin 직접
+등록(이 모듈의 `ingest_*`, `documents.source_type='direct'`)과 제출 →
+admin 결재(`knowledge_submissions.py`가 이 모듈의 `_ingest()`를 재사용,
+`source_type='submission'`). `index_knowledge()`는 삭제됐다.
 
 실측으로 확인한 버그 — `vectorstore.index_text()`는 청크 분할이 없다.
 모델별 임베딩 글자수 한도(`vectorstore._MAX_EMBED_CHARS_BY_MODEL`, 예:
@@ -15,7 +19,7 @@ mxbai-embed-large는 350자)를 넘는 텍스트는 `_truncate_for_embedding()`�
 한도 이내 청크로 미리 쪼갠 뒤에야 `index_text()`를 호출한다.
 
 VectorDB 검색(`vectorstore.search()`)은 전역이다(`source_agent_id`로
-필터링하지 않는다) — 한 번 색인되면 `지식검색` 스킬이 있는 어떤 Agent든
+필터링하지 않는다) — 한 번 색인되면 `내부지식검색` 스킬이 있는 어떤 Agent든
 대화창 단발 호출 경로(`agent_runtime.retrieve_context()`)와 실제 Crew
 실행 경로(`vectordb_search` CrewAI Tool) 양쪽에서 그대로 찾아낸다. 이
 모듈은 그 전역 색인기에 "파일에서 뽑은 텍스트"를 넣어주는 입구일
@@ -486,6 +490,9 @@ def _ingest(
     text: str,
     provider: str | None,
     model: str | None,
+    *,
+    source_type: str = "direct",
+    submission_id: int | None = None,
 ) -> dict:
     if provider is None or model is None:
         default_provider, default_model = (
@@ -497,9 +504,9 @@ def _ingest(
     chunks = chunk_text(text, vectorstore.max_embed_chars(model))
 
     cur = conn.execute(
-        "INSERT INTO documents (filename, uploaded_by, char_count, chunk_count) "
-        "VALUES (?, ?, ?, ?)",
-        (filename, actor_id, len(text), len(chunks)),
+        "INSERT INTO documents (filename, uploaded_by, char_count, chunk_count, "
+        "source_type, submission_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (filename, actor_id, len(text), len(chunks), source_type, submission_id),
     )
     document_id = cur.lastrowid
     assert document_id is not None
@@ -535,7 +542,8 @@ def _ingest(
 def list_documents(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT d.id, d.filename, d.mime_type, d.uploaded_by, u.username AS uploaded_by_username, "
-        "d.conversation_id, d.char_count, d.chunk_count, d.created_at "
+        "d.conversation_id, d.char_count, d.chunk_count, d.created_at, "
+        "d.source_type, d.submission_id "
         "FROM documents d JOIN users u ON u.id = d.uploaded_by "
         "ORDER BY d.id DESC"
     ).fetchall()
@@ -548,6 +556,14 @@ def delete_document(conn: sqlite3.Connection, actor_id: int, document_id: int) -
     ).fetchone()
     if row is None:
         raise ValueError("document_not_found")
+    # 제출 → 결재로 등록된 문서(2026-11-20)면 그 제출 건을 'removed'로
+    # 돌리고 FK를 끊는다(안 끊으면 FOREIGN KEY constraint failed). 같은
+    # 원본은 이후 새 제출로 다시 등록할 수 있다.
+    conn.execute(
+        "UPDATE knowledge_submissions SET status = 'removed', document_id = NULL "
+        "WHERE document_id = ?",
+        (document_id,),
+    )
     conn.execute(
         "DELETE FROM knowledge_chunks WHERE source_document_id = ?", (document_id,)
     )

@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from hair_platform import audit, pool_registry, tool_calling
+from hair_platform import audit, model_options, tool_calling
 
 DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-5",
@@ -90,6 +90,7 @@ def set_platform_default_llm(
         after={"provider": provider, "model": model},
     )
     conn.commit()
+    model_options.refresh(conn)  # 모델명 없는 호출의 기본 모델이 바로 따라오게
 
 
 def resolve_provider_and_model(
@@ -123,8 +124,15 @@ def resolve_provider_and_model(
             f"지원하지 않는 provider입니다: {provider!r} "
             f"({', '.join(DEFAULT_MODELS)} 중 하나만 가능)"
         )
+    # 모델명이 비었을 때(2026-11-21, 하드코딩 점검 1번): 환경변수 → 플랫폼 기본 LLM
+    # (같은 provider) → 모델 레지스트리 활성 모델 → 마지막으로 `DEFAULT_MODELS` 고정값
+    # (그 provider 모델이 레지스트리에 하나도 없을 때만 — 예: 레지스트리를 아직 안 채운
+    # 새 설치). 예전엔 바로 고정값이 들어가 설치되지 않은 'llama3.1'로 404가 났다.
     model = (
-        model or os.environ.get("HAIR_PLATFORM_LLM_MODEL") or DEFAULT_MODELS[provider]
+        model
+        or os.environ.get("HAIR_PLATFORM_LLM_MODEL")
+        or model_options.default_model_for(provider)
+        or DEFAULT_MODELS[provider]
     )
     return provider, model
 
@@ -148,6 +156,7 @@ def call_llm(
     prompt: str,
     *,
     timeout_seconds: float | None = None,
+    temperature: float | None = None,
 ) -> str:
     """실제 API 호출 지점 — 여기서만 비용/로컬 연산이 발생한다.
 
@@ -156,12 +165,15 @@ def call_llm(
     적용된다 — 하위 호환.
     `agent_runtime.execute_agent()`가 deep_reasoning tier Agent에는 더 긴
     값을 넘겨 쓴다(아래 `_call_anthropic`/`_call_openai` 참고)."""
+    # `temperature`(2026-11-21) — 에이전트 파인튜닝 값. 지정됐을 때만 넘겨
+    # 기존 호출 모양(테스트 대역 포함)을 그대로 둔다.
+    extra = {"temperature": temperature} if temperature is not None else {}
     if provider == "anthropic":
-        return _call_anthropic(model, system, prompt, timeout_seconds)
+        return _call_anthropic(model, system, prompt, timeout_seconds, **extra)
     if provider == "openai":
-        return _call_openai(model, system, prompt, timeout_seconds)
+        return _call_openai(model, system, prompt, timeout_seconds, **extra)
     if provider == "ollama":
-        return _call_ollama(model, system, prompt, timeout_seconds)
+        return _call_ollama(model, system, prompt, timeout_seconds, **extra)
     raise ValueError(f"지원하지 않는 provider입니다: {provider!r}")
 
 
@@ -174,6 +186,7 @@ def call_llm_with_tools(
     *,
     timeout_seconds: float | None = None,
     max_iterations: int = tool_calling.MAX_TOOL_CALL_ITERATIONS,
+    temperature: float | None = None,
 ) -> str:
     """사용자 요청(2026-11-18, "...Skill, tool 사용 제약을 없애고...
     엔터프라이즈 환경 적용이 가능한 수준의 확실한 개선 방안을 도출해줘"
@@ -187,19 +200,20 @@ def call_llm_with_tools(
     `call_llm()`과 동일하게 1턴만 호출한다(불필요한 복잡도 없음,
     호출부가 매번 "도구가 있는지" 분기할 필요가 없도록 이 함수 안에서
     처리)."""
+    extra = {"temperature": temperature} if temperature is not None else {}
     if not tools:
-        return call_llm(provider, model, system, prompt, timeout_seconds=timeout_seconds)
+        return call_llm(provider, model, system, prompt, timeout_seconds=timeout_seconds, **extra)
     if provider == "anthropic":
         return _call_anthropic_with_tools(
-            model, system, prompt, tools, timeout_seconds, max_iterations
+            model, system, prompt, tools, timeout_seconds, max_iterations, **extra
         )
     if provider == "openai":
         return _call_openai_with_tools(
-            model, system, prompt, tools, timeout_seconds, max_iterations
+            model, system, prompt, tools, timeout_seconds, max_iterations, **extra
         )
     if provider == "ollama":
         return _call_ollama_with_tools(
-            model, system, prompt, tools, timeout_seconds, max_iterations
+            model, system, prompt, tools, timeout_seconds, max_iterations, **extra
         )
     raise ValueError(f"지원하지 않는 provider입니다: {provider!r}")
 
@@ -207,6 +221,15 @@ def call_llm_with_tools(
 _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE = (
     "도구 호출을 반복하다 최대 횟수에 도달해 중단했습니다 — 지금까지의 "
     "도구 호출 결과를 참고해 이어서 직접 답변해주세요."
+)
+
+# 반복 상한에 걸렸을 때의 마무리(2026-11-21) — 예전엔 위 안내문을 **결과물로 그대로**
+# 돌려줬다(실측: 프레젠테이션 Agent가 차트 도구를 13번 부르다 상한에 걸려, 발표자료
+# 대신 이 한 줄이 저장됐다). 이제 도구를 끈 채 한 번 더 불러 지금까지의 도구 결과로
+# 최종 답을 받는다. 그 호출마저 실패·빈 응답일 때만 안내문을 돌려준다.
+_FINAL_ANSWER_INSTRUCTION = (
+    "도구 호출을 더 하지 마세요. 지금까지의 도구 결과와 대화 내용만으로 처음 요청에 대한 "
+    "최종 결과물을 완성해 출력하세요."
 )
 
 
@@ -217,6 +240,7 @@ def _call_anthropic_with_tools(
     tools: list,
     timeout_seconds: float | None,
     max_iterations: int,
+    temperature: float | None = None,
 ) -> str:
     import anthropic
 
@@ -231,6 +255,7 @@ def _call_anthropic_with_tools(
             system=system,
             messages=messages,
             tools=tool_schemas,
+            **model_options.request_options("anthropic", model, temperature),
         )
         if resp.stop_reason != "tool_use":
             return "".join(b.text for b in resp.content if b.type == "text")
@@ -247,7 +272,22 @@ def _call_anthropic_with_tools(
                     }
                 )
         messages.append({"role": "user", "content": tool_results})
-    return _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
+    # 상한 도달 — 도구를 끄고(tool_choice none) 최종 답을 받는다.
+    messages[-1]["content"].append({"type": "text", "text": _FINAL_ANSWER_INSTRUCTION})
+    try:
+        resp = client.messages.create(
+            model=model,
+            max_tokens=_ANTHROPIC_MAX_OUTPUT_TOKENS,
+            system=system,
+            messages=messages,
+            tools=tool_schemas,
+            tool_choice={"type": "none"},
+            **model_options.request_options("anthropic", model, temperature),
+        )
+        final = "".join(b.text for b in resp.content if b.type == "text")
+    except Exception:  # noqa: BLE001 — 마무리 실패 시 기존 안내문으로
+        final = ""
+    return final or _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
 
 
 def _call_openai_with_tools(
@@ -257,6 +297,7 @@ def _call_openai_with_tools(
     tools: list,
     timeout_seconds: float | None,
     max_iterations: int,
+    temperature: float | None = None,
 ) -> str:
     import json
 
@@ -271,7 +312,10 @@ def _call_openai_with_tools(
     ]
     for _ in range(max_iterations):
         resp = client.chat.completions.create(
-            model=model, messages=messages, tools=tool_schemas
+            model=model,
+            messages=messages,
+            tools=tool_schemas,
+            **model_options.request_options("openai", model, temperature),
         )
         msg = resp.choices[0].message
         if not msg.tool_calls:
@@ -293,7 +337,20 @@ def _call_openai_with_tools(
             messages.append(
                 {"role": "tool", "tool_call_id": tc.id, "content": result}
             )
-    return _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
+    # 상한 도달 — 도구를 끄고(tool_choice none) 최종 답을 받는다.
+    messages.append({"role": "user", "content": _FINAL_ANSWER_INSTRUCTION})
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tool_schemas,
+            tool_choice="none",
+            **model_options.request_options("openai", model, temperature),
+        )
+        final = resp.choices[0].message.content or ""
+    except Exception:  # noqa: BLE001 — 마무리 실패 시 기존 안내문으로
+        final = ""
+    return final or _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
 
 
 def _call_ollama_with_tools(
@@ -303,6 +360,7 @@ def _call_ollama_with_tools(
     tools: list,
     timeout_seconds: float | None,
     max_iterations: int,
+    temperature: float | None = None,
 ) -> str:
     """Ollama는 OpenAI 호환 `tools` 스키마를 `/api/chat`이 받는다(설치된
     모델이 함수 호출을 지원해야 함 — 지원 안 하면 `tool_calls` 없이
@@ -325,10 +383,14 @@ def _call_ollama_with_tools(
                 "messages": messages,
                 "tools": tool_schemas,
                 "stream": False,
+                "options": model_options.request_options("ollama", model, temperature),
             },
             timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _raise_ollama_error_with_detail(resp, exc)
         data = resp.json()
         msg = data["message"]
         tool_calls = msg.get("tool_calls")
@@ -341,7 +403,24 @@ def _call_ollama_with_tools(
             args = raw_args if isinstance(raw_args, dict) else {}
             result = tool_calling.run_tool(tools_by_name, fn.get("name", ""), args)
             messages.append({"role": "tool", "content": result})
-    return _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
+    # 상한 도달 — tools 없이 한 번 더 불러 최종 답을 받는다.
+    messages.append({"role": "user", "content": _FINAL_ANSWER_INSTRUCTION})
+    try:
+        resp = httpx.post(
+            f"{base_url}/api/chat",
+            json={
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "options": model_options.request_options("ollama", model, temperature),
+            },
+            timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        final = (resp.json().get("message") or {}).get("content", "")
+    except Exception:  # noqa: BLE001 — 마무리 실패 시 기존 안내문으로
+        final = ""
+    return final or _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
 
 
 # 사용자 보고(2026-10-18, "@자율 개발 크루" 품질 분석 중 실측) — QA
@@ -375,7 +454,11 @@ OLLAMA_LLM_TIMEOUT_SECONDS = 1800.0
 _ANTHROPIC_MAX_OUTPUT_TOKENS = 8192
 
 def _call_anthropic(
-    model: str, system: str, prompt: str, timeout_seconds: float | None = None
+    model: str,
+    system: str,
+    prompt: str,
+    timeout_seconds: float | None = None,
+    temperature: float | None = None,
 ) -> str:
     import anthropic  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
@@ -395,12 +478,17 @@ def _call_anthropic(
         max_tokens=_ANTHROPIC_MAX_OUTPUT_TOKENS,
         system=system,
         messages=[{"role": "user", "content": prompt}],
+        **model_options.request_options("anthropic", model, temperature),
     )
     return "".join(block.text for block in resp.content if block.type == "text")
 
 
 def _call_openai(
-    model: str, system: str, prompt: str, timeout_seconds: float | None = None
+    model: str,
+    system: str,
+    prompt: str,
+    timeout_seconds: float | None = None,
+    temperature: float | None = None,
 ) -> str:
     import openai  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
@@ -413,12 +501,17 @@ def _call_openai(
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
+        **model_options.request_options("openai", model, temperature),
     )
     return resp.choices[0].message.content or ""
 
 
 def _call_ollama(
-    model: str, system: str, prompt: str, timeout_seconds: float | None = None
+    model: str,
+    system: str,
+    prompt: str,
+    timeout_seconds: float | None = None,
+    temperature: float | None = None,
 ) -> str:
     import httpx  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
@@ -432,6 +525,7 @@ def _call_ollama(
                 {"role": "user", "content": prompt},
             ],
             "stream": False,
+            "options": model_options.request_options("ollama", model, temperature),
         },
         # 사용자 보고(2026-10-14, "@개발자... -> 일부 응답이 실패했습니다:
         # timed out") — 실측으로 원인 확인: `conversation_jobs`에 정확히
@@ -456,41 +550,59 @@ def _call_ollama(
     try:
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        # 사용자 보고(2026-11-18, "데이터분석가이드 스킬 사용시 '400
-        # Bad Request' 오류") — 실측 재현 결과 스킬 자체와는 무관했다
-        # (Ollama 서버 로그: "request (33806 tokens) exceeds the
-        # available context size (32768 tokens)") — 대화가 길어져
-        # 로드된 모델의 컨텍스트 한도(llama-server `-c` 옵션)를
-        # 넘기면 어떤 스킬/멘션을 썼든 똑같이 터진다. 그런데
-        # `raise_for_status()`가 올리는 예외는 "Client error '400
-        # Bad Request' for url '...'" 뿐이고, Ollama가 응답 바디에
-        # 실어 보낸 진짜 원인(`error` 필드)은 읽지도 않고 버려지고
-        # 있었다 — 사용자에게는 원인을 전혀 알 수 없는 메시지만
-        # 남았다. 이 필드를 읽어 예외 메시지에 포함시킨다(호출부
-        # 전부 `except Exception`으로 받아 `str(exc)`를 그대로
-        # 사용자에게 보여주므로, 여기서 고치면 전부 혜택을 본다).
-        detail = None
-        try:
-            detail = resp.json().get("error")
-        except Exception:  # noqa: BLE001 — 응답 바디가 JSON이 아닐 수도 있음
-            pass
-        if detail:
-            hint = (
-                " — 대화가 길어져 이 모델의 컨텍스트 한도를 넘었습니다. "
-                "대화를 요약해 새로 시작하거나, 첨부 자료를 줄이거나, "
-                "더 넓은 컨텍스트를 지원하는 모델로 바꿔보세요."
-                if "context size" in detail
-                else ""
-            )
-            raise RuntimeError(
-                f"Ollama 요청 실패(HTTP {resp.status_code}): {detail}{hint}"
-            ) from exc
-        raise
+        _raise_ollama_error_with_detail(resp, exc)
     return resp.json()["message"]["content"]
 
 
+def _raise_ollama_error_with_detail(resp, exc: Exception) -> None:
+    """사용자 보고(2026-11-18, "데이터분석가이드 스킬 사용시 '400
+    Bad Request' 오류") — 실측 재현 결과 스킬 자체와는 무관했다
+    (Ollama 서버 로그: "request (33806 tokens) exceeds the available
+    context size (32768 tokens)") — 대화가 길어져 로드된 모델의
+    컨텍스트 한도(llama-server `-c` 옵션)를 넘기면 어떤 스킬/멘션을
+    썼든 똑같이 터진다. 그런데 `raise_for_status()`가 올리는 예외는
+    "Client error '400 Bad Request' for url '...'" 뿐이고, Ollama가
+    응답 바디에 실어 보낸 진짜 원인(`error` 필드)은 읽지도 않고
+    버려지고 있었다 — 사용자에게는 원인을 전혀 알 수 없는 메시지만
+    남았다. 이 필드를 읽어 예외 메시지에 포함시킨다(호출부 전부
+    `except Exception`으로 받아 `str(exc)`를 그대로 사용자에게
+    보여주므로, 여기서 고치면 전부 혜택을 본다).
+
+    버그 수정(2026-11-19, 사용자 보고 — 같은 바닥 메시지 재발) — 이
+    함수는 원래 `_call_ollama()` 안에 인라인으로만 있었다. 그 뒤
+    추가된 `_call_ollama_with_tools()`(개선축 A, Tool 호출 루프)는
+    자기만의 `resp.raise_for_status()`를 별도로 호출하면서 이 보강을
+    안 가져가, 같은 컨텍스트 초과 상황에서 다시 맨 "Client error '400
+    Bad Request'"만 떴다 — 도구를 쓰는 스킬("데이터분석가이드" 등)
+    일수록 요청 토큰 수가 더 커 더 쉽게 재현된다. 공용 함수로 빼서
+    두 호출부가 똑같은 보강을 받게 한다."""
+    detail = None
+    try:
+        detail = resp.json().get("error")
+    except Exception:  # noqa: BLE001 — 응답 바디가 JSON이 아닐 수도 있음
+        pass
+    if detail:
+        hint = (
+            " — 대화가 길어져 이 모델의 컨텍스트 한도를 넘었습니다. "
+            "대화를 요약해 새로 시작하거나, 첨부 자료를 줄이거나, "
+            "더 넓은 컨텍스트를 지원하는 모델로 바꿔보세요."
+            if "context size" in detail
+            else ""
+        )
+        raise RuntimeError(
+            f"Ollama 요청 실패(HTTP {resp.status_code}): {detail}{hint}"
+        ) from exc
+    raise exc
+
+
 def system_prompt_for_role(
-    conn: sqlite3.Connection, role_name: str, skills: list[str]
+    conn: sqlite3.Connection,
+    role_name: str,
+    skills: list[str],
+    *,
+    request: str | None = None,
+    callable_tools: list | None = None,
+    has_retrieval: bool = False,
 ) -> str:
     """`conn`(2026-10-13, "Harness Methodology 기준 개발 단계별 에이전트
     생성... skill을 적극 활용") — 전까지는 `skills`의 스킬 "이름"만
@@ -500,18 +612,25 @@ def system_prompt_for_role(
     (`pool_registry.skill_knowledge_text()`가 이제 그 설명을 실제로
     끌어와 붙인다 — `deliverables.skill_grounded_system_prompt()`가
     쓰던 것과 같은 조회)."""
+    # 스킬 활용·품질 개선(2026-11-21, `skill_prompting.py`) — 역할 소개에서
+    # "소프트웨어 개발팀"을 뺐고(전략·보고·카피 Agent에도 똑같이 붙었다), 도구 안내는
+    # 실제 실행 조건(`callable_tools`/`has_retrieval`)에 맞춰 고른다. `request`를
+    # 주면 요청과 관련 있는 스킬을 앞에 두고 상위 몇 개만 상세 지침을 싣는다.
+    from hair_platform import skill_prompting
+
     skill_text = ", ".join(skills) if skills else "특별히 명시된 스킬 없음"
     base = (
-        f"당신은 소프트웨어 개발팀에서 '{role_name}' 역할을 맡은 AI 에이전트입니다. "
-        f"보유 역량: {skill_text}. 이 역할의 관점에서 실무에 바로 쓸 수 있는 "
+        f"당신은 '{role_name}' 역할을 맡은 AI 에이전트입니다. "
+        f"보유 역량: {skill_text}. 이 역할의 숙련자 관점에서 실무에 바로 쓸 수 있는 "
         "구체적이고 실질적인 산출물을 작성하세요. 불필요한 설명 없이 산출물 자체에 집중하세요."
     )
-    knowledge = pool_registry.skill_knowledge_text(conn, skills)
-    if not knowledge:
-        return base
-    return (
-        f"{base}\n\n참고 지식({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n{knowledge}"
-        f"\n\n{pool_registry.NO_TOOL_LOOP_GUARD}"
+    return skill_prompting.compose(
+        base,
+        conn,
+        skills,
+        request=request,
+        callable_tools=callable_tools,
+        has_retrieval=has_retrieval,
     )
 
 

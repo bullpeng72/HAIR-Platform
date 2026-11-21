@@ -96,22 +96,22 @@ def test_init_schema_assigns_codes_to_all_reference_rows():
     # Skill 추가"로 Tool "실시간 뉴스 검색(Tavily, 최근 7일)" 1개
     # 추가(12 → 13), Skill 2종(딥리서치/AI업계동향브리핑) 추가(51 → 53).
     # 2026-11-17 "주어진 업무를 잘 처리할 수 있는 skill을 생성하는
-    # skill을 추가해줘"로 Skill "스킬생성가이드" 1개 추가(53 → 54).
+    # skill을 추가해줘"로 Skill "스킬생성" 1개 추가(53 → 54).
     # 2026-11-18 "excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프
     # 출력 등이 가능하도록... 전담 팀을 구성해"로 Tool "차트 생성기" 1개
-    # 추가(13 → 14), Skill "데이터시각화가이드" 1개 추가(54 → 55).
+    # 추가(13 → 14), Skill "데이터시각화" 1개 추가(54 → 55).
     assert len(agent_codes) == 26
     assert all(c is not None for c in agent_codes)
     assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 26종 전원 레퍼런스
     assert len(set(agent_codes)) == 26  # 전부 유일
 
-    assert len(tool_codes) == 14
+    assert len(tool_codes) == 15
     assert all(c is not None for c in tool_codes)
-    assert len(set(tool_codes)) == 14
+    assert len(set(tool_codes)) == 15
 
-    assert len(skill_codes) == 55
+    assert len(skill_codes) == 62  # +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21)
     assert all(c is not None for c in skill_codes)
-    assert len(set(skill_codes)) == 55
+    assert len(set(skill_codes)) == 62
 
 
 def test_init_schema_tool_codes_reflect_kind():
@@ -185,7 +185,7 @@ def test_reset_and_reassign_codes_wipes_then_reassigns_deterministically():
 
     counts = id_scheme.reset_and_reassign_codes(conn)
 
-    assert counts == {"agent_pool": 26, "tool_pool": 14, "skill_pool": 55}
+    assert counts == {"agent_pool": 26, "tool_pool": 15, "skill_pool": 62}
     after = {
         table: [
             r["code"]

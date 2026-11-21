@@ -68,6 +68,9 @@ def export_skill_markdown(conn: sqlite3.Connection, skill: dict) -> str:
     tool_native_id = _resolve_tool_native_id(conn, skill)
     if tool_native_id:
         lines.append(f"tool: {tool_native_id}")
+    if skill.get("includes"):
+        # 함께 적용할 스킬(2026-11-20) — 쉼표로 구분한 이름 목록.
+        lines.append(f"includes: {', '.join(skill['includes'])}")
     lines.append("---")
     lines.append("")
     for section in _SECTION_ORDER:
@@ -151,4 +154,6 @@ def parse_skill_markdown(conn: sqlite3.Connection, text: str) -> dict:
         "output_format": sections.get("output_format"),
         "examples": sections.get("examples"),
         "constraints": sections.get("constraints"),
+        # 존재 여부 검증은 `create_skill()`이 한다(unknown_included_skill).
+        "includes": [n.strip() for n in (fm.get("includes") or "").split(",") if n.strip()],
     }

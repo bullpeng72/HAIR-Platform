@@ -131,7 +131,7 @@ def context_for_prompt(conn: sqlite3.Connection) -> str:
 
 
 def as_crewai_tool(conn: sqlite3.Connection):
-    """GraphDB 관계조회를 실제 CrewAI Tool로 감싼다(사용자 요청
+    """GraphDB 조직배정관계조회를 실제 CrewAI Tool로 감싼다(사용자 요청
     2026-09-27 — "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘"). 경계는
     `context_for_prompt()` 자체가 성과 컬럼을 절대 SELECT하지 않는
     것으로 이미 보장된다 — Tool로 감싸도 호출하는 함수가 그대로이므로 이

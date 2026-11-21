@@ -207,6 +207,7 @@ def retrieve_context_for_query(
     query: str,
     provider: str | None = None,
     model: str | None = None,
+    reserved_tokens: int = 0,
 ) -> str | None:
     """이 대화에 색인된 청크가 하나도 없으면 임베딩 호출 자체를
     생략한다(비용 없음 — 첨부파일을 안 올린 대화의 모든 요청마다 매번
@@ -236,8 +237,17 @@ def retrieve_context_for_query(
         return None
     if not hits:
         return None
+    # 버그 수정(2026-11-20, 사용자 보고 — "지식베이스로 보내기" 후 "지식
+    # 검색" 스킬로 질의했는데 "구체적인 질문이 보이지 않는다"는 답만 옴).
+    # 실측 원인: 이 예산을 "모델 입력 예산 전체"로 잡아, 호출자가 이미
+    # 확정한 system 프롬프트(+내부지식검색 결과)를 빼지 않고 첨부자료 청크로
+    # 예산을 혼자 다 채웠다 — 그 뒤 `_build_transcript()`에 남은 예산이
+    # 0이 돼 사용자 질문 자체가 프롬프트에서 사라졌다. `reserved_tokens`
+    # 로 다른 소비처 몫을 먼저 빼고 남은 만큼만 쓴다.
     budget = (
-        token_budget.input_budget_tokens(conn, provider, model)
+        token_budget.input_budget_tokens(
+            conn, provider, model, reserved_tokens=reserved_tokens
+        )
         if provider and model
         else 4000
     )

@@ -646,10 +646,11 @@ def _fake_embed(text, provider=None, model=None):
     return (provider or "openai", model or "text-embedding-3-small", [0.1, 0.2, 0.3])
 
 
-def test_gc_save_message_as_knowledge_creates_chunk(client_and_conn):
+def test_gc_save_message_as_knowledge_by_admin_registers_immediately(client_and_conn):
     """사용자 요청(2026-11-10, "대화에서 생성된 결과물을 지식으로 보내는
-    경로가 없음") — admin/manager가 대화 메시지를 지식베이스(VectorDB)에
-    직접 색인할 수 있는지 확인."""
+    경로가 없음")으로 생긴 경로 — 2026-11-20 지식베이스 등록 체계 개편 후엔
+    `knowledge_submissions.submit()`의 별칭이다. admin 본인 제출은 결재
+    없이 바로 등록된다(경로 A와 같은 권한)."""
     client, conn = client_and_conn
     _login(client, "admin1", "adminpass")
     conv_id = client.post(
@@ -665,23 +666,26 @@ def test_gc_save_message_as_knowledge_creates_chunk(client_and_conn):
             f"/api/conversations/{conv_id}/messages/{msg['id']}/save-as-knowledge"
         )
     assert resp.status_code == 201, resp.text
-    chunk_id = resp.json()["chunk_id"]
+    submission_id = resp.json()["id"]
 
+    sub = conn.execute(
+        "SELECT status, document_id FROM knowledge_submissions WHERE id = ?",
+        (submission_id,),
+    ).fetchone()
+    assert sub["status"] == "registered"
     row = conn.execute(
-        "SELECT * FROM knowledge_chunks WHERE id = ?", (chunk_id,)
+        "SELECT * FROM knowledge_chunks WHERE source_document_id = ?",
+        (sub["document_id"],),
     ).fetchone()
     assert row["text"] == "이 내용은 지식베이스에 남길 만합니다"
     assert row["source_agent_id"] is None
 
-    audit_row = conn.execute(
-        "SELECT * FROM audit_log WHERE action = 'conversation_message_indexed_as_knowledge' "
-        "ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    assert audit_row is not None
 
-
-def test_gc_save_message_as_knowledge_rbac_blocks_member(client_and_conn):
-    client, _conn = client_and_conn
+def test_gc_save_message_as_knowledge_by_member_needs_admin_approval(client_and_conn):
+    """개편 전엔 member가 403이었다(admin/manager 즉시 색인 전용). 이제
+    참여자면 누구나 제출할 수 있고, 결재 전까지는 아무것도 색인되지 않는다.
+    참여자가 아니거나 열람 전용이면 여전히 막힌다."""
+    client, conn = client_and_conn
     _login(client, "member1", "memberpass")
     conv_id = client.post(
         "/api/conversations", json={"title": "member 지식베이스 시도방"}
@@ -690,6 +694,14 @@ def test_gc_save_message_as_knowledge_rbac_blocks_member(client_and_conn):
         f"/api/conversations/{conv_id}/messages", json={"content": "메모"}
     ).json()
 
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages/{msg['id']}/save-as-knowledge"
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["status"] == "pending"
+    assert conn.execute("SELECT COUNT(*) AS c FROM knowledge_chunks").fetchone()["c"] == 0
+
+    _login(client, "viewer1", "viewerpass")
     resp = client.post(
         f"/api/conversations/{conv_id}/messages/{msg['id']}/save-as-knowledge"
     )
