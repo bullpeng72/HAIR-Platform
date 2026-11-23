@@ -2678,6 +2678,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="이 업무의 결과물을 볼 권한이 없습니다")
         return deliverables.deliverable_history(conn, deliverable_id)
 
+    @app.get("/api/deliverables/{deliverable_id}/export.docx")
+    def export_deliverable_docx(
+        deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """결과물 Word 내보내기(2026-11-23, P1-7 — `exports.py`). 권한은 결과물 조회와 같다."""
+        from fastapi.responses import Response
+
+        from hair_platform import exports
+
+        row = conn.execute("SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="결과물을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, row["task_id"], user["id"]) is None
+        ):
+            raise HTTPException(status_code=403, detail="이 업무의 결과물을 볼 권한이 없습니다")
+        if not exports.available():
+            raise HTTPException(status_code=400, detail=exports.INSTALL_HINT)
+        data = exports.to_docx(row["content"], row["content_type"], title=f"결과물 #{deliverable_id}")
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="deliverable-{deliverable_id}.docx"'},
+        )
+
     @app.post("/api/tasks/{task_id}/deliverables", status_code=201)
     def create_task_deliverable(
         task_id: int,

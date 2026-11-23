@@ -132,6 +132,10 @@ def _run_custom_python_tool(source: str, query: str, timeout: int) -> str:
     return str(output)[:_CUSTOM_TOOL_MAX_OUTPUT_CHARS]
 
 
+# 함수 호출용 ASCII 도구 이름 → 입력 JSON Schema(2026-11-23, P1-7). `_custom_python_crewai_tool()`이 채운다.
+CUSTOM_TOOL_INPUT_SCHEMAS: dict[str, dict] = {}
+
+
 def _custom_python_crewai_tool(row: sqlite3.Row):
     from crewai.tools import tool  # 지연 import — 안 쓰면 crewai 설치가 필요 없다.
 
@@ -147,6 +151,13 @@ def _custom_python_crewai_tool(row: sqlite3.Row):
     from hair_platform import progress  # 진행 표시용 이름(2026-11-23)
 
     progress.TOOL_LABELS[ascii_tool_name] = row["name"]
+    # 입력 형식(2026-11-23, P1-7 — `tool_calling.py`) — 설정에 `input_schema`(JSON Schema)가 있으면
+    # 함수 호출 경로가 `query` 문자열 대신 그 필드들로 함수 스키마를 만든다.
+    schema = config.get("input_schema")
+    if isinstance(schema, dict) and schema.get("properties"):
+        CUSTOM_TOOL_INPUT_SCHEMAS[ascii_tool_name] = schema
+    else:
+        CUSTOM_TOOL_INPUT_SCHEMAS.pop(ascii_tool_name, None)
 
     def _dynamic(query: str) -> str:
         return _run_custom_python_tool(source, query, timeout)

@@ -125,11 +125,23 @@ def _clean_description(tool) -> str:
     return doc.strip() if doc else tool.description
 
 
+def _parameters(tool) -> dict:
+    """도구의 입력 스키마 — 관리자가 `input_schema`를 정해 둔 커스텀 도구는 그 필드들(2026-11-23,
+    P1-7), 아니면 도구 함수 시그니처(대개 `query: str` 하나). 실측(2026-11-22): JSON을 요구하는
+    도구가 `query` 문자열 하나만 노출해, 모델이 첫 호출에 "매출 42, 48, 55" 같은 문장을 넘겨 실패하고
+    한 번 더 왕복했다(설명에 형식을 적어 줄였지만, 형식 자체를 스키마로 주는 것이 근본 해결)."""
+    custom = pool_registry.CUSTOM_TOOL_INPUT_SCHEMAS.get(tool.name)
+    if custom:
+        return {"type": "object", **{k: v for k, v in custom.items() if k != "title"}}
+    schema = dict(tool.args_schema.model_json_schema())
+    schema.pop("title", None)
+    return schema
+
+
 def tool_schema_openai(tool) -> dict:
     """OpenAI/Ollama가 공유하는 함수 스키마 형식(`tools=[{"type":
     "function", "function": {...}}]`)."""
-    schema = dict(tool.args_schema.model_json_schema())
-    schema.pop("title", None)
+    schema = _parameters(tool)
     return {
         "type": "function",
         "function": {
@@ -141,8 +153,7 @@ def tool_schema_openai(tool) -> dict:
 
 
 def tool_schema_anthropic(tool) -> dict:
-    schema = dict(tool.args_schema.model_json_schema())
-    schema.pop("title", None)
+    schema = _parameters(tool)
     return {
         "name": tool.name,
         "description": _clean_description(tool),
@@ -252,6 +263,14 @@ def run_tool(tools_by_name: dict, name: str, arguments: dict) -> str:
 
     progress.report(f"도구 실행 중: {progress.TOOL_LABELS.get(name, name)}")
     tool = tools_by_name.get(name)
+    # 구조화된 입력(2026-11-23, P1-7) — 입력 스키마가 있는 커스텀 도구에 필드로 넘어온 인자는
+    # 도구 코드가 받는 JSON 문자열 하나(`query`)로 바꿔 전달한다(도구 코드는 그대로).
+    if (
+        name in pool_registry.CUSTOM_TOOL_INPUT_SCHEMAS
+        and isinstance(arguments, dict)
+        and set(arguments) != {"query"}
+    ):
+        arguments = {"query": json.dumps(arguments, ensure_ascii=False)}
     if tool is None:
         result = f"알 수 없는 도구입니다: {name}"
     else:

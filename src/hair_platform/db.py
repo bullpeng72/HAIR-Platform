@@ -2614,6 +2614,26 @@ def _show_custom_tool_skills_in_conversation(conn: sqlite3.Connection) -> None:
             )
 
 
+def _add_tool_input_schemas(conn: sqlite3.Connection) -> None:
+    """레퍼런스 JSON 입력 도구 4개에 입력 스키마를 붙인다(2026-11-23, P1-7) — 소스가 지금 시드와
+    같고 스키마가 아직 없는 행만(admin이 소스를 고쳐 입력 형식이 달라졌을 수 있는 도구는 그대로)."""
+    current = {name: source for name, _d, source, _t in reference_pipeline_seeds.TOOL_SPECS}
+    for name, schema in reference_pipeline_seeds.TOOL_INPUT_SCHEMAS.items():
+        row = conn.execute(
+            "SELECT id, config FROM tool_pool WHERE name = ? AND kind = 'custom_python'", (name,)
+        ).fetchone()
+        if row is None:
+            continue
+        config = json.loads(row["config"] or "{}")
+        if "input_schema" in config or config.get("function_source") != current.get(name):
+            continue
+        config["input_schema"] = schema
+        conn.execute(
+            "UPDATE tool_pool SET config = ? WHERE id = ?",
+            (json.dumps(config, ensure_ascii=False), row["id"]),
+        )
+
+
 def _run_once(conn: sqlite3.Connection, name: str, fn) -> bool:
     """이름 붙은 데이터 마이그레이션을 DB마다 한 번만 실행한다(2026-11-21). 지금까지는
     이력 테이블이 없어 "조건이 맞으면 매 기동마다" 돌리는 방식이라, admin이 의도적으로
@@ -3347,6 +3367,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _run_once(conn, "2026-11-23-coverage-check-sw-dev", _reclassify_coverage_check_sw_dev)
     _run_once(conn, "2026-11-22-tool-input-formats", _add_tool_input_formats)
     _run_once(conn, "2026-11-23-show-custom-tool-skills", _show_custom_tool_skills_in_conversation)
+    _run_once(conn, "2026-11-23-tool-input-schemas", _add_tool_input_schemas)
     _apply_skill_catalog(conn)
     if is_new_includes_column:
         _apply_skill_includes(conn)

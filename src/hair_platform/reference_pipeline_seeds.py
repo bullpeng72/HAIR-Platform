@@ -400,6 +400,56 @@ TOOL_SPECS = [
     for name, description, source, timeout in TOOL_SPECS
 ]
 
+# 입력 스키마(2026-11-23, P1-7 — `tool_calling._parameters`) — 함수 호출 경로가 `query` 문자열 하나
+# 대신 이 필드들을 모델에 보여 주고, 받은 인자를 JSON 문자열로 바꿔 도구 코드에 넘긴다(도구 코드는
+# 그대로). 설명에 적은 형식(`TOOL_INPUT_NOTES`)은 CrewAI 경로(문자열 입력)를 위해 남긴다.
+TOOL_INPUT_SCHEMAS: dict[str, dict] = {
+    "수치 데이터 분석기": {
+        "type": "object",
+        "description": "series(기간별 비교) 또는 values(단순 통계) 중 하나를 넣는다.",
+        "properties": {
+            "series": {
+                "type": "object",
+                "description": '기간 이름 → 숫자(단위 없이). 예: {"1분기": 42, "2분기": 48}. 구간별 증감률까지 한 번에 계산된다.',
+                "additionalProperties": {"type": "number"},
+            },
+            "values": {"type": "array", "items": {"type": "number"}, "description": "단순 숫자 목록(단위 없이)."},
+        },
+    },
+    "차트 생성기": {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["bar", "line", "pie", "doughnut", "radar"],
+                     "description": "비교=bar, 추이=line, 구성비=doughnut"},
+            "title": {"type": "string"},
+            "labels": {"type": "array", "items": {"type": "string"}, "description": "가로축 이름(최대 30개)"},
+            "series": {
+                "type": "object",
+                "description": '계열 이름 → labels와 길이가 같은 숫자 배열(빈 구간은 null). 예: {"매출": [100, 150]}',
+                "additionalProperties": {"type": "array", "items": {"type": ["number", "null"]}},
+            },
+            "unit": {"type": "string", "description": "값의 단위(예: 억 원, %)"},
+        },
+        "required": ["type", "labels", "series"],
+    },
+    "골든셋 커버리지 체커": {
+        "type": "object",
+        "properties": {
+            "criteria": {"type": "array", "items": {"type": "string"}, "description": "완료조건(기준) 목록"},
+            "output": {"type": "string", "description": "점검할 산출물 전문"},
+        },
+        "required": ["criteria", "output"],
+    },
+    "분석 프레임워크 템플릿 생성기": {
+        "type": "object",
+        "properties": {
+            "framework": {"type": "string", "enum": ["3C", "4P", "SWOT"]},
+            "subject": {"type": "string", "description": "분석 대상"},
+        },
+        "required": ["framework"],
+    },
+}
+
 # (skill_name, description, tool_name) — tool_name은 위 TOOL_SPECS의 name과 매칭해 default_tool_pool_ids를 채운다.
 TOOL_SKILL_SPECS: list[tuple[str, str, str]] = [
     (
@@ -894,7 +944,8 @@ def seed(conn: sqlite3.Connection) -> None:
                 name,
                 description,
                 json.dumps(
-                    {"function_source": source, "timeout_seconds": timeout_seconds},
+                    {"function_source": source, "timeout_seconds": timeout_seconds}
+                    | ({"input_schema": TOOL_INPUT_SCHEMAS[name]} if name in TOOL_INPUT_SCHEMAS else {}),
                     ensure_ascii=False,
                 ),
             ),

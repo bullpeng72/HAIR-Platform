@@ -4616,6 +4616,8 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '<div class="actions"><button class="small" data-download-deliverable="' + d.id + '">다운로드</button>' +
     // 버전 이력(2026-11-23, P1-6) — 같은 작성자가 다시 낸 버전·직접 고친 기록을 현재본과 비교.
     '<button class="small" data-deliverable-history="' + d.id + '">버전 이력</button>' +
+    // Word 내보내기(2026-11-23, P1-7) — 코드 결과물은 원본 다운로드가 더 맞아 버튼을 두지 않는다.
+    (d.content_type !== "code" ? '<button class="small" data-export-docx="' + d.id + '">Word로 내보내기</button>' : "") +
     (d.status === "approved" && ME.role !== "viewer" ? knowledgeSubmitButton("deliverable", d.id) : "") +
     '</div>' +
     '<div class="deliverable-history" id="history-' + d.id + '" hidden></div>' +
@@ -5213,6 +5215,30 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
           show();
         }
         box.hidden = false;
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  // Word 내보내기(2026-11-23, P1-7) — api()와 같은 인증 헤더(탭별 토큰)로 받아 파일로 저장한다.
+  detail.querySelectorAll("[data-export-docx]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.exportDocx;
+      const headers = {};
+      const token = sessionStorage.getItem("hair_token");
+      if (token) headers["Authorization"] = "Bearer " + token;
+      try {
+        const resp = await fetch("/api/deliverables/" + id + "/export.docx", { headers, credentials: "same-origin" });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || ("내보내기 실패(" + resp.status + ")"));
+        }
+        const blob = await resp.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "deliverable-" + id + ".docx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
@@ -11515,6 +11541,7 @@ const MANUAL_MARKDOWN = [
 '- **"갤러리"** 탭(사람 메뉴)에서 여러 할 일을 가로질러 결과물을 한 화면에 모아 봅니다 — admin/manager는 조직 전체, 그 외엔 본인이 참가한 할 일의 결과물만 보입니다. 유형(텍스트/마크다운/HTML/코드)별로 걸러볼 수 있습니다.',
 '- 카드의 **"새 탭에서 보기"**를 누르면 그 결과물 하나만 담긴 독립 페이지가 새 탭에 열립니다(로그인 세션은 그대로 필요합니다 — 외부에 공개로 공유되는 링크가 아닙니다). 코드는 문법 강조, HTML은 그대로 렌더링, 나머지는 마크다운으로 보여줍니다.',
 '- 협업 워크스페이스의 결과물 카드에서 **"버전 이력"**을 누르면, 같은 작성자(같은 Agent 또는 같은 사람)가 이 할 일에 다시 낸 이전 버전(반려 뒤 재실행·파이프라인 재시도)과 사람이 직접 고치기 전 내용을 골라 지금 버전과 줄 단위로 비교할 수 있습니다(추가는 녹색, 삭제는 빨간색) — 무엇이 바뀌었는지 확인한 뒤 승인·반려하세요.',
+'- **"Word로 내보내기"**는 결과물을 .docx로 내려받습니다 — 마크다운의 제목·목록·표·굵게·인용은 Word 서식으로, HTML은 화면에 보이는 글자만 문단으로 옮기고, 차트·다이어그램은 "(차트 「제목」 — HAIR 화면에서 확인)"으로 자리만 남깁니다. 발표자료 덱처럼 디자인이 중요한 결과물은 원본 "다운로드"를 쓰세요(코드 결과물에는 이 버튼이 없습니다). 서버에 `documents` 확장이 설치돼 있어야 합니다.',
 '- **"삭제"** 버튼은 admin/manager는 항상, 그 외엔 본인이 작성하고 아직 제출 전(초안, draft)인 결과물에만 보입니다 — 제출 후에는 결재 이력이라 본인도 못 지웁니다. 삭제하면 갤러리·협업 워크스페이스 양쪽에서 즉시 사라집니다(별도 새로고침 없이 바로 반영).',
 '',
 '> 배정을 잘못 걸었거나 더 이상 필요 없어졌다면, 할 일 상세 화면(admin/manager 전용)의 **"배정 취소"** 버튼으로 confirmed/requested 상태를 되돌릴 수 있습니다 — 업무 요청·할 일 삭제가 "확정된 배정이 있어 삭제할 수 없다"로 막힐 때도 이 버튼으로 먼저 정리하세요.',
