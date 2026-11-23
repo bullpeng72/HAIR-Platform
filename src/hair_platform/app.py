@@ -2663,6 +2663,21 @@ def create_app(db_path: str | None = None) -> FastAPI:
         conn.commit()
         return {"status": "deleted"}
 
+    @app.get("/api/deliverables/{deliverable_id}/history")
+    def get_deliverable_history(
+        deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """결과물 버전 이력(2026-11-23, P1-6) — 같은 할 일·같은 작성자가 다시 낸 버전과, 사람이 직접
+        고친 기록. 권한은 결과물 조회와 같다(admin/manager 또는 그 할 일의 참가자)."""
+        row = conn.execute("SELECT task_id FROM deliverables WHERE id = ?", (deliverable_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="결과물을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, row["task_id"], user["id"]) is None
+        ):
+            raise HTTPException(status_code=403, detail="이 업무의 결과물을 볼 권한이 없습니다")
+        return deliverables.deliverable_history(conn, deliverable_id)
+
     @app.post("/api/tasks/{task_id}/deliverables", status_code=201)
     def create_task_deliverable(
         task_id: int,

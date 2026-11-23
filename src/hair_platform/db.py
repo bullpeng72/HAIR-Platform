@@ -1323,6 +1323,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 실행(`run_agent_execution_job()`)과 직접 연결된
     # `agent_execution_jobs`에 그 시점 스냅샷을 JSON으로 남긴다.
     _ensure_column(conn, "agent_execution_jobs", "prompt_snapshot", "TEXT")
+    # 결과물 수정 이력(2026-11-23, P1-6 — `deliverables.deliverable_history`).
+    from hair_platform import deliverables as _deliverables
+
+    _deliverables.ensure_revision_schema(conn)
     # 개인 API 키(2026-11-23, P1-5 — `integrations.py`).
     from hair_platform import integrations
 

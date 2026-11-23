@@ -486,6 +486,10 @@ def delete_deliverable(
     conn.execute(
         "DELETE FROM deliverable_comments WHERE deliverable_id = ?", (deliverable_id,)
     )
+    # 수정 이력(2026-11-23, P1-6)도 결과물과 함께 지운다.
+    conn.execute(
+        "DELETE FROM deliverable_revisions WHERE deliverable_id = ?", (deliverable_id,)
+    )
     conn.execute(
         "DELETE FROM agent_evaluations WHERE deliverable_id = ?", (deliverable_id,)
     )
@@ -547,6 +551,12 @@ def update_deliverable_content(
         and row["status"] == "draft"
     ):
         raise PermissionError("not_allowed")
+    if content != row["content"]:
+        # 수정 이력(2026-11-23, P1-6) — 덮어쓰기 전 내용을 남긴다(예전엔 그대로 사라졌다).
+        conn.execute(
+            "INSERT INTO deliverable_revisions (deliverable_id, content, edited_by) VALUES (?, ?, ?)",
+            (deliverable_id, row["content"], actor_id),
+        )
     conn.execute(
         "UPDATE deliverables SET content = ? WHERE id = ?",
         (content, deliverable_id),
@@ -2770,3 +2780,55 @@ def run_agent_execution_job(
             conn, job_id, task_id, agent_id, actor_id, role_name, prompt, provider, model,
             content_type,
         )
+
+
+# ---------- 결과물 버전 이력(2026-11-23, P1-6) ----------
+# 사용자 요청("P1 진행해줘" — 사람·AI가 결과물을 함께 다듬는 흐름). 공식 한계였다: "반려된 결과물을
+# 고쳐서 다시 낼 때 이전 버전과 묶어서 보여주는 기능은 아직 없다"(docs/OVERVIEW.md). 두 가지를 묶는다.
+# - **다시 만든 버전**: 같은 할 일에서 같은 작성자(같은 Agent 또는 같은 사람)가 낸 결과물들 —
+#   반려 뒤 재실행·파이프라인 재시도가 여기에 쌓인다. 만드는 경로가 많아 저장 시점에 잇는 대신
+#   읽을 때 묶는다(`revises_id`는 쓰지 않는다 — 모든 생성 경로를 고쳐야 해서).
+# - **직접 고친 기록**: `update_deliverable_content()`가 덮어쓰기 전 내용을 `deliverable_revisions`에
+#   남긴다.
+
+
+def ensure_revision_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS deliverable_revisions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "deliverable_id INTEGER NOT NULL REFERENCES deliverables(id), "
+        "content TEXT NOT NULL, "
+        "edited_by INTEGER NOT NULL REFERENCES users(id), "
+        "created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deliverable_revisions_deliverable_id "
+        "ON deliverable_revisions(deliverable_id)"
+    )
+
+
+def deliverable_history(conn: sqlite3.Connection, deliverable_id: int) -> dict:
+    row = conn.execute("SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)).fetchone()
+    if row is None:
+        raise ValueError("deliverable_not_found")
+    versions = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT id, status, content, content_type, created_at FROM deliverables "
+            "WHERE task_id = ? AND author_type = ? AND author_id = ? ORDER BY created_at, id",
+            (row["task_id"], row["author_type"], row["author_id"]),
+        )
+    ]
+    for number, v in enumerate(versions, 1):
+        v["version"] = number
+        v["is_current"] = v["id"] == deliverable_id
+    edits = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT r.id, r.content, r.created_at, u.username AS edited_by FROM deliverable_revisions r "
+            "LEFT JOIN users u ON u.id = r.edited_by WHERE r.deliverable_id = ? ORDER BY r.id",
+            (deliverable_id,),
+        )
+    ]
+    return {"deliverable_id": deliverable_id, "current_content": row["content"],
+            "versions": versions, "edits": edits}

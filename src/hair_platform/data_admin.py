@@ -198,6 +198,11 @@ def _delete_deliverables_for_tasks(
             f"DELETE FROM deliverable_comments WHERE deliverable_id IN ({d_placeholders})",
             deliverable_ids,
         )
+        # 결과물 수정 이력(2026-11-23, P1-6).
+        conn.execute(
+            f"DELETE FROM deliverable_revisions WHERE deliverable_id IN ({d_placeholders})",
+            deliverable_ids,
+        )
         conn.execute(
             f"DELETE FROM agent_evaluations WHERE deliverable_id IN ({d_placeholders})",
             deliverable_ids,
@@ -392,6 +397,7 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "knowledge_chunks",
     "agent_evaluations",
     "deliverable_comments",
+    "deliverable_revisions",
     "pipeline_run_stages",
     "pipeline_runs",
     "crew_runs",
