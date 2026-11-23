@@ -1323,6 +1323,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 실행(`run_agent_execution_job()`)과 직접 연결된
     # `agent_execution_jobs`에 그 시점 스냅샷을 JSON으로 남긴다.
     _ensure_column(conn, "agent_execution_jobs", "prompt_snapshot", "TEXT")
+    # 개인 API 키(2026-11-23, P1-5 — `integrations.py`).
+    from hair_platform import integrations
+
+    integrations.ensure_schema(conn)
     # 대화에서 전환한 업무 요청의 출처(2026-11-23, P1-4).
     _ensure_column(conn, "briefs", "source_conversation_id", "INTEGER REFERENCES conversations(id)")
     # 실행 중 단계 표시(2026-11-23, P0-2 — `progress.py`).
@@ -1384,6 +1388,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "id INTEGER PRIMARY KEY CHECK (id = 1), employee_id_pattern TEXT, employee_id_hint TEXT)"
     )
     _ensure_column(conn, "org_policy", "output_language", "TEXT")
+    # 외부 알림 웹훅·정기 실행(2026-11-23, P1-5 — `integrations.py`·`automation.py`).
+    from hair_platform import automation, integrations
+
+    integrations.ensure_notify_schema(conn)
+    automation.ensure_schema(conn)
     # 팀별 "공장 초기화 시 보호"(2026-11-21) — 예전엔 `data_admin`이 팀 이름("데이터 분석·
     # 시각화 전담팀")으로 보호해, 팀 이름을 바꾸면 보호가 풀렸다.
     _ensure_column(conn, "teams", "protect_on_reset", "INTEGER NOT NULL DEFAULT 0")

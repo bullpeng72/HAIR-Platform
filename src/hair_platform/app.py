@@ -106,8 +106,12 @@ from hair_platform.models import (
     AssignmentCancelRequest,
     AssignmentRequest,
     AssistRequest,
+    ActiveToggle,
+    ApiKeyCreate,
     BriefDraftRequest,
     BriefSubmission,
+    NotifyConfigUpdate,
+    PipelineScheduleCreate,
     ConsentRequest,
     ContentFixSuggestRequest,
     ConversationAutoReplyUpdate,
@@ -240,6 +244,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # 실제 LLM 사용량 기록(2026-11-22) — 직접 호출(`llm.py`)과 CrewAI(litellm) 경로 모두.
     llm_usage.configure(conn)
     llm_usage.install_litellm_callback()
+    # 자동화 루프(정기 실행·외부 알림, 2026-11-23 — `automation.py`) — `hair serve`(HAIR_AUTOMATION=1)
+    # 에서만 띄운다. 프로세스당 한 번.
+    from hair_platform import automation
+
+    automation.start_loop(conn)
 
     @app.post("/login")
     def login(payload: LoginRequest, request: Request):
@@ -505,6 +514,132 @@ def create_app(db_path: str | None = None) -> FastAPI:
             conversations.record_brief_transfer(conn, source, user["id"], cur.lastrowid)
         return {"id": cur.lastrowid, "stub_roles": stub_roles, "status": "submitted",
                 "source_conversation_id": source}
+
+    # ---------- 개인 API 키(2026-11-23, P1-5 — `integrations.py`) ----------
+    @app.get("/api/api-keys")
+    def list_api_keys_endpoint(
+        all_users: bool = False,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)),
+    ):
+        """내 키 목록(원문 토큰은 다시 볼 수 없다). admin은 `all_users=true`로 전체를 본다."""
+        from hair_platform import integrations
+
+        if all_users and user["role"] != Role.ADMIN.value:
+            raise HTTPException(status_code=403, detail="전체 키 목록은 admin만 볼 수 있습니다")
+        return integrations.list_api_keys(conn, None if all_users else user["id"])
+
+    @app.post("/api/api-keys", status_code=201)
+    def create_api_key_endpoint(
+        payload: ApiKeyCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)),
+    ):
+        from hair_platform import integrations
+
+        try:
+            return integrations.create_api_key(conn, user["id"], payload.name)
+        except ValueError as exc:
+            detail = {"empty_name": "키 이름을 입력하세요",
+                      "too_many_keys": "사용 중인 키가 너무 많습니다(최대 10개) — 쓰지 않는 키를 폐기하세요"}.get(str(exc), str(exc))
+            raise HTTPException(status_code=400, detail=detail) from exc
+
+    @app.delete("/api/api-keys/{key_id}")
+    def revoke_api_key_endpoint(
+        key_id: int,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)),
+    ):
+        from hair_platform import integrations
+
+        try:
+            integrations.revoke_api_key(conn, user["id"], key_id, user["role"] == Role.ADMIN.value)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="API 키를 찾을 수 없습니다") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="본인 키만 폐기할 수 있습니다") from exc
+        return {"id": key_id, "revoked": True}
+
+    # ---------- 외부 알림 웹훅(2026-11-23, P1-5 — `integrations.py`, admin) ----------
+    @app.get("/api/integrations/notify")
+    def get_notify_config_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import integrations
+
+        return {**integrations.get_notify_config(conn), "available_events": integrations.NOTIFY_EVENTS}
+
+    @app.put("/api/integrations/notify")
+    def set_notify_config_endpoint(
+        payload: NotifyConfigUpdate, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        from hair_platform import integrations
+
+        try:
+            return integrations.set_notify_config(conn, user["id"], payload.webhook_url, payload.events)
+        except ValueError as exc:
+            detail = "웹훅 URL은 http:// 또는 https://로 시작해야 합니다" if str(exc) == "invalid_webhook_url" else str(exc)
+            raise HTTPException(status_code=400, detail=detail) from exc
+
+    @app.post("/api/integrations/notify/test")
+    def test_notify_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import integrations
+
+        cfg = integrations.get_notify_config(conn)
+        if not cfg["webhook_url"]:
+            raise HTTPException(status_code=400, detail="먼저 웹훅 URL을 저장하세요")
+        ok, err = integrations.send_webhook(cfg["webhook_url"], "[HAIR] 알림 연결 테스트입니다.")
+        return {"ok": ok, "error": err}
+
+    # ---------- 정기 실행(2026-11-23, P1-5 — `automation.py`, admin/manager) ----------
+    _SCHEDULE_ERRORS = {
+        "empty_name": "이름을 입력하세요",
+        "empty_brief_text": "업무 요청 내용을 입력하세요",
+        "empty_role_name": "할 일 역할을 입력하세요",
+        "invalid_interval": "반복 주기를 고르세요",
+        "weekday_required": "매주 실행은 요일을 골라야 합니다",
+        "invalid_time": "시각은 HH:MM(00:00~23:59) 형식이어야 합니다",
+        "pipeline_template_not_found": "파이프라인 템플릿을 찾을 수 없습니다",
+        "pipeline_template_inactive": "비활성화된 파이프라인 템플릿입니다",
+        "schedule_not_found": "정기 실행을 찾을 수 없습니다",
+    }
+
+    @app.get("/api/pipeline-schedules")
+    def list_pipeline_schedules(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        from hair_platform import automation
+
+        return automation.list_schedules(conn)
+
+    @app.post("/api/pipeline-schedules", status_code=201)
+    def create_pipeline_schedule(
+        payload: PipelineScheduleCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        from hair_platform import automation
+
+        try:
+            return automation.create_schedule(conn, user["id"], payload.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=_SCHEDULE_ERRORS.get(str(exc), str(exc))) from exc
+
+    @app.patch("/api/pipeline-schedules/{schedule_id}")
+    def toggle_pipeline_schedule(
+        schedule_id: int, payload: ActiveToggle,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        from hair_platform import automation
+
+        try:
+            return automation.set_active(conn, user["id"], schedule_id, payload.active)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=_SCHEDULE_ERRORS.get(str(exc), str(exc))) from exc
+
+    @app.delete("/api/pipeline-schedules/{schedule_id}")
+    def delete_pipeline_schedule(
+        schedule_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))
+    ):
+        from hair_platform import automation
+
+        try:
+            automation.delete_schedule(conn, user["id"], schedule_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=_SCHEDULE_ERRORS.get(str(exc), str(exc))) from exc
+        return {"id": schedule_id, "deleted": True}
 
     @app.post("/api/conversations/{conversation_id}/brief-draft")
     def conversation_brief_draft(

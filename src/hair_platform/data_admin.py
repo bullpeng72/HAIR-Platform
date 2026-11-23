@@ -418,6 +418,11 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "model_registry",
     "embedding_config",
     "audit_log",
+    # 개인 API 키·정기 실행·알림 기록(2026-11-23, P1-5) — 사용자와 함께 지운다(남기면 지워진
+    # 계정의 키·일정이 된다). 알림 웹훅 설정 자체는 조직 정책(org_policy)이라 남는다.
+    "api_keys",
+    "pipeline_schedules",
+    "notification_log",
     "users",
 )
 

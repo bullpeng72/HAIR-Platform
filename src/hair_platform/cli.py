@@ -250,6 +250,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # 호출한다 — 그 경로로 `db_path`를 전달할 수단이 환경변수 말고는
     # 없다(`create_app()`이 `HAIR_PLATFORM_DB_PATH`를 보는 이유).
     os.environ["HAIR_PLATFORM_DB_PATH"] = args.db_path
+    # 자동화 루프(정기 실행·외부 알림, 2026-11-23 — `automation.py`)는 `hair serve`로 띄운 서버에서만
+    # 돈다. 테스트·외부 uvicorn 실행에서는 이 값이 없어 돌지 않는다.
+    os.environ.setdefault("HAIR_AUTOMATION", "1")
 
     # 사용자 요청(2026-11-03, "사내망을 통해 다른 사용자도 접속하도록
     # 개선 방안을 제안해줘" → "1번, 2번 진행") — `--host 0.0.0.0` 등

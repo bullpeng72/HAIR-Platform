@@ -89,13 +89,21 @@ def get_current_user(request: Request) -> sqlite3.Row:
     user_id = None
     auth_header = request.headers.get("authorization")
     if auth_header and auth_header.lower().startswith("bearer "):
-        # 탭별 토큰(위 주석) — 있으면 쿠키 세션보다 우선한다. 같은 브라우저의
-        # 다른 탭이 로그인/로그아웃해도 이 탭의 계정에는 영향이 없어야 한다.
-        user_id = decode_session_token(
-            request.app.state.secret_key, auth_header[len("Bearer ") :]
-        )
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="세션이 유효하지 않습니다")
+        token = auth_header[len("Bearer ") :].strip()
+        from hair_platform import integrations  # 지연 import — 순환 방지
+
+        if integrations.is_api_key(token):
+            # 개인 API 키(2026-11-23, P1-5 — `integrations.py`) — 외부 시스템 호출용.
+            # 키 주인의 계정·권한 그대로 동작한다(아래 is_active 확인도 똑같이 적용).
+            user_id = integrations.user_id_for_api_key(request.app.state.db, token)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="API 키가 유효하지 않거나 폐기됐습니다")
+        else:
+            # 탭별 토큰(위 주석) — 있으면 쿠키 세션보다 우선한다. 같은 브라우저의
+            # 다른 탭이 로그인/로그아웃해도 이 탭의 계정에는 영향이 없어야 한다.
+            user_id = decode_session_token(request.app.state.secret_key, token)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="세션이 유효하지 않습니다")
     else:
         session_user = request.session.get("user")
         if session_user is None:

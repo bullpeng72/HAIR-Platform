@@ -2608,6 +2608,10 @@ const TABS = [
   { id: "search", label: "인력 검색", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderSearch },
   { id: "orgchart", label: "조직도", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderOrgChart },
   { id: "manual", label: "이용 가이드", group: "common", roles: ["admin", "manager", "member", "viewer"], render: renderManual },
+  // 연동 설정(2026-11-23, P1-5) — 개인 API 키(전원), 정기 실행(admin/manager), 외부 알림 웹훅(admin).
+  // "common" 그룹은 역할과 무관한 순수 조회 화면만 둔다(test_phase11) — 역할마다 보이는 구역이
+  // 다른 작업 화면이라 "user" 그룹이다.
+  { id: "integrations", label: "연동 설정", group: "user", roles: ["admin", "manager", "member"], render: renderIntegrations },
   { id: "dashboard", label: "대시보드", group: "admin", roles: ["admin", "manager"], render: renderDashboard },
   { id: "cost", label: "비용", group: "admin", roles: ["admin", "manager"], render: renderCost },
   { id: "fairness", label: "공정성 지표", group: "admin", roles: ["admin", "manager"], render: renderFairness },
@@ -11638,6 +11642,14 @@ const MANUAL_MARKDOWN = [
 '   - ⚠️ **병행 위임(parallel_delegated) 모드는 신중하게 쓰세요** — 매니저가 "Delegate work to coworker" 도구로 그때그때 동적으로 위임하는 방식인데, 실측 결과 매니저가 실제 위임 대신 위임 계획만 요약하고 끝내는 경우가 반복 확인됐습니다. 여러 명이 순서대로 작업을 이어받으면 되는 경우라면 **순차 릴레이**가 더 안정적입니다(기본 제공 파이프라인 4개 전부, 다인원 단계가 전부 순차 릴레이인 이유). 병행 위임 단계는 리드가 실제로 위임했는지 **"위임확인" Gate**로 따로 검사해, 위임 없이 끝나면 Gate 점수와 무관하게 그 단계를 재시도합니다. 또 병행 위임 단계가 하나라도 있는 템플릿은 "신규 실행엔진(LangGraph)"으로 실행할 수 없고 기존 엔진으로만 돕니다.',
 '3. 단계 순서는 카드의 위/아래 이동 버튼으로 나중에도 바꿀 수 있습니다.',
 '',
+'### 사람이 누르지 않아도 돌게 하기 — 정기 실행·외부 알림·API 키',
+'',
+'📍 **메뉴**: 연동 설정',
+'',
+'- **정기 실행**(admin/manager) — 이름·파이프라인·할 일 역할·업무 요청 내용과 주기(매일/평일/매주 ○요일)·시각을 정하면, 그 시각마다 업무 요청 → 할 일 → 파이프라인 실행을 자동으로 만듭니다(예: 매주 월요일 09:00 "실적 보고 파이프라인"). **만든 사람의 이름으로** 실행되므로 1단계 사람 승인 같은 결재는 직접 실행할 때와 똑같이 거칩니다. 시각은 서버 PC의 현지 시각이고, `hair serve`로 띄운 서버가 30초마다 확인합니다(서버가 꺼져 있거나 PC가 잠자기면 그동안은 돌지 않습니다). 표의 "끄기"로 잠시 멈출 수 있습니다.',
+'- **외부 알림**(admin) — Slack·Teams의 수신 웹훅(Incoming Webhook) URL과 받을 일(결재 대기·파이프라인 사람 승인 대기·완료·실패·Agent 실행 실패)을 고르면, 그 일이 생길 때마다 한 번씩 메시지를 보냅니다. 처음 저장할 때 이미 있던 일은 보내지 않습니다. "테스트 전송"으로 연결을 먼저 확인하세요.',
+'- **내 API 키**(admin/manager/member) — 외부 시스템(cron·메일 규칙·지라 등)이 **내 계정·권한 그대로** HAIR API를 부를 때 씁니다. 발급한 키는 그 자리에서 한 번만 보이니 바로 복사해 두고, 요청 헤더에 `Authorization: Bearer 키`로 넣습니다(예: `POST /api/briefs`로 업무 요청 올리기, `POST /api/tasks/{id}/execute-pipeline`으로 파이프라인 시작). 키는 권한을 넓히지 않고, 폐기하거나 계정이 비활성화되면 즉시 막힙니다.',
+'',
 '<h2 id="scenario">7. 실전 시나리오 4가지</h2>',
 '',
 '### 시나리오 A — 가벼운 질문 하나',
@@ -11660,7 +11672,7 @@ const MANUAL_MARKDOWN = [
 '',
 '<h2 id="menu">8. 메뉴 전체 지도</h2>',
 '',
-'**오늘 할 일(user)**: 대화 · 인박스(결재 대기+실행 실패+낮은 Gate 경고 모음) · 내 업무 · 할 일 보드 · 갤러리(여러 할 일의 결과물 모아보기) · 업무 요청 · 결재 · 성과 리뷰',
+'**오늘 할 일(user)**: 대화 · 인박스(결재 대기+실행 실패+낮은 Gate 경고 모음) · 내 업무 · 할 일 보드 · 갤러리(여러 할 일의 결과물 모아보기) · 업무 요청 · 결재 · 성과 리뷰 · 연동 설정(viewer 제외 — 내 API 키, 정기 실행은 admin/manager, 외부 알림은 admin)',
 '',
 '**조회(common, 전원 접근)**: 인력 검색 · 조직도 · 이용 가이드(이 화면)',
 '',
@@ -11687,6 +11699,159 @@ const MANUAL_MARKDOWN = [
 '- **방금 만든 팀이 `hair reset-data` 이후 사라졌다** → 팀(team)도 초기화 대상입니다(Agent/Tool/Skill/파이프라인 템플릿과 달리 팀은 재기동 시 자동으로 다시 채워지지 않는 데이터라서) — 다시 "팀 관리"에서 등록해야 합니다. 초기화해도 남겨야 하는 팀은 팀 카드에서 **"초기화 시 보호"**를 켜 두세요.',
 '- **결과물이 한국어가 아닌 언어로 나와야 한다** → "사용자 관리" 탭(admin 전용)의 조직 정책에서 **결과물 언어**를 바꾸면 모든 Agent에 그 언어로 쓰라고 지시합니다(한국어가 아니면 한국어 전용 자동 교정은 꺼집니다).',
 ].join("\\n");
+
+/* ---------- 연동 설정(2026-11-23, "P1 진행해줘" — P1-5 사람이 누르지 않아도 도는 자동화) ----------
+   ① 내 API 키 — 외부 시스템(cron·메일 규칙·지라)이 내 계정·권한으로 HAIR API를 부른다.
+   ② 정기 실행(admin/manager) — 정해진 시각에 업무 요청 → 할 일 → 파이프라인 실행을 만든다.
+   ③ 외부 알림(admin) — 결재 대기·파이프라인 완료/실패 등을 Slack·Teams 수신 웹훅으로 보낸다.
+   이 코드는 파이썬 문자열 안에 있어 역슬래시를 쓰지 않는다(이스케이프가 파이썬에서 먼저 풀린다). */
+async function renderIntegrations(content) {
+  const isAdmin = ME.role === "admin";
+  const canSchedule = ["admin", "manager"].includes(ME.role);
+  const fmt = v => v ? esc(String(v).replace("T", " ")) : "-";
+  const [keys, schedules, templates, notify] = await Promise.all([
+    api("GET", "/api/api-keys"),
+    canSchedule ? api("GET", "/api/pipeline-schedules") : Promise.resolve([]),
+    canSchedule ? api("GET", "/api/pipeline-templates") : Promise.resolve([]),
+    isAdmin ? api("GET", "/api/integrations/notify") : Promise.resolve(null),
+  ]);
+  const origin = location.origin;
+  const keyRows = keys.map(k =>
+    "<tr><td>" + esc(k.name) + "</td><td><code>" + esc(k.key_prefix) + "…</code></td><td>" + fmt(k.created_at) +
+    "</td><td>" + fmt(k.last_used_at) + "</td><td>" + (k.revoked_at ? "폐기됨" : "사용 중") + "</td><td>" +
+    (k.revoked_at ? "" : '<button class="small danger" data-revoke-key="' + k.id + '">폐기</button>') + "</td></tr>"
+  ).join("");
+  const WD = ["월", "화", "수", "목", "금", "토", "일"];
+  const schedRows = schedules.map(s =>
+    "<tr><td>" + esc(s.name) + "</td><td>" + esc(s.template_name) + "</td><td>" + esc(s.when) + "</td><td>" +
+    (s.is_active ? fmt(s.next_run_at) : "꺼짐") + "</td><td>" + fmt(s.last_run_at) +
+    (s.last_task_id ? " (할 일 #" + s.last_task_id + ")" : "") +
+    (s.last_error ? '<div class="muted">⚠ ' + esc(s.last_error) + "</div>" : "") + "</td><td>" +
+    '<button class="small" data-toggle-schedule="' + s.id + '" data-active="' + (s.is_active ? "0" : "1") + '">' +
+    (s.is_active ? "끄기" : "켜기") + "</button> " +
+    '<button class="small danger" data-delete-schedule="' + s.id + '">삭제</button></td></tr>'
+  ).join("");
+  const eventBoxes = notify ? Object.entries(notify.available_events).map(([key, label]) =>
+    '<label class="muted" style="margin-right:0.8rem"><input type="checkbox" class="notify-event" value="' + key + '"' +
+    (notify.events.includes(key) ? " checked" : "") + "> " + esc(label) + "</label>"
+  ).join("") : "";
+
+  content.innerHTML =
+    "<h2>연동 설정</h2>" +
+    helpBox(
+      '<ul class="muted help-list">' +
+      "<li>사람이 버튼을 누르지 않아도 HAIR가 돌게 하는 설정입니다 — 외부 시스템이 API를 부르게 하거나(API 키), 정해진 시각에 파이프라인을 돌리거나(정기 실행), 결재 대기·완료를 메신저로 알립니다(외부 알림).</li>" +
+      "<li>정기 실행과 외부 알림은 <code>hair serve</code>로 띄운 서버에서 30초마다 확인합니다(서버가 꺼져 있거나 PC가 잠자기면 그동안은 돌지 않습니다).</li>" +
+      "</ul>"
+    ) +
+    "<h3>내 API 키</h3>" +
+    '<p class="muted">외부 시스템이 <b>내 계정·권한 그대로</b> HAIR API를 부를 때 씁니다 — 요청 헤더에 <code>Authorization: Bearer 발급한 키</code>를 넣습니다. 예: <code>curl -X POST ' + esc(origin) +
+    '/api/briefs -H "Authorization: Bearer hair_..." -H "Content-Type: application/json" -d &#39;{"raw_text": "업무 내용"}&#39;</code></p>' +
+    '<form class="inline" id="apikey-form"><input id="apikey-name" placeholder="키 이름(용도, 예: 주간 실적 cron)" style="min-width:260px" required>' +
+    '<button class="primary" type="submit">발급</button></form>' +
+    '<div id="apikey-new" hidden></div>' +
+    (keys.length ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>앞자리</th><th>발급</th><th>마지막 사용</th><th>상태</th><th></th></tr></thead><tbody>' + keyRows + "</tbody></table></div>"
+      : '<p class="muted">발급한 키가 없습니다.</p>') +
+    (canSchedule ?
+      "<h3>정기 실행</h3>" +
+      '<p class="muted">정해진 시각마다 아래 내용으로 업무 요청과 할 일을 만들고 파이프라인을 시작합니다 — <b>만든 사람의 이름으로</b> 실행돼 결재·사람 승인 단계도 직접 실행했을 때와 같습니다. 시각은 서버 PC의 현지 시각입니다.</p>' +
+      '<form id="schedule-form" style="display:grid;gap:0.4rem;margin-bottom:0.6rem">' +
+      '<div class="inline" style="flex-wrap:wrap">' +
+      '<input id="sch-name" placeholder="이름(예: 주간 실적 보고)" required>' +
+      '<select id="sch-template">' + templates.filter(t => t.is_active !== false && t.is_active !== 0).map(t => '<option value="' + t.id + '">' + esc(t.name) + "</option>").join("") + "</select>" +
+      '<input id="sch-role" placeholder="할 일 역할(예: 실적 보고서 작성자)" required>' +
+      "</div>" +
+      '<textarea id="sch-brief" rows="3" placeholder="매번 만들 업무 요청 내용(예: 지난주 매출·영업이익·신규고객 실적 보고서를 써줘)" required></textarea>' +
+      '<div class="inline" style="flex-wrap:wrap">' +
+      '<select id="sch-interval"><option value="weekly">매주</option><option value="weekdays">평일(월~금)</option><option value="daily">매일</option></select>' +
+      '<select id="sch-weekday">' + WD.map((d, i) => '<option value="' + i + '">' + d + "요일</option>").join("") + "</select>" +
+      '<input id="sch-time" type="time" value="09:00" required>' +
+      '<button class="primary" type="submit">정기 실행 추가</button></div></form>' +
+      (schedules.length ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>파이프라인</th><th>주기</th><th>다음 실행</th><th>마지막 실행</th><th></th></tr></thead><tbody>' + schedRows + "</tbody></table></div>"
+        : '<p class="muted">등록된 정기 실행이 없습니다.</p>')
+      : "") +
+    (isAdmin ?
+      "<h3>외부 알림(admin)</h3>" +
+      '<p class="muted">Slack·Teams의 수신 웹훅(Incoming Webhook) URL을 넣으면 고른 일이 생길 때마다 한 번씩 메시지를 보냅니다. 처음 저장할 때 이미 있던 일은 보내지 않습니다.</p>' +
+      '<div style="display:grid;gap:0.4rem"><input id="notify-url" type="url" placeholder="https://hooks.slack.com/services/..." style="width:100%" value="' + escAttr(notify.webhook_url || "") + '">' +
+      "<div>" + eventBoxes + "</div>" +
+      '<div class="inline"><button class="primary" id="notify-save">저장</button><button id="notify-test">테스트 전송</button>' +
+      '<span class="muted">' + (notify.last_sent_at ? "마지막 전송 " + fmt(notify.last_sent_at) : "") +
+      (notify.last_error ? " · ⚠ " + esc(notify.last_error) : "") + "</span></div></div>"
+      : "");
+
+  document.getElementById("apikey-form").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    try {
+      const created = await api("POST", "/api/api-keys", { name: document.getElementById("apikey-name").value });
+      const box = document.getElementById("apikey-new");
+      box.hidden = false;
+      box.innerHTML = '<p style="font-weight:600">키를 발급했습니다 — <b>지금만 볼 수 있습니다.</b> 안전한 곳에 복사해 두세요.</p>' +
+        '<div class="inline"><code id="apikey-token" style="user-select:all;word-break:break-all">' + esc(created.token) + "</code>" +
+        '<button class="small" id="apikey-copy">복사</button></div>';
+      document.getElementById("apikey-copy").addEventListener("click", () => {
+        navigator.clipboard.writeText(created.token).then(
+          () => showMsg("global-msg", "키를 복사했습니다.", "ok"),
+          () => showMsg("global-msg", "복사하지 못했습니다 — 키를 직접 선택해 복사하세요.", "error"));
+      });
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+  content.querySelectorAll("[data-revoke-key]").forEach(btn => btn.addEventListener("click", async () => {
+    if (!(await confirmModal("이 키를 폐기합니다 — 이 키를 쓰는 외부 시스템은 즉시 막힙니다. 계속할까요?"))) return;
+    try { await api("DELETE", "/api/api-keys/" + btn.dataset.revokeKey); renderIntegrations(content); }
+    catch (e) { showMsg("global-msg", e.message, "error"); }
+  }));
+  if (canSchedule) {
+    const intervalSel = document.getElementById("sch-interval");
+    const weekdaySel = document.getElementById("sch-weekday");
+    intervalSel.addEventListener("change", () => { weekdaySel.hidden = intervalSel.value !== "weekly"; });
+    document.getElementById("schedule-form").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      try {
+        await api("POST", "/api/pipeline-schedules", {
+          name: document.getElementById("sch-name").value,
+          pipeline_template_id: Number(document.getElementById("sch-template").value),
+          brief_text: document.getElementById("sch-brief").value,
+          role_name: document.getElementById("sch-role").value,
+          interval: intervalSel.value,
+          weekday: intervalSel.value === "weekly" ? Number(weekdaySel.value) : null,
+          time_hhmm: document.getElementById("sch-time").value,
+        });
+        showMsg("global-msg", "정기 실행을 추가했습니다.", "ok");
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+    content.querySelectorAll("[data-toggle-schedule]").forEach(btn => btn.addEventListener("click", async () => {
+      try {
+        await api("PATCH", "/api/pipeline-schedules/" + btn.dataset.toggleSchedule, { active: btn.dataset.active === "1" });
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    }));
+    content.querySelectorAll("[data-delete-schedule]").forEach(btn => btn.addEventListener("click", async () => {
+      if (!(await confirmModal("이 정기 실행을 삭제할까요? 이미 만들어진 업무·실행 이력은 남습니다."))) return;
+      try { await api("DELETE", "/api/pipeline-schedules/" + btn.dataset.deleteSchedule); renderIntegrations(content); }
+      catch (e) { showMsg("global-msg", e.message, "error"); }
+    }));
+  }
+  if (isAdmin) {
+    document.getElementById("notify-save").addEventListener("click", async () => {
+      try {
+        await api("PUT", "/api/integrations/notify", {
+          webhook_url: document.getElementById("notify-url").value,
+          events: [...content.querySelectorAll(".notify-event:checked")].map(c => c.value),
+        });
+        showMsg("global-msg", "외부 알림 설정을 저장했습니다.", "ok");
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+    document.getElementById("notify-test").addEventListener("click", async () => {
+      try {
+        const r = await api("POST", "/api/integrations/notify/test");
+        showMsg("global-msg", r.ok ? "테스트 메시지를 보냈습니다." : "전송 실패: " + r.error, r.ok ? "ok" : "error");
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+  }
+}
 
 async function renderManual(content) {
   content.innerHTML = '<section class="card manual-card">' +

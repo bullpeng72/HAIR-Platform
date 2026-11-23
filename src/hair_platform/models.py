@@ -103,6 +103,35 @@ class BriefSubmission(BaseModel):
     source_conversation_id: int | None = None
 
 
+class ApiKeyCreate(BaseModel):
+    """개인 API 키 발급(2026-11-23, P1-5) — 이름은 용도 표시용(예: "주간 실적 cron")."""
+
+    name: str
+
+
+class NotifyConfigUpdate(BaseModel):
+    """외부 알림 웹훅(2026-11-23, P1-5) — 빈 URL이면 알림을 끈다."""
+
+    webhook_url: str = ""
+    events: list[str] = []
+
+
+class PipelineScheduleCreate(BaseModel):
+    """정기 실행(2026-11-23, P1-5). `interval`: daily/weekdays/weekly, `weekday`: 0=월~6=일(weekly만)."""
+
+    name: str
+    pipeline_template_id: int
+    brief_text: str
+    role_name: str
+    interval: str
+    time_hhmm: str
+    weekday: int | None = None
+
+
+class ActiveToggle(BaseModel):
+    active: bool
+
+
 class BriefDraftRequest(BaseModel):
     """대화 → 업무 요청 초안(2026-11-23, P1-4). `message_ids`를 비우면 대화 전체.
     `use_llm`이면 대화 기본 모델로 구조화한다(비용 발생)."""
