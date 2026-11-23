@@ -74,8 +74,10 @@ def test_proposal_skill_has_no_inline_style_instructions():
     guide = skill_catalog.SKILL_GUIDES["제안서작성"]
     # 슬라이드 형식은 포함 스킬(프레젠테이션작성)이 정한다 — 제안서작성 자신은
     # <style> 인라인 지시를 갖지 않고 덱 골격을 따른다고만 한다.
-    assert "프레젠테이션작성" in guide.description + guide.output_format
-    assert "<style>" not in guide.description + guide.output_format
+    # output_format은 스킬에 따라 없을 수 있다(SkillGuide 필드가 str | None).
+    text = guide.description + (guide.output_format or "")
+    assert "프레젠테이션작성" in text
+    assert "<style>" not in text
 
 
 # ---------- 스킬 포함 관계(2026-11-20, "제안서 작성의 경우, 프레젠테이션 스킬을

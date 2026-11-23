@@ -22,7 +22,7 @@ from hair_platform.auth import Role, create_user
 
 def _make_agent(
     conn, role_name, skill_tags, tuning_config=None, provider=None, model=None
-):
+) -> int:
     import json
 
     cur = conn.execute(
@@ -37,6 +37,7 @@ def _make_agent(
         ),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 

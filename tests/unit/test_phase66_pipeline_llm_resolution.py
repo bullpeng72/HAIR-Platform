@@ -27,7 +27,7 @@ from hair_platform import pipeline_runtime as pr
 from hair_platform.auth import Role, create_user
 
 
-def _make_task(conn):
+def _make_task(conn) -> int:
     cur = conn.execute(
         "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (1, 'x', '[]')"
     )
@@ -37,6 +37,7 @@ def _make_task(conn):
         (brief_id,),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 

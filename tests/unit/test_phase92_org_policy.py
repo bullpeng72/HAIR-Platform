@@ -30,6 +30,13 @@ def _restore_policy():
 # ---------- 1. 사번 형식 ----------
 
 
+
+def _team(conn, team_id: int) -> dict:
+    """있어야 하는 팀 조회 — 없으면 None 인덱싱 TypeError 대신 바로 실패시킨다."""
+    team = teams.get_team(conn, team_id)
+    assert team is not None, f"팀 {team_id}이 없습니다"
+    return team
+
 def test_default_policy_keeps_previous_rule(client_and_conn):
     assert org_policy.employee_id_policy()["is_default"]
     assert org_policy.validate_employee_id("12345678") == "12345678"
@@ -107,7 +114,7 @@ def test_reset_protection_follows_team_flag_not_name(client_and_conn):
     assert client.patch(url, json={"protect_on_reset": True}).status_code == 403  # admin 전용
     _login(client, "admin1", "adminpass")
     assert client.patch(url, json={"protect_on_reset": True}).status_code == 200
-    assert teams.get_team(conn, renamed)["protect_on_reset"] is True
+    assert _team(conn, renamed)["protect_on_reset"] is True
 
     data_admin.reset_to_factory_state(conn)
     remaining = {r[0] for r in conn.execute("SELECT id FROM teams")}
@@ -126,8 +133,8 @@ def test_legacy_named_team_gets_flag_once_on_migration():
     conn.execute("DELETE FROM schema_migrations WHERE name = '2026-11-21-team-protect-on-reset'")
     conn.commit()
     db.init_schema(conn)
-    assert teams.get_team(conn, team_id)["protect_on_reset"] is True
+    assert _team(conn, team_id)["protect_on_reset"] is True
     # admin이 끄면 재기동해도 다시 켜지 않는다.
     teams.set_team_reset_protection(conn, actor, team_id, False)
     db.init_schema(conn)
-    assert teams.get_team(conn, team_id)["protect_on_reset"] is False
+    assert _team(conn, team_id)["protect_on_reset"] is False

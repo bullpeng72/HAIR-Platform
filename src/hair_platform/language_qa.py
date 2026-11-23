@@ -112,6 +112,10 @@ def _parse_json_list(raw: str, expected: int) -> list[str] | None:
     return data
 
 
+@overload
+def repair(text: str, call: Callable[[str, str], str]) -> tuple[str, dict]: ...
+@overload
+def repair(text: None, call: Callable[[str, str], str]) -> tuple[None, dict]: ...
 def repair(text: str | None, call: Callable[[str, str], str]) -> tuple[str | None, dict]:
     """문제 문장을 `call(system, prompt)`로 한 번 교정한다. `(교정된 텍스트,
     보고)`를 돌려준다 — 보고: found(발견 조각 수)·fixed(교정 반영 수)·

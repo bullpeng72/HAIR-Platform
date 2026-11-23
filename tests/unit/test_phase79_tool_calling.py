@@ -67,6 +67,7 @@ def test_resolve_callable_tools_includes_agent_explicit_links():
         "('테스트', '[]', 'active')"
     )
     agent_id = cur.lastrowid
+    assert agent_id is not None
     conn.commit()
     tool_row = conn.execute(
         "SELECT id FROM tool_pool WHERE name = '수치 데이터 분석기'"

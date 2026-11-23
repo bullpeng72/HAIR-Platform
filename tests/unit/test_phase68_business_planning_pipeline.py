@@ -22,7 +22,7 @@ from hair_platform import pipeline_runtime as pr
 from hair_platform.auth import Role, create_user
 
 
-def _make_task(conn):
+def _make_task(conn) -> int:
     cur = conn.execute(
         "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (1, 'x', '[]')"
     )
@@ -32,6 +32,7 @@ def _make_task(conn):
         (brief_id,),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 
@@ -67,6 +68,7 @@ def test_business_planning_pipeline_all_stages_have_at_least_one_resolvable_agen
         "SELECT id FROM pipeline_templates WHERE name = '사업/기획 업무 처리 파이프라인'"
     ).fetchone()
     full = pr.get_pipeline_template(conn, template["id"])
+    assert full is not None
     assert len(full["stages"]) == 7
     for stage in full["stages"]:
         assert len(stage["agents"]) >= 1, f"{stage['name']} 단계에 Agent가 없음"

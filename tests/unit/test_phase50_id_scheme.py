@@ -30,19 +30,22 @@ def _login(client, username, password):
 # ---------- assign_code() 자체 ----------
 
 
+def _insert(conn, sql: str) -> int:
+    """INSERT 후 새 행 id — 실패해 id가 없으면 바로 실패시킨다."""
+    row_id = conn.execute(sql).lastrowid
+    assert row_id is not None
+    return row_id
+
+
 def test_assign_code_starts_at_001_and_increments_within_same_segment():
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     # 레퍼런스 22종이 이미 AGT-REF-001..022를 다 썼으니, 새 세그먼트
     # (AGT-CUSTOM)로 번호가 1부터 다시 시작하는지 확인한다.
-    cur = conn.execute("INSERT INTO agent_pool (role_name) VALUES ('임시 역할 A')")
-    code_a = id_scheme.assign_code(
-        conn, "agent_pool", cur.lastrowid, id_scheme.AGENT_CUSTOM_SEGMENT
-    )
-    cur2 = conn.execute("INSERT INTO agent_pool (role_name) VALUES ('임시 역할 B')")
-    code_b = id_scheme.assign_code(
-        conn, "agent_pool", cur2.lastrowid, id_scheme.AGENT_CUSTOM_SEGMENT
-    )
+    row_a = _insert(conn, "INSERT INTO agent_pool (role_name) VALUES ('임시 역할 A')")
+    code_a = id_scheme.assign_code(conn, "agent_pool", row_a, id_scheme.AGENT_CUSTOM_SEGMENT)
+    row_b = _insert(conn, "INSERT INTO agent_pool (role_name) VALUES ('임시 역할 B')")
+    code_b = id_scheme.assign_code(conn, "agent_pool", row_b, id_scheme.AGENT_CUSTOM_SEGMENT)
     assert code_a == "AGT-CUSTOM-001"
     assert code_b == "AGT-CUSTOM-002"
 
@@ -50,11 +53,9 @@ def test_assign_code_starts_at_001_and_increments_within_same_segment():
 def test_assign_code_different_segments_number_independently():
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
-    cur = conn.execute(
-        "INSERT INTO tool_pool (name, kind) VALUES ('임시 도구', 'custom_python')"
-    )
+    tool_row = _insert(conn, "INSERT INTO tool_pool (name, kind) VALUES ('임시 도구', 'custom_python')")
     pyexec_code = id_scheme.assign_code(
-        conn, "tool_pool", cur.lastrowid, id_scheme.TOOL_KIND_SEGMENT["custom_python"]
+        conn, "tool_pool", tool_row, id_scheme.TOOL_KIND_SEGMENT["custom_python"]
     )
     # 기존 레퍼런스 PYEXEC 8개(Spec EARS 린터~차트 생성기, 2026-11-18
     # 추가) 다음 번호라 009여야 한다 — NATIVE/MCPSTDIO/MCPRMT 세그먼트

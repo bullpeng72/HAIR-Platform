@@ -28,7 +28,7 @@ def _login(client, username, password):
     return resp
 
 
-def _make_brief(conn, raw_text="로드러너 게임 웹 구현"):
+def _make_brief(conn, raw_text="로드러너 게임 웹 구현") -> int:
     # `client_and_conn` 픽스처는 이미 "admin1"을 시드해두므로(다른
     # phase 테스트들과 동일), 여기서 또 만들면 UNIQUE 충돌이 난다 —
     # 있으면 재사용하고 없을 때만(순수 `db.get_connection(":memory:")`
@@ -42,6 +42,7 @@ def _make_brief(conn, raw_text="로드러너 게임 웹 구현"):
         (admin_id, raw_text),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 

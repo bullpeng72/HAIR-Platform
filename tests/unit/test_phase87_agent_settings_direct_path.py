@@ -90,7 +90,7 @@ def test_temperature_sent_in_ollama_payload(monkeypatch):
             return {"message": {"content": "답"}}
 
     def fake_post(url, json=None, timeout=None):
-        sent.update(json)
+        sent.update(json or {})
         return _Resp()
 
     monkeypatch.setattr("httpx.post", fake_post)

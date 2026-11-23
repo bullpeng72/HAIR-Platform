@@ -22,12 +22,13 @@ def _admin(conn):
     return row[0] if row else create_user(conn, "sp_admin", "pw", Role.ADMIN)
 
 
-def _agent(conn, skills, tuning=None, role="분석가"):
+def _agent(conn, skills, tuning=None, role="분석가") -> int:
     cur = conn.execute(
         "INSERT INTO agent_pool (role_name, skill_tags, status, tuning_config) VALUES (?, ?, 'active', ?)",
         (role, json.dumps(skills, ensure_ascii=False), json.dumps(tuning or {})),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 

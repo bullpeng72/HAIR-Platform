@@ -1220,6 +1220,7 @@ def test_gc88_task_assignment_owner_and_context_for_prompt(client_and_conn):
     client.post(f"/api/approvals/{approval_id}/decide", json={"approve": True})
 
     owner = graphquery.task_assignment_owner(conn, task_id)
+    assert owner is not None  # 승인 직후라 확정 배정이 있어야 한다
     assert owner["resource_type"] == "human"
     assert owner["resource_id"] == human_id
     assert owner["requested_by_username"] == "manager1"

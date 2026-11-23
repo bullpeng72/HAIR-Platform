@@ -131,7 +131,7 @@ def test_ollama_sends_no_sampling_options_unless_registered(monkeypatch):
 
     def fake_post(url, json=None, timeout=None):
         sent.clear()
-        sent.update(json)
+        sent.update(json or {})
         return _Resp()
 
     monkeypatch.setattr("httpx.post", fake_post)
@@ -223,7 +223,7 @@ def test_repair_call_retries_without_think_when_rejected(monkeypatch):
         text = '{"error":"unknown field think"}'
 
     def fake_post(url, json=None, timeout=None):
-        calls.append(dict(json))
+        calls.append(dict(json or {}))
         return _Bad() if len(calls) == 1 else _Resp()
 
     monkeypatch.setattr("httpx.post", fake_post)

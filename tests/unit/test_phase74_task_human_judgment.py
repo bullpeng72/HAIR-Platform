@@ -20,7 +20,7 @@ from hair_platform.auth import Role, create_user
 from tests.unit.test_phase48_pipeline_runtime import _good_run_crew
 
 
-def _make_task(conn):
+def _make_task(conn) -> int:
     cur = conn.execute(
         "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (1, 'x', '[]')"
     )
@@ -30,6 +30,7 @@ def _make_task(conn):
         (brief_id,),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 

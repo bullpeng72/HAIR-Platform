@@ -35,12 +35,14 @@ def test_deck_without_chart_has_no_script():
 
 def test_presentation_skill_documents_chart_component():
     guide = skill_catalog.SKILL_GUIDES["프레젠테이션작성"]
+    assert guide.output_format is not None
     assert 'class="hair-chart"' in guide.output_format
 
 
 def test_visualization_skill_says_when_and_how():
     guide = skill_catalog.SKILL_GUIDES["데이터시각화"]
     assert "3개 이상" in guide.description  # 언제
+    assert guide.output_format is not None
     assert "```chart" in guide.output_format  # 마크다운·대화에서는 어떻게
     assert 'class="hair-chart"' in guide.output_format  # 덱에서는 어떻게
 
@@ -153,6 +155,7 @@ def test_vietnamese_leak_is_detected_and_fixed():
 
 def test_presentation_rules_forbid_invented_meta_and_classes():
     rules = skill_catalog.SKILL_GUIDES["프레젠테이션작성"].constraints
+    assert rules is not None
     assert "연도·날짜·출처·표본 수·담당 부서·목표치를 지어내지 않는다" in rules
     assert "⑱ 출력 형식에 나온 클래스만 쓴다" in rules
     # 개정 직전 문구가 남은 DB도 새 문구로 바뀐다.

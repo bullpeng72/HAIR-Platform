@@ -2131,13 +2131,36 @@ _SW_DEV_CATEGORY_SKILL_NAMES = (
     # API 레퍼런스 작성)는 소프트웨어 개발 문서화 전용이라 일반업무가
     # 아닌 개발업무로 재분류.
     "문서작성",
+    # 사용자 요청(2026-11-23, "TUL-PYEXEC-003, SKL-TOOL-007 은 일반업무가 아닌 개발업무로
+    # 분류해") — 골든셋 완료조건 대비 커버리지 측정은 평가·검증 절차.
+    "커버리지체크",
 )
 _SW_DEV_CATEGORY_TOOL_NAMES = (
     "Gate 조치 지식 조회(recommend_fix)",
     "Spec EARS 린터",
     "실패모드 기계적 도출",
     "테스트 케이스 기계적 도출",
+    "골든셋 커버리지 체커",  # 2026-11-23 사용자 요청 — 위 "커버리지체크" 스킬과 같은 이유
 )
+
+# 2026-11-23 개발업무로 재분류한 항목 — 기존 DB에 한 번만 적용(`_reclassify_coverage_check_sw_dev`).
+_RECLASSIFIED_SW_DEV_SKILLS_2026_11_23 = ("커버리지체크",)
+_RECLASSIFIED_SW_DEV_TOOLS_2026_11_23 = ("골든셋 커버리지 체커",)
+
+
+def _reclassify_coverage_check_sw_dev(conn: sqlite3.Connection) -> None:
+    """2026-11-23 "TUL-PYEXEC-003, SKL-TOOL-007 은 일반업무가 아닌 개발업무로 분류해" — 이미
+    `category`가 채워진 기존 DB는 위 이름 목록이 다시 적용되지 않으므로 한 번만 바꾼다. 지금도
+    기본값(general)인 행만 바꾼다(admin이 이미 다른 분류로 정했으면 그대로)."""
+    for table, names in (
+        ("skill_pool", _RECLASSIFIED_SW_DEV_SKILLS_2026_11_23),
+        ("tool_pool", _RECLASSIFIED_SW_DEV_TOOLS_2026_11_23),
+    ):
+        conn.execute(
+            f"UPDATE {table} SET category = 'sw_dev' WHERE category = 'general' "
+            f"AND name IN ({','.join('?' * len(names))})",
+            names,
+        )
 
 
 def _backfill_skill_tool_category(conn: sqlite3.Connection) -> None:
@@ -3302,6 +3325,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _run_once(conn, "2026-11-21-traceability-must-pass", _require_traceability_to_pass)
     _run_once(conn, "2026-11-22-runnable-implementation", _single_author_runnable_implementation)
     _run_once(conn, "2026-11-22-review-returns-to-writing", _review_returns_to_primary_stage)
+    _run_once(conn, "2026-11-23-coverage-check-sw-dev", _reclassify_coverage_check_sw_dev)
     _run_once(conn, "2026-11-22-tool-input-formats", _add_tool_input_formats)
     _run_once(conn, "2026-11-23-show-custom-tool-skills", _show_custom_tool_skills_in_conversation)
     _apply_skill_catalog(conn)

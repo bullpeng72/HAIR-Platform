@@ -27,6 +27,7 @@ from __future__ import annotations
 import html as html_lib
 import json
 import re
+from typing import overload
 
 SKILL_NAME = "프레젠테이션작성"
 
@@ -229,6 +230,10 @@ def _title_from(markup: str) -> str:
     return title[:80] or "발표자료"
 
 
+@overload
+def finalize(text: str) -> str: ...
+@overload
+def finalize(text: None) -> None: ...
 def finalize(text: str | None) -> str | None:
     """덱 마크업이면 디자인 시스템 CSS를 넣은 완전한 HTML 문서로 만든다.
     덱이 아니면 그대로 돌려준다(모든 산출물 저장 경로에서 안전하게 호출할
@@ -418,6 +423,10 @@ def _with_css(markup: str) -> str:
     )
 
 
+@overload
+def finalize_with_type(text: str, content_type: str | None) -> tuple[str, str | None]: ...
+@overload
+def finalize_with_type(text: None, content_type: str | None) -> tuple[None, str | None]: ...
 def finalize_with_type(text: str | None, content_type: str | None) -> tuple[str | None, str | None]:
     """산출물(deliverable) 저장용 — 덱이면 완성된 HTML과 `'html'`을, 아니면
     입력 그대로를 돌려준다. 갤러리·업무 화면은 `content_type`으로 렌더링

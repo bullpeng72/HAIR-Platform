@@ -64,4 +64,6 @@ def test_codebase_analyst_no_longer_gets_org_chart_or_kb_rules():
 
 def test_one_time_changes_support_add_and_remove():
     spec = skill_catalog.ONE_TIME_AGENT_SKILL_ADDITIONS["2026-11-21-dev-agent-quality"]
-    assert spec["코드베이스 분석가"]["remove"] == ["조직배정관계조회", "내부지식검색"]
+    entry = spec["코드베이스 분석가"]
+    assert isinstance(entry, dict)  # 값이 dict면 add/remove 형식, list면 추가만
+    assert entry["remove"] == ["조직배정관계조회", "내부지식검색"]

@@ -28,7 +28,14 @@ def _login(client, username="admin1", password="adminpass"):
     return resp
 
 
-def _make_task(conn):
+def _template(conn, template_id: int) -> dict:
+    """있어야 하는 템플릿 조회 — 없으면 None 인덱싱 TypeError 대신 바로 실패시킨다."""
+    tpl = pr.get_pipeline_template(conn, template_id)
+    assert tpl is not None, f"템플릿 {template_id}이 없습니다"
+    return tpl
+
+
+def _make_task(conn) -> int:
     cur = conn.execute(
         "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (1, 'x', '[]')"
     )
@@ -38,6 +45,7 @@ def _make_task(conn):
         (brief_id,),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 
@@ -128,7 +136,7 @@ def test_create_template_and_add_stages_round_trip():
         lead_role_name="개발 계획 수립가",
     )
 
-    tpl = pr.get_pipeline_template(conn, tid)
+    tpl = _template(conn, tid)
     assert [s["seq_order"] for s in tpl["stages"]] == [1, 2, 3]
     assert tpl["stages"][0]["requires_human_approval"] is True
     assert [a["role_name"] for a in tpl["stages"][1]["agents"]] == ["AA", "DA"]
@@ -151,20 +159,20 @@ def test_create_template_and_add_stages_round_trip():
         )
 
     pr.reorder_stage(conn, admin_id, s2, "down")
-    tpl2 = pr.get_pipeline_template(conn, tid)
+    tpl2 = _template(conn, tid)
     assert [s["name"] for s in tpl2["stages"]] == ["요구분석", "구현", "설계"]
     pr.reorder_stage(conn, admin_id, s2, "up")
-    tpl3 = pr.get_pipeline_template(conn, tid)
+    tpl3 = _template(conn, tid)
     assert [s["name"] for s in tpl3["stages"]] == ["요구분석", "설계", "구현"]
 
     pr.update_stage(conn, admin_id, s1, instructions="갱신된 지시문")
     assert (
-        pr.get_pipeline_template(conn, tid)["stages"][0]["instructions"]
+        _template(conn, tid)["stages"][0]["instructions"]
         == "갱신된 지시문"
     )
 
     pr.delete_stage(conn, admin_id, s3)
-    assert len(pr.get_pipeline_template(conn, tid)["stages"]) == 2
+    assert len(_template(conn, tid)["stages"]) == 2
 
     pr.delete_pipeline_template(conn, admin_id, tid)
     assert pr.get_pipeline_template(conn, tid) is None
@@ -180,7 +188,7 @@ def test_default_software_dev_pipeline_is_seeded_idempotently():
         if t["name"] == "소프트웨어 개발 파이프라인"
     ]
     assert len(templates) == 1
-    tpl = pr.get_pipeline_template(conn, templates[0]["id"])
+    tpl = _template(conn, templates[0]["id"])
     assert len(tpl["stages"]) == 7
     modes = [s["mode"] for s in tpl["stages"]]
     # 2026-11-22 C안 — "구현"(4번째)은 풀스택 개발자 단일 작성(실행 가능성 Gate).
@@ -385,13 +393,13 @@ def test_is_primary_deliverable_round_trips_through_add_stage_and_template():
         is_primary_deliverable=True,
     )
 
-    tpl = pr.get_pipeline_template(conn, tid)
+    tpl = _template(conn, tid)
     assert tpl["stages"][0]["is_primary_deliverable"] is False
     assert tpl["stages"][1]["is_primary_deliverable"] is True
 
     pr.update_stage(conn, admin_id, s1, is_primary_deliverable=True)
     pr.update_stage(conn, admin_id, s2, is_primary_deliverable=False)
-    tpl2 = pr.get_pipeline_template(conn, tid)
+    tpl2 = _template(conn, tid)
     assert tpl2["stages"][0]["is_primary_deliverable"] is True
     assert tpl2["stages"][1]["is_primary_deliverable"] is False
 
@@ -461,7 +469,7 @@ def test_expected_output_round_trips_through_add_stage_and_update_stage():
         expected_output="실제로 실행 가능한 테스트 코드와 통과/실패 리포트",
     )
 
-    tpl = pr.get_pipeline_template(conn, tid)
+    tpl = _template(conn, tid)
     assert tpl["stages"][0]["expected_output"] == ""  # 기본값
     assert (
         tpl["stages"][1]["expected_output"]
@@ -469,13 +477,13 @@ def test_expected_output_round_trips_through_add_stage_and_update_stage():
     )
 
     pr.update_stage(conn, admin_id, s1, expected_output="설계 문서(ERD/API 스펙)")
-    tpl2 = pr.get_pipeline_template(conn, tid)
+    tpl2 = _template(conn, tid)
     assert tpl2["stages"][0]["expected_output"] == "설계 문서(ERD/API 스펙)"
 
     # s2를 빈 문자열로 되돌리면 플랫폼 공통 기본값으로 폴백(crew_runtime.
     # run_crew()가 falsy 체크로 처리 — 여기선 저장값만 확인).
     pr.update_stage(conn, admin_id, s2, expected_output="")
-    tpl3 = pr.get_pipeline_template(conn, tid)
+    tpl3 = _template(conn, tid)
     assert tpl3["stages"][1]["expected_output"] == ""
 
 

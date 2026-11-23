@@ -28,6 +28,12 @@ LEAKED_WITH_BODY = (
 )
 
 
+
+def _id(cur) -> int:
+    """INSERT 커서의 새 행 id — 없으면 바로 실패시킨다(None이 다음 호출로 흘러가지 않게)."""
+    assert cur.lastrowid is not None
+    return cur.lastrowid
+
 def test_clean_strips_reasoning_and_tool_calls():
     assert model_output.clean(LEAKED_ONLY) == ""
     assert model_output.clean(LEAKED_WITH_BODY) == "## 실적 보고서\n\n3분기 매출 55억 원(목표 52억 원 대비 105.8%)."
@@ -52,12 +58,12 @@ def test_later_stages_receive_original_brief():
 
     conn = _conn()
     uid = create_user(conn, "pq_admin", "pw", Role.ADMIN)
-    brief_id = conn.execute(
+    brief_id = _id(conn.execute(
         "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, '3분기 목표 52억 원', '[]')", (uid,)
-    ).lastrowid
-    task_id = conn.execute(
+    ))
+    task_id = _id(conn.execute(
         "INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, '실적 보고', '[]')", (brief_id,)
-    ).lastrowid
+    ))
     out = pipeline_runtime.with_brief_reference(conn, task_id, "앞 단계 산출물")
     assert out.startswith("앞 단계 산출물") and "3분기 목표 52억 원" in out
     assert "원 업무 요청(Brief)" in out
@@ -491,17 +497,17 @@ def test_resolve_stage_decision_rejects_rows_not_awaiting_decision():
     template = conn.execute("SELECT id FROM pipeline_templates LIMIT 1").fetchone()[0]
     s1, s2 = [r[0] for r in conn.execute(
         "SELECT id FROM pipeline_stages WHERE pipeline_template_id = ? ORDER BY seq_order LIMIT 2", (template,))]
-    brief = conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, 'b', '[]')", (admin,)).lastrowid
-    task = conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)).lastrowid
-    run = conn.execute(
+    brief = _id(conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, 'b', '[]')", (admin,)))
+    task = _id(conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)))
+    run = _id(conn.execute(
         "INSERT INTO pipeline_runs (pipeline_template_id, task_id, actor_id, status, current_stage_seq) "
-        "VALUES (?, ?, ?, 'paused_for_approval', 2)", (template, task, admin)).lastrowid
-    done = conn.execute(
+        "VALUES (?, ?, ?, 'paused_for_approval', 2)", (template, task, admin)))
+    done = _id(conn.execute(
         "INSERT INTO pipeline_run_stages (pipeline_run_id, stage_id, attempt, status, output) "
-        "VALUES (?, ?, 1, 'passed', 'x')", (run, s1)).lastrowid
-    escalated = conn.execute(
+        "VALUES (?, ?, 1, 'passed', 'x')", (run, s1)))
+    escalated = _id(conn.execute(
         "INSERT INTO pipeline_run_stages (pipeline_run_id, stage_id, attempt, status, output) "
-        "VALUES (?, ?, 1, 'escalated', 'y')", (run, s2)).lastrowid
+        "VALUES (?, ?, 1, 'escalated', 'y')", (run, s2)))
     # 이미 지난 1단계 행으로는 실행을 진행시킬 수 없다(2단계가 사람 검토 대기 중).
     with pytest.raises(ValueError, match="not_awaiting_decision"):
         pipeline_runtime.resolve_stage_decision(conn, admin, done, True, None)
@@ -591,9 +597,9 @@ def test_auto_fit_uses_gate_a_only_with_enough_samples(monkeypatch):
 
     summary = {"sample_count": 5, "gate_averages": {"A": 0.82, "D": 0.0, "C": 0.4}}
     monkeypatch.setattr(agent_evaluation, "aggregate_agent_score", lambda conn, aid: summary)
-    assert agent_evaluation.auto_fit_score(None, 1) == 0.82  # D·C(내용과 무관한 고정값)는 쓰지 않는다
+    assert agent_evaluation.auto_fit_score(_conn(), 1) == 0.82  # D·C(내용과 무관한 고정값)는 쓰지 않는다
     monkeypatch.setattr(agent_evaluation, "aggregate_agent_score", lambda conn, aid: dict(summary, sample_count=2))
-    assert agent_evaluation.auto_fit_score(None, 1) is None  # 근거 부족 — 지어내지 않는다
+    assert agent_evaluation.auto_fit_score(_conn(), 1) is None  # 근거 부족 — 지어내지 않는다
 
 
 # ---------- 21. 하드코딩·스텁 점검 4순위 — 요구사항 정의 단계 지정·Gate 목록 API ----------
@@ -616,10 +622,10 @@ def test_traceability_uses_designated_requirements_stage(monkeypatch):
     s1 = pipeline_runtime.add_stage(conn, admin, tid, "자료 수집", "single", [("PM", "")])
     s2 = pipeline_runtime.add_stage(conn, admin, tid, "요구 정리", "single", [("PM", "")], is_requirements_source=True)
     s3 = pipeline_runtime.add_stage(conn, admin, tid, "검증", "single", [("PM", "")], checks_requirements_traceability=True)
-    brief = conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, 'b', '[]')", (admin,)).lastrowid
-    task = conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)).lastrowid
-    run = conn.execute("INSERT INTO pipeline_runs (pipeline_template_id, task_id, actor_id, status, current_stage_seq) "
-                       "VALUES (?, ?, ?, 'running', 3)", (tid, task, admin)).lastrowid
+    brief = _id(conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, 'b', '[]')", (admin,)))
+    task = _id(conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)))
+    run = _id(conn.execute("INSERT INTO pipeline_runs (pipeline_template_id, task_id, actor_id, status, current_stage_seq) "
+                       "VALUES (?, ?, ?, 'running', 3)", (tid, task, admin)))
     for sid, out in ((s1, "1단계 자료"), (s2, "R1. 요구사항 문서")):
         conn.execute("INSERT INTO pipeline_run_stages (pipeline_run_id, stage_id, attempt, status, output) "
                      "VALUES (?, ?, 1, 'passed', ?)", (run, sid, out))
@@ -677,8 +683,8 @@ def test_failed_review_returns_to_writing_stage_with_review_feedback():
         conn, admin, tid, "검토", "single", [("문서 검토자", "")],
         gate_ids=["A"], min_gate_pass_ratio=1.0, max_retry=2, on_fail_return_stage_id=write,
     )
-    brief = conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, '기획서', '[]')", (admin,)).lastrowid
-    task = conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)).lastrowid
+    brief = _id(conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, '기획서', '[]')", (admin,)))
+    task = _id(conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)))
     conn.commit()
     roles = {r[0]: r[1] for r in conn.execute("SELECT id, role_name FROM agent_pool")}
     calls = []
@@ -727,8 +733,8 @@ def test_graph_engine_returns_to_writing_stage_and_keeps_counting_review_attempt
         conn, admin, tid, "검토", "single", [("문서 검토자", "")],
         gate_ids=["A"], min_gate_pass_ratio=1.0, max_retry=2, on_fail_return_stage_id=write,
     )
-    brief = conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, '기획서', '[]')", (admin,)).lastrowid
-    task = conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)).lastrowid
+    brief = _id(conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, '기획서', '[]')", (admin,)))
+    task = _id(conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)))
     conn.commit()
     roles = {r[0]: r[1] for r in conn.execute("SELECT id, role_name FROM agent_pool")}
     calls = []

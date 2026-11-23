@@ -62,6 +62,7 @@ def test_skill_creator_uses_catalog_lookup_tool(conn):
     assert json.loads(tool["config"])["native_id"] == pool_catalog.NATIVE_ID
     # 직접 호출 경로(대화 @멘션·스킬 선택)는 조회 결과를 정적으로 주입한다.
     ctx = agent_runtime.retrieve_context(conn, ["스킬생성"], "회의 내용을 정리해서 결정사항과 할 일을 뽑는 스킬")
+    assert ctx is not None  # 도구가 연결된 스킬이라 주입할 내용이 있어야 한다
     assert "회의록정리" in ctx.split("중복 후보):")[1].splitlines()[0]
     assert "- 수치 데이터 분석기 |" in ctx
 

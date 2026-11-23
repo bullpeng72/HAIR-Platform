@@ -641,7 +641,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
     return _fn
 
 
-def _make_task(conn):
+def _make_task(conn) -> int:
     cur = conn.execute(
         "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (1, 'x', '[]')"
     )
@@ -651,6 +651,7 @@ def _make_task(conn):
         (brief_id,),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 

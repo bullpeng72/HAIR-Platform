@@ -456,5 +456,6 @@ def test_run_adhoc_crew_job_creates_only_one_deliverable_per_agent_when_self_rev
     # 쪽으로 투명성을 확인한다.
     run = crew_history.list_runs_for_task(conn, task_id)[0]
     full = crew_history.get_run(conn, run["id"])
+    assert full is not None  # 방금 목록에서 찾은 실행이라 단건 조회도 있어야 한다
     stages = [a["stage"] for a in full["agents"]]
     assert stages == ["draft", "final", "draft", "final"]

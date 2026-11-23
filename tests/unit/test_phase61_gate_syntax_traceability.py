@@ -161,7 +161,7 @@ def test_assess_traceability_zero_total_requirements_is_not_measured(monkeypatch
 # ---------- pipeline_runtime 통합 — 핵심 회귀 ----------
 
 
-def _make_task(conn):
+def _make_task(conn) -> int:
     cur = conn.execute(
         "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (1, 'x', '[]')"
     )
@@ -171,6 +171,7 @@ def _make_task(conn):
         (brief_id,),
     )
     conn.commit()
+    assert cur.lastrowid is not None
     return cur.lastrowid
 
 

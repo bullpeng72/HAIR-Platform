@@ -42,6 +42,10 @@ from __future__ import annotations
 import os
 import re
 import time
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:  # 타입 표기 전용 — 실행 시 crewai는 여전히 지연 import(선택 extra)
+    from crewai.tools.base_tool import Tool
 
 DEFAULT_LANG = "ko"
 _ENDPOINT_TEMPLATE = "https://{lang}.wikipedia.org/w/api.php"
@@ -180,7 +184,7 @@ def context_for_prompt(query: str, top_k: int = 3, lang: str = DEFAULT_LANG) -> 
     return "외부 자료 검색 결과(Wikipedia):\n" + "\n".join(lines)
 
 
-def as_crewai_tool(conn=None, top_k: int = 3):
+def as_crewai_tool(conn=None, top_k: int = 3) -> Tool:
     """외부 자료 검색을 실제 CrewAI Tool로 감싼다(`vectorstore.py`/
     `graphquery.py`와 같은 패턴). `conn`은 다른 native
     tool과 시그니처를 맞추기 위한 것뿐 실제로 쓰지 않는다(외부 API
@@ -202,7 +206,8 @@ def as_crewai_tool(conn=None, top_k: int = 3):
         충분하면 호출하지 마라."""
         return context_for_prompt(query, top_k=top_k)
 
-    return search_external_sources
+    # crewai `@tool`은 실행 시 Tool 객체를 돌려주지만 타입 표기상 원래 함수로 보인다.
+    return cast("Tool", search_external_sources)
 
 
 # ---------- Tavily 실시간 웹 검색(사용자 요청, 2026-10-26, "대화에서
@@ -321,7 +326,7 @@ def tavily_context_for_prompt(query: str, top_k: int = 3) -> str:
     return text
 
 
-def as_tavily_crewai_tool(conn=None, top_k: int = 3):
+def as_tavily_crewai_tool(conn=None, top_k: int = 3) -> Tool:
     """실시간 웹 검색을 실제 CrewAI Tool로 감싼다(`as_crewai_tool()`과
     같은 패턴 — ASCII 함수명 제약도 동일하게 적용된다). `crewai`는
     지연 import한다."""
@@ -334,7 +339,8 @@ def as_tavily_crewai_tool(conn=None, top_k: int = 3):
         충분하면 호출하지 마라."""
         return tavily_context_for_prompt(query, top_k=top_k)
 
-    return search_realtime_web
+    # crewai `@tool`은 실행 시 Tool 객체를 돌려주지만 타입 표기상 원래 함수로 보인다.
+    return cast("Tool", search_realtime_web)
 
 
 # 사용자 요청(2026-11-17, "딥리서치 skill과, AI 빅테크와 AI기반 개발/
@@ -367,7 +373,7 @@ def tavily_news_context_for_prompt(query: str, top_k: int = 5, days: int = 7) ->
     return text
 
 
-def as_tavily_news_crewai_tool(conn=None, top_k: int = 5, days: int = 7):
+def as_tavily_news_crewai_tool(conn=None, top_k: int = 5, days: int = 7) -> Tool:
     """최근 뉴스 검색을 실제 CrewAI Tool로 감싼다(`as_tavily_crewai_
     tool()`과 같은 패턴 — ASCII 함수명 제약도 동일하게 적용된다).
     `crewai`는 지연 import한다."""
@@ -380,4 +386,5 @@ def as_tavily_news_crewai_tool(conn=None, top_k: int = 5, days: int = 7):
         결과만 돌려준다. 오래된 일반 정보면 호출하지 마라."""
         return tavily_news_context_for_prompt(query, top_k=top_k, days=days)
 
-    return search_recent_news
+    # crewai `@tool`은 실행 시 Tool 객체를 돌려주지만 타입 표기상 원래 함수로 보인다.
+    return cast("Tool", search_recent_news)
