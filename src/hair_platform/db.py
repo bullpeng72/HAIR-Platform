@@ -18,6 +18,7 @@ Agent(VectorDB)의 임베딩 저장소다 — 별도 벡터DB
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -654,7 +655,7 @@ CREATE TABLE IF NOT EXISTS pipeline_stages (
     seq_order INTEGER NOT NULL,
     name TEXT NOT NULL,
     mode TEXT NOT NULL DEFAULT 'single'
-        CHECK (mode IN ('single', 'sequential_relay', 'parallel_delegated')),
+        CHECK (mode IN ('single', 'sequential_relay', 'parallel_delegated', 'plan_merge')),
     lead_role_name TEXT,
     instructions TEXT NOT NULL DEFAULT '',
     gate_ids TEXT NOT NULL DEFAULT '["A","B","C","D","E","F","G"]',
@@ -1070,6 +1071,54 @@ def _backfill_skill_context_policy(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+_OLD_STAGE_MODE_CHECK = "CHECK (mode IN ('single', 'sequential_relay', 'parallel_delegated'))"
+_NEW_STAGE_MODE_CHECK = "CHECK (mode IN ('single', 'sequential_relay', 'parallel_delegated', 'plan_merge'))"
+
+
+def _migrate_pipeline_stage_plan_merge_mode(conn: sqlite3.Connection) -> None:
+    """`pipeline_stages.mode` CHECK에 'plan_merge'(계획 분담 — 2026-11-23, P2-9 `plan_merge.py`)를
+    더한다. SQLite는 CHECK를 ALTER로 못 바꿔 테이블을 다시 만든다(`_migrate_tool_pool_custom_
+    python_kind()`와 같은 방식) — 옛 CHECK가 그대로 있을 때만. 행·id는 그대로 옮기고 인덱스도
+    다시 만든다. 자식 테이블(단계 참여자·실행 단계)은 테이블 이름으로 참조하므로 그대로 유효하다."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_stages'"
+    ).fetchone()
+    if row is None or _OLD_STAGE_MODE_CHECK not in row["sql"]:
+        return
+    # 한 번 ALTER RENAME된 테이블은 sqlite_master에 `CREATE TABLE "pipeline_stages"`(따옴표)로 남는다.
+    new_sql = re.sub(
+        r'^CREATE TABLE\s+["`\[]?pipeline_stages["`\]]?',
+        "CREATE TABLE pipeline_stages__new",
+        row["sql"].replace(_OLD_STAGE_MODE_CHECK, _NEW_STAGE_MODE_CHECK),
+        count=1,
+    )
+    if "pipeline_stages__new" not in new_sql:
+        raise RuntimeError("pipeline_stages_migration_unexpected_sql")
+    indexes = [
+        r["sql"]
+        for r in conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'pipeline_stages' "
+            "AND sql IS NOT NULL"
+        )
+    ]
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(new_sql)
+        conn.execute("INSERT INTO pipeline_stages__new SELECT * FROM pipeline_stages")
+        conn.execute("DROP TABLE pipeline_stages")
+        conn.execute("ALTER TABLE pipeline_stages__new RENAME TO pipeline_stages")
+        for sql in indexes:
+            conn.execute(sql)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+
+
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """`CREATE TABLE IF NOT EXISTS`는 이미 존재하는 테이블에 새 컬럼을 추가하지
     못한다 — 이 저장소가 커오면서 `agent_pool`에 여러 번 컬럼을 추가했는데,
@@ -1349,6 +1398,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 그대로 쓴다(지정 안 한 Agent는 지금과 100% 동일하게 동작).
     _ensure_column(conn, "agent_pool", "tuning_config", "TEXT NOT NULL DEFAULT '{}'")
     _migrate_tool_pool_custom_python_kind(conn)
+    _migrate_pipeline_stage_plan_merge_mode(conn)
     # 사용자 요청(2026-10-14, "호출 받은 사람에게 브라우저 알림이
     # 오고... ") — 실측으로 발견한 버그: 처음엔 "최초 폴링은 알림 없이
     # 기준점만 잡는다"는 클라이언트 메모리 커서(`_mentionNotifySinceId`)

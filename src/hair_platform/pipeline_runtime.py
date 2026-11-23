@@ -74,7 +74,10 @@ from hair_platform import (
 )
 from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 
-VALID_MODES = ("single", "sequential_relay", "parallel_delegated")
+# `plan_merge`(2026-11-23, P2-9 — `plan_merge.py`): 리드 계획 → 팀원 분담 실행 → 리드 병합을 플랫폼이
+# 직접 진행한다(위임형처럼 모델의 즉흥 위임에 맡기지 않는다).
+VALID_MODES = ("single", "sequential_relay", "parallel_delegated", "plan_merge")
+LEAD_MODES = ("parallel_delegated", "plan_merge")
 GATE_IDS = ["A", "B", "C", "D", "E", "F", "G"]
 
 
@@ -295,13 +298,13 @@ def add_stage(
         raise ValueError("stage_needs_at_least_one_agent")
     if mode == "single" and len(agents) != 1:
         raise ValueError("single_mode_requires_exactly_one_agent")
-    if mode == "parallel_delegated":
+    if mode in LEAD_MODES:
         if not lead_role_name:
-            raise ValueError("parallel_delegated_requires_lead_role_name")
+            raise ValueError(f"{mode}_requires_lead_role_name")
         if lead_role_name not in [r for r, _ in agents]:
             raise ValueError("lead_role_name_must_be_in_agents")
         if len(agents) < 2:
-            raise ValueError("parallel_delegated_requires_at_least_one_coworker")
+            raise ValueError(f"{mode}_requires_at_least_one_coworker")
     template = conn.execute(
         "SELECT id FROM pipeline_templates WHERE id = ?", (template_id,)
     ).fetchone()
@@ -814,7 +817,7 @@ def _resolve_stage_llm(
     달라지지 않는다."""
     representative_role = (
         stage["lead_role_name"]
-        if stage["mode"] == "parallel_delegated" and stage["lead_role_name"]
+        if stage["mode"] in LEAD_MODES and stage["lead_role_name"]
         else None
     )
     if representative_role is None:
@@ -1045,6 +1048,19 @@ def _execute_stage_attempt(
         task_descriptions = [lead_description] * len(run_agent_ids)
         process = "hierarchical"
         manager_agent_id = lead_agent_id
+    elif stage["mode"] == "plan_merge":
+        # 계획 분담(2026-11-23, P2-9) — 실행은 아래에서 `plan_merge.run()`이 한다.
+        lead_agent_id = _resolve_role_agent_id(conn, stage["lead_role_name"])
+        plan_lead = {"agent_id": lead_agent_id, "role_name": stage["lead_role_name"], "instructions": ""}
+        plan_workers = [
+            {"agent_id": _resolve_role_agent_id(conn, a["role_name"]), "role_name": a["role_name"],
+             "instructions": a["instructions"]}
+            for a in stage_agents if a["role_name"] != stage["lead_role_name"]
+        ]
+        run_agent_ids = [lead_agent_id] + [w["agent_id"] for w in plan_workers]
+        task_descriptions = [combined_base] * len(run_agent_ids)
+        process = "sequential"
+        manager_agent_id = None
     elif stage["mode"] == "sequential_relay":
         run_agent_ids = agent_ids
         task_descriptions = [
@@ -1071,30 +1087,39 @@ def _execute_stage_attempt(
     expected_outputs = [stage["expected_output"]] * len(run_agent_ids)
     stage_provider, stage_model = _resolve_stage_llm(conn, stage)
 
-    result = crew_runtime.run_crew(
-        conn,
-        run_agent_ids,
-        task_descriptions,
-        actor_id,
-        process=process,
-        # 실측(2026-11-06, park_member 로드러너 게임 데모, Ollama 검증
-        # 중) — `run_crew()`의 `memory=True`(기본값)는 provider와
-        # 무관하게 항상 OpenAI 임베딩 API를 쓴다(`run_crew()` 자체
-        # docstring에 이미 경고돼 있던 제약). "구현" 단계 출력처럼 긴
-        # 산출물을 임베딩하려 하면 OpenAI 임베딩 API의 입력 길이 한도
-        # (8192 토큰)를 넘겨 `BadRequestError`가 났다 — provider를
-        # Ollama로 고쳐도 이 메모리 레이어만은 몰래 OpenAI에 의존해
-        # 깨졌다. 이 모듈은 이미 단계 간 출력을 `base_input`으로 직접
-        # 체이닝하므로(위 "요구분석" 섹션 참고) CrewAI 자체 메모리가
-        # 따로 필요 없다 — 꺼서 이 숨은 OpenAI 의존을 완전히 없앤다.
-        memory=False,
-        eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
-        provider=stage_provider,
-        model=stage_model,
-        manager_agent_id=manager_agent_id,
-        expected_outputs=expected_outputs,
-        self_review=use_self_review_tier,
-    )
+    if stage["mode"] == "plan_merge":
+        from hair_platform import plan_merge
+
+        result = plan_merge.run(
+            conn, plan_lead, plan_workers, combined_base, actor_id,
+            expected_output=stage["expected_output"], provider=stage_provider, model=stage_model,
+            eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
+        )
+    else:
+        result = crew_runtime.run_crew(
+            conn,
+            run_agent_ids,
+            task_descriptions,
+            actor_id,
+            process=process,
+            # 실측(2026-11-06, park_member 로드러너 게임 데모, Ollama 검증
+            # 중) — `run_crew()`의 `memory=True`(기본값)는 provider와
+            # 무관하게 항상 OpenAI 임베딩 API를 쓴다(`run_crew()` 자체
+            # docstring에 이미 경고돼 있던 제약). "구현" 단계 출력처럼 긴
+            # 산출물을 임베딩하려 하면 OpenAI 임베딩 API의 입력 길이 한도
+            # (8192 토큰)를 넘겨 `BadRequestError`가 났다 — provider를
+            # Ollama로 고쳐도 이 메모리 레이어만은 몰래 OpenAI에 의존해
+            # 깨졌다. 이 모듈은 이미 단계 간 출력을 `base_input`으로 직접
+            # 체이닝하므로(위 "요구분석" 섹션 참고) CrewAI 자체 메모리가
+            # 따로 필요 없다 — 꺼서 이 숨은 OpenAI 의존을 완전히 없앤다.
+            memory=False,
+            eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
+            provider=stage_provider,
+            model=stage_model,
+            manager_agent_id=manager_agent_id,
+            expected_outputs=expected_outputs,
+            self_review=use_self_review_tier,
+        )
     tcr = result["tcr"]
 
     # 실측 발견(2026-11-07, "구현" 단계를 sequential_relay로 전환하며

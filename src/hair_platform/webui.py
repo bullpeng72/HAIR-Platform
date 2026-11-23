@@ -8704,6 +8704,8 @@ const PIPELINE_MODE_LABEL = {
   single: "단독(1명)",
   sequential_relay: "순차 릴레이(N명, 앞사람 결과를 이어받음)",
   parallel_delegated: "병행 위임(리드 1명이 코워커에게 실제로 위임)",
+  // 계획 분담(2026-11-23, P2-9) — 첫 번째 역할이 리드: 계획 → 나머지가 분담 실행 → 리드가 병합
+  plan_merge: "계획 분담(첫 역할=리드가 나눠 맡기고 결과를 합침)",
 };
 
 function pipelineStageAgentRowHtml(activeAgents) {
@@ -8921,8 +8923,8 @@ async function renderPipelines(content) {
       if (mode === "single" && roleAgents.length !== 1) {
         showMsg("global-msg", "단독 모드는 역할이 정확히 1개여야 합니다.", "error"); return;
       }
-      if (mode === "parallel_delegated" && roleAgents.length < 2) {
-        showMsg("global-msg", "병행 위임 모드는 리드 포함 최소 2개 역할이 필요합니다.", "error"); return;
+      if ((mode === "parallel_delegated" || mode === "plan_merge") && roleAgents.length < 2) {
+        showMsg("global-msg", (mode === "plan_merge" ? "계획 분담" : "병행 위임") + " 모드는 리드(첫 번째 역할) 포함 최소 2개 역할이 필요합니다.", "error"); return;
       }
       const payload = {
         name: form.querySelector(".stage-name").value,
@@ -8937,7 +8939,7 @@ async function renderPipelines(content) {
         checks_requirements_traceability: form.querySelector(".stage-checks-trace").checked,
         expected_output: form.querySelector(".stage-expected-output").value,
       };
-      if (mode === "parallel_delegated") payload.lead_role_name = roleAgents[0].role_name;
+      if (mode === "parallel_delegated" || mode === "plan_merge") payload.lead_role_name = roleAgents[0].role_name;
       try {
         await api("POST", "/api/pipeline-templates/" + templateId + "/stages", payload);
         showMsg("global-msg", "단계를 추가했습니다.", "ok");
@@ -11759,6 +11761,7 @@ const MANUAL_MARKDOWN = [
 '| 단독(single) | Agent 1명이 혼자 처리 | 요구사항 분석가 1명 |',
 '| 순차 릴레이(sequential_relay) | N명이 순서대로 앞 사람 결과를 이어받음 | AA → DA |',
 '| 병행 위임(parallel_delegated) | 리드 1명이 코워커들에게 실제로 과업을 쪼개 위임 | (admin이 직접 구성) |',
+'| 계획 분담(plan_merge) | 리드(첫 번째 역할)가 팀원별 하위 작업을 정함 → 팀원이 각자 수행 → 리드가 하나로 합침. 위임 여부를 모델에 맡기지 않고 플랫폼이 세 단계를 직접 진행 | 시장 조사가·재무 분석가가 나눠 쓰고 편집장이 합치는 보고서 |',
 '',
 '단계마다 **통과 판정에 쓸 Gate 목록과 통과 비율·최대 재시도 횟수·"사람 승인 필요" 여부**를 정합니다. 판정은 그 단계에 지정한 Gate만으로 합니다 — 기본 검증 단계는 **A(목표 달성)와 요구사항 추적성**(요구사항 정의 단계의 요구사항을 빠짐없이 반영했는지 LLM이 판정, 둘 다 통과해야 함), 구현 단계는 **실행 가능성 Gate**(그대로 실행되는 완성본인지)로 판정하고, 나머지 Gate(C 신뢰성·D 응답시간·F 협업구조·G 관측성)는 결과물 내용과 무관하게 비슷한 값이 나와 기록·표시만 합니다.',
 '승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어가고(최소 HITL), 기준 미달이면 "어떤 Gate가 왜 부족한지" 피드백을 반영해 자동 재시도합니다. 검증 단계에 **"검토 실패 시 되돌릴 단계"**를 정해두면, 같은 검토를 다시 돌리는 대신 그 단계(보통 작성·구현)로 돌아가 **검토 의견을 반영해 다시 쓰게** 합니다(기본 템플릿 4종은 모두 이렇게 설정돼 있습니다).',
@@ -11827,6 +11830,7 @@ const MANUAL_MARKDOWN = [
 '   공통 지시문, Gate 통과 비율(%), 최대 재시도, "사람 승인 필요" 체크박스, **산출물 형식**(텍스트/마크다운/HTML/코드 — 코드로 지정하면 결과 화면에 문법 강조가 자동 적용됩니다), **"요구사항 정의 단계"**(요구사항 추적성의 기준 문서를 내는 단계 — 지정이 없으면 1단계), **"요구사항 추적성 검사"**(이 단계 산출물을 그 요구사항과 대조) 체크박스도 이때 정합니다.',
 '   만든 뒤에는 단계 카드에서 요구사항 정의 단계 지정·추적성 검사를 켜고 끌 수 있고, Gate 기준이 있는 단계에는 **"검토 실패 시"** 선택(이 단계만 재시도 / 앞 단계로 되돌림)이 보입니다.',
 '   - ⚠️ **병행 위임(parallel_delegated) 모드는 신중하게 쓰세요** — 매니저가 "Delegate work to coworker" 도구로 그때그때 동적으로 위임하는 방식인데, 실측 결과 매니저가 실제 위임 대신 위임 계획만 요약하고 끝내는 경우가 반복 확인됐습니다. 여러 명이 순서대로 작업을 이어받으면 되는 경우라면 **순차 릴레이**가 더 안정적입니다(기본 제공 파이프라인 4개 전부, 다인원 단계가 전부 순차 릴레이인 이유). 병행 위임 단계는 리드가 실제로 위임했는지 **"위임확인" Gate**로 따로 검사해, 위임 없이 끝나면 Gate 점수와 무관하게 그 단계를 재시도합니다. 또 병행 위임 단계가 하나라도 있는 템플릿은 "신규 실행엔진(LangGraph)"으로 실행할 수 없고 기존 엔진으로만 돕니다.',
+'   - **여러 Agent가 나눠 맡아야 한다면 계획 분담(plan_merge)을 쓰세요** — 리드가 팀원별 하위 작업을 JSON 계획으로 내면 플랫폼이 팀원을 하나씩(클라우드 모델이면 최대 3명 동시에) 실행하고, 리드가 결과를 하나의 완성본으로 합칩니다. 계획을 읽지 못하면 단계에 적은 팀원별 지시로 대신 진행해 멈추지 않습니다. Gate는 병합된 최종본으로 판정하고, 두 실행엔진 모두에서 동작합니다. 로컬 Ollama 모델은 요청을 하나씩 처리하므로 동시 실행이 없고 순차 릴레이보다 리드 호출 2번(계획·병합)만큼 오래 걸립니다.',
 '3. 단계 순서는 카드의 위/아래 이동 버튼으로 나중에도 바꿀 수 있습니다.',
 '',
 '### 사람이 누르지 않아도 돌게 하기 — 정기 실행·외부 알림·API 키',
