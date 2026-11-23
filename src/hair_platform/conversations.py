@@ -2825,3 +2825,85 @@ def run_default_ai_job(
     with progress.reporting(conn, "conversation_jobs", job_id):
         progress.report("응답 생성 중")
         return _run_default_ai_job(conn, job_id, conversation_id, actor_id, skill)
+
+
+# ---------- 대화 → 업무 요청 전환(2026-11-23, P1-4) ----------
+# 사용자 요청("P1 진행해줘" — 대화와 정식 업무의 단절). 지금까지 대화에서 정한 일을 결재·Gate가
+# 붙는 정식 업무로 넘기려면 내용을 직접 복사해 "업무 요청"에 붙여야 했다(이용 가이드 2절 6단계).
+# 대화에서 바로 업무 요청 초안을 만들고(기본은 LLM 없이 무료, 선택하면 LLM이 구조화), 사람이 다듬어
+# 제출하면 어느 대화에서 왔는지 남기고 대화에도 전환 사실을 적는다.
+
+TRANSFER_NOTE_PREFIX = "📋 이 대화를 업무 요청"
+_DRAFT_MAX_MESSAGE_CHARS = 2000
+_DRAFT_MAX_TOTAL_CHARS = 12000
+
+BRIEF_DRAFT_SYSTEM = (
+    "너는 대화 기록을 정식 업무 요청서로 정리하는 담당자다. 대화에 나온 내용만 근거로 다음 순서의 "
+    "마크다운으로 쓴다: 제목 한 줄 → ## 목표 → ## 배경 → ## 요구사항(검증 가능한 항목 목록, 대화에 나온 "
+    "수치·기간·대상·형식 조건은 원문 그대로) → ## 산출물 → ## 완료 기준 → ## 확인 필요(대화에서 정해지지 "
+    "않은 것). 대화에 없는 사실·수치는 지어내지 않는다. 머리말·맺음말 없이 요청서만 출력한다."
+)
+
+
+def _transfer_messages(conn: sqlite3.Connection, conversation_id: int, message_ids: list[int] | None) -> list[dict]:
+    msgs = [m for m in list_messages(conn, conversation_id) if not m["content"].startswith(TRANSFER_NOTE_PREFIX)]
+    if message_ids:
+        wanted = set(message_ids)
+        msgs = [m for m in msgs if m["id"] in wanted]
+    return msgs
+
+
+def brief_draft_from_conversation(
+    conn: sqlite3.Connection,
+    conversation_id: int,
+    actor_id: int,
+    message_ids: list[int] | None = None,
+    use_llm: bool = False,
+) -> dict:
+    """업무 요청 초안 — 저장하지 않는다(사람이 다듬어 `POST /api/briefs`로 제출).
+    기본(무료): 사람 메시지를 순서대로 요청 내용으로, 마지막 AI 응답을 참고 발췌로 붙인다.
+    `use_llm=True`: 대화 기본 모델로 목표·요구사항·완료 기준을 구조화한다(비용 발생)."""
+    conv = get_conversation(conn, conversation_id)
+    if conv is None:
+        raise ValueError("conversation_not_found")
+    if not is_participant(conn, conversation_id, actor_id):
+        raise PermissionError("not_a_participant")
+    msgs = _transfer_messages(conn, conversation_id, message_ids)
+    if not msgs:
+        raise ValueError("no_messages")
+    title = (conv["title"] or "").strip() or "대화에서 전환한 업무"
+    footer = f"\n\n(대화 #{conversation_id}「{title}」에서 전환)"
+    if use_llm:
+        lines, total = [], 0
+        for m in msgs:
+            who = "사람" if m["author_type"] == "human" else "AI"
+            piece = f"[{who}] {m['content'][:_DRAFT_MAX_MESSAGE_CHARS]}"
+            if total + len(piece) > _DRAFT_MAX_TOTAL_CHARS:
+                break
+            lines.append(piece)
+            total += len(piece)
+        provider, model = llm.resolve_provider_and_model(conv["llm_provider"], conv["llm_model"], conn=conn)
+        text = llm.call_llm(provider, model, BRIEF_DRAFT_SYSTEM, "\n\n".join(lines)).strip()
+        if text:
+            return {"raw_text": text + footer, "source": "llm", "message_count": len(lines),
+                    "llm_provider": provider, "llm_model": model}
+    human = [m["content"].strip() for m in msgs if m["author_type"] == "human"]
+    agent = [m["content"].strip() for m in msgs if m["author_type"] == "agent"]
+    parts = [title, "", "## 요청 내용"] + [f"- {h[:_DRAFT_MAX_MESSAGE_CHARS]}" for h in human]
+    if agent:
+        parts += ["", "## 대화에서 나온 참고 답변(발췌)", agent[-1][:1500]]
+    return {"raw_text": "\n".join(parts) + footer, "source": "rule", "message_count": len(msgs)}
+
+
+def record_brief_transfer(conn: sqlite3.Connection, conversation_id: int, actor_id: int, brief_id: int) -> None:
+    """업무 요청 제출 뒤 대화에 전환 사실을 남긴다 — 사람 메시지로 바로 넣어 AI 자동응답을 부르지
+    않는다(`create_message()`를 거치지 않음)."""
+    conn.execute(
+        "INSERT INTO conversation_messages (conversation_id, author_type, author_id, content) "
+        "VALUES (?, 'human', ?, ?)",
+        (conversation_id, actor_id,
+         f"{TRANSFER_NOTE_PREFIX} #{brief_id}로 전환했습니다 — \"업무 요청\" 탭에서 할 일로 나누고 배정하세요."),
+    )
+    audit.record(conn, actor_id, "conversation_transferred_to_brief", "conversations", conversation_id,
+                 after={"brief_id": brief_id})
+    conn.commit()

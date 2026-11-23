@@ -106,6 +106,7 @@ from hair_platform.models import (
     AssignmentCancelRequest,
     AssignmentRequest,
     AssistRequest,
+    BriefDraftRequest,
     BriefSubmission,
     ConsentRequest,
     ContentFixSuggestRequest,
@@ -491,12 +492,38 @@ def create_app(db_path: str | None = None) -> FastAPI:
         stub_roles = lines if explicit_role_list else (
             pool_catalog.suggest_roles(conn, payload.raw_text) or lines
         )
+        source = payload.source_conversation_id
+        if source is not None and not conversations.is_participant(conn, source, user["id"]):
+            raise HTTPException(status_code=403, detail="참가 중인 대화에서만 업무 요청으로 전환할 수 있습니다")
         cur = conn.execute(
-            "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, ?, ?)",
-            (user["id"], payload.raw_text, json.dumps(stub_roles, ensure_ascii=False)),
+            "INSERT INTO briefs (submitted_by, raw_text, stub_roles, source_conversation_id) "
+            "VALUES (?, ?, ?, ?)",
+            (user["id"], payload.raw_text, json.dumps(stub_roles, ensure_ascii=False), source),
         )
         conn.commit()
-        return {"id": cur.lastrowid, "stub_roles": stub_roles, "status": "submitted"}
+        if source is not None:
+            conversations.record_brief_transfer(conn, source, user["id"], cur.lastrowid)
+        return {"id": cur.lastrowid, "stub_roles": stub_roles, "status": "submitted",
+                "source_conversation_id": source}
+
+    @app.post("/api/conversations/{conversation_id}/brief-draft")
+    def conversation_brief_draft(
+        conversation_id: int,
+        payload: BriefDraftRequest,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)),
+    ):
+        """대화 → 업무 요청 초안(2026-11-23, P1-4) — 저장하지 않는다. 사람이 다듬어
+        `POST /api/briefs`(source_conversation_id 포함)로 제출한다."""
+        try:
+            return conversations.brief_draft_from_conversation(
+                conn, conversation_id, user["id"], payload.message_ids, payload.use_llm
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="이 대화의 참가자만 전환할 수 있습니다") from exc
+        except ValueError as exc:
+            detail = {"conversation_not_found": "대화를 찾을 수 없습니다",
+                      "no_messages": "전환할 메시지가 없습니다"}.get(str(exc), str(exc))
+            raise HTTPException(status_code=404 if "not_found" in str(exc) else 400, detail=detail) from exc
 
     @app.get("/api/briefs")
     def list_briefs(user: sqlite3.Row = Depends(get_current_user)):

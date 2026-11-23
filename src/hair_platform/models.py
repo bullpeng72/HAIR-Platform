@@ -99,6 +99,16 @@ class BriefSubmission(BaseModel):
     """규칙기반 스텁. 실제 LLM 기반 해석기 연동은 이후 버전에서 이뤄진다."""
 
     raw_text: str
+    # 대화에서 전환한 업무 요청(2026-11-23, P1-4) — 어느 대화에서 왔는지 남기고 대화에 전환 사실을 적는다.
+    source_conversation_id: int | None = None
+
+
+class BriefDraftRequest(BaseModel):
+    """대화 → 업무 요청 초안(2026-11-23, P1-4). `message_ids`를 비우면 대화 전체.
+    `use_llm`이면 대화 기본 모델로 구조화한다(비용 발생)."""
+
+    message_ids: list[int] | None = None
+    use_llm: bool = False
 
 
 class HumanPoolCreate(BaseModel):

@@ -3166,7 +3166,7 @@ async function renderConversations(content) {
     helpBox(
       '<ul class="muted help-list">' +
       '<li>로그인하면 바로 쓸 수 있는 대화 공간입니다 — 사람·Agent·Agent 그룹(Team)을 불러 대화하듯 업무를 처리하세요.</li>' +
-      '<li>대화와 업무 요청(Brief)은 서로 독립적인 두 처리 방식입니다 — 대화 내용을 업무 요청으로 쓰고 싶다면 업무 요청 작성란에 직접 옮겨 적으세요.</li>' +
+      '<li>결재·Gate 채점이 필요한 정식 업무로 넘기려면 대화 상단의 "📋 업무 요청으로 전환"을 쓰세요 — 대화 내용으로 업무 요청 초안을 만들고(AI 정리는 선택), 다듬어 제출하면 "업무 요청" 탭에 올라갑니다.</li>' +
       '</ul>'
     ) +
     '<form class="inline" id="new-conversation-form">' +
@@ -3599,6 +3599,17 @@ async function renderConversationDetail(conversationId, containerId) {
     '<label><input type="checkbox" id="conv-auto-reply"' + (conv.ai_auto_reply ? " checked" : "") + '> AI 자동응답</label>' +
     '</div>' +
     '<p class="muted">AI 자동응답이 켜져 있으면 멘션 없는 메시지에도 매번 LLM 호출이 발생합니다(비용 발생). provider/model을 고른 뒤 "모델 설정 저장"을 눌러야 반영됩니다.</p>' +
+    // 대화 → 업무 요청 전환(2026-11-23, P1-4) — 대화에서 정한 일을 결재·Gate가 붙는 정식 업무로
+    // 넘길 때 내용을 직접 복사하지 않게 한다. 초안은 저장하지 않고, 다듬어 제출해야 만들어진다.
+    '<details class="conv-to-brief" id="conv-to-brief"><summary>📋 업무 요청으로 전환</summary>' +
+    '<p class="muted">이 대화 내용으로 업무 요청 초안을 만듭니다. 다듬어 제출하면 "업무 요청" 탭에서 할 일로 나누고 배정·결재를 거칩니다.</p>' +
+    '<div class="inline" style="flex-wrap:wrap">' +
+    '<label class="muted"><input type="checkbox" id="conv-brief-use-llm"> AI로 목표·요구사항·완료 기준 정리(비용 발생)</label>' +
+    '<button type="button" class="small" id="conv-brief-draft-btn">초안 만들기</button>' +
+    '</div>' +
+    '<textarea id="conv-brief-text" rows="10" style="width:100%;margin-top:0.4rem" hidden></textarea>' +
+    '<button type="button" class="small primary" id="conv-brief-submit-btn" hidden>업무 요청 제출</button>' +
+    '</details>' +
     // 사용자 요청(2026-10-14, "대화창에 사용중인 모델이 명시되도록 UI를
     // 개선해줘") — 실측으로 확인한 사실: 이 설정은 **멘션 없는 기본 AI
     // 응답에만** 적용된다. `@Agent`로 직접 부르면 그 Agent 자신에게 저장된
@@ -3749,6 +3760,41 @@ async function renderConversationDetail(conversationId, containerId) {
   }
 
   document.getElementById("conv-save-model-btn").addEventListener("click", () => _saveConversationModel(conversationId));
+
+  // 대화 → 업무 요청 전환(2026-11-23, P1-4).
+  const briefDraftBtn = document.getElementById("conv-brief-draft-btn");
+  const briefText = document.getElementById("conv-brief-text");
+  const briefSubmitBtn = document.getElementById("conv-brief-submit-btn");
+  briefDraftBtn.addEventListener("click", async () => {
+    const useLlm = document.getElementById("conv-brief-use-llm").checked;
+    briefDraftBtn.disabled = true;
+    briefDraftBtn.textContent = useLlm ? "AI가 정리하는 중…" : "초안 만드는 중…";
+    try {
+      const draft = await api("POST", "/api/conversations/" + conversationId + "/brief-draft", { use_llm: useLlm });
+      briefText.value = draft.raw_text;
+      briefText.hidden = false;
+      briefSubmitBtn.hidden = false;
+      briefText.focus();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+    finally {
+      briefDraftBtn.disabled = false;
+      briefDraftBtn.textContent = "초안 다시 만들기";
+    }
+  });
+  briefSubmitBtn.addEventListener("click", async () => {
+    if (!briefText.value.trim()) { showMsg("global-msg", "업무 요청 내용을 입력하세요.", "error"); return; }
+    briefSubmitBtn.disabled = true;
+    try {
+      const created = await api("POST", "/api/briefs", { raw_text: briefText.value, source_conversation_id: conversationId });
+      showMsg("global-msg", "업무 요청 #" + created.id + "로 전환했습니다 — 「업무 요청」 탭에서 할 일로 나누고 배정하세요.", "ok");
+      briefText.value = "";
+      briefText.hidden = true;
+      briefSubmitBtn.hidden = true;
+      document.getElementById("conv-to-brief").open = false;
+      await refreshConversationMessages(conversationId, participants, conv);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+    finally { briefSubmitBtn.disabled = false; }
+  });
 
   document.getElementById("conv-auto-reply").addEventListener("change", async (ev) => {
     try {
@@ -11338,7 +11384,7 @@ const MANUAL_MARKDOWN = [
 '',
 '### 6단계 — (선택) 정식 절차로 넘기기',
 '',
-'대화와 업무 요청(Brief)은 서로 독립적인 두 처리 방식입니다 — 결재·Gate 채점이 필요해지면 대화 내용을 복사해 업무 요청 작성란(3절)에 직접 옮겨 적으세요.',
+'결재·Gate 채점이 필요해지면 대화 상단의 "**📋 업무 요청으로 전환**"을 펼칩니다. "**초안 만들기**"를 누르면 이 대화의 사람 메시지를 요청 내용으로, 마지막 AI 답변을 참고 발췌로 묶은 초안이 만들어지고(무료), "AI로 목표·요구사항·완료 기준 정리"를 켜면 대화 기본 모델이 목표·요구사항·산출물·완료 기준·확인 필요 항목으로 정리합니다(비용 발생). 초안을 다듬어 "**업무 요청 제출**"을 누르면 업무 요청(3절 1단계)이 만들어지고, 대화에는 "업무 요청 #N으로 전환했습니다" 메시지가 남습니다 — 이후 할 일로 나누기·배정·결재는 3절 그대로 진행합니다.',
 '',
 '> 실수하기 쉬운 점: Agent/Team을 멘션했는데 반응이 없다면, 그 대상이 아직 **이 대화의 참가자가 아닐 가능성**이 가장 큽니다 — 자동완성 목록에서 골라 초대부터 된 상태인지 확인하세요(9절 "자주 겪는 문제" 참고).',
 '',
