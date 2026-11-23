@@ -240,6 +240,15 @@ INDEX_HTML = """<!DOCTYPE html>
      (flex-shrink:0 유지해도 안전), 자세한 에러 문구는 flex-basis:100%로
      다음 줄에 떨어뜨려 폭 안에서 자연스럽게 줄바꿈되게 한다. */
   .job-progress-list { list-style: none; margin: 0.4rem 0 0.1rem; padding: 0 0 0 1.4rem; }
+  /* 홈(2026-11-23, P2-8) */
+  .home-stats { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+  .home-stat { display: flex; flex-direction: column; align-items: flex-start; min-width: 120px; padding: 0.6rem 0.9rem; text-align: left; }
+  .home-stat b { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+  .home-stat span { font-size: 0.85rem; opacity: 0.8; }
+  .home-ways { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.8rem; }
+  .home-way { border: 1px solid rgba(127,127,127,0.3); border-radius: 6px; padding: 0.7rem 0.9rem; min-width: 0; }
+  .home-way h3 { margin: 0 0 0.3rem; font-size: 1rem; }
+  .home-way p { margin: 0.2rem 0 0.5rem; }
   .job-progress-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.15rem 0; }
   .job-status-badge { font-size: 0.8em; border-radius: 3px; padding: 0.05rem 0.4rem; flex-shrink: 0; white-space: nowrap; }
   .job-status-badge.running { background: #eef2ff; color: #4338ca; }
@@ -2598,6 +2607,10 @@ function empIdInputAttrs(optional) {
    humanpool→poolregistry(18단계) 인접성을 둘 다 맞춘다. */
 const TABS = [
   { id: "conversations", label: "대화", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderConversations },
+  // 홈(2026-11-23, "P2 진행해줘" — P2-8 화면 복잡도·학습 곡선). 탭이 28개라 "무엇부터, 어디서"를
+  // 몰라 이용 가이드를 읽어야 했다. 처리할 일과 "AI에게 일을 맡기는 방법"을 역할에 맞게 한 화면에
+  // 모은다. 로그인 첫 화면은 그대로 대화(첫 탭)다.
+  { id: "home", label: "홈", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderHome },
   { id: "inbox", label: "인박스", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderInbox },
   { id: "mywork", label: "내 업무", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderMyWork },
   { id: "board", label: "할 일 보드", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderBoard },
@@ -4006,6 +4019,49 @@ async function _loadTaskConversation(taskId) {
       await _loadTaskConversation(taskId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   };
+}
+
+/* ---------- 홈(2026-11-23, P2-8) — 처리할 일 + AI에게 일을 맡기는 방법 + (admin) 관리 점검 ---------- */
+async function renderHome(content) {
+  const role = ME.role;
+  const canManage = ["admin", "manager"].includes(role);
+  const [inbox, cfg, notify, usage] = await Promise.all([
+    api("GET", "/api/inbox").catch(() => []),
+    role === "admin" ? api("GET", "/api/admin/config-check").catch(() => null) : Promise.resolve(null),
+    role === "admin" ? api("GET", "/api/integrations/notify").catch(() => null) : Promise.resolve(null),
+    canManage ? api("GET", "/api/llm-usage?days=30").catch(() => null) : Promise.resolve(null),
+  ]);
+  const count = type => inbox.filter(i => i.type === type).length;
+  const todo = [
+    ["approval_pending", "결재 대기", "approvals"],
+    ["execution_failed", "AI 실행 실패", "inbox"],
+    ["low_gate_score", "낮은 Gate 점수", "inbox"],
+    ["completed", "최근 완료", "inbox"],
+  ].map(([type, name, tab]) =>
+    '<button class="home-stat" data-go="' + tab + '"><b>' + count(type) + "</b><span>" + name + "</span></button>"
+  ).join("");
+  const ways = [
+    { title: "빠르게 묻거나 초안 받기", when: "결재 없이 바로 답이 필요할 때 — 질문·요약·초안·코드 리뷰", how: "대화에서 그냥 묻거나 @Agent이름으로 부르기", tab: "conversations", go: "대화 열기", show: true },
+    { title: "정식 업무로 맡기기", when: "결과를 결재받고 이력·Gate 점수를 남겨야 할 때", how: "업무 요청 → 할 일로 나누기 → 사람·Agent·팀 배정 → 결재(대화에서 「업무 요청으로 전환」도 가능)", tab: "briefs", go: "업무 요청 열기", show: role !== "viewer" },
+    { title: "여러 단계를 자동으로", when: "보고서·제안서·사업 기획·소프트웨어 개발처럼 조사→작성→검증이 필요한 일", how: "업무 요청 뒤 할 일의 협업 워크스페이스에서 기본 제공 파이프라인 실행 — 계획 단계에서 한 번만 승인", tab: "mywork", go: "내 업무 열기", show: role !== "viewer" },
+    { title: "반복 업무 자동화", when: "매주 실적 보고처럼 정해진 때마다 도는 일, 외부 시스템에서 호출", how: "연동 설정 — 정기 실행(admin/manager)·API 키·외부 알림(admin)", tab: "integrations", go: "연동 설정 열기", show: role !== "viewer" },
+  ].filter(w => w.show).map(w =>
+    '<div class="home-way"><h3>' + esc(w.title) + '</h3><p class="muted">' + esc(w.when) + "</p><p>" + esc(w.how) + "</p>" +
+    '<button class="small" data-go="' + w.tab + '">' + esc(w.go) + "</button></div>"
+  ).join("");
+  const checks = [];
+  if (cfg && cfg.length) checks.push('기본 구성과 다른 곳 ' + cfg.length + '건 — <button class="small" data-go="admin">사용자 관리에서 점검</button>');
+  if (notify && !notify.webhook_url) checks.push('외부 알림 웹훅이 설정되지 않았습니다 — 결재 대기를 메신저로 받으려면 <button class="small" data-go="integrations">연동 설정</button>');
+  if (usage && usage.unpriced_models) checks.push("단가가 없는 모델 " + usage.unpriced_models + '개 — 실제 비용을 보려면 <button class="small" data-go="modelregistry">모델 레지스트리</button>에서 단가 입력');
+  content.innerHTML =
+    "<h2>홈</h2>" +
+    '<section class="card"><h3>처리할 일</h3><div class="home-stats">' + todo + "</div></section>" +
+    '<section class="card"><h3>AI에게 일을 맡기는 방법</h3><div class="home-ways">' + ways + "</div>" +
+    '<p class="muted">자세한 절차는 <button class="small" data-go="manual">이용 가이드</button>에 있습니다.</p></section>' +
+    (role === "admin" ? '<section class="card"><h3>관리 점검</h3>' +
+      (checks.length ? "<ul>" + checks.map(c => "<li>" + c + "</li>").join("") + "</ul>" : '<p class="muted">확인할 항목이 없습니다.</p>') +
+      "</section>" : "");
+  content.querySelectorAll("[data-go]").forEach(btn => btn.addEventListener("click", () => selectTab(btn.dataset.go)));
 }
 
 /* ---------- 통합 인박스(Phase 5, 사용자 요청 2026-09-28) ---------- */
@@ -11803,7 +11859,7 @@ const MANUAL_MARKDOWN = [
 '',
 '<h2 id="menu">8. 메뉴 전체 지도</h2>',
 '',
-'**오늘 할 일(user)**: 대화 · 인박스(결재 대기+실행 실패+낮은 Gate 경고 모음) · 내 업무 · 할 일 보드 · 갤러리(여러 할 일의 결과물 모아보기) · 업무 요청 · 결재 · 성과 리뷰 · 연동 설정(viewer 제외 — 내 API 키, 정기 실행은 admin/manager, 외부 알림은 admin)',
+'**오늘 할 일(user)**: 대화 · 홈(처리할 일 요약 + AI에게 일을 맡기는 방법 4가지 + admin 관리 점검 — 어디서 시작할지 모르겠으면 여기부터) · 인박스(결재 대기+실행 실패+낮은 Gate 경고 모음) · 내 업무 · 할 일 보드 · 갤러리(여러 할 일의 결과물 모아보기) · 업무 요청 · 결재 · 성과 리뷰 · 연동 설정(viewer 제외 — 내 API 키, 정기 실행은 admin/manager, 외부 알림은 admin)',
 '',
 '**조회(common, 전원 접근)**: 인력 검색 · 조직도 · 이용 가이드(이 화면)',
 '',
