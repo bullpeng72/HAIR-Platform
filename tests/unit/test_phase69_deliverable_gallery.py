@@ -617,6 +617,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         return {
             "final_output": "최종산출물",

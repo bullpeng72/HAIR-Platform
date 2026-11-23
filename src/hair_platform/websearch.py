@@ -263,7 +263,11 @@ def _tavily_search_raw(
         "api_key": api_key,
         "query": query,
         "max_results": top_k,
-        "include_answer": True,
+        # 자동 요약 끔(2026-11-22, "스킬, 툴, 에이전트 각각의 실행 품질을 점검해줘" 실측) —
+        # Tavily가 만든 영문 요약이 원문 "9,750억 달러"를 "$9.75 trillion"으로 10배 부풀린 채
+        # 검색 결과 맨 앞("요약: ...")에 붙어 있었다. 출처 없는 2차 생성 텍스트라 모델이
+        # 원문보다 먼저 읽고 인용할 위험이 있어, 원문 결과만 넘긴다.
+        "include_answer": False,
         "topic": topic,
     }
     if days is not None:
@@ -314,9 +318,6 @@ def tavily_context_for_prompt(query: str, top_k: int = 3) -> str:
         for r in results[:top_k]
     ]
     text = "실시간 웹 검색 결과(Tavily):\n" + "\n".join(lines)
-    answer = data.get("answer")
-    if answer:
-        text = f"요약: {answer}\n\n{text}"
     return text
 
 
@@ -363,9 +364,6 @@ def tavily_news_context_for_prompt(query: str, top_k: int = 5, days: int = 7) ->
         for r in results[:top_k]
     ]
     text = f"최근 {days}일 뉴스 검색 결과(Tavily):\n" + "\n".join(lines)
-    answer = data.get("answer")
-    if answer:
-        text = f"요약: {answer}\n\n{text}"
     return text
 
 

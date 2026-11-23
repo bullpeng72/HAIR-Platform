@@ -33,7 +33,7 @@ Agent라고 다른 대우를 받지 않는다.
   있다.
 
 **지금 상태**: 위 기능 전부 실제로 동작하는 코드로 구현돼 있고(스텁이나
-목업이 아니다), 테스트 932건이 통과하는 상태로 유지된다. 개념·아키텍처
+목업이 아니다), 테스트 1,300건 이상이 통과하는 상태로 유지된다. 개념·아키텍처
 전체 설명은 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은
 `git log`(커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를
 참고.
@@ -65,7 +65,7 @@ Agent라고 다른 대우를 받지 않는다.
 - 대화에서 쓸 스킬을 직접 고를 수 있는데, **"개발업무" 스킬은
   일반 사용자에게 불필요하므로 기본적으로 목록에서 숨겨진다** —
   "개발업무 스킬도 보기"를 켜야 보이고, 평소엔 일반 업무용 스킬
-  (51개 중 다수)·도구(12개)만 노출된다. (Agent/Task에 미리 등록해둔
+  (68개 중 다수)·도구(15개)만 노출된다. (Agent/Task에 미리 등록해둔
   스킬 태그나 CrewAI 실행 자체는 이 필터와 무관하게 전부 동작한다.)
 - 특정 업무(Task)에 종속된 대화는 그 업무로 자동 흡수된다. 독립
   대화는 결재·Gate 채점이 필요해지면 내용을 복사해 업무 요청(Brief)
@@ -158,28 +158,30 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,all]"
 # `[dev]`만 설치하면 `tests/unit`의 CrewAI 연동 테스트 일부가 테스트
 # 실행 시점에 `ModuleNotFoundError`로 깨진다. `all`(= crewai+mcp+llm+
-# documents 묶음, pyproject.toml 참고)까지 같이 설치해야 아래 골든셋이
+# documents+graph 묶음, pyproject.toml 참고)까지 같이 설치해야 아래 골든셋이
 # 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 932건 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 1,300건 이상 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 ### 설치 옵션(extras) 한눈에 보기
 
-아직 PyPI에 배포되지 않아 지금은 GitHub 클론 후 `pip install -e ".[...]"`
-형태로만 설치할 수 있다(PyPI 배포 후에는 `pip install "hair-platform[...]"`
-로 동일하게 쓸 수 있다). 필요한 조합만 골라 쉼표로 묶어 한 번에 설치
-가능(예: `pip install -e ".[llm,documents]"`) — 아래 "빠른 시작"
-각 절이 extra별 상세 설정(환경변수·API 키 등)을 안내한다.
+PyPI에 `hair-platform`으로 배포된다 — `pip install "hair-platform[...]"`로
+설치하고, 소스에서 개발할 때는 GitHub 클론 후 `pip install -e ".[...]"`로
+같은 extra를 쓴다(PyPI의 최신 배포 버전이 이 저장소 버전보다 늦을 수 있다 —
+`pip index versions hair-platform`으로 확인). 필요한 조합만 골라 쉼표로 묶어
+한 번에 설치 가능(예: `pip install "hair-platform[crewai,documents]"`) —
+아래 "빠른 시작" 각 절이 extra별 상세 설정(환경변수·API 키 등)을 안내한다.
 
 | extra | 설치 명령 | 필요할 때 | 추가 설치되는 패키지 |
 |-------|-----------|-----------|----------------------|
-| *(기본)* | `pip install -e .` | 무료 스텁으로만 쓸 때 — LLM/CrewAI/MCP/문서 업로드 전부 불필요 | pydantic·fastapi·uvicorn 등 핵심 의존성만 |
+| *(기본)* | `pip install -e .` | 웹 UI·API 전체 + Ollama(로컬, API 키 불필요) 단발 실행·대화 — CrewAI 협업(팀·Crew 빌더·파이프라인)·클라우드 LLM·문서 업로드는 해당 extra 필요. Agent 생성 기본 방식은 crewai가 없으면 simple_llm으로 대신한다 | pydantic·fastapi·uvicorn·httpx·tiktoken 등 핵심 의존성만 |
 | `llm` | `pip install -e ".[llm]"` | 실제 Anthropic/OpenAI API로 Agent를 실행할 때(Ollama는 API 키 없이 기본 의존성만으로 동작) | anthropic, openai |
 | `crewai` | `pip install -e ".[crewai]"` | 여러 Agent를 실제 CrewAI Crew로 협업시킬 때("Crew 빌더"/파이프라인) | crewai, litellm |
 | `mcp` | `pip install -e ".[mcp]"` | Agent에 외부 MCP 도구 서버를 연결할 때 | crewai-tools[mcp], mcp(`<2.0` 고정 — 아래 참고) |
 | `documents` | `pip install -e ".[documents]"` | 대화창/지식 베이스에서 `.pdf`/`.html`/`.xlsx`/`.docx`/`.pptx` 파일을 업로드할 때(`.md`/`.txt`/`.csv`는 추가 설치 불필요) | pypdf, beautifulsoup4, openpyxl, python-docx, python-pptx |
+| `graph` | `pip install -e ".[graph]"` | LangGraph 실행엔진(팀 관리에서 "그래프 엔진"을 켤 때 — 체크포인트·사람 승인 중단/재개). 없이 켜면 설치 안내가 뜬다 | langgraph, langgraph-checkpoint-sqlite |
 | `dev` | `pip install -e ".[dev]"` | 테스트/린트/포맷터를 돌릴 때 | pytest, black, ruff |
-| `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents` 전부) | 위 extras 전부 |
+| `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents`+`graph` 전부) | 위 extras 전부(dev 제외) |
 
 > `mcp`는 `mcp>=1.10.1,<2.0`으로 상한을 고정해둔다 — `crewai-tools`가
 > 쓰는 `mcpadapt==0.1.19`가 `mcp 2.x`의 API 이름 변경을 아직 못
@@ -202,9 +204,10 @@ hair --help
 hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.db
 ```
 
-운영 중 쌓인 데이터만 초기화하고(사용자·업무·대화·실행 이력·모델
-레지스트리·팀·활동 기록 등) Agent(26종)/Tool·Skill Pool/파이프라인
-템플릿은 그대로 둘 때(예: 배포 전 깨끗한 상태로 준비):
+운영 중 쌓인 데이터만 초기화하고(사용자·업무·대화·실행 이력·LLM 사용량
+기록·모델 레지스트리·팀·활동 기록 등) Agent(29종)/Tool·Skill Pool/파이프라인
+템플릿은 그대로 둘 때(예: 배포 전 깨끗한 상태로 준비). 팀 관리 화면에서
+"초기화 시 보호"를 켠 팀과 조직 정책(사번 형식·결과물 언어)은 남는다:
 
 ```bash
 hair reset-data                              # 확인 프롬프트 뜸(되돌릴 수 없음)
@@ -400,7 +403,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(176개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(200개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   match_llm_judge.py # 매칭 결과 LLM judge 폴백(역할명 부분일치로도 못 찾을 때)
@@ -415,9 +418,9 @@ src/hair_platform/
   fairness.py        # 배정 공정성 지표
   retention.py       # 데이터 보관기간 정책(assignment_history 1년)
   eval_wiring.py      # Gate A/B/D/E/G 평가 배선 수동 실행 probe(agent-evaluator SDK, python -m으로 직접 실행)
-  agent_evaluation.py # Gate A-G 평가를 Agent 실행 경로에 상시 연결(agent_evaluations 테이블) + 구문검사
+  agent_evaluation.py # Gate A-G 평가를 Agent 실행 경로에 상시 연결(agent_evaluations 테이블) + 구문검사 + 실행 가능성 Gate(주 산출물이 그대로 실행되는 완성본인지)
   content_validators.py # content_type별(html 등) pluggable 구문 검증기 디스패치
-  requirements_traceability_llm.py # "코드 검증" 단계 요구사항 추적성 LLM judge 채점(정보성 지표)
+  requirements_traceability_llm.py # 요구사항 추적성 LLM judge 채점(요구사항 정의 단계 산출물 대비 — 단계 Gate 목록에 넣으면 통과 판정에 참여)
   brief_decompose_llm.py # 업무 분해 LLM 제안(역할·필요 스킬·선행 업무 의존관계)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
   cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/reset-data/eval
@@ -433,20 +436,36 @@ src/hair_platform/
   websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(Crew 전용). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)
   documents.py       # 외부 자료(.md/.txt/.csv/.html/.pdf/.xlsx/.docx/.pptx) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
   pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화 + 개발업무/일반업무 category 분류, CrewAI Tool 조립
-  data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호) + 운영 데이터 공장 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 초기화, `hair reset-data`)
+  data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호) + 운영 데이터 공장 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 "초기화 시 보호" 팀만 유지, `hair reset-data`)
   deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)
   inbox.py           # 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고)
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이) + Task 재시도 합산
   conversations.py   # 대화 중심 작업공간 — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩
-  pipeline_runtime.py # 단계형 업무 파이프라인 엔진(단독/순차 릴레이/병행 위임 단계, Gate A-G 기준 자동 재시도·에스컬레이션, Task 재시도 예산)
-  reference_pipeline_seeds.py # 레퍼런스 Agent 26종 + Skill/Tool Pool + 파이프라인 템플릿 4종(소프트웨어 개발/사업·기획/제안서 작성/실적 보고) 기본 시드
+  pipeline_runtime.py # 단계형 업무 파이프라인 엔진(단독/순차 릴레이/병행 위임 단계, 단계별 Gate 목록 기준 자동 재시도·에스컬레이션, 검토 실패 시 작성 단계로 되돌림, Task 재시도 예산)
+  reference_pipeline_seeds.py # 레퍼런스 Agent 29종 + Skill/Tool Pool + 파이프라인 템플릿 4종(소프트웨어 개발/사업·기획/제안서 작성/실적 보고) 기본 시드
   agent_optimizer.py # Agent별 LLM provider/model/tuning_config 최적화 추천(규칙 기반 + 선택적 LLM 보정, admin)
   id_scheme.py       # Agent/Tool/Skill 표시용 코드 체계(`AGT-REF-001` 등, 종류 구분용) — 정수 PK는 그대로, `code`만 별도 배정
+  execution_graph.py # LangGraph 기반 에이전틱 실행엔진(팀별 선택) — 체크포인트·사람 승인 중단·재개
+  skill_catalog.py   # 기본 스킬 가이드(정본) + 신규 스킬 시드 + 한 번만 적용하는 Agent-스킬 연결
+  skill_markdown.py  # 스킬 구조화 필드 ↔ 마크다운 import/export
+  skill_prompting.py # 스킬 그라운딩 프롬프트 조립(관련 스킬 상세·활용 원칙·품질 기준·도구 안내·결과물 언어)
+  pool_catalog.py    # "스킬·도구 목록 조회" 내장 도구 + 업무 요청 → 기존 Agent 역할 제안(LLM 없음)
+  presentation_deck.py # 발표자료 덱 디자인 시스템(CSS·차트 런타임 주입, 슬라이드 클래스 정규화·린트)
+  context_policy.py  # 대화 컨텍스트 정책(스킬별 기본값·Agent별 덮어쓰기)
+  conversation_memory.py # 대화 첨부·장기 기억 색인(표 데이터 집계 포함)
+  token_budget.py    # 모델 컨텍스트 한도에 맞춘 프롬프트 예산·자르기
+  tool_calling.py    # provider 공통 Tool 호출 루프 보조
+  knowledge_submissions.py # 지식 등록 제출·결재(admin 승인 후 VectorDB 색인)
+  language_qa.py     # 한국어 결과물 언어 품질 검사·자동 교정(조직 결과물 언어가 한국어일 때만)
+  model_output.py    # 모델 출력 정리·감지(추론·도구 호출 흔적, 영어 메모, 작업 과정·혼잣말, 반복 루프, 잘린 마크업)
+  model_options.py   # 모델별 생성 옵션·출력 한도·Ollama num_ctx(레지스트리 값, 특정 모델 하드코딩 없음)
+  llm_usage.py       # 실제 LLM 토큰 사용량 기록(직접 호출·CrewAI 공통) + 모델별 단가로 금액 집계
+  org_policy.py      # 조직 정책(사번 형식·결과물 언어)
 docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # RBAC 권한 설정을 테스트로 감사하는 Claude Code 스킬
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 932건 통과
+tests/unit/                            # 골든셋 1,300건 이상 통과
 ```
 
 ## 로드맵
@@ -463,6 +482,7 @@ tests/unit/                            # 골든셋 932건 통과
 
 | 버전 | 날짜 | 핵심 변경 |
 |------|------|-----------|
+| v0.2.0 | 2026-11-23 | LangGraph 기반 에이전틱 실행엔진(선택) · 지식 등록 결재·대화 컨텍스트 정책 · 스킬 구조화(import/export)·품질 기준·발표자료 덱/차트 · **4개 파이프라인 실측 점검 후 품질 개선**(산출물의 추론·메모·반복·잘림 감지·정리, 검증 Gate를 내용 신호(A+요구사항 추적성)로, 구현 단계 단일 작성+실행 가능성 Gate, 검토 실패 시 작성 단계로 되돌림, 요구사항 정의 단계 지정) · CrewAI 도구 호출 전면 실패(litellm↔mcp 버전 불일치) 수정 · Ollama 출력 한도·`num_ctx`(레지스트리 컨텍스트 창) 적용 · 하드코딩·스텁 정리(세션 키 자동 생성, Agent 생성 기본 crewai, 풀 기반 역할 제안·스킬 기반 매칭, 실제 토큰 사용량·모델별 단가, 자동 적합도, 조직 결과물 언어) · 웹 UI 상단 버전 표기(`hair --version`과 동일) · 이용 가이드·화면 도움말·`hair --help` 현행화 · pip 기본 설치에서 CrewAI/LangGraph 미설치 시 설치 안내(500 오류·고아 실행 방지) |
 | v0.1.6 | 2026-11-12 | 모델 레지스트리 성능 테스트(실측 속도 기반 tier 추천) 추가 · LLM 호출 타임아웃 기준 통일(Ollama가 클라우드보다 항상 길게, 대화·업무 공통) · 대화 HTML 첨부 미리보기 깨짐·즉시 전송 버그 수정 · 샘플 체험 기능 제거 |
 | v0.1.5 | 2026-11-12 | `hair serve` 로그 노이즈 제거 · 업무 진행상황 가시성 개선(실행 중 표시·완료 알림·보드 배지) · 피드백/확인 UX 통일 |
 | v0.1.4 | 2026-11-12 | PyPI 첫 배포 준비(라이선스 SPDX 전환, LICENSE/프로젝트 URL 추가) + 실제 배포 · pending_onboarding 팀이 활성화 토글로 온보딩 절차를 우회할 수 있던 버그 수정 |

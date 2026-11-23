@@ -71,7 +71,7 @@ def test_gc125_init_schema_seeds_agent_eval_procedural_skills():
     skill_names = {s["name"] for s in skills}
     assert _EXPECTED_AGENT_EVAL_SKILL_NAMES <= skill_names
     assert (
-        len(skills) == 5 + len(_EXPECTED_AGENT_EVAL_SKILL_NAMES) + 39
+        len(skills) == 5 + len(_EXPECTED_AGENT_EVAL_SKILL_NAMES) + 45
     )  # (+1: 2026-11-20 "프레젠테이션작성" 스킬 추가, +6: 2026-11-21 우선순위 1 스킬) rag/graphdb 2(원래 vectordb/rag/graphdb/관계질의 4였으나 2026-10-06
     # 자동완성 중복 통합으로 2로 줄어듦) + 일반웹검색 1 + 실시간웹검색 1
     # (Tavily, 2026-10-26 "대화에서 외부 검색이 가능한 방법을 제안해줘"로

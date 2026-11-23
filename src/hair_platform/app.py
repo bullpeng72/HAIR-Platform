@@ -65,10 +65,13 @@ from hair_platform import (
     inbox,
     jobs,
     knowledge_submissions,
+    language_qa,
     llm,
+    llm_usage,
     match_llm_judge,
     model_benchmark,
     model_registry,
+    org_policy,
     performance,
     pipeline_runtime,
     pool,
@@ -130,7 +133,10 @@ from hair_platform.models import (
     ModelContextWindowUpdate,
     ModelOptimizationTiersUpdate,
     ModelRegistryCreate,
+    ModelPricingUpdate,
     ModelSamplingOptionsUpdate,
+    OrgPolicyUpdate,
+    OutputLanguageUpdate,
     PerformanceScoreRequest,
     PipelineExecuteRequest,
     PipelineStageCreate,
@@ -158,6 +164,7 @@ from hair_platform.models import (
     TeamLeaderUpdate,
     TeamMemberAdd,
     TeamMemberReorder,
+    TeamResetProtectionUpdate,
     ToolActiveUpdate,
     ToolPoolCreate,
     ToolPoolUpdate,
@@ -195,16 +202,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # 코드 재점검(2026-09-26)에서 발견: "배포 시 환경변수로 교체한다"는 주석만 있고
     # 실제로 환경변수를 읽는 코드가 없어 항상 소스에 공개된 고정 키를 쓰던 오류를
     # 수정 — HAIR_PLATFORM_SECRET_KEY가 없으면 개발용 기본값으로 폴백한다.
-    secret_key = os.environ.get(
-        "HAIR_PLATFORM_SECRET_KEY", "dev-secret-change-in-production"
-    )
+    #
+    # 하드코딩·스텁 점검(2026-11-22) 1순위 — 환경변수가 없을 때 소스에 공개된 고정 문자열
+    # ("dev-secret-change-in-production")로 폴백해, 소스를 본 누구나 세션 쿠키·Bearer 토큰을
+    # 위조할 수 있었다. 이제 첫 기동 때 무작위 키를 만들어 DB에 저장하고 재사용한다(재시작해도
+    # 로그인이 유지된다). 운영에서는 여전히 환경변수로 지정하는 것을 권장한다.
+    conn = db.get_connection(db_path)
+    db.init_schema(conn)
+    secret_key = os.environ.get("HAIR_PLATFORM_SECRET_KEY") or db.session_secret(conn)
     app.add_middleware(SessionMiddleware, secret_key=secret_key)
     # get_current_user가 Bearer 토큰(탭별 다계정 로그인, auth.py 참고)을
     # 복호화할 때 같은 키를 쓴다 — 쿠키 서명과 토큰 서명이 어긋나면 안 된다.
     app.state.secret_key = secret_key
 
-    conn = db.get_connection(db_path)
-    db.init_schema(conn)
     # 실측으로 발견(2026-09-28, 리뷰) — 이전 프로세스가 실행 도중
     # 죽으면 agent_execution_jobs가 영원히 'running'으로 남아 해당
     # task의 실행 버튼이 복구 불가능하게 막힌다. 단일 프로세스 전제이므로
@@ -226,6 +236,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # (retention.py 참고, 지울 게 없으면 DB에 손도 대지 않는다).
     retention.purge_expired(conn)
     app.state.db = conn
+    # 실제 LLM 사용량 기록(2026-11-22) — 직접 호출(`llm.py`)과 CrewAI(litellm) 경로 모두.
+    llm_usage.configure(conn)
+    llm_usage.install_litellm_callback()
 
     @app.post("/login")
     def login(payload: LoginRequest, request: Request):
@@ -468,7 +481,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=422, detail="업무 요청 내용을 입력하세요"
             )
-        stub_roles = parse_brief_stub(payload.raw_text)
+        # 역할 후보(2026-11-22, 하드코딩·스텁 점검 2순위) — 요청 본문과 맞는 기존 Agent 역할을
+        # 먼저 제안하고(LLM 없음·무료), 맞는 역할이 없을 때만 예전처럼 줄 단위로 나눈다.
+        from hair_platform import pool_catalog
+
+        lines = parse_brief_stub(payload.raw_text)
+        # 짧은 줄 여러 개("백엔드 개발자 1명\n디자이너 1명")는 사용자가 역할을 직접 나열한 것 — 그대로 쓴다.
+        explicit_role_list = len(lines) >= 2 and all(len(line) <= 20 for line in lines)
+        stub_roles = lines if explicit_role_list else (
+            pool_catalog.suggest_roles(conn, payload.raw_text) or lines
+        )
         cur = conn.execute(
             "INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, ?, ?)",
             (user["id"], payload.raw_text, json.dumps(stub_roles, ensure_ascii=False)),
@@ -3006,6 +3028,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 status_code=403,
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
             )
+        if payload.use_graph_engine:
+            from hair_platform import GRAPH_ENGINE_INSTALL_HINT, graph_engine_available
+
+            # 실행 행을 만들기 전에 확인한다(2026-11-23) — 만든 뒤에 import가 실패하면 'running'
+            # 상태로 고아가 됐다.
+            if not graph_engine_available():
+                raise HTTPException(status_code=400, detail=GRAPH_ENGINE_INSTALL_HINT)
         try:
             run_id = pipeline_runtime.start_pipeline_run(
                 conn, user["id"], payload.pipeline_template_id, task_id
@@ -3149,8 +3178,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         `framework="crewai"`면 실제 CrewAI Agent+Task+Crew를
         구성해 kickoff한다. `use_llm=True`+`framework` 미지정(또는
         `"simple_llm"`)이면 기존 1회성 LLM 호출이다. 둘 다 명시적으로
-        요청했을 때만 실제 API를 호출한다(사용자 요청, 2026-09-26) —
-        기본값은 여전히 무료 규칙기반 스텁이다.
+        요청했을 때만 실제 API를 호출했다(2026-09-26). 2026-11-22부터 framework를
+        지정하지 않으면 crewai — 무료 스텁은 `framework="stub"` 명시.
         """
         brief = conn.execute(
             "SELECT * FROM briefs WHERE id = ?", (brief_id,)
@@ -3158,13 +3187,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if brief is None:
             raise HTTPException(status_code=404, detail="브리프를 찾을 수 없습니다")
         generator = None
-        if payload.framework == "crewai":
+        # 지정이 없으면 crewai — 단, crewai가 설치되지 않은 기본 설치본이면 simple_llm(2026-11-23
+        # pip 설치 점검: 기본 설치에서 아무 옵션 없이 생성하면 "No module named 'crewai'"로 실패했다).
+        from hair_platform import crewai_available
+
+        framework = payload.framework or (
+            "simple_llm" if payload.use_llm or not crewai_available() else "crewai"
+        )
+        if framework == "crewai":
             generator = partial(
                 crew_runtime.crewai_agent_generator,
                 provider=payload.provider,
                 model=payload.model,
             )
-        elif payload.use_llm:
+        elif framework == "simple_llm" or (framework != "stub" and payload.use_llm):
             generator = partial(
                 jobs.llm_agent_generator, provider=payload.provider, model=payload.model
             )
@@ -3333,6 +3369,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=409, detail="온보딩(active)된 Agent만 실행할 수 있습니다"
             ) from exc
+        # 언어 품질 검사(2026-11-22 점검 — 대화·산출물 경로와 달리 이 직접 실행 API만
+        # 빠져 있었다, `language_qa.py`).
+        output = language_qa.repair_output(
+            conn,
+            output,
+            retrieval_sink.get("llm_provider"),
+            retrieval_sink.get("llm_model"),
+            user["id"],
+            "agent_execute_api",
+        )
         return {
             "id": agent_id,
             "output": output,
@@ -3977,6 +4023,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": model_id, "sampling_options": saved}
 
+    @app.patch("/api/model-registry/{model_id}/pricing")
+    def set_model_registry_pricing(
+        model_id: int,
+        payload: ModelPricingUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """모델별 단가(100만 토큰당 입력/출력, 2026-11-22) — 실제 사용량 금액 계산용."""
+        try:
+            saved = model_registry.set_pricing(
+                conn, user["id"], model_id, payload.price_input_per_1m, payload.price_output_per_1m
+            )
+        except ValueError as exc:
+            if str(exc) == "model_not_found":
+                raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다") from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"id": model_id, **saved}
+
+    @app.get("/api/llm-usage")
+    def get_llm_usage(
+        days: int = 30,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """provider·모델별 실제 토큰 사용량과(단가가 입력된 모델만) 금액(2026-11-22)."""
+        return llm_usage.report(conn, days if days > 0 else None)
+
     @app.post("/api/model-registry/{model_id}/benchmark", status_code=201)
     def run_model_registry_benchmark(
         model_id: int,
@@ -4225,6 +4296,53 @@ def create_app(db_path: str | None = None) -> FastAPI:
             ) from exc
         return {"id": team_id, "is_active": payload.is_active}
 
+    @app.patch("/api/teams/{team_id}/reset-protection")
+    def set_team_reset_protection_endpoint(
+        team_id: int,
+        payload: TeamResetProtectionUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """팀별 "공장 초기화 시 보호"(2026-11-21) — 초기화는 admin 전용 작업이라 켜고 끄는
+        것도 admin만 한다."""
+        try:
+            teams.set_team_reset_protection(conn, user["id"], team_id, payload.protect_on_reset)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="팀을 찾을 수 없습니다") from exc
+        return {"id": team_id, "protect_on_reset": payload.protect_on_reset}
+
+    @app.get("/api/org-policy")
+    def get_org_policy_endpoint(user: sqlite3.Row = Depends(get_current_user)):
+        """조직 정책(2026-11-21) — 사번 입력란이 형식 안내를 보여 주도록 로그인 사용자 누구나
+        읽을 수 있다(값 자체는 비밀이 아니다). 변경은 admin만."""
+        return {
+            "employee_id": org_policy.employee_id_policy(),
+            "output_language": org_policy.output_language_policy(),
+        }
+
+    @app.put("/api/org-policy")
+    def set_org_policy_endpoint(
+        payload: OrgPolicyUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        try:
+            result = org_policy.set_employee_id_policy(
+                conn, user["id"], payload.employee_id_pattern, payload.employee_id_hint
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"employee_id": result}
+
+    @app.put("/api/org-policy/output-language")
+    def set_output_language_endpoint(
+        payload: OutputLanguageUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """조직 결과물 언어(2026-11-22) — 에이전트 지시에 반영, 한국어가 아니면 언어 교정을 끈다."""
+        try:
+            return org_policy.set_output_language(conn, user["id"], payload.code)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.patch("/api/teams/{team_id}")
     def update_team_defaults_endpoint(
         team_id: int,
@@ -4286,6 +4404,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 payload.role_label,
             )
         except ValueError as exc:
+            if str(exc) == "manager_role_label_blocked_for_new_teams":
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        '역할 라벨에 "매니저"가 들어간 Agent는 위임형(hierarchical) 매니저로 '
+                        "인식되는데, 위임형은 신뢰성 문제로 새 팀에 지정할 수 없습니다 — "
+                        '"리드"·"PM"처럼 다른 라벨을 쓰세요(이미 위임형으로 쓰던 팀은 그대로 가능).'
+                    ),
+                ) from exc
             detail = (
                 "팀을 찾을 수 없습니다"
                 if str(exc) == "team_not_found"
@@ -4426,6 +4553,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 requires_human_approval=payload.requires_human_approval,
                 is_primary_deliverable=payload.is_primary_deliverable,
                 checks_requirements_traceability=payload.checks_requirements_traceability,
+                is_requirements_source=payload.is_requirements_source,
+                on_fail_return_stage_id=payload.on_fail_return_stage_id,
                 output_content_type=payload.output_content_type,
                 expected_output=payload.expected_output,
             )

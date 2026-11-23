@@ -121,7 +121,7 @@ def test_gc65_generate_without_use_llm_still_uses_free_stub(client_and_conn):
 
     with patch("hair_platform.llm.call_llm") as m:
         resp = client.post(
-            f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]}
+            f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]}
         )
     m.assert_not_called()  # 기본값은 여전히 비용 없는 스텁이어야 한다.
     assert resp.status_code == 201

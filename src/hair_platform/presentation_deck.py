@@ -54,7 +54,7 @@ html,body{margin:0;padding:0;background:#e8e8ec}
 .hair-deck *{box-sizing:border-box}
 .hair-deck .slide{position:relative;width:min(1280px,calc(100vw - 32px));aspect-ratio:16/9;
  margin:0 auto 24px;container-type:size;overflow:hidden;display:flex;flex-direction:column;
- justify-content:center;padding:4.8% 6.25%;background:var(--surface);color:var(--ink);
+ justify-content:safe center;padding:4.8% 6.25%;background:var(--surface);color:var(--ink);
  border:1px solid var(--rule);--px:min(calc(100cqw / 1120),calc(100cqh / 597))}
 /* 컨테이너 단위는 패딩을 뺀 내용 영역 기준이다 — 1280×720에서 내용 영역은
    1120×597(패딩 6.25%·4.8%, 둘 다 너비 기준)이므로 그 값으로 나눠야 1:1이 된다.
@@ -128,6 +128,13 @@ html,body{margin:0;padding:0;background:#e8e8ec}
 .hair-deck td{border-bottom:1px solid var(--rule);padding:calc(var(--px)*10) calc(var(--px)*12) calc(var(--px)*10) 0;vertical-align:top}
 .hair-deck table.num td:not(:first-child),.hair-deck table.num th:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}
 .hair-deck tr.hl td{background:var(--accent-soft);color:var(--ink)}
+/* 긴 표(2026-11-21 실측: 제안서 덱 요구사항 표 13행이 슬라이드를 넘쳐 제목·마지막 행이 잘림) —
+   행이 많을수록 행 간격·글자를 줄인다. 넘치면 위에서부터 보이도록 .slide는 safe center. */
+.hair-deck .slide:has(tr:nth-child(8)) td,.hair-deck .slide:has(tr:nth-child(8)) th{
+ padding-top:calc(var(--px)*5);padding-bottom:calc(var(--px)*5);font-size:calc(var(--px)*16)}
+.hair-deck .slide:has(tr:nth-child(12)) td,.hair-deck .slide:has(tr:nth-child(12)) th{
+ padding-top:calc(var(--px)*3);padding-bottom:calc(var(--px)*3);font-size:calc(var(--px)*13.5)}
+.hair-deck .slide:has(tr:nth-child(12))>*+*{margin-top:calc(var(--px)*12)}
 /* 절차 · 타임라인 */
 .hair-deck .steps{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:calc(var(--px)*20)}
 .hair-deck .step{border-top:calc(var(--px)*3) solid var(--accent);padding-top:calc(var(--px)*16)}

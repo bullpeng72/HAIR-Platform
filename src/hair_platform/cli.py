@@ -27,6 +27,7 @@ import sys
 
 from dotenv import load_dotenv
 
+
 # 사용자 보고(2026-11-12, "아무 동작없이도 메시지가 출력되는 원인을
 # 분석하고, 오류 등 꼭 필요한 메시지만 노출되도록 개선해줘") — 처음엔
 # `webui.py`의 멘션 알림 폴링(`startMentionNotificationPolling()`)과
@@ -68,7 +69,7 @@ _EPILOG_TOP = """\
   hair serve --port 9000 --reload         개발 중 코드 변경 자동 반영
   hair serve --no-browser                 브라우저 자동 열기 끄기(서버만 실행)
   hair bootstrap-admin -u admin -p ***    최초 관리자 계정 생성(최초 1회만)
-  hair reset-data                         운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 초기화)
+  hair reset-data                         운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 '초기화 시 보호' 팀만 유지)
   hair eval                               Gate A/B/D/E/G 측정 1회 실행
 
 서브커맨드별 자세한 옵션: hair <subcommand> --help
@@ -85,7 +86,7 @@ HAIR-Platform 통합 CLI — 사람과 AI Agent를 하나의 조직도에서 관
 명령어:
   serve             Web UI + API 서버 실행
   bootstrap-admin   최초 ADMIN 계정 생성(콜드스타트 전용)
-  reset-data        운영 데이터 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 초기화)
+  reset-data        운영 데이터 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 '초기화 시 보호' 팀만 유지)
   eval              Gate A/B/D/E/G 측정 1회 실행
 
 자세한 도움말:       hair --help
@@ -95,12 +96,9 @@ HAIR-Platform 통합 CLI — 사람과 AI Agent를 하나의 조직도에서 관
 
 
 def _get_version() -> str:
-    from importlib.metadata import PackageNotFoundError, version
+    from hair_platform import get_version
 
-    try:
-        return version("hair-platform")
-    except PackageNotFoundError:
-        return "0.0.0"
+    return get_version()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -135,9 +133,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "'import secrets; print(secrets.token_hex(32))')\"\n"
             "  hair serve --host 0.0.0.0 --no-browser   다른 PC에서 "
             "http://<이 PC의 사내망 IP>:8000/\n"
-            "  (키를 안 주면 기동 시 경고가 뜬다 — 소스에 공개된 고정 "
-            "키로 세션이 서명돼 같은 망의\n"
-            "   누구나 다른 사용자 세션을 위조할 수 있다. --reload는 "
+            "  (키를 안 주면 기동 시 경고가 뜬다 — 첫 기동 때 만든 무작위 "
+            "키를 DB 파일에 저장해 쓰므로\n"
+            "   DB 파일 접근 권한이 곧 세션 위조 권한이 된다. --reload는 "
             "공용 인스턴스에 쓰지 않는다 —\n"
             "   파일 변경마다 재시작되며 접속이 전부 끊긴다.)\n"
         ),
@@ -195,19 +193,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_reset = sub.add_parser(
         "reset-data",
-        help="운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인 템플릿은 유지, 팀은 초기화)",
+        help="운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인 템플릿은 유지, '초기화 시 보호' 팀만 유지)",
         description=(
             "사용자 계정·사람 인력(human_pool)·업무 요청/할 일/배정/결재/\n"
             "결과물(+댓글)·대화·업로드 문서·VectorDB 지식 조각·AI 에이전트\n"
-            "생성 Job·Crew/파이프라인 실행 이력·Gate 평가 기록·모델\n"
-            "레지스트리·임베딩 설정·Tool-Agent 연결·팀/팀원·활동 기록\n"
-            "(audit_log)을 전부 지운다. Agent(26종)/Tool·Skill Pool/\n"
-            "파이프라인 템플릿 자체는 삭제하지 않는다 — hair.db 재기동 시\n"
-            "항상 자동으로 다시 채워지는 레퍼런스 데이터이기 때문이다(단,\n"
-            "Agent가 실행되며 쌓인 비용·성과점수·LLM provider/model 설정·\n"
-            "마지막 산출물은 초기값으로 되돌아간다). 팀은 그렇게 재시드되지\n"
-            "않아(사용자가 직접 만든 데이터) 함께 지운다 — 지워도 다시\n"
-            "자동으로 생기지 않는다. 되돌릴 수 없다."
+            "생성 Job·Crew/파이프라인 실행 이력·Gate 평가 기록·LLM 사용량\n"
+            "기록·지식 등록 요청·모델 레지스트리(단가·생성 옵션 포함)·임베딩\n"
+            "설정·Tool-Agent 연결·팀/팀원·활동 기록(audit_log)을 전부\n"
+            "지운다. Agent(29종)/Tool·Skill Pool/파이프라인 템플릿 자체는\n"
+            "삭제하지 않는다 — hair.db 재기동 시 항상 자동으로 다시 채워지는\n"
+            "레퍼런스 데이터이기 때문이다(단, Agent가 실행되며 쌓인 비용·\n"
+            "성과점수·LLM provider/model 설정·마지막 산출물은 초기값으로\n"
+            "되돌아간다). 팀은 그렇게 재시드되지 않아(사용자가 직접 만든\n"
+            "데이터) 함께 지운다 — 단, 팀 관리 화면에서 '초기화 시 보호'를\n"
+            "켠 팀(과 그 팀원)은 남긴다. 조직 정책(사번 형식·결과물 언어)과\n"
+            "세션 서명 키는 유지한다. 되돌릴 수 없다."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -254,9 +254,8 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # 사용자 요청(2026-11-03, "사내망을 통해 다른 사용자도 접속하도록
     # 개선 방안을 제안해줘" → "1번, 2번 진행") — `--host 0.0.0.0` 등
     # 루프백이 아닌 주소로 띄우면서 `HAIR_PLATFORM_SECRET_KEY`를 안 주면
-    # `app.py`의 세션 서명 키가 소스에 공개된 고정값("dev-secret-
-    # change-in-production")으로 폴백한다 — 같은 네트워크의 누구나 그
-    # 값으로 다른 사용자(admin 포함)의 로그인 세션을 위조할 수 있다.
+    # `app.py`의 세션 서명 키가 소스에 공개된 고정값으로 폴백했다(2026-11-22부터는 첫 기동 때
+    # 만든 무작위 키를 DB에 저장해 쓴다 — DB 파일 접근 권한이 곧 세션 위조 권한이라 경고는 유지).
     # 막지는 않는다(로컬 1인 개발 흐름까지 깨면 안 됨) — 조용히 넘어가지
     # 않고 기동 시점에 경고만 한다.
     #
@@ -274,9 +273,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         print(
             "경고: HAIR_PLATFORM_SECRET_KEY 환경변수가 설정되지 않았습니다.\n"
             f"  --host {args.host}로 외부에서 접속 가능한 상태로 서버를 띄우면서\n"
-            "  세션 서명 키가 소스코드에 공개된 고정값으로 동작합니다 — 같은\n"
-            "  네트워크의 누구나 다른 사용자의 로그인 세션을 위조할 수 있습니다.\n"
-            "  다음처럼 랜덤 키를 지정한 뒤 다시 실행하세요:\n"
+            "  세션 서명 키를 첫 기동 때 무작위로 만들어 DB 파일에 저장해 씁니다 —\n"
+            "  DB 파일을 읽을 수 있는 사람은 그 키로 로그인 세션을 위조할 수 있으니,\n"
+            "  운영에서는 다음처럼 키를 환경변수로 지정하세요:\n"
             "    export HAIR_PLATFORM_SECRET_KEY=\"$(python3 -c "
             "'import secrets; print(secrets.token_hex(32))')\"\n",
             file=sys.stderr,

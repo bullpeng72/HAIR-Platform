@@ -382,9 +382,13 @@ def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None
 # 다시 만들어야 하는 상황을 피한다. 이름 기준으로 보호한다(팀은
 # 코드/고유 식별자가 없어 이름이 유일한 식별 수단) — 다른 팀(관리자가
 # 직접 만든 TF팀 등)은 여전히 2026-11-10 결정 그대로 초기화 대상이다.
-_FACTORY_RESET_PROTECTED_TEAM_NAMES: tuple[str, ...] = ("데이터 분석·시각화 전담팀",)
+# 보호 팀(2026-11-21 설정화) — 예전엔 팀 이름 목록(`_FACTORY_RESET_PROTECTED_TEAM_NAMES`,
+# "데이터 분석·시각화 전담팀")으로 보호해 이름을 바꾸면 보호가 풀렸다. 이제 팀마다
+# `teams.protect_on_reset` 표시(팀 관리 화면에서 admin이 켜고 끔)를 본다.
 
 _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
+    # 실제 LLM 토큰 사용량 기록(2026-11-22 `llm_usage.py`) — 실행 이력과 같은 운영 데이터.
+    "llm_usage",
     "knowledge_chunks",
     "agent_evaluations",
     "deliverable_comments",
@@ -423,8 +427,8 @@ def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
     Skill/파이프라인 템플릿은 그대로 둔다(위 모듈 독스트링 참고). 팀
     (teams/team_members)은 2026-11-10부터 삭제 대상이다(재시드되지
     않는 데이터라 Agent 등과 같은 보존 근거가 없음, 바로 위 주석 참고)
-    — 단 `_FACTORY_RESET_PROTECTED_TEAM_NAMES`에 이름이 있는 팀(현재
-    "데이터 분석·시각화 전담팀")은 2026-11-18 결정으로 예외다.
+    — 단 "초기화 시 보호" 표시(`teams.protect_on_reset`)가 켜진 팀은 예외다
+    (2026-11-18 결정, 2026-11-21 이름 목록에서 팀별 표시로 설정화).
     Agent 자체는 남기되 실행하면서 쌓인 휘발성 필드(비용·성과점수·
     provider/model·마지막 산출물)는 초기값으로 되돌린다 — `source_
     job_item_id`는 `job_items`를 지우므로 먼저 NULL로 비운다(이 파일
@@ -444,15 +448,12 @@ def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
         )
         for table in _FACTORY_RESET_WIPE_TABLES:
             counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
-        placeholders = ",".join("?" * len(_FACTORY_RESET_PROTECTED_TEAM_NAMES))
         counts["team_members"] = conn.execute(
-            f"DELETE FROM team_members WHERE team_id NOT IN "
-            f"(SELECT id FROM teams WHERE name IN ({placeholders}))",
-            _FACTORY_RESET_PROTECTED_TEAM_NAMES,
+            "DELETE FROM team_members WHERE team_id NOT IN "
+            "(SELECT id FROM teams WHERE protect_on_reset = 1)"
         ).rowcount
         counts["teams"] = conn.execute(
-            f"DELETE FROM teams WHERE name NOT IN ({placeholders})",
-            _FACTORY_RESET_PROTECTED_TEAM_NAMES,
+            "DELETE FROM teams WHERE protect_on_reset = 0"
         ).rowcount
         conn.commit()
     finally:

@@ -310,7 +310,8 @@ def test_performance_report_pipeline_final_stage_checks_traceability():
         (template["id"],),
     ).fetchone()
     assert bool(stage["checks_requirements_traceability"]) is True
-    assert stage["min_gate_pass_ratio"] == 0.5
+    # 2026-11-21 A안 — 추적성 단계는 Gate A와 요구사항 추적성이 모두 통과해야 한다.
+    assert stage["min_gate_pass_ratio"] == 1.0
 
 
 def test_performance_report_pipeline_runs_end_to_end():

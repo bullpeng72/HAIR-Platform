@@ -678,15 +678,15 @@ def test_gc250_run_crew_for_team_auto_detects_manager_when_hierarchical_and_unse
 
     resp = client.post("/api/teams", json={"name": "자동탐지팀"})
     team_id = resp.json()["id"]
-    resp = client.post(
-        f"/api/teams/{team_id}/members",
-        json={
-            "member_type": "agent",
-            "member_id": manager_agent,
-            "role_label": "매니저",
-        },
+    # 2026-11-23부터 새 팀에는 API로 "매니저" 라벨 Agent를 넣을 수 없다(위임형 신규 지정 차단,
+    # `teams.add_team_member()`) — 이 테스트는 그 정책 이전에 만들어진 기존 위임형 팀의
+    # 동작을 검증하므로 라벨을 DB에 직접 넣어 기존 팀을 재현한다.
+    conn.execute(
+        "INSERT INTO team_members (team_id, member_type, member_id, role_label) "
+        "VALUES (?, 'agent', ?, '매니저')",
+        (team_id, manager_agent),
     )
-    assert resp.status_code == 201, resp.text
+    conn.commit()
     resp = client.post(
         f"/api/teams/{team_id}/members",
         json={"member_type": "agent", "member_id": worker_agent, "role_label": "워커"},
@@ -722,6 +722,7 @@ def test_gc250_run_crew_for_team_auto_detects_manager_when_hierarchical_and_unse
         manager_provider=None,
         manager_model=None,
         parallel_agent_ids=None,
+        **_kwargs,
     ):
         captured["process"] = process
         captured["manager_agent_id"] = manager_agent_id
@@ -857,15 +858,15 @@ def test_manager_agent_id_for_team_prefers_explicit_default_over_role_label_heur
     team_id = resp.json()["id"]
     # role_label="매니저"인 멤버와, 그와 별개로 명시적 기본값으로 지정할
     # 또 다른 Agent 둘 다 팀에 넣는다.
-    resp = client.post(
-        f"/api/teams/{team_id}/members",
-        json={
-            "member_type": "agent",
-            "member_id": labeled_manager,
-            "role_label": "매니저",
-        },
+    # 2026-11-23부터 새 팀에는 API로 "매니저" 라벨 Agent를 넣을 수 없다(위임형 신규 지정 차단,
+    # `teams.add_team_member()`) — 이 테스트는 그 정책 이전에 만들어진 기존 위임형 팀의
+    # 동작을 검증하므로 라벨을 DB에 직접 넣어 기존 팀을 재현한다.
+    conn.execute(
+        "INSERT INTO team_members (team_id, member_type, member_id, role_label) "
+        "VALUES (?, 'agent', ?, '매니저')",
+        (team_id, labeled_manager),
     )
-    assert resp.status_code == 201, resp.text
+    conn.commit()
     resp = client.post(
         f"/api/teams/{team_id}/members",
         json={"member_type": "agent", "member_id": explicit_manager},
@@ -934,6 +935,7 @@ def test_execute_team_crew_endpoint_falls_back_to_team_default_process_and_manag
         planning=False,
         manager_provider=None,
         manager_model=None,
+        **_kwargs,
     ):
         captured["process"] = process
         captured["manager_agent_id"] = manager_agent_id

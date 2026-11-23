@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 
@@ -96,3 +97,37 @@ def as_crewai_tool(conn: sqlite3.Connection):
         return context_for_prompt(conn, query)
 
     return lookup_skill_tool_catalog
+
+
+ROLE_SUGGESTION_MIN_SCORE = 2
+
+
+def suggest_roles(conn: sqlite3.Connection, request_text: str, limit: int = 6) -> list[str]:
+    """업무 요청 본문과 맞는 기존 Agent 역할을 고른다 — LLM 없이(무료) 역할명·목표·보유 스킬의
+    이름·설명과 요청 본문의 어간이 겹치는 정도로 점수를 매긴다(역할명·목표 일치는 2배).
+    하드코딩·스텁 점검(2026-11-22) 2순위: 예전에는 요청을 줄바꿈으로 나눈 줄을 "역할 후보"로
+    보여 줬다(`app.parse_brief_stub`). 맞는 역할이 없으면 빈 목록 — 호출자가 줄 단위로 폴백한다."""
+    query = _stems(request_text)
+    if not query:
+        return []
+    skills = {
+        r["name"]: f"{r['name']} {r['description'] or ''}"
+        for r in conn.execute("SELECT name, description FROM skill_pool")
+    }
+    scored: list[tuple[int, str]] = []
+    for row in conn.execute(
+        "SELECT role_name, goal, skill_tags FROM agent_pool WHERE status = 'active'"
+    ):
+        try:
+            raw_tags = json.loads(row["skill_tags"] or "[]")
+        except ValueError:
+            raw_tags = []
+        # 문자열 태그만 쓴다 — JSON에 null·숫자가 섞여 있으면 join이 TypeError로 깨졌다(2026-11-23).
+        tags: list[str] = [t for t in raw_tags if isinstance(t, str)] if isinstance(raw_tags, list) else []
+        own = _stems(f"{row['role_name']} {row['goal'] or ''}")
+        skill_text = " ".join(skills.get(t) or t for t in tags)
+        score = 2 * len(query & own) + len(query & (_stems(skill_text) - own))
+        if score >= ROLE_SUGGESTION_MIN_SCORE:
+            scored.append((score, row["role_name"]))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [role for _, role in scored[:limit]]

@@ -23,6 +23,7 @@ import json
 import os
 import re
 from collections.abc import Callable
+from typing import overload
 
 _HAN_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿぀-ヿ]")
 _HANGUL_RE = re.compile(r"[가-힣]")
@@ -51,6 +52,12 @@ REPAIR_SYSTEM = (
 
 
 def enabled() -> bool:
+    """한국어 결과물 전용 교정 — 조직 결과물 언어가 한국어일 때만(2026-11-22). 다른 언어로 일하는
+    조직에서 켜 두면 일본어·중국어 결과물을 한국어로 바꿔 망가뜨린다."""
+    from hair_platform import org_policy
+
+    if org_policy.output_language() != org_policy.DEFAULT_OUTPUT_LANGUAGE:
+        return False
     return os.environ.get("HAIR_LANGUAGE_QA", "1") != "0"
 
 
@@ -267,6 +274,18 @@ def _call(provider: str, model: str, system: str, prompt: str) -> str:
         )
     resp.raise_for_status()
     return resp.json()["message"]["content"]
+
+
+@overload
+def repair_output(
+    conn, text: str, provider: str | None, model: str | None, actor_id: int, where: str
+) -> str: ...
+
+
+@overload
+def repair_output(
+    conn, text: None, provider: str | None, model: str | None, actor_id: int, where: str
+) -> None: ...
 
 
 def repair_output(

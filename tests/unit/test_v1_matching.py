@@ -104,3 +104,17 @@ def test_gc11_completely_different_role_names_still_require_generate_new():
 
     assert result.generate_new is True
     assert result.top == []
+
+
+def test_skill_coverage_matches_differently_named_role():
+    """2026-11-22 — 표기만 다른 역할(영문/한글)도 요구 스킬(2개 이상)을 전부 갖추면 후보가 된다."""
+    eng = _candidate(id=7, role="Backend Engineer", skill_tags=["python", "fastapi", "sql"])
+    designer = _candidate(id=8, role="UI Designer", skill_tags=["figma"])
+    result = match_candidates("백엔드 개발자", ["python", "fastapi"], [eng, designer])
+    assert result.generate_new is False
+    assert [s.candidate.id for s in result.top] == [7]
+    # 일부 스킬만 가진 무관한 역할은 후보가 아니다(python을 아는 분석가를 백엔드로 추천하지 않는다).
+    weak = _candidate(id=9, role="Data Analyst", skill_tags=["python", "fastapi"])
+    assert match_candidates("백엔드 개발자", ["python", "fastapi", "docker"], [weak]).generate_new is True
+    # 요구 스킬이 하나뿐이면 스킬만으로는 역할 일치로 보지 않는다.
+    assert match_candidates("백엔드 개발자", ["python"], [weak]).generate_new is True

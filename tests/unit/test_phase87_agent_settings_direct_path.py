@@ -68,6 +68,7 @@ def test_persona_goal_and_backstory_reach_system_prompt(client_and_conn):
 
 
 def test_agent_temperature_overrides_model_and_is_clamped(monkeypatch):
+    monkeypatch.setenv("HAIR_OLLAMA_MAX_OUTPUT_TOKENS", "0")  # 샘플링 값만 본다(출력 한도는 phase94)
     monkeypatch.setattr(model_options, "_CACHE", {})
     model_options.set_cached("anthropic", "c", {"top_p": 0.9})
     assert model_options.request_options("anthropic", "c", 1.5) == {"top_p": 0.9, "temperature": 1.0}
@@ -76,6 +77,7 @@ def test_agent_temperature_overrides_model_and_is_clamped(monkeypatch):
 
 
 def test_temperature_sent_in_ollama_payload(monkeypatch):
+    monkeypatch.setenv("HAIR_OLLAMA_MAX_OUTPUT_TOKENS", "0")  # 샘플링 값만 본다(출력 한도는 phase94)
     from hair_platform import llm
 
     sent = {}

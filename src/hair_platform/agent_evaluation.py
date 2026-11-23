@@ -117,7 +117,19 @@ _EXPLAINABILITY = ExplainabilityConfig(require_reasoning=True)
 _SCOPE = ScopeConfig(allowed_tools=[], fail_on_violation=False, violation_penalty=0.5)
 
 
-def run_and_score(role_name: str, call_fn: Callable[[], str]) -> dict:
+# 평가 유형(2026-11-22, 하드코딩·스텁 점검 4순위) — 예전엔 모든 실행을 "document_creation"으로
+# 채점했다(코드 산출물까지). 단계 출력 형식에 맞춰 SDK TaskType을 고른다.
+EVAL_TASK_TYPE_BY_CONTENT = {"code": "code_generation"}
+DEFAULT_EVAL_TASK_TYPE = "document_creation"
+
+
+def eval_task_type_for(content_type: str | None) -> str:
+    return EVAL_TASK_TYPE_BY_CONTENT.get(content_type or "", DEFAULT_EVAL_TASK_TYPE)
+
+
+def run_and_score(
+    role_name: str, call_fn: Callable[[], str], task_type: str = DEFAULT_EVAL_TASK_TYPE
+) -> dict:
     """실제 Agent 실행(`call_fn`)을 감싸 그 자리에서 Gate A-G를 측정한다.
     DB에 아무것도 쓰지 않는다 — `call_fn`이 예외를 던지면(LLM 호출 실패)
     그대로 전파하고, 이 시점엔 아직 deliverable 행이 없어야 하므로 호출자는
@@ -135,7 +147,7 @@ def run_and_score(role_name: str, call_fn: Callable[[], str]) -> dict:
         # 아니다("unrecognised task_type" 경고, SDK가 그래도 그대로 받아는
         # 준다). 산출물은 문서/텍스트 생성이므로 SDK 목록의
         # 'document_creation'이 정확히 맞는다.
-        task_type="document_creation",
+        task_type=task_type,
         question_arg="role_name",
         sla=_SLA,
         explainability=_EXPLAINABILITY,
@@ -163,7 +175,9 @@ def run_and_score(role_name: str, call_fn: Callable[[], str]) -> dict:
     return {"output": output, "gate_scores": gate_scores, "tcr": tcr}
 
 
-def run_and_score_crew(crew_label: str, call_fn: Callable[[], object]) -> dict:
+def run_and_score_crew(
+    crew_label: str, call_fn: Callable[[], object], task_type: str = DEFAULT_EVAL_TASK_TYPE
+) -> dict:
     """`crew_runtime.run_crew()`의 실제 `crew.kickoff()` 호출(`call_fn`)을
     감싸 Gate A-G를 측정한다 — 사용자 요청(2026-09-29, "crewAI의 핵심
     개념과 기능들을 적절하게 반영하였는지 확인해줘"에서 찾은 갭을
@@ -193,7 +207,7 @@ def run_and_score_crew(crew_label: str, call_fn: Callable[[], object]) -> dict:
 
     @agent_eval(
         monitor,
-        task_type="document_creation",
+        task_type=task_type,
         question_arg="crew_label",
         framework="crewai",
         sla=_SLA,
@@ -363,6 +377,63 @@ def compute_code_syntax_check(content: str) -> dict:
     }
 
 
+# 실행 가능성 Gate(2026-11-22, "모든 파이프라인 점검" C안) — SW 개발 파이프라인 실측에서 "구현"
+# 단계 산출물이 실행 가능한 완성본 없이(완전한 HTML 문서 2개가 모두 1천 자 미만 골격, 나머지는
+# 코드 조각과 혼잣말) 코드 검증·QA·최종 판정을 모두 통과해 '완료'로 끝났다. Gate A·요구사항 추적성
+# LLM 판정은 "코드가 실제로 돌아가는가"를 보지 않는다. 추가 LLM 호출 없이 결정론적으로 본다.
+_PLACEHOLDER_RE = re.compile(
+    r"/\*\s*(?:css|js|javascript|styles?|code|logic)\s+(?:here|goes here)\s*\*/"
+    r"|//\s*\.\.\.\s*$|^\s*\.\.\.\s*$|\bTODO:?\s*implement"
+    r"|<!--\s*(?:\w+\s+)*(?:rendered|goes|content)\s+here\s*-->",
+    re.IGNORECASE | re.MULTILINE,
+)
+_HTML_DOC_RE = re.compile(r"<!DOCTYPE html>.*?</html>|<html\b.*?</html>", re.DOTALL | re.IGNORECASE)
+RUNNABLE_MIN_SCRIPT_LINES = 15
+
+
+def compute_deliverable_runnable(content: str) -> dict:
+    """주 산출물(코드)이 "그대로 실행할 수 있는 완성본"인지.
+    - 작업 과정(혼잣말·메모)·반복 루프가 섞이지 않았다(`model_output`).
+    - 코드 블록(또는 완전한 HTML 문서)이 하나 이상 있다.
+    - 완전한 HTML 문서가 있으면 가장 긴 문서가 골격이 아니다: 인라인 스크립트 15줄 이상, 자리표시자
+      (`/* CSS here */`·`// ...`·`TODO: implement`) 없음, 스크립트 구문 오류 없음(Node가 있을 때).
+    - 그 밖의 코드 블록은 구문 검사(`compute_code_syntax_check`)를 통과한다.
+    실제 브라우저 실행·기능 테스트는 아니다 — "완성본이 존재하고 깨지지 않았다"까지만 본다."""
+    from hair_platform import model_output
+
+    text = content or ""
+    reasons: list[str] = []
+    if model_output.repetition_loop(text):
+        reasons.append("같은 문장이 반복되는 루프")
+    if model_output.work_in_progress(text):
+        reasons.append("작업 과정(혼잣말·메모·초안 반복)이 섞임")
+    docs = _HTML_DOC_RE.findall(text)
+    blocks = _FENCED_CODE_BLOCK_RE.findall(text)
+    if not docs and not blocks:
+        reasons.append("실행할 코드(코드 블록·HTML 문서)가 없음")
+    if docs:
+        doc = max(docs, key=len)
+        scripts = _extract_inline_scripts(doc)
+        script_lines = sum(1 for s in scripts for line in s.splitlines() if line.strip())
+        if script_lines < RUNNABLE_MIN_SCRIPT_LINES:
+            reasons.append(f"완전한 HTML 문서의 스크립트가 {script_lines}줄뿐(골격)")
+        if _PLACEHOLDER_RE.search(doc):
+            reasons.append("완성본에 자리표시자(예: /* CSS here */, // ...)가 남아 있음")
+        syntax = compute_code_syntax_check(f"```html\n{doc}\n```")
+    else:
+        syntax = compute_code_syntax_check(text)
+    if syntax.get("status") == "fail":
+        reasons.append("구문 오류: " + "; ".join(syntax.get("errors", [])[:3]))
+    passed = not reasons
+    return {
+        "score": 1.0 if passed else 0.0,
+        "status": "pass" if passed else "fail",
+        "not_measured": False,
+        "passed": passed,
+        "reasons": reasons,
+    }
+
+
 def compute_raw_html_syntax_check(content: str) -> dict:
     """펜스로 감싸지 않은 **전체 raw HTML 문서**용(로드맵 5번, 2026-11-05)
     — `content_type="html"`로 명시 요청한 경우 LLM에게 주는 지시문
@@ -402,3 +473,18 @@ def compute_raw_html_syntax_check(content: str) -> dict:
         "checked_blocks": checked,
         "errors": errors,
     }
+
+
+AUTO_FIT_MIN_SAMPLES = 3
+
+
+def auto_fit_score(conn: sqlite3.Connection, agent_id: int) -> float | None:
+    """매칭용 자동 적합도(2026-11-22, 하드코딩·스텁 점검 3순위) — 관리자가 `performance_score`를
+    입력하지 않은 Agent에 쓴다. 그 Agent 산출물의 Gate A(목표 달성) 평균만 쓴다 — C(실행 안정성)·
+    D(응답 30초 SLA)·F(크루 구조)·G(추론 노출)는 파이프라인 실측에서 내용과 무관하게 같은 값이라
+    적합도로 쓰면 잡음이다. 평가가 `AUTO_FIT_MIN_SAMPLES`건 미만이면 None(근거 부족 — 지어내지 않는다)."""
+    summary = aggregate_agent_score(conn, agent_id)
+    if not summary or summary.get("sample_count", 0) < AUTO_FIT_MIN_SAMPLES:
+        return None
+    value = (summary.get("gate_averages") or {}).get("A")
+    return None if value is None else max(0.0, min(1.0, float(value)))

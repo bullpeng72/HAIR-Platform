@@ -1371,6 +1371,16 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 모델별 생성 옵션(2026-11-21, `model_options.py`) — top_k/top_p 등.
     # 비어 있으면 아무것도 보내지 않는다(그 모델의 기본값).
     _ensure_column(conn, "model_registry", "sampling_options", "TEXT NOT NULL DEFAULT '{}'")
+    # 조직 정책(2026-11-21, `org_policy.py`) — 사번 형식(정규식)·설명. 행이 없으면 기본값
+    # (숫자 8~12자리)을 쓴다.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS org_policy ("
+        "id INTEGER PRIMARY KEY CHECK (id = 1), employee_id_pattern TEXT, employee_id_hint TEXT)"
+    )
+    _ensure_column(conn, "org_policy", "output_language", "TEXT")
+    # 팀별 "공장 초기화 시 보호"(2026-11-21) — 예전엔 `data_admin`이 팀 이름("데이터 분석·
+    # 시각화 전담팀")으로 보호해, 팀 이름을 바꾸면 보호가 풀렸다.
+    _ensure_column(conn, "teams", "protect_on_reset", "INTEGER NOT NULL DEFAULT 0")
     # 대화 컨텍스트 정책(2026-11-20, `context_policy.py` 참고) — 스킬별 기본값,
     # Agent별 덮어쓰기(NULL = 스킬에서 계산), 메시지 단위 요청/적용 기록.
     _ensure_column(
@@ -1507,6 +1517,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # NULL(기본값) = provider별 보수적 기본값으로 폴백(위 스키마 주석
     # 참고), admin이 등록해야 모델별 실제 한도가 정확히 반영된다.
     _ensure_column(conn, "model_registry", "context_window", "INTEGER")
+    # 모델별 단가·실제 사용량(2026-11-22, 하드코딩·스텁 점검 3순위 — `llm_usage.py`).
+    _ensure_column(conn, "model_registry", "price_input_per_1m", "REAL")
+    _ensure_column(conn, "pipeline_stages", "is_requirements_source", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "pipeline_stages", "on_fail_return_stage_id", "INTEGER")
+    _ensure_column(conn, "model_registry", "price_output_per_1m", "REAL")
+    from hair_platform import llm_usage
+
+    conn.executescript(llm_usage.SCHEMA)
     # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
     # (종류 구분 가능) 초기화하여 정리") — 기존 DB에도 `code` 컬럼을
     # 추가한다. UNIQUE 인덱스는 컬럼이 확실히 생긴 뒤인 여기서만
@@ -2026,9 +2044,14 @@ def _sync_dev_crew_pipeline_integration(conn: sqlite3.Connection) -> None:
 def _backfill_show_in_conversation(conn: sqlite3.Connection) -> None:
     """`show_in_conversation` 컬럼이 막 추가된 직후 1회만 실행 —
     `augmentation_mode`가 `'tool'`/`'always'`이면서 연결된 도구 중
-    `kind != 'native'`인 것이 있는 스킬(대화창 기본 AI 경로에서 구조적
-    으로 실시간 실행이 불가능한 것들 — `pool_registry.
-    unsupported_realtime_skill_names()`와 같은 기준)을 0으로 끈다."""
+    `kind`가 MCP(`mcp_stdio`/`mcp_remote`)인 것이 있는 스킬(대화창 기본 AI
+    경로에서 구조적으로 실시간 실행이 불가능한 것들 — `pool_registry.
+    unsupported_realtime_skill_names()`와 같은 기준)을 0으로 끈다.
+
+    기준 정정(2026-11-23) — 예전엔 `kind != 'native'`면 껐다. 2026-11-18부터
+    `custom_python` 도구는 대화창에서도 함수 호출로 실제 실행되므로(`tool_calling.
+    py`) 이제는 MCP만 끈다. 예전 기준으로 꺼진 기존 DB의 스킬은 `_show_custom_
+    tool_skills_in_conversation()`이 한 번 되살린다."""
     for row in conn.execute(
         "SELECT id, default_tool_pool_ids FROM skill_pool "
         "WHERE augmentation_mode IN ('tool', 'always')"
@@ -2039,7 +2062,7 @@ def _backfill_show_in_conversation(conn: sqlite3.Connection) -> None:
             trow = conn.execute(
                 "SELECT kind FROM tool_pool WHERE id = ? AND is_active = 1", (tool_id,)
             ).fetchone()
-            if trow is not None and trow["kind"] != "native":
+            if trow is not None and trow["kind"] in ("mcp_stdio", "mcp_remote"):
                 has_non_native = True
                 break
         if has_non_native:
@@ -2281,6 +2304,204 @@ def _seed_presentation_skill(conn: sqlite3.Connection) -> None:
     )
 
 
+# 업무 문서 파이프라인 단계 배정(2026-11-21, "파이프라인 품질 점검") — (단계명, 기존 역할, 새 역할).
+# 1단계(요구사항)는 단계명이 파이프라인마다 달라 seq_order=1로 찾는다.
+_BUSINESS_STAGE_REASSIGNMENTS: tuple[tuple[str | None, str, str], ...] = (
+    (None, "요구사항 분석가", "업무 요구사항 분석가"),
+    ("내용 검증", "품질 관리자", "문서 검토자"),
+    ("표현 검토", "콘텐츠 카피라이팅", "문서 교정자"),
+)
+
+
+def _reassign_business_pipeline_agents(conn: sqlite3.Connection) -> None:
+    """사업/기획·제안서·실적 보고 파이프라인에서 SW 개발용·광고 카피 Agent가 맡던 단계를 업무
+    문서용 Agent로 바꾼다. 단계 배정이 지금도 기존 역할 그대로일 때만 바꾼다(admin이 이미 다른
+    Agent로 바꿨으면 그대로). 소프트웨어 개발 파이프라인은 건드리지 않는다."""
+    names = (
+        reference_pipeline_seeds.BUSINESS_PIPELINE_NAME,
+        reference_pipeline_seeds.PROPOSAL_PIPELINE_NAME,
+        reference_pipeline_seeds.PERFORMANCE_REPORT_PIPELINE_NAME,
+    )
+    for template_id, in conn.execute(
+        f"SELECT id FROM pipeline_templates WHERE name IN ({','.join('?' * len(names))})", names
+    ).fetchall():
+        for stage_name, old_role, new_role in _BUSINESS_STAGE_REASSIGNMENTS:
+            if stage_name is None:
+                stage_ids = conn.execute(
+                    "SELECT id FROM pipeline_stages WHERE pipeline_template_id = ? AND seq_order = 1",
+                    (template_id,),
+                ).fetchall()
+            else:
+                stage_ids = conn.execute(
+                    "SELECT id FROM pipeline_stages WHERE pipeline_template_id = ? AND name = ?",
+                    (template_id, stage_name),
+                ).fetchall()
+            for (stage_id,) in stage_ids:
+                conn.execute(
+                    "UPDATE pipeline_stage_agents SET role_name = ? WHERE stage_id = ? AND role_name = ?",
+                    (new_role, stage_id, old_role),
+                )
+
+
+_FULL_GATE_IDS = ["A", "B", "C", "D", "E", "F", "G"]
+
+
+def _review_pipeline_quality_settings(conn: sqlite3.Connection) -> None:
+    """2026-11-21 "모든 파이프라인 점검" — 레퍼런스 파이프라인 설정 정비(한 번만). 지금 값이
+    시드 기본값 그대로일 때만 바꾼다(admin이 이미 고친 단계는 그대로).
+
+    1. 검증 단계 Gate: 기본 A-G 전체 → A(+요구사항 추적성). C·D·F·G는 파이프라인 경로에서
+       내용과 무관하게 같은 값이라 검증 단계가 늘 기준 미달로 사람 검토에 넘어갔다.
+    2. SW 개발: UI 기획자를 "구현" 릴레이 맨 앞에서 "설계" 단계 끝으로.
+    3. 제안서: "작성" 단계 출력 형식 text → html(제안서 작성자는 덱을 낸다).
+    4. 실적 보고: "데이터 분석" 지시문을 요청의 모든 지표를 분석하도록(매출만 분석했다)."""
+    seeds = reference_pipeline_seeds
+    for row in conn.execute(
+        "SELECT id, gate_ids, checks_requirements_traceability FROM pipeline_stages "
+        "WHERE min_gate_pass_ratio > 0"
+    ).fetchall():
+        if json.loads(row["gate_ids"] or "[]") != _FULL_GATE_IDS:
+            continue
+        gate_ids = (
+            seeds.REVIEW_GATE_IDS_WITH_TRACEABILITY
+            if row["checks_requirements_traceability"]
+            else seeds.REVIEW_GATE_IDS
+        )
+        conn.execute(
+            "UPDATE pipeline_stages SET gate_ids = ? WHERE id = ?",
+            (json.dumps(gate_ids), row["id"]),
+        )
+
+    def stage_id(template_name: str, stage_name: str) -> int | None:
+        found = conn.execute(
+            "SELECT ps.id FROM pipeline_stages ps JOIN pipeline_templates pt "
+            "ON pt.id = ps.pipeline_template_id WHERE pt.name = ? AND ps.name = ?",
+            (template_name, stage_name),
+        ).fetchone()
+        return found["id"] if found else None
+
+    impl_id = stage_id(seeds.DEV_PIPELINE_NAME, "구현")
+    design_id = stage_id(seeds.DEV_PIPELINE_NAME, "설계")
+    if impl_id is not None and design_id is not None:
+        first = conn.execute(
+            "SELECT id, role_name FROM pipeline_stage_agents WHERE stage_id = ? "
+            "ORDER BY seq_order LIMIT 1",
+            (impl_id,),
+        ).fetchone()
+        in_design = conn.execute(
+            "SELECT 1 FROM pipeline_stage_agents WHERE stage_id = ? AND role_name = ?",
+            (design_id, seeds.UI_PLANNER_ROLE),
+        ).fetchone()
+        if first is not None and first["role_name"] == seeds.UI_PLANNER_ROLE and not in_design:
+            conn.execute("DELETE FROM pipeline_stage_agents WHERE id = ?", (first["id"],))
+            next_seq = conn.execute(
+                "SELECT COALESCE(MAX(seq_order), 0) + 1 FROM pipeline_stage_agents WHERE stage_id = ?",
+                (design_id,),
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO pipeline_stage_agents (stage_id, role_name, seq_order, instructions) "
+                "VALUES (?, ?, ?, ?)",
+                (design_id, seeds.UI_PLANNER_ROLE, next_seq, seeds.UI_PLANNER_DESIGN_INSTRUCTION),
+            )
+
+    proposal_id = stage_id(seeds.PROPOSAL_PIPELINE_NAME, "작성")
+    if proposal_id is not None:
+        conn.execute(
+            "UPDATE pipeline_stages SET output_content_type = 'html' "
+            "WHERE id = ? AND output_content_type = 'text'",
+            (proposal_id,),
+        )
+
+    analysis_id = stage_id(seeds.PERFORMANCE_REPORT_PIPELINE_NAME, "데이터 분석")
+    if analysis_id is not None:
+        conn.execute(
+            "UPDATE pipeline_stages SET instructions = ? WHERE id = ? AND instructions = ?",
+            (
+                seeds.PERFORMANCE_DATA_ANALYSIS_INSTRUCTION,
+                analysis_id,
+                seeds.PERFORMANCE_DATA_ANALYSIS_INSTRUCTION_V1,
+            ),
+        )
+
+
+def _require_traceability_to_pass(conn: sqlite3.Connection) -> None:
+    """2026-11-21 "A안으로 진행해줘" — 요구사항 추적성을 재는 검증 단계는 Gate A와 추적성이 둘 다
+    통과해야 통과(임계 0.5 → 1.0). 0.5면 Gate A 하나만 통과해도 넘어가, 제안서 실측에서 요구사항
+    11/13인 내용 검증 단계가 그대로 통과했다. 지금 값이 직전 기본값(0.5, A+추적성)일 때만 바꾼다."""
+    for row in conn.execute(
+        "SELECT id, gate_ids FROM pipeline_stages WHERE min_gate_pass_ratio = 0.5"
+    ).fetchall():
+        if json.loads(row["gate_ids"] or "[]") == reference_pipeline_seeds.REVIEW_GATE_IDS_WITH_TRACEABILITY:
+            conn.execute(
+                "UPDATE pipeline_stages SET min_gate_pass_ratio = 1.0 WHERE id = ?", (row["id"],)
+            )
+
+
+def _single_author_runnable_implementation(conn: sqlite3.Connection) -> None:
+    """2026-11-22 "모든 파이프라인 점검" C안 — SW 개발 파이프라인 "구현" 단계(한 번만).
+    1. 4명 릴레이(데이터/인프라 → 백엔드 → 프론트엔드 → 풀스택)를 풀스택 개발자 단일 단계로 —
+       배정이 시드 기본 릴레이 그대로일 때만(admin이 바꾼 구성은 그대로).
+    2. 실행 가능성 Gate(`deliverable_runnable`)를 통과해야 넘어가게 — Gate 설정이 기본값(A-G 전체,
+       판정 없음 0.0)일 때만. 실측: 실행 가능한 완성본 없이 코드 검증·QA·최종 판정을 통과했다."""
+    seeds = reference_pipeline_seeds
+    stage = conn.execute(
+        "SELECT ps.* FROM pipeline_stages ps JOIN pipeline_templates pt "
+        "ON pt.id = ps.pipeline_template_id WHERE pt.name = ? AND ps.name = '구현'",
+        (seeds.DEV_PIPELINE_NAME,),
+    ).fetchone()
+    if stage is None:
+        return
+    roles = [
+        r["role_name"]
+        for r in conn.execute(
+            "SELECT role_name FROM pipeline_stage_agents WHERE stage_id = ? ORDER BY seq_order",
+            (stage["id"],),
+        )
+    ]
+    if stage["mode"] == "sequential_relay" and roles == seeds.IMPLEMENTATION_RELAY_ROLES_V1:
+        conn.execute(
+            "DELETE FROM pipeline_stage_agents WHERE stage_id = ? AND role_name != ?",
+            (stage["id"], seeds.IMPLEMENTATION_ROLE),
+        )
+        conn.execute(
+            "UPDATE pipeline_stage_agents SET seq_order = 1, instructions = '' "
+            "WHERE stage_id = ? AND role_name = ?",
+            (stage["id"], seeds.IMPLEMENTATION_ROLE),
+        )
+        conn.execute(
+            "UPDATE pipeline_stages SET mode = 'single', instructions = ? WHERE id = ?",
+            (seeds.IMPLEMENTATION_INSTRUCTION, stage["id"]),
+        )
+    if (
+        stage["min_gate_pass_ratio"] == 0
+        and json.loads(stage["gate_ids"] or "[]") == _FULL_GATE_IDS
+    ):
+        conn.execute(
+            "UPDATE pipeline_stages SET gate_ids = ?, min_gate_pass_ratio = 1.0 WHERE id = ?",
+            (json.dumps(seeds.IMPLEMENTATION_GATE_IDS), stage["id"]),
+        )
+
+
+def _review_returns_to_primary_stage(conn: sqlite3.Connection) -> None:
+    """2026-11-22 하드코딩·스텁 점검 4순위 — 요구사항 추적성을 재는 검증 단계가 기준 미달이면 그
+    템플릿의 '최종 결과물 단계'(작성·구현)로 돌아가 검토 의견을 반영해 다시 쓰게 한다(한 번만,
+    단계 이름이 아니라 플래그로 고른다). 이미 되돌릴 단계를 정해 둔 단계는 그대로."""
+    for review in conn.execute(
+        "SELECT id, pipeline_template_id, seq_order FROM pipeline_stages "
+        "WHERE checks_requirements_traceability = 1 AND on_fail_return_stage_id IS NULL"
+    ).fetchall():
+        primary = conn.execute(
+            "SELECT id FROM pipeline_stages WHERE pipeline_template_id = ? "
+            "AND is_primary_deliverable = 1 AND seq_order < ? ORDER BY seq_order DESC LIMIT 1",
+            (review["pipeline_template_id"], review["seq_order"]),
+        ).fetchone()
+        if primary is not None:
+            conn.execute(
+                "UPDATE pipeline_stages SET on_fail_return_stage_id = ? WHERE id = ?",
+                (primary["id"], review["id"]),
+            )
+
+
 def _upgrade_chart_generator_tool(conn: sqlite3.Connection) -> None:
     """'차트 생성기' 소스를 2026-11-21 개정판("type" 별칭·빈 구간 null 허용)으로 바꾼다 —
     지금 소스가 직전 시드 원본(V1) 그대로일 때만(admin이 고친 코드는 건드리지 않는다)."""
@@ -2297,6 +2518,58 @@ def _upgrade_chart_generator_tool(conn: sqlite3.Connection) -> None:
         "UPDATE tool_pool SET config = ? WHERE id = ?",
         (json.dumps(config, ensure_ascii=False), row["id"]),
     )
+
+
+def _add_tool_input_formats(conn: sqlite3.Connection) -> None:
+    """레퍼런스 도구 설명에 입력 형식을 붙이고 '수치 데이터 분석기'를 관용 입력판으로 바꾼다
+    (2026-11-22, `reference_pipeline_seeds.TOOL_INPUT_NOTES` 참고) — 설명·소스가 시드 원본
+    그대로인 행만 바꾼다(admin이 고친 값은 건드리지 않는다)."""
+    for name, old_description in reference_pipeline_seeds.TOOL_DESCRIPTIONS_V1.items():
+        conn.execute(
+            "UPDATE tool_pool SET description = ? WHERE name = ? AND description = ? "
+            "AND kind = 'custom_python'",
+            (
+                f"{old_description} {reference_pipeline_seeds.TOOL_INPUT_NOTES[name]}",
+                name,
+                old_description,
+            ),
+        )
+    row = conn.execute(
+        "SELECT id, config FROM tool_pool WHERE name = '수치 데이터 분석기' AND kind = 'custom_python'"
+    ).fetchone()
+    if row is None:
+        return
+    config = json.loads(row["config"] or "{}")
+    if config.get("function_source") != reference_pipeline_seeds.DATA_ANALYZER_SOURCE_V1:
+        return
+    config["function_source"] = reference_pipeline_seeds.DATA_ANALYZER_SOURCE
+    conn.execute(
+        "UPDATE tool_pool SET config = ? WHERE id = ?",
+        (json.dumps(config, ensure_ascii=False), row["id"]),
+    )
+
+
+def _show_custom_tool_skills_in_conversation(conn: sqlite3.Connection) -> None:
+    """`_backfill_show_in_conversation()`의 예전 기준(`kind != 'native'`)으로 대화창에서
+    꺼졌던 스킬 중, 연결 도구가 native/custom_python뿐(MCP 없음)이고 custom_python이 하나
+    이상인 것을 다시 켠다(2026-11-23 — 수치 데이터 분석기·차트 생성기 같은 계산 도구는
+    대화창에서도 실제로 호출된다). 개발업무로 분류된 스킬은 켜도 여전히 "개발업무 스킬도
+    보기"를 켠 사용자에게만 보인다(분류 축은 그대로)."""
+    for row in conn.execute(
+        "SELECT id, default_tool_pool_ids FROM skill_pool "
+        "WHERE show_in_conversation = 0 AND augmentation_mode IN ('tool', 'always')"
+    ).fetchall():
+        kinds = set()
+        for tool_id in json.loads(row["default_tool_pool_ids"] or "[]"):
+            trow = conn.execute(
+                "SELECT kind FROM tool_pool WHERE id = ? AND is_active = 1", (tool_id,)
+            ).fetchone()
+            if trow is not None:
+                kinds.add(trow["kind"])
+        if "custom_python" in kinds and kinds <= {"native", "custom_python"}:
+            conn.execute(
+                "UPDATE skill_pool SET show_in_conversation = 1 WHERE id = ?", (row["id"],)
+            )
 
 
 def _run_once(conn: sqlite3.Connection, name: str, fn) -> bool:
@@ -2319,16 +2592,20 @@ def _apply_one_time_agent_skill_additions(conn: sqlite3.Connection) -> None:
     적용한다. 스킬이 실제로 등록돼 있을 때만 붙이고, 이미 있으면 그대로 둔다."""
     from hair_platform import skill_catalog
 
-    def apply(additions: dict[str, list[str]]):
+    def apply(changes: dict):
         def _fn(c: sqlite3.Connection) -> None:
             existing = {r[0] for r in c.execute("SELECT name FROM skill_pool")}
-            for role_name, skills in additions.items():
-                wanted = [s for s in skills if s in existing]
+            for role_name, spec in changes.items():
+                # 값이 목록이면 추가만, dict면 {"add": [...], "remove": [...]}(2026-11-21).
+                add = spec if isinstance(spec, list) else spec.get("add", [])
+                remove = set() if isinstance(spec, list) else set(spec.get("remove", []))
+                wanted = [s for s in add if s in existing]
                 for agent_id, raw in c.execute(
                     "SELECT id, skill_tags FROM agent_pool WHERE role_name = ?", (role_name,)
                 ).fetchall():
                     tags = json.loads(raw or "[]")
-                    merged = tags + [s for s in wanted if s not in tags]
+                    kept = [s for s in tags if s not in remove]
+                    merged = kept + [s for s in wanted if s not in kept]
                     if merged != tags:
                         c.execute(
                             "UPDATE agent_pool SET skill_tags = ? WHERE id = ?",
@@ -3020,6 +3297,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _seed_catalog_skills(conn)
     _apply_one_time_agent_skill_additions(conn)
     _upgrade_chart_generator_tool(conn)
+    _run_once(conn, "2026-11-21-business-pipeline-agents", _reassign_business_pipeline_agents)
+    _run_once(conn, "2026-11-21-pipeline-quality-settings", _review_pipeline_quality_settings)
+    _run_once(conn, "2026-11-21-traceability-must-pass", _require_traceability_to_pass)
+    _run_once(conn, "2026-11-22-runnable-implementation", _single_author_runnable_implementation)
+    _run_once(conn, "2026-11-22-review-returns-to-writing", _review_returns_to_primary_stage)
+    _run_once(conn, "2026-11-22-tool-input-formats", _add_tool_input_formats)
+    _run_once(conn, "2026-11-23-show-custom-tool-skills", _show_custom_tool_skills_in_conversation)
     _apply_skill_catalog(conn)
     if is_new_includes_column:
         _apply_skill_includes(conn)
@@ -3035,3 +3319,39 @@ def init_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import model_options
 
     model_options.refresh(conn)
+    from hair_platform import org_policy
+
+    org_policy.refresh(conn)
+    # 이름으로 보호하던 팀에 보호 표시를 한 번만 옮긴다(이후 admin이 끄면 그대로 둔다).
+    _run_once(
+        conn,
+        "2026-11-21-team-protect-on-reset",
+        lambda c: c.execute(
+            "UPDATE teams SET protect_on_reset = 1 WHERE name = '데이터 분석·시각화 전담팀'"
+        ),
+    )
+    conn.commit()
+
+
+def session_secret(conn: sqlite3.Connection) -> str:
+    """세션·토큰 서명 키 — `HAIR_PLATFORM_SECRET_KEY`가 없을 때 쓴다(2026-11-22). 처음 부르면
+    무작위 키(256비트 이상)를 만들어 `platform_secrets`에 저장하고, 이후에는 그 값을 돌려준다.
+    이 표는 초기화(`data_admin` 공장 초기화 대상 표 목록)와 내보내기 대상에 넣지 않는다."""
+    import secrets as _secrets
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS platform_secrets ("
+        "name TEXT PRIMARY KEY, value TEXT NOT NULL, "
+        "created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    row = conn.execute(
+        "SELECT value FROM platform_secrets WHERE name = 'session_secret'"
+    ).fetchone()
+    if row is not None:
+        return row[0]
+    value = _secrets.token_urlsafe(48)
+    conn.execute(
+        "INSERT INTO platform_secrets (name, value) VALUES ('session_secret', ?)", (value,)
+    )
+    conn.commit()
+    return value

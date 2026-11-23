@@ -623,3 +623,25 @@ def test_execute_agent_endpoint_accepts_multipart_attachment(client_and_conn):
     assert "note.txt" in audit_row["after_value"]
     assert "first-run-only-note" not in audit_row["after_value"]
     assert conn.execute("SELECT COUNT(*) c FROM documents").fetchone()["c"] == 0
+
+
+def test_pptx_notes_slide_without_body_placeholder_does_not_fail():
+    """2026-11-23 — 노트 슬라이드에 본문 자리표시자가 없으면 `notes_text_frame`이 None이다.
+    예전엔 그 `.text`를 바로 읽어 AttributeError로 업로드 전체가 실패했다."""
+    pptx = pytest.importorskip("pptx")
+    from io import BytesIO
+
+    from hair_platform import documents
+
+    prs = pptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])  # 제목만 있는 레이아웃
+    slide.shapes.title.text = "분기 실적"
+    notes = slide.notes_slide
+    body = notes.notes_placeholder
+    assert body is not None
+    body._element.getparent().remove(body._element)  # 본문 자리표시자 제거
+    assert slide.notes_slide.notes_text_frame is None
+    buf = BytesIO()
+    prs.save(buf)
+    text = documents.extract_text("deck.pptx", buf.getvalue())
+    assert "분기 실적" in text and "발표자 노트" not in text

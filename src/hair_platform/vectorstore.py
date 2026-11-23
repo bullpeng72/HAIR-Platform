@@ -218,6 +218,42 @@ def _keyword_overlap_ratio(query: str, text: str) -> float:
     return matched / len(query_tokens)
 
 
+# 강제 주입용 관련성 관문(2026-11-22, "스킬, 툴, 에이전트 각각의 실행 품질을 점검해줘"
+# 실측) — `내부지식검색` 스킬을 가진 Agent는 단발 실행 경로에서 요청과 무관해도 항상 지식
+# 청크가 주입됐다(전기차 SWOT·반도체 시장·매출 계산 요청에 'Human-AI 협업' 자료). mxbai
+# 코사인으로는 구분이 안 된다 — 무관 질의 0.69~0.88, 관련 질의 0.72~0.86으로 겹치고, mxbai
+# 검색 접두어를 붙여도 마찬가지였다(한국어에 약하다). 반면 키워드 겹침은 무관 ≤ 0.11,
+# 관련 ≥ 0.40으로 뚜렷이 갈렸다. 그래서 모델이 스스로 고른 검색(도구 호출)이 아니라
+# **요청 원문으로 강제 주입하는 경우에만** 겹침이 이 하한 미만인 청크를 뺀다. 긴 요청은
+# 토큰이 많아 비율이 낮아지므로, 질의 토큰이 4개 이상 실제로 겹치면 비율과 무관하게 통과.
+# 코사인이 아주 높은 청크(`INJECTION_CONFIDENT_COSINE` 이상)도 통과시킨다 — Task 실행처럼
+# 검색어가 업무 제목("'정책 문의 응답' 업무를 수행하세요")이라 단어는 안 겹쳐도 의미로
+# 맞는 지식을 버리지 않기 위해서다. 실측 mxbai 무관 질의 최고값이 0.876이라 0.9로 둔다
+# (임베딩 모델을 바꾸면 이 값도 다시 재 볼 것).
+INJECTION_MIN_KEYWORD_OVERLAP = 0.25
+INJECTION_MIN_MATCHED_TOKENS = 4
+INJECTION_CONFIDENT_COSINE = 0.9
+
+
+def lexically_relevant_hits(query: str, hits: list[dict]) -> list[dict]:
+    query_tokens = {t for t in _KEYWORD_TOKEN_RE.findall(query.lower()) if len(t) >= 2}
+    if not query_tokens:
+        return hits
+    kept = []
+    for hit in hits:
+        if (hit.get("score") or 0.0) >= INJECTION_CONFIDENT_COSINE:
+            kept.append(hit)
+            continue
+        text_lower = (hit.get("text") or "").lower()
+        matched = sum(1 for t in query_tokens if t in text_lower)
+        if (
+            matched / len(query_tokens) >= INJECTION_MIN_KEYWORD_OVERLAP
+            or matched >= INJECTION_MIN_MATCHED_TOKENS
+        ):
+            kept.append(hit)
+    return kept
+
+
 # 사용자 보고(2026-10-14, "Error code: 400 - ... maximum context length is
 # 8192 tokens") — 실측으로 확인한 원인: `agent_runtime.
 # augment_with_retrieval()`이 대화 전체 transcript를 그대로 VectorDB 검색

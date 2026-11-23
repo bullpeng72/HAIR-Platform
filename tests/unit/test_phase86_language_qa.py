@@ -124,6 +124,7 @@ class _Resp:
 
 def test_ollama_sends_no_sampling_options_unless_registered(monkeypatch):
     """기본값 하드코딩 없음 — 레지스트리에 등록한 모델에만, 등록한 값만 보낸다."""
+    monkeypatch.setenv("HAIR_OLLAMA_MAX_OUTPUT_TOKENS", "0")  # 샘플링 값만 본다(출력 한도는 phase94)
     from hair_platform import llm, model_options
 
     sent = {}
@@ -146,6 +147,7 @@ def test_ollama_sends_no_sampling_options_unless_registered(monkeypatch):
 
 
 def test_options_are_filtered_per_provider(monkeypatch):
+    monkeypatch.setenv("HAIR_OLLAMA_MAX_OUTPUT_TOKENS", "0")  # 샘플링 값만 본다(출력 한도는 phase94)
     from hair_platform import model_options
 
     monkeypatch.setattr(model_options, "_CACHE", {})
@@ -187,7 +189,8 @@ def test_crewai_llm_receives_registered_options(monkeypatch):
     assert captured["top_p"] == 0.7 and "top_k" not in captured
 
 
-def test_sampling_options_api_is_admin_only_and_persists(client_and_conn):
+def test_sampling_options_api_is_admin_only_and_persists(client_and_conn, monkeypatch):
+    monkeypatch.setenv("HAIR_OLLAMA_MAX_OUTPUT_TOKENS", "0")  # 샘플링 값만 본다(출력 한도는 phase94)
     from hair_platform import model_options
 
     client, conn = client_and_conn

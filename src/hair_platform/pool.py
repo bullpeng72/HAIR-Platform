@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from hair_platform import agent_evaluation
 from hair_platform.models import ResourceCandidate
 
 
@@ -99,7 +100,12 @@ def agent_pool_candidates(
                 is_available=True,
                 cost=row["cost_estimate"],
                 skill_tags=skill_tags,
-                performance_score=row["performance_score"],
+                # 관리자 입력값이 없으면 자동 적합도(Gate A 평균, 평가 3건 이상일 때만 — 2026-11-22).
+                performance_score=(
+                    row["performance_score"]
+                    if row["performance_score"] is not None
+                    else agent_evaluation.auto_fit_score(conn, row["id"])
+                ),
                 # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
                 # 지정 안 했으면 None(화면에서 role로 폴백, 데이터는
                 # 솔직하게 비워둔다).

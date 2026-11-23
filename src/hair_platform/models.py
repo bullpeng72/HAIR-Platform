@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
 
 # 사용자 요청(2026-10-27, "사람의 경우 ID는 향후 사번 적용 예정으로
 # 8자리~12자리 입력 및 표시 가능해야 함") — HumanPoolCreate/Update
 # 둘 다 쓰는 검증. 아직 전사 사번 체계가 없는 사람도 많아(비워두면
 # 통과) 선택 필드고, 값을 주면 형식만 확인한다(실제 사번 발급 여부는
 # 이 플랫폼이 알 수 없음).
-_EMPLOYEE_ID_PATTERN = re.compile(r"^\d{8,12}$")
-
-
+# 2026-11-21 설정화("사번 형식 … 설정화 진행해줘") — 형식은 `org_policy`(admin이 "운영
+# 관리"에서 바꿈)가 정한다. 기본값은 위 결정 그대로 숫자 8~12자리.
 def _validate_employee_id(value: str | None) -> str | None:
-    if value is not None and not _EMPLOYEE_ID_PATTERN.fullmatch(value):
-        raise ValueError("employee_id는 숫자 8~12자리여야 합니다")
-    return value
+    from hair_platform import org_policy
+
+    return org_policy.validate_employee_id(value)
 
 
 LlmProvider = Literal["anthropic", "openai", "ollama"]
@@ -449,16 +448,19 @@ class AssistRequest(BaseModel):
 class GenerateRequest(BaseModel):
     """생성 버튼. 부족한 역할(Task)들을 지정해 배치로 Agent 생성을 트리거한다.
 
-    `use_llm=True`일 때만 실제 Anthropic/OpenAI/Ollama를 호출한다(사용자 요청,
-    2026-09-26) — 기본값은 여전히 무료 규칙기반 스텁이다(비용 발생을 암묵적으로
-    유발하지 않기 위해 항상 opt-in). `framework="crewai"`(2차 요청)면
+    2026-11-22부터 `framework`를 지정하지 않으면 crewai(실제 Agent)로 만든다 — 예전 기본값
+    (무료 규칙기반 스텁)은 자리표시자 Agent만 남겼다. 무료 생성은 `framework="stub"` 명시. `framework="crewai"`(2차 요청)면
     `use_llm`을 안 켜도 CrewAI 경로가 쓰이며(CrewAI 자체가 LLM을 호출하므로),
     `use_llm=True`+`framework="simple_llm"`(또는 미지정)는 기존 1회성 LLM 호출과
     동일하다."""
 
     task_ids: list[int]
     use_llm: bool = False
-    framework: GeneratorFramework = "stub"
+    # 하드코딩·스텁 점검(2026-11-22) 1순위 — 기본값이 `stub`(역할명·스킬만 되돌려주는 자리표시자)
+    # 이라 API로 생성하면 실제로 일하지 못하는 Agent가 만들어졌다. 지정하지 않으면(None)
+    # `use_llm=True`는 예전처럼 simple_llm, 그 밖에는 화면과 같은 crewai. 무료·결정론적 생성이
+    # 필요하면 `stub`을 명시한다(테스트·데모).
+    framework: GeneratorFramework | None = None
     provider: LlmProvider | None = None
     model: str | None = None
 
@@ -654,7 +656,12 @@ class TeamCrewExecuteRequest(BaseModel):
 
 
 PipelineStageMode = Literal["single", "sequential_relay", "parallel_delegated"]
-GateId = Literal["A", "B", "C", "D", "E", "F", "G"]
+# A-G(agent-evaluator) + 플랫폼이 직접 재는 점수(2026-11-22 — 마이그레이션이 단계에 넣는 값인데
+# API가 A-G만 받아, admin이 그 단계의 Gate 목록을 고쳐 저장하면 422가 났다).
+GateId = Literal[
+    "A", "B", "C", "D", "E", "F", "G",
+    "requirements_traceability", "deliverable_runnable", "code_syntax",
+]
 
 
 class PipelineTemplateCreate(BaseModel):
@@ -706,6 +713,14 @@ class PipelineStageCreate(BaseModel):
     # 파이프라인(사업기획서 등)의 검증 단계가 다른 이름을 써도 똑같이
     # 받을 수 있도록, 단계명과 무관한 명시적 플래그로 뺐다.
     checks_requirements_traceability: bool = False
+    # 요구사항 정의 단계(2026-11-22, 하드코딩·스텁 점검 4순위) — 요구사항 추적성의 기준 문서를 내는
+    # 단계. 예전엔 항상 1단계 산출물을 요구사항으로 봤다. 아무 단계도 지정하지 않으면 1단계(기존 동작).
+    is_requirements_source: bool = False
+    # 검토 실패 시 되돌아갈 단계의 id(2026-11-22, 하드코딩·스텁 점검 4순위) — 지정하면 이 단계가
+    # Gate 미달일 때 같은 검토를 다시 돌리지 않고 그 단계(보통 '작성', 이 단계보다 앞)로 돌아가 검토
+    # 의견을 반영해 다시 쓰게 한다. 순서 번호가 아니라 id라 단계 순서를 바꿔도 가리키는 단계가 같다.
+    # 비우면(None) 예전처럼 이 단계만 재시도.
+    on_fail_return_stage_id: int | None = Field(default=None, ge=1)
     # 사용자 요청(2026-11-10, "결과물 출력 유형 다양화") — 파이프라인
     # 경로가 지금까지 `deliverables.content_type`을 항상 'text'로
     # 하드코딩했다(`db.py`의 `pipeline_stages` CREATE TABLE 설명 참고).
@@ -729,6 +744,8 @@ class PipelineStageUpdate(BaseModel):
     requires_human_approval: bool | None = None
     is_primary_deliverable: bool | None = None
     checks_requirements_traceability: bool | None = None
+    is_requirements_source: bool | None = None
+    on_fail_return_stage_id: int | None = Field(default=None, ge=0)  # 0 = 해제
     output_content_type: ContentType | None = None
     expected_output: str | None = None
 
@@ -932,12 +949,40 @@ class ModelOptimizationTiersUpdate(BaseModel):
     ] = []
 
 
+class OrgPolicyUpdate(BaseModel):
+    """조직 정책(2026-11-21) — 사번 형식. pattern을 비우면 기본값(숫자 8~12자리)."""
+
+    employee_id_pattern: str | None = Field(default=None, max_length=200)
+    employee_id_hint: str | None = Field(default=None, max_length=100)
+
+
+class OutputLanguageUpdate(BaseModel):
+    """조직 결과물 언어(2026-11-22) — ko·en·ja·zh·vi."""
+
+    code: str = Field(min_length=2, max_length=8)
+
+
+class TeamResetProtectionUpdate(BaseModel):
+    """팀별 공장 초기화 보호(2026-11-21)."""
+
+    protect_on_reset: bool
+
+
 class ModelSamplingOptionsUpdate(BaseModel):
     """모델별 생성 옵션(2026-11-21) — 비우면(None) 그 항목을 보내지 않는다.
     OpenAI는 top_k를 지원하지 않아 저장돼도 호출에 포함하지 않는다."""
 
     top_k: int | None = Field(default=None, ge=1, le=1000)
     top_p: float | None = Field(default=None, gt=0.0, le=1.0)
+    # 최대 출력 토큰 — 비우면 provider 기본값(Ollama 32768, 그 밖엔 provider 기본).
+    max_output_tokens: int | None = Field(default=None, ge=256, le=1_000_000)
+
+
+class ModelPricingUpdate(BaseModel):
+    """모델별 단가(100만 토큰당, 입력/출력) — 비우면(None) 금액을 계산하지 않는다."""
+
+    price_input_per_1m: float | None = Field(default=None, ge=0)
+    price_output_per_1m: float | None = Field(default=None, ge=0)
 
 
 class ModelContextWindowUpdate(BaseModel):

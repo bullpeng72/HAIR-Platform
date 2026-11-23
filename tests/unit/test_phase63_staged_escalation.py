@@ -61,6 +61,7 @@ def _bad_run_crew_tracking(calls):
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         calls.append({"self_review": self_review, "description": task_descriptions[0]})
         return {

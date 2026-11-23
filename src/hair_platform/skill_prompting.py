@@ -155,11 +155,18 @@ def tool_guidance(callable_tools: list | None, has_retrieval: bool) -> str:
             except Exception:  # noqa: BLE001 — 설명을 못 읽어도 이름은 알린다
                 desc = getattr(t, "description", "") or ""
             name = getattr(t, "name", "도구")
-            lines.append(f"- {name}: {' '.join(str(desc).split())[:120]}")
+            # 400자(2026-11-22) — 설명 끝에 붙인 입력 형식(`reference_pipeline_seeds.
+            # TOOL_INPUT_NOTES`)이 120자에서 잘려 나가지 않게 한다.
+            lines.append(f"- {name}: {' '.join(str(desc).split())[:400]}")
+        # 마지막 두 문장(2026-11-22 실측) — 스펙 작성자가 린터·실패모드 결과만 내고 정작
+        # 요청한 Spec 본문을 빼먹었고, 실적 보고서 작성자는 차트를 만들고도 답에 넣지 않았다.
         text = (
             "[도구] 이 실행에서 실제로 호출할 수 있는 도구:\n" + "\n".join(lines) + "\n"
             "계산·조회가 필요한 부분은 추측하지 말고 도구를 호출해 그 결과를 근거로 쓴다. "
-            "도구 결과의 수치는 그대로 옮긴다. 위 목록에 없는 도구는 호출하지 않는다."
+            "도구 결과의 수치는 그대로 옮긴다. 위 목록에 없는 도구는 호출하지 않는다. "
+            "도구는 점검·계산 수단일 뿐이다 — 요청한 산출물 본문(문서·Spec·코드 등)은 "
+            "도구에 넘긴 내용까지 포함해 최종 답에 전부 쓰고, 도구가 만든 차트 설정은 "
+            "```chart 코드펜스로 답에 넣는다."
         )
         if has_retrieval:
             text += " 시스템이 미리 조회해 넣은 결과도 함께 근거로 쓴다."
@@ -179,15 +186,19 @@ def compose(
     has_retrieval: bool = False,
     knowledge_label: str = "참고 지식",
 ) -> str:
-    """역할 소개(base) + 스킬 지식 + 스킬 활용 원칙 + 결과 품질 기준 + 도구 안내."""
+    """역할 소개(base) + 스킬 지식 + 스킬 활용 원칙 + 결과 품질 기준 + 도구 안내 + 결과물 언어."""
+    from hair_platform import org_policy
+
+    language = org_policy.output_language_instruction()
     knowledge = knowledge_block(conn, skills, request)
     if not knowledge:
-        return base
-    return (
+        return f"{base}\n\n{language}" if language else base
+    composed = (
         f"{base}\n\n{knowledge_label}({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n{knowledge}"
         f"\n\n{SKILL_USAGE_PRINCIPLES}\n\n{QUALITY_BAR}"
         f"\n\n{tool_guidance(callable_tools, has_retrieval)}"
     )
+    return f"{composed}\n\n{language}" if language else composed
 
 
 # ---------------------------------------------------------------- 자체 검토(선택)
@@ -202,12 +213,29 @@ def self_review_system(role: str, knowledge: str) -> str:
     )
 
 
-def self_review_prompt(request: str, draft: str) -> str:
+# 근거 자료 상한 — 검토 호출 프롬프트가 초안보다 커지지 않게 한다.
+SELF_REVIEW_EVIDENCE_MAX_CHARS = 6000
+
+
+def self_review_prompt(request: str, draft: str, evidence: str | None = None) -> str:
+    """수치 점검(2026-11-22, "스킬, 툴, 에이전트 각각의 실행 품질을 점검해줘" P2) — 실측에서
+    숫자 자체는 도구 결과대로 맞았는데 라벨·단위·서술이 틀렸다("4분기 대비 1분기" 방향 뒤집힘,
+    "9,098억 달러(90.98억 달러)" 단위 환산, "11.3%p"를 비율에 씀, 증가액이 줄었다고 쓰고 바로
+    "줄지 않았다"고 쓴 자기모순). 검토자가 초안만 보면 대조할 근거가 없으므로, 실행 중 받은
+    도구 결과·조회 결과를 함께 넘기고 이 항목을 첫 점검 대상으로 둔다."""
+    evidence_block = ""
+    if evidence and evidence.strip():
+        evidence_block = (
+            "[근거 자료 — 실행 중 받은 도구 결과·조회 결과]\n"
+            f"{evidence.strip()[:SELF_REVIEW_EVIDENCE_MAX_CHARS]}\n\n"
+        )
     return (
-        f"[요청]\n{request}\n\n[초안]\n{draft}\n\n"
-        "점검할 것: 요청 중 빠진 요구, 스킬 출력 형식·제약사항 위반, 근거 없는 단정, "
-        "일반론으로 남은 부분(수치·사례·담당·기한으로 구체화), 숙련자라면 덧붙일 내용"
-        "(리스크·대안·다음 행동). 고친 최종본 전체를 출력하라."
+        f"[요청]\n{request}\n\n{evidence_block}[초안]\n{draft}\n\n"
+        "점검할 것: ① 수치·단위·기간 라벨·비교 방향(무엇 대비 무엇)이 요청과 근거 자료에 "
+        "맞는지, 표와 서술이 서로 모순되지 않는지, %와 %p를 바르게 썼는지 — 틀린 곳만 "
+        "근거대로 고치고 근거에 없는 숫자는 새로 만들지 않는다. ② 요청 중 빠진 요구, 스킬 "
+        "출력 형식·제약사항 위반, 근거 없는 단정, 일반론으로 남은 부분(수치·사례·담당·기한으로 "
+        "구체화), 숙련자라면 덧붙일 내용(리스크·대안·다음 행동). 고친 최종본 전체를 출력하라."
     )
 
 

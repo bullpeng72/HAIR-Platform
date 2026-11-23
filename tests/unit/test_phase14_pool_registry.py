@@ -536,7 +536,7 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 62
+        len(resp.json()) == 68
     )  # (+1: 2026-11-20 "프레젠테이션작성") 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 일반웹검색 1 +
     # 실시간웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복
     # 통합으로 제거됨. 2026-10-26 "대화에서 외부 검색이 가능한 방법을
@@ -598,12 +598,13 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
 # 대화창 표시 속성 추가, 가능한 것들만 표시되도록 개선") ----------
 
 
-def test_gc_show_in_conversation_defaults_true_but_backfill_hides_non_native_tool_skills():
+def test_gc_show_in_conversation_defaults_true_but_backfill_hides_mcp_tool_skills():
     """새 컬럼은 생성 시 기본 True지만, `init_schema()`가 기본 시드
-    스킬을 깔고 나면 mcp_remote/mcp_stdio/custom_python 도구가 붙은
-    스킬(대화창 기본 AI 경로에서 구조적으로 실행 불가)은 자동으로
-    False가 돼야 한다 — native 3개(rag/graphdb/실시간웹검색)는 그대로
-    True."""
+    스킬을 깔고 나면 mcp_remote/mcp_stdio 도구가 붙은 스킬(대화창 기본 AI
+    경로에서 구조적으로 실행 불가)은 자동으로 False가 돼야 한다.
+
+    기준 정정(2026-11-23) — 예전엔 custom_python 도구 스킬도 껐지만, 2026-11-18부터
+    대화창에서도 함수 호출로 실제 실행되므로(`tool_calling.py`) 이제는 켜져 있다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     skills = {s["name"]: s for s in pool_registry.list_skills(conn)}
@@ -611,18 +612,19 @@ def test_gc_show_in_conversation_defaults_true_but_backfill_hides_non_native_too
     for name in ("내부지식검색", "조직배정관계조회", "실시간웹검색"):
         assert skills[name]["show_in_conversation"] is True
 
-    hidden = {
-        "일반웹검색",
-        "recommend-fix-workflow",
+    for name in ("일반웹검색", "recommend-fix-workflow"):
+        assert skills[name]["show_in_conversation"] is False, name
+    for name in (
         "요구사항검증",
         "실패모드도출",
         "커버리지체크",
         "프레임워크템플릿생성",
         "발표자료구성",
         "테스트케이스도출",
-    }
-    for name in hidden:
-        assert skills[name]["show_in_conversation"] is False, name
+        "데이터분석",
+        "데이터시각화",
+    ):
+        assert skills[name]["show_in_conversation"] is True, name
 
     # 순수 텍스트 지침 스킬(도구 없음)은 건드리지 않는다 — 계속 True.
     assert skills["tdd-ai-workflow-checklist"]["show_in_conversation"] is True

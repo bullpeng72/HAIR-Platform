@@ -200,7 +200,7 @@ def test_job_result_records_what_smoke_test_actually_did(client_and_conn, monkey
         f"/api/briefs/{brief_id}/tasks",
         json={"tasks": [{"role_name": "기록 확인", "required_skills": ["python"]}]},
     ).json()["tasks"][0]["id"]
-    body = client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]}).json()
+    body = client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]}).json()
     assert body["items"][0]["status"] == "succeeded"
     stored = conn.execute("SELECT result FROM job_items WHERE id = ?", (body["items"][0]["id"],)).fetchone()[0]
     assert json.loads(stored)["smoke_test"] == expected

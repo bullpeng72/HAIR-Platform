@@ -119,7 +119,7 @@ def test_every_seeded_skill_has_all_four_sections_on_fresh_db():
     rows = conn.execute(
         "SELECT name, description, output_format, examples, constraints FROM skill_pool"
     ).fetchall()
-    assert len(rows) == 62
+    assert len(rows) == 68
     incomplete = [
         r["name"]
         for r in rows

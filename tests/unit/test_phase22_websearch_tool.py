@@ -171,7 +171,7 @@ def test_gc194_as_crewai_tool_wraps_context_for_prompt():
 # 만들어 대화창 정적 주입·Crew 실행 양쪽에서 동일하게 동작시킨다.
 
 
-def test_gc195_tavily_context_for_prompt_formats_results_and_answer(monkeypatch):
+def test_gc195_tavily_context_for_prompt_formats_results_without_auto_answer(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "test-key")
     payload = {
         "answer": "T3Q는 데이터 분석 솔루션을 제공하는 한국 기업입니다.",
@@ -188,7 +188,10 @@ def test_gc195_tavily_context_for_prompt_formats_results_and_answer(monkeypatch)
 
     assert post_mock.call_args.kwargs["json"]["api_key"] == "test-key"
     assert post_mock.call_args.kwargs["json"]["query"] == "T3Q 한국 기업"
-    assert "요약: T3Q는 데이터 분석 솔루션을 제공하는 한국 기업입니다." in text
+    # Tavily 자동 요약은 요청하지도 싣지도 않는다(2026-11-22 — 영문 요약이 수치를 10배
+    # 부풀린 실측, `websearch._tavily_search_raw()` 참고). 원문 결과만 넘긴다.
+    assert post_mock.call_args.kwargs["json"]["include_answer"] is False
+    assert "T3Q는 데이터 분석 솔루션을 제공하는 한국 기업입니다." not in text
     assert "실시간 웹 검색 결과(Tavily)" in text
     assert "T3Q 공식 홈페이지: 빅데이터 분석 플랫폼 (https://t3q.example)" in text
 
@@ -314,7 +317,7 @@ def test_tavily_news_context_for_prompt_requests_news_topic_and_days(monkeypatch
     assert sent_json["days"] == 7
     assert "최근 7일 뉴스 검색 결과(Tavily)" in text
     assert "OpenAI, 신모델 발표: 성능이 크게 개선됐다" in text
-    assert "요약: 이번 주 OpenAI와 Anthropic이 새 모델을 발표했습니다." in text
+    assert "이번 주 OpenAI와 Anthropic이 새 모델을 발표했습니다." not in text
 
 
 def test_tavily_context_for_prompt_does_not_send_days(monkeypatch):

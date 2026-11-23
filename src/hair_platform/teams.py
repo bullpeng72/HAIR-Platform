@@ -185,6 +185,7 @@ def get_team(conn: sqlite3.Connection, team_id: int) -> dict | None:
         "completed_at": row["completed_at"],
         "pipeline_template_id": row["pipeline_template_id"],
         "use_graph_engine": bool(row["use_graph_engine"]),
+        "protect_on_reset": bool(row["protect_on_reset"]),
         "default_process": row["default_process"],
         "default_manager_agent_id": row["default_manager_agent_id"],
         "members": [_member_row_to_dict(m) for m in members],
@@ -214,6 +215,30 @@ def set_team_active(
         team_id,
         before={"is_active": bool(row["is_active"])},
         after={"is_active": is_active},
+    )
+    conn.commit()
+
+
+def set_team_reset_protection(
+    conn: sqlite3.Connection, actor_id: int, team_id: int, protected: bool
+) -> None:
+    """팀별 "공장 초기화 시 보호"(2026-11-21 설정화) — 켜진 팀은 `data_admin.
+    reset_to_factory_state()`가 팀·멤버를 지우지 않는다. 예전엔 팀 이름 목록으로
+    보호해 이름을 바꾸면 보호가 풀렸다."""
+    row = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if row is None:
+        raise ValueError("team_not_found")
+    conn.execute(
+        "UPDATE teams SET protect_on_reset = ? WHERE id = ?", (int(protected), team_id)
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "team_reset_protection_changed",
+        "team",
+        team_id,
+        before={"protect_on_reset": bool(row["protect_on_reset"])},
+        after={"protect_on_reset": protected},
     )
     conn.commit()
 
@@ -287,12 +312,7 @@ def update_team_defaults(
         # 명시적 플래그로 "전환"하는 건 새로 hierarchical이 되는 게
         # 아니라 기존 동작을 더 안정적인 방식으로 굳히는 것이므로
         # 막지 않는다.
-        already_hierarchical = (
-            team["default_process"] == "hierarchical"
-            or team["default_manager_agent_id"] is not None
-            or manager_agent_id_for_team(conn, team_id) is not None
-        )
-        if not already_hierarchical:
+        if not _is_already_hierarchical(conn, team):
             raise ValueError("hierarchical_mode_blocked_for_new_teams")
     if "pipeline_template_id" in fields and fields["pipeline_template_id"] is not None:
         template = conn.execute(
@@ -316,6 +336,10 @@ def update_team_defaults(
         )
         if effective_template_id is None:
             raise ValueError("use_graph_engine_requires_pipeline_template")
+        from hair_platform import GRAPH_ENGINE_INSTALL_HINT, graph_engine_available
+
+        if not graph_engine_available():
+            raise ValueError(GRAPH_ENGINE_INSTALL_HINT)
         from hair_platform import execution_graph
 
         execution_graph.validate_template_supported(conn, effective_template_id)
@@ -371,6 +395,19 @@ def delete_team(conn: sqlite3.Connection, actor_id: int, team_id: int) -> None:
     conn.commit()
 
 
+MANAGER_ROLE_LABEL_KEYWORD = "매니저"
+
+
+def _is_already_hierarchical(conn: sqlite3.Connection, team: sqlite3.Row) -> bool:
+    """이미 위임형으로 동작 중인 팀인지 — 명시 플래그(`default_process`/
+    `default_manager_agent_id`) 또는 역할 라벨 추정(`manager_agent_id_for_team()`)."""
+    return (
+        team["default_process"] == "hierarchical"
+        or team["default_manager_agent_id"] is not None
+        or manager_agent_id_for_team(conn, team["id"]) is not None
+    )
+
+
 def add_team_member(
     conn: sqlite3.Connection,
     actor_id: int,
@@ -381,9 +418,22 @@ def add_team_member(
 ) -> int:
     if member_type not in ("human", "agent"):
         raise ValueError(f"unsupported_member_type:{member_type}")
-    team = conn.execute("SELECT id FROM teams WHERE id = ?", (team_id,)).fetchone()
+    team = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
     if team is None:
         raise ValueError("team_not_found")
+    # "매니저" 라벨 우회 차단(2026-11-23, "팀이나 파이프라인에서 병행위임 기능 가능 여부를
+    # 확인" 후속) — `manager_agent_id_for_team()`은 역할 라벨에 "매니저"가 든 Agent 멤버를
+    # 매니저로 추정해 팀을 위임형(hierarchical)으로 돌린다. `update_team_defaults()`가 새
+    # 팀의 위임형 지정을 막아도, 새 팀에 이 라벨로 Agent를 넣기만 하면 그대로 위임형이 됐고
+    # 그 뒤엔 기본값 hierarchical 저장까지 "이미 위임형"으로 통과했다(실측 재현). 같은 정책을
+    # 여기서도 적용한다 — 이미 위임형인 팀(기존 팀)은 그대로 둔다. 사람 멤버는 매니저 추정
+    # 대상이 아니라(Agent만 본다) 막지 않는다.
+    if (
+        member_type == "agent"
+        and MANAGER_ROLE_LABEL_KEYWORD in (role_label or "")
+        and not _is_already_hierarchical(conn, team)
+    ):
+        raise ValueError("manager_role_label_blocked_for_new_teams")
     table = "human_pool" if member_type == "human" else "agent_pool"
     member = conn.execute(
         f"SELECT id FROM {table} WHERE id = ?", (member_id,)

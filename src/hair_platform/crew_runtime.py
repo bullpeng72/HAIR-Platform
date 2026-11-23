@@ -44,6 +44,7 @@ MCPServerAdapter` 클래스 자체)로만 검증할 수 있다.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from collections.abc import Callable
@@ -278,7 +279,13 @@ def _crewai_llm(provider: str, model: str, temperature: float | None = None):
         if provider == "ollama"
         else CREWAI_LLM_TIMEOUT_SECONDS
     )
-    kwargs: dict[str, Any] = {"timeout": timeout_seconds}
+    # `_skip_mcp_handler`(2026-11-21, "모든 파이프라인 점검") — litellm 1.106은 tools가 실린
+    # 모든 completion에서 자체 MCP 프록시 핸들러를 import하는데, 그 모듈은 mcp>=2.2가 필요해
+    # 설치된 mcp(crewai 요구: >=1.16)와 맞지 않으면 `ImportError: CacheableResult`로 호출이
+    # 실패한다. 그래서 CrewAI 경로의 네이티브 도구 호출이 전부 실패하고 텍스트 파싱으로
+    # 떨어져 `<tool_call>` 문자열이 산출물에 섞였다(실측 재현). 이 플랫폼은 litellm의 MCP
+    # 프록시 기능을 쓰지 않으므로(MCP 도구는 CrewAI가 직접 붙인다) 핸들러를 건너뛴다.
+    kwargs: dict[str, Any] = {"timeout": timeout_seconds, "_skip_mcp_handler": True}
     # 모델별 생성 옵션(2026-11-21, `model_options.py`) — 모델 레지스트리에 admin이
     # 등록한 값만 보낸다(특정 모델용 하드코딩 없음). provider가 받지 않는 키는
     # `for_model`이 이미 걸러 낸다(예: OpenAI는 top_k 없음). top_p는 crewai LLM의
@@ -302,6 +309,8 @@ def _crewai_llm(provider: str, model: str, temperature: float | None = None):
 # 보장하진 않는다 — Gate A-G의 역할을 대체하지 않고 그 앞단의 저렴한
 # 1차 방어선일 뿐이라는 걸 명시해둔다.
 _GUARDRAIL_MIN_CHARS = 20
+# CrewAI `Task.guardrail_max_retries` 기본값과 같게 — Task 생성 시 명시해 둘을 맞춘다.
+_GUARDRAIL_MAX_RETRIES = 3
 
 
 def _min_length_guardrail(output):
@@ -317,13 +326,102 @@ def _min_length_guardrail(output):
     # 안 드러나는 함정 — `Task(...)` 생성 시점에만 터진다). 검증기 자체가
     # "annotation이 있으면 검사하되 없으면 요구하지 않는다"고 돼 있어,
     # annotation을 아예 생략하는 게 유일하게 안전한 해법이다.
-    text = (output.raw or "").strip()
+    # 출력 정리(2026-11-21, 파이프라인 실측 — `model_output.py`): 내부 추론(</think> 앞)·
+    # "Thought:"/"Final Answer:" 흔적·실행되지 않은 <tool_call> 문자열이 단계 산출물로
+    # 그대로 저장됐다. 정리한 본문을 산출물로 돌려주고(CrewAI가 guardrail 결과로 교체),
+    # 정리하고 나니 남는 게 없으면(도구 호출만 하다 끝남) 결과를 직접 쓰라고 재시도시킨다.
+    from hair_platform import model_output
+
+    raw = output.raw or ""
+    text = model_output.clean(raw)
     if len(text) < _GUARDRAIL_MIN_CHARS:
+        if model_output.leaked(raw):
+            return False, (
+                "출력에 내부 추론이나 실행되지 않은 도구 호출만 있고 결과물이 없습니다 — "
+                "도구 호출 형식을 본문에 쓰지 말고, 지금까지 확인한 내용으로 결과물을 "
+                "직접 완성해 작성하세요."
+            )
         return False, (
             f"산출물이 비어있거나 너무 짧습니다(최소 {_GUARDRAIL_MIN_CHARS}자 "
             "필요) — 역할에 맞는 구체적인 내용으로 다시 작성하세요."
         )
-    return True, output.raw
+    problem = _quality_problem(text)
+    if problem is not None:
+        return False, problem
+    return True, text
+
+
+_REPETITION_RETRY_MESSAGE = (
+    "출력이 같은 문장을 반복하는 루프에 빠졌습니다. 고민한 내용은 쓰지 말고, 이 단계의 "
+    "결과물(형식에 맞춘 최종본)만 처음부터 한 번에 작성하세요."
+)
+# 작업 과정 출력(2026-11-21, `model_output.work_in_progress`) — 영어 메모와 초안이 번갈아
+# 나오는 출력은 정리로 최종본을 골라낼 수 없어, 최종 결과물만 한 번에 다시 내게 한다.
+_WORK_IN_PROGRESS_RETRY_MESSAGE = (
+    "출력에 작업 과정(영어 메모·검토 독백·같은 부분의 초안 반복)이 섞여 있습니다. "
+    "생각과 수정은 출력 전에 끝내고, 최종 결과물 하나만 처음부터 끝까지 한 번에 "
+    "작성하세요 — 메모·계획·자기 점검 문장은 쓰지 마세요."
+)
+
+
+_TRUNCATED_RETRY_MESSAGE = (
+    "출력이 끝까지 작성되지 않고 중간에 잘렸습니다(열린 슬라이드·태그가 닫히지 않음). 사전 검토는 "
+    "짧게 끝내고, 결과물을 처음부터 마지막 닫는 태그까지 빠짐없이 다시 작성하세요."
+)
+
+
+def _quality_problem(text: str) -> str | None:
+    """정리된 출력의 품질 문제(반복 루프·작업 과정) — 재시도 지시문, 없으면 None."""
+    from hair_platform import model_output
+
+    if model_output.repetition_loop(text):
+        _log_rejected("repetition_loop", text)
+        return _REPETITION_RETRY_MESSAGE
+    if model_output.work_in_progress(text):
+        _log_rejected("work_in_progress", text)
+        return _WORK_IN_PROGRESS_RETRY_MESSAGE
+    if model_output.truncated_markup(text):
+        _log_rejected("truncated_markup", text)
+        return _TRUNCATED_RETRY_MESSAGE
+    return None
+
+
+def _log_rejected(reason: str, text: str) -> None:
+    """품질 재시도로 거부한 출력의 표본을 남긴다 — 오탐인지 나중에 확인할 수 있게(2026-11-22,
+    SW 개발 파이프라인 실측에서 거부된 출력이 어디에도 남지 않아 원인을 볼 수 없었다)."""
+    lines = [line.strip() for line in text.splitlines() if len(line.strip()) >= 20]
+    top = max(set(lines), key=lines.count) if lines else ""
+    logging.getLogger(__name__).warning(
+        "output guardrail rejected (%s): %d chars, most repeated line x%d: %.120s | head: %.300s",
+        reason, len(text), lines.count(top) if top else 0, top, text[:300].replace("\n", " "),
+    )
+
+
+def _output_guardrail(max_retries: int | None = None):
+    """Task마다 새로 만드는 산출물 guardrail — 마지막 시도에서는 품질 재시도(반복 루프·작업
+    과정)를 걸지 않고 정리본을 받는다(2026-11-22). CrewAI는 재시도를 다 쓰면 Task 전체를 실패로
+    끝내는데, SW 개발 파이프라인 실측에서 구현 Agent 하나가 4번 연속 반복 판정을 받아 파이프라인
+    전체가 실패했다. 품질 판단은 그 뒤 Gate·사람 검토가 맡는다. 비어 있는 출력은 마지막에도
+    실패시킨다(저장할 결과물이 없다)."""
+    limit = _GUARDRAIL_MAX_RETRIES if max_retries is None else max_retries
+    attempts = {"n": 0}
+
+    def guardrail(output):  # annotation 없음 — `_min_length_guardrail` 주석 참고
+        attempts["n"] += 1
+        if attempts["n"] <= limit:
+            return _min_length_guardrail(output)
+        from hair_platform import model_output
+
+        text = model_output.clean(output.raw or "")
+        if len(text) < _GUARDRAIL_MIN_CHARS:
+            return _min_length_guardrail(output)
+        if _quality_problem(text) is not None:
+            logging.getLogger(__name__).warning(
+                "output guardrail: accepting output on final attempt despite quality problem"
+            )
+        return True, text
+
+    return guardrail
 
 
 # 플랫폼 공통 `Task.expected_output` 기본 문구 — `agent_pool.
@@ -372,12 +470,16 @@ def _agent_backstory(
     skill_text = ", ".join(skills) if skills else "특별히 명시된 스킬 없음"
     backstory = f"'{role_name}' 역할의 숙련자로서 보유 역량은 {skill_text}이다."
     knowledge = pool_registry.skill_knowledge_text(conn, skills)
-    return (
+    from hair_platform import org_policy
+
+    language = org_policy.output_language_instruction()
+    text = (
         f"{backstory}\n\n보유 역량 상세({pool_registry.SKILL_KNOWLEDGE_GUIDANCE})\n"
         f"{knowledge}\n\n{skill_prompting.SKILL_USAGE_PRINCIPLES}\n\n{skill_prompting.QUALITY_BAR}"
         if knowledge
         else backstory
     )
+    return f"{text}\n\n{language}" if language else text
 
 
 def crewai_agent_generator(
@@ -395,6 +497,10 @@ def crewai_agent_generator(
     2026-09-27, "MCP Tool처럼, CrewAI Tool처럼 동작하도록 개선해줘" —
     `GeneratorFn` 계약 자체에 conn을 추가해 생성 시점부터 이 Agent가
     쓸 도구를 가지고 태어나게 했다)."""
+    from hair_platform import CREWAI_INSTALL_HINT, crewai_available
+
+    if not crewai_available():  # 기본 설치에서 "No module named 'crewai'"만 보이던 것을 안내로(2026-11-23)
+        raise RuntimeError(CREWAI_INSTALL_HINT)
     from crewai import Agent, Crew, Process, Task
     from crewai.crews.crew_output import CrewOutput
 
@@ -423,12 +529,20 @@ def crewai_agent_generator(
             ),
             expected_output=DEFAULT_EXPECTED_OUTPUT,
             agent=agent,
-            guardrail=_min_length_guardrail,
+            guardrail=_output_guardrail(),
+            guardrail_max_retries=_GUARDRAIL_MAX_RETRIES,
         )
         _reset_crewai_local_task_output_storage()
-        crew = Crew(
-            agents=[agent], tasks=[task], process=Process.sequential, verbose=False
-        )
+        # 인자를 dict로 넘긴다(아래 `run_crew()`의 `Crew(**crew_kwargs)`와 같은 방식) — Crew는
+        # pydantic 모델이라 런타임에는 키워드 인자가 정상인데, 일부 Pylance 환경이 Crew의
+        # 생성자 시그니처를 못 풀어 "No parameter named 'agents'"로 표시했다(2026-11-23).
+        crew_kwargs: dict[str, Any] = {
+            "agents": [agent],
+            "tasks": [task],
+            "process": Process.sequential,
+            "verbose": False,
+        }
+        crew = Crew(**crew_kwargs)
         result = crew.kickoff()
         # `kickoff()`의 선언 반환형은 `CrewOutput | CrewStreamingOutput`이지만
         # `stream`을 켜지 않는 이 호출에서는 항상 `CrewOutput`이다 — 정적으로
@@ -490,6 +604,7 @@ def run_crew(
     manager_model: str | None = None,
     parallel_agent_ids: list[int] | None = None,
     self_review: bool = False,
+    eval_task_type: str = "document_creation",
 ) -> dict:
     """여러 온보딩된 Agent를 CrewAI Crew로 묶어 실제 협업
     실행한다. N번째 `agent_ids`가 N번째 `task_descriptions`를 맡는다.
@@ -783,7 +898,8 @@ def run_crew(
                         "코워커들에게 위임한 하위 과업들의 결과를 모두 "
                         "통합한, 실무에 바로 쓸 수 있는 하나의 완성된 최종 산출물",
                     ),
-                    guardrail=_min_length_guardrail,
+                    guardrail=_output_guardrail(),
+                    guardrail_max_retries=_GUARDRAIL_MAX_RETRIES,
                 )
             ]
         else:
@@ -816,7 +932,8 @@ def run_crew(
                     agent=crewai_agents[i],
                     context=context,
                     async_execution=is_parallel,
-                    guardrail=_min_length_guardrail,
+                    guardrail=_output_guardrail(),
+                    guardrail_max_retries=_GUARDRAIL_MAX_RETRIES,
                 )
                 tasks.append(draft_task)
                 task_owner_rows.append(rows[i])
@@ -840,7 +957,8 @@ def run_crew(
                         expected_output="모든 요구사항이 반영되고 기존 동작은 보존된 최종본",
                         agent=crewai_agents[i],
                         context=[draft_task],
-                        guardrail=_min_length_guardrail,
+                        guardrail=_output_guardrail(),
+                        guardrail_max_retries=_GUARDRAIL_MAX_RETRIES,
                     )
                     tasks.append(review_task)
                     task_owner_rows.append(rows[i])
@@ -1004,7 +1122,9 @@ def run_crew(
             # 뽑아준다 — 반환값은 그대로 CrewOutput이라 아래 로직은 전혀
             # 안 바뀐다.
             crew_label = ", ".join(r["role_name"] for r in worker_rows)
-            eval_result = agent_evaluation.run_and_score_crew(crew_label, crew.kickoff)
+            eval_result = agent_evaluation.run_and_score_crew(
+                crew_label, crew.kickoff, task_type=eval_task_type
+            )
             result = eval_result["output"]
 
     per_agent = []

@@ -193,6 +193,7 @@ def _run_crew_with_output(output_text, gate_scores=None):
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         return {
             "final_output": output_text,

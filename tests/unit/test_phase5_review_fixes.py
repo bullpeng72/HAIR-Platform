@@ -84,7 +84,7 @@ def test_gc43_pool_search_filters_apply_to_agents_too(client_and_conn):
     _login(client, "manager1", "managerpass")
     brief_id, task_id = _make_brief_with_task(client, "디자이너")
 
-    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
+    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]})
     item_id = resp.json()["items"][0]["id"]
     agent_id = conn.execute(
         "SELECT id FROM agent_pool WHERE source_job_item_id = ?", (item_id,)
@@ -111,7 +111,7 @@ def test_gc44_org_chart_attributes_agent_assignment_to_requester(client_and_conn
     _login(client, "manager1", "managerpass")
     brief_id, task_id = _make_brief_with_task(client, "디자이너")
 
-    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
+    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]})
     item_id = resp.json()["items"][0]["id"]
     agent_id = conn.execute(
         "SELECT id FROM agent_pool WHERE source_job_item_id = ?", (item_id,)

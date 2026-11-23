@@ -15,6 +15,7 @@ import pytest
 from hair_platform import execution_graph
 from hair_platform import pipeline_runtime as pr
 from hair_platform.auth import Role, create_user
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 from tests.unit.test_phase17_collab_workspace import _login
 
@@ -505,7 +506,7 @@ def test_completed_run_checkpoint_is_cleaned_up(setup):
         "hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()
     ):
         execution_graph.run_pipeline_graph(conn, run_id, admin_id, saver)
-        config = {"configurable": {"thread_id": f"pipeline_run_{run_id}"}}
+        config: RunnableConfig = {"configurable": {"thread_id": f"pipeline_run_{run_id}"}}
         assert saver.get_tuple(config) is None
 
 
@@ -520,7 +521,7 @@ def test_escalated_run_checkpoint_is_preserved(setup):
     ):
         result = execution_graph.run_pipeline_graph(conn, run_id, admin_id, saver)
         assert "__interrupt__" in result
-        config = {"configurable": {"thread_id": f"pipeline_run_{run_id}"}}
+        config: RunnableConfig = {"configurable": {"thread_id": f"pipeline_run_{run_id}"}}
         assert saver.get_tuple(config) is not None
 
 

@@ -22,10 +22,11 @@ OpenAI는 과금, Ollama는 로컬 실행이라 API 비용은 없지만 로컬 �
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 
-from hair_platform import audit, model_options, tool_calling
+from hair_platform import audit, llm_usage, model_options, tool_calling
 
 DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-5",
@@ -116,9 +117,25 @@ def resolve_provider_and_model(
         if configured is not None:
             provider = configured["provider"]
             model = model or configured["model"]
-    provider = (
-        provider or os.environ.get("HAIR_PLATFORM_LLM_PROVIDER") or _auto_detect()
-    )
+    # provider를 아무도 안 정했을 때(2026-11-21, 파이프라인 실측 — 모델 설정이 없는 새 Agent가
+    # 단계 실행에서 "API 키 필요"로 즉시 실패했다): DB 연결이 없는 호출부(Agent 실행·Crew·
+    # 파이프라인)도 admin이 정한 플랫폼 기본 LLM을 쓰고, 그다음 환경변수 → API 키 자동판별 →
+    # 레지스트리 첫 활성 모델 순으로 고른다. Agent에 provider가 설정돼 있으면 여기 오지 않는다.
+    if provider is None:
+        default = model_options.platform_default()
+        if default is not None:
+            provider = default[0]
+            model = model or default[1]
+    if provider is None:
+        provider = os.environ.get("HAIR_PLATFORM_LLM_PROVIDER")
+    if provider is None:
+        try:
+            provider = _auto_detect()
+        except RuntimeError:
+            fallback = model_options.first_active_model()
+            if fallback is None:
+                raise
+            provider, model = fallback[0], model or fallback[1]
     if provider not in DEFAULT_MODELS:
         raise ValueError(
             f"지원하지 않는 provider입니다: {provider!r} "
@@ -245,9 +262,12 @@ def _call_anthropic_with_tools(
     import anthropic
 
     client = anthropic.Anthropic(timeout=timeout_seconds or _CLOUD_LLM_TIMEOUT_SECONDS)
-    tool_schemas = [tool_calling.tool_schema_anthropic(t) for t in tools]
+    # SDK의 tools 인자는 provider별 TypedDict(`ToolUnionParam` 등)로 선언돼 있어, 우리가 만드는
+    # 일반 dict 목록은 타입 검사에서 안 맞는다 — 아래 `messages`처럼 `list`로 둔다(2026-11-23).
+    tool_schemas: list = [tool_calling.tool_schema_anthropic(t) for t in tools]
     tools_by_name = {t.name: t for t in tools}
     messages: list = [{"role": "user", "content": prompt}]
+    interim: list[str] = []  # 도구 호출 턴의 본문(`tool_calling.merge_interim_text()`)
     for _ in range(max_iterations):
         resp = client.messages.create(
             model=model,
@@ -257,8 +277,11 @@ def _call_anthropic_with_tools(
             tools=tool_schemas,
             **model_options.request_options("anthropic", model, temperature),
         )
+        llm_usage.record_anthropic(model, resp)
+        text = "".join(b.text for b in resp.content if b.type == "text")
         if resp.stop_reason != "tool_use":
-            return "".join(b.text for b in resp.content if b.type == "text")
+            return tool_calling.merge_interim_text(interim, text)
+        interim.append(text)
         messages.append({"role": "assistant", "content": resp.content})
         tool_results = []
         for block in resp.content:
@@ -284,10 +307,11 @@ def _call_anthropic_with_tools(
             tool_choice={"type": "none"},
             **model_options.request_options("anthropic", model, temperature),
         )
+        llm_usage.record_anthropic(model, resp)
         final = "".join(b.text for b in resp.content if b.type == "text")
     except Exception:  # noqa: BLE001 — 마무리 실패 시 기존 안내문으로
         final = ""
-    return final or _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
+    return tool_calling.merge_interim_text(interim, final) or _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
 
 
 def _call_openai_with_tools(
@@ -304,12 +328,15 @@ def _call_openai_with_tools(
     import openai
 
     client = openai.OpenAI(timeout=timeout_seconds or _CLOUD_LLM_TIMEOUT_SECONDS)
-    tool_schemas = [tool_calling.tool_schema_openai(t) for t in tools]
+    # SDK의 tools 인자는 provider별 TypedDict(`ToolUnionParam` 등)로 선언돼 있어, 우리가 만드는
+    # 일반 dict 목록은 타입 검사에서 안 맞는다 — 아래 `messages`처럼 `list`로 둔다(2026-11-23).
+    tool_schemas: list = [tool_calling.tool_schema_openai(t) for t in tools]
     tools_by_name = {t.name: t for t in tools}
     messages: list = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
     ]
+    interim: list[str] = []  # 도구 호출 턴의 본문(`tool_calling.merge_interim_text()`)
     for _ in range(max_iterations):
         resp = client.chat.completions.create(
             model=model,
@@ -317,9 +344,11 @@ def _call_openai_with_tools(
             tools=tool_schemas,
             **model_options.request_options("openai", model, temperature),
         )
+        llm_usage.record_openai(model, resp)
         msg = resp.choices[0].message
         if not msg.tool_calls:
-            return msg.content or ""
+            return tool_calling.merge_interim_text(interim, msg.content or "")
+        interim.append(msg.content or "")
         messages.append(msg.model_dump(exclude_unset=True))
         for tc in msg.tool_calls:
             try:
@@ -347,10 +376,11 @@ def _call_openai_with_tools(
             tool_choice="none",
             **model_options.request_options("openai", model, temperature),
         )
+        llm_usage.record_openai(model, resp)
         final = resp.choices[0].message.content or ""
     except Exception:  # noqa: BLE001 — 마무리 실패 시 기존 안내문으로
         final = ""
-    return final or _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
+    return tool_calling.merge_interim_text(interim, final) or _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
 
 
 def _call_ollama_with_tools(
@@ -369,12 +399,15 @@ def _call_ollama_with_tools(
     import httpx
 
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-    tool_schemas = [tool_calling.tool_schema_openai(t) for t in tools]
+    # SDK의 tools 인자는 provider별 TypedDict(`ToolUnionParam` 등)로 선언돼 있어, 우리가 만드는
+    # 일반 dict 목록은 타입 검사에서 안 맞는다 — 아래 `messages`처럼 `list`로 둔다(2026-11-23).
+    tool_schemas: list = [tool_calling.tool_schema_openai(t) for t in tools]
     tools_by_name = {t.name: t for t in tools}
     messages: list = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
     ]
+    interim: list[str] = []  # 도구 호출 턴의 본문(`tool_calling.merge_interim_text()`)
     for _ in range(max_iterations):
         resp = httpx.post(
             f"{base_url}/api/chat",
@@ -392,16 +425,30 @@ def _call_ollama_with_tools(
         except httpx.HTTPStatusError as exc:
             _raise_ollama_error_with_detail(resp, exc)
         data = resp.json()
+        llm_usage.record_ollama(model, data)
         msg = data["message"]
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
-            return msg.get("content", "")
+            return tool_calling.merge_interim_text(interim, msg.get("content", ""))
+        interim.append(msg.get("content", ""))
         messages.append(msg)
         for tc in tool_calls:
             fn = tc.get("function", {})
             raw_args = fn.get("arguments")
-            args = raw_args if isinstance(raw_args, dict) else {}
-            result = tool_calling.run_tool(tools_by_name, fn.get("name", ""), args)
+            # 문자열 인자(2026-11-22 점검) — 일부 모델은 arguments를 JSON 문자열로 준다.
+            # 예전엔 dict가 아니면 조용히 `{}`로 바꿔 "query 누락" 오류만 돌아갔다. OpenAI
+            # 경로처럼 JSON으로 읽고, 읽을 수 없으면 그 사실을 모델에 알려 다시 시도하게 한다.
+            if isinstance(raw_args, str):
+                try:
+                    raw_args = json.loads(raw_args) if raw_args.strip() else {}
+                except ValueError:
+                    raw_args = None
+            if isinstance(raw_args, dict):
+                result = tool_calling.run_tool(tools_by_name, fn.get("name", ""), raw_args)
+            elif raw_args is None and fn.get("arguments") is None:
+                result = tool_calling.run_tool(tools_by_name, fn.get("name", ""), {})
+            else:
+                result = "도구 호출 인자가 올바른 JSON이 아닙니다 — 다시 시도하세요."
             messages.append({"role": "tool", "content": result})
     # 상한 도달 — tools 없이 한 번 더 불러 최종 답을 받는다.
     messages.append({"role": "user", "content": _FINAL_ANSWER_INSTRUCTION})
@@ -417,10 +464,12 @@ def _call_ollama_with_tools(
             timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
-        final = (resp.json().get("message") or {}).get("content", "")
+        final_data = resp.json()
+        llm_usage.record_ollama(model, final_data)
+        final = (final_data.get("message") or {}).get("content", "")
     except Exception:  # noqa: BLE001 — 마무리 실패 시 기존 안내문으로
         final = ""
-    return final or _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
+    return tool_calling.merge_interim_text(interim, final) or _TOOL_CALL_LIMIT_EXCEEDED_MESSAGE
 
 
 # 사용자 보고(2026-10-18, "@자율 개발 크루" 품질 분석 중 실측) — QA
@@ -480,6 +529,7 @@ def _call_anthropic(
         messages=[{"role": "user", "content": prompt}],
         **model_options.request_options("anthropic", model, temperature),
     )
+    llm_usage.record_anthropic(model, resp)
     return "".join(block.text for block in resp.content if block.type == "text")
 
 
@@ -503,6 +553,7 @@ def _call_openai(
         ],
         **model_options.request_options("openai", model, temperature),
     )
+    llm_usage.record_openai(model, resp)
     return resp.choices[0].message.content or ""
 
 
@@ -551,7 +602,9 @@ def _call_ollama(
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
         _raise_ollama_error_with_detail(resp, exc)
-    return resp.json()["message"]["content"]
+    data = resp.json()
+    llm_usage.record_ollama(model, data)
+    return data["message"]["content"]
 
 
 def _raise_ollama_error_with_detail(resp, exc: Exception) -> None:

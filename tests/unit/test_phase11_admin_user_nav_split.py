@@ -48,6 +48,9 @@ def _parse_tab_entries() -> list[dict]:
         tab_id = m.group(1)
         group_m = re.search(r'group:\s*"(\w+)"', line)
         roles_m = re.search(r"roles:\s*\[([^\]]*)\]", line)
+        # 모든 탭 정의에는 roles가 있어야 한다 — 없으면 None.group()의 AttributeError 대신
+        # 어느 탭인지 바로 보이게 실패시킨다.
+        assert roles_m is not None, f"탭 '{tab_id}' 정의에 roles가 없습니다"
         roles = [r.strip().strip('"') for r in roles_m.group(1).split(",")]
         entries.append(
             {

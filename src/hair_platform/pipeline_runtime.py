@@ -130,6 +130,8 @@ def _stage_to_dict(conn: sqlite3.Connection, stage_row: sqlite3.Row) -> dict:
         "checks_requirements_traceability": bool(
             stage_row["checks_requirements_traceability"]
         ),
+        "is_requirements_source": bool(stage_row["is_requirements_source"]),
+        "on_fail_return_stage_id": stage_row["on_fail_return_stage_id"],
         "output_content_type": stage_row["output_content_type"],
         "expected_output": stage_row["expected_output"],
         "agents": [
@@ -268,6 +270,8 @@ def add_stage(
     requires_human_approval: bool = False,
     is_primary_deliverable: bool = False,
     checks_requirements_traceability: bool = False,
+    is_requirements_source: bool = False,
+    on_fail_return_stage_id: int | None = None,
     output_content_type: str = "text",
     expected_output: str = "",
 ) -> int:
@@ -312,8 +316,9 @@ def add_stage(
         "INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode, "
         "lead_role_name, instructions, gate_ids, min_gate_pass_ratio, max_retry, "
         "requires_human_approval, is_primary_deliverable, "
-        "checks_requirements_traceability, output_content_type, expected_output) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "checks_requirements_traceability, output_content_type, expected_output, "
+        "is_requirements_source, on_fail_return_stage_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             template_id,
             next_seq,
@@ -329,6 +334,8 @@ def add_stage(
             1 if checks_requirements_traceability else 0,
             output_content_type,
             expected_output,
+            1 if is_requirements_source else 0,
+            on_fail_return_stage_id or None,
         ),
     )
     stage_id = cur.lastrowid
@@ -367,6 +374,8 @@ def update_stage(
         "requires_human_approval",
         "is_primary_deliverable",
         "checks_requirements_traceability",
+        "is_requirements_source",
+        "on_fail_return_stage_id",
         "output_content_type",
         "expected_output",
     }
@@ -398,8 +407,11 @@ def update_stage(
             "requires_human_approval",
             "is_primary_deliverable",
             "checks_requirements_traceability",
+            "is_requirements_source",
         ):
             value = 1 if value else 0
+        if key == "on_fail_return_stage_id":
+            value = value or None  # 0·빈 값 = 해제
         set_clauses.append(f"{key} = ?")
         values.append(value)
     values.append(stage_id)
@@ -607,12 +619,102 @@ def request_pipeline_run_cancel(
     return dict(run)
 
 
-def _gate_pass_ratio(gate_scores: dict) -> float:
+def _gate_pass_ratio(gate_scores: dict, gate_ids=None) -> float:
+    """통과 비율 — `gate_ids`(단계 설정)를 주면 그 목록에 든 점수만 센다(2026-11-21,
+    "모든 파이프라인 점검"). 예전엔 단계의 `gate_ids` 설정을 무시하고 측정된 모든 점수를
+    셌다 — 파이프라인(CrewAI) 경로에서 C(실행 안정성)·D(응답 30초 SLA)·F(크루 협업
+    구조)·G(추론 노출)는 내용과 무관하게 늘 같은 값이라, 검증 단계가 내용과 상관없이
+    매번 기준 미달로 사람 검토에 넘어갔다. 목록에 없는 점수도 기록·표시는 그대로 한다."""
+    if gate_ids is not None:
+        wanted = set(gate_ids)
+        gate_scores = {k: v for k, v in gate_scores.items() if k in wanted}
     measured = [g for g in gate_scores.values() if not g.get("not_measured")]
     if not measured:
         return 1.0  # 측정 신호가 없으면 막을 근거가 없다(기존 webui Gate 표시 원칙과 동일).
     passed = [g for g in measured if g.get("passed")]
     return len(passed) / len(measured)
+
+
+def requirements_traceability_score(
+    conn: sqlite3.Connection, run_id: int, stage, stage_output: str
+) -> dict | None:
+    """요구사항 추적성(1단계 요구사항 대비 이 단계 산출물) — `checks_requirements_traceability`
+    단계에서만 잰다. 두 실행 엔진 공통(2026-11-21 — 그래프 엔진은 지금까지 아예 재지
+    않았다). 단계 `gate_ids`에 'requirements_traceability'가 있으면 통과 판정에 참여하고,
+    없으면 예전처럼 정보 제공용(not_measured)으로만 남긴다."""
+    if not stage["checks_requirements_traceability"]:
+        return None
+    # 기준 문서 = '요구사항 정의 단계'로 지정된 단계의 최신 통과 산출물(2026-11-22). 지정이 없으면
+    # 1단계(기존 동작). 여러 단계를 지정했으면 이 단계보다 앞선 것 중 가장 뒤의 것.
+    requirements_row = conn.execute(
+        "SELECT prs.output FROM pipeline_run_stages prs "
+        "JOIN pipeline_stages ps ON ps.id = prs.stage_id "
+        "WHERE prs.pipeline_run_id = ? AND prs.status IN ('passed', 'approved') "
+        "AND ps.is_requirements_source = 1 AND ps.seq_order < ? "
+        "ORDER BY ps.seq_order DESC, prs.id DESC LIMIT 1",
+        (run_id, stage["seq_order"]),
+    ).fetchone() or conn.execute(
+        "SELECT prs.output FROM pipeline_run_stages prs "
+        "JOIN pipeline_stages ps ON ps.id = prs.stage_id "
+        "WHERE prs.pipeline_run_id = ? AND ps.seq_order = 1 "
+        "AND prs.status IN ('passed', 'approved') "
+        "ORDER BY prs.id DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    if requirements_row is None:
+        return None
+    traceability = requirements_traceability_llm.assess_traceability(
+        conn, requirements_row["output"], stage_output
+    )
+    gate_ids = json.loads(stage["gate_ids"]) if stage["gate_ids"] else []
+    if "requirements_traceability" not in gate_ids:
+        traceability["not_measured"] = True
+    return traceability
+
+
+def return_target_stage(conn: sqlite3.Connection, stage) -> sqlite3.Row | None:
+    """검토 실패 시 되돌아갈 단계(`on_fail_return_stage_id`) — 같은 템플릿의, 이 단계보다 앞선
+    단계일 때만. 지정이 없거나 잘못됐으면 None(예전처럼 이 단계만 재시도)."""
+    target_id = stage["on_fail_return_stage_id"]
+    if not target_id:
+        return None
+    target = conn.execute(
+        "SELECT * FROM pipeline_stages WHERE id = ? AND pipeline_template_id = ?",
+        (target_id, stage["pipeline_template_id"]),
+    ).fetchone()
+    if target is None or target["seq_order"] >= stage["seq_order"]:
+        return None
+    return target
+
+
+_REWORK_REVIEW_CHARS = 6000
+
+
+def rework_feedback(conn: sqlite3.Connection, run_id: int, stage) -> str:
+    """이 단계로 되돌아온 검토 의견(2026-11-22, 하드코딩·스텁 점검 4순위) — 이 단계를 되돌아갈
+    곳으로 지정한 검토 단계가 이 단계의 마지막 시도 뒤에 Gate 미달로 끝났으면, 그 검토 산출물과
+    미통과 사유를 다시 쓰기 지시로 돌려준다. 예전에는 검토 단계만 재시도해, 검토자가 결함을
+    짚어도 고칠 사람이 없어 결국 사람 검토로 넘어갔다(사업/기획 2차 실측)."""
+    last_own = conn.execute(
+        "SELECT MAX(id) FROM pipeline_run_stages WHERE pipeline_run_id = ? AND stage_id = ?",
+        (run_id, stage["id"]),
+    ).fetchone()[0] or 0
+    row = conn.execute(
+        "SELECT prs.output, prs.gate_scores, ps.name FROM pipeline_run_stages prs "
+        "JOIN pipeline_stages ps ON ps.id = prs.stage_id "
+        "WHERE prs.pipeline_run_id = ? AND ps.on_fail_return_stage_id = ? "
+        "AND prs.status = 'failed_retrying' AND prs.id > ? ORDER BY prs.id DESC LIMIT 1",
+        (run_id, stage["id"], last_own),
+    ).fetchone()
+    if row is None:
+        return ""
+    summary = _gate_failure_summary(json.loads(row["gate_scores"] or "{}"))
+    review = (row["output"] or "")[:_REWORK_REVIEW_CHARS]
+    return (
+        f"\n\n[되돌아온 검토 결과 — '{row['name']}' 단계, 미통과: {summary}]\n{review}\n\n"
+        "위 검토 의견을 반영해 직전 초안을 고친 완성본 전체를 다시 작성하세요. 지적되지 않은 "
+        "부분은 유지하고, 사실·수치는 근거 없이 바꾸지 마세요."
+    )
 
 
 def _gate_failure_summary(gate_scores: dict) -> str:
@@ -655,6 +757,28 @@ def _stage_initial_input(conn: sqlite3.Connection, task_id: int) -> str:
     if latest_human is not None:
         parts.append(f"참고할 사람 작성 자료:\n{latest_human['content']}")
     return "\n\n".join(parts)
+
+
+def with_brief_reference(conn: sqlite3.Connection, task_id: int, prior_output: str) -> str:
+    """2단계 이후의 입력 — 이전 단계 산출물 + 원 업무 요청(Brief) 전문(참고용).
+
+    실측(2026-11-21, 실적 보고 파이프라인 실제 실행): Brief는 1단계에만 들어가고 이후
+    단계는 직전 산출물만 받았다. 2단계 산출물이 깨지자(도구 호출 문자열뿐) 3·4단계가
+    원 요청의 목표 52억·영업이익·지역 비중을 잃고 '확인 필요'로 채웠고, 4단계 요구사항
+    추적성 검사가 바로 그 항목들을 누락으로 잡았다. 앞 단계가 무엇을 내든 원 요청을
+    다시 확인할 수 있게 모든 단계에 함께 넣는다(두 실행 엔진 공통)."""
+    task = conn.execute("SELECT brief_id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    brief = (
+        conn.execute("SELECT raw_text FROM briefs WHERE id = ?", (task["brief_id"],)).fetchone()
+        if task is not None
+        else None
+    )
+    if brief is None or not (brief["raw_text"] or "").strip():
+        return prior_output
+    return (
+        f"{prior_output}\n\n[원 업무 요청(Brief) — 모든 단계 공통 참고, 수치·조건은 여기서 "
+        f"확인하세요]\n{brief['raw_text']}"
+    )
 
 
 def _resolve_role_agent_id(conn: sqlite3.Connection, role_name: str) -> int:
@@ -819,7 +943,7 @@ def _execute_stage_attempt(
         (run_id,),
     ).fetchone()
     base_input = (
-        prior["output"]
+        with_brief_reference(conn, run["task_id"], prior["output"])
         if prior is not None
         else _stage_initial_input(conn, run["task_id"])
     )
@@ -883,6 +1007,7 @@ def _execute_stage_attempt(
     # 기존 동작 그대로 둔다(현재 시드된 "코드 검증"/"QA 기능테스트"/
     # "품질 관리 최종 판정" — 실제로 에스컬레이션 가능한 유일한 3단계
     # — 는 전부 `single`/`sequential_relay`라 영향받음).
+    retry_feedback += rework_feedback(conn, run_id, stage)
     use_self_review_tier = (
         attempt == stage["max_retry"] and stage["mode"] != "parallel_delegated"
     )
@@ -961,6 +1086,7 @@ def _execute_stage_attempt(
         # 체이닝하므로(위 "요구분석" 섹션 참고) CrewAI 자체 메모리가
         # 따로 필요 없다 — 꺼서 이 숨은 OpenAI 의존을 완전히 없앤다.
         memory=False,
+        eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
         provider=stage_provider,
         model=stage_model,
         manager_agent_id=manager_agent_id,
@@ -1024,6 +1150,11 @@ def _execute_stage_attempt(
         gate_scores["code_syntax"] = agent_evaluation.compute_code_syntax_check(
             stage_output
         )
+    # 실행 가능성 Gate(2026-11-22 C안) — 단계 gate_ids에 있을 때만 잰다(SW 개발 "구현").
+    if "deliverable_runnable" in json.loads(stage["gate_ids"] or "[]"):
+        gate_scores["deliverable_runnable"] = agent_evaluation.compute_deliverable_runnable(
+            stage_output
+        )
 
     # 실측(2026-11-06, park_member 로드러너 게임 데모) — "구현" 단계
     # 매니저가 'Delegate work to coworker'를 한 번도 호출하지 않고
@@ -1063,23 +1194,12 @@ def _execute_stage_attempt(
     # 도메인 파이프라인의 검증 단계가 이름을 다르게 지어도 똑같이
     # 요구사항 추적성을 검사받도록, 단계명과 무관한 명시적 플래그
     # (`checks_requirements_traceability`)로 바꾼다.
-    if stage["checks_requirements_traceability"]:
-        requirements_row = conn.execute(
-            "SELECT prs.output FROM pipeline_run_stages prs "
-            "JOIN pipeline_stages ps ON ps.id = prs.stage_id "
-            "WHERE prs.pipeline_run_id = ? AND ps.seq_order = 1 "
-            "AND prs.status IN ('passed', 'approved') "
-            "ORDER BY prs.id DESC LIMIT 1",
-            (run_id,),
-        ).fetchone()
-        if requirements_row is not None:
-            traceability = requirements_traceability_llm.assess_traceability(
-                conn, requirements_row["output"], stage_output
-            )
-            traceability["not_measured"] = True
-            gate_scores["requirements_traceability"] = traceability
+    stage_gate_ids = json.loads(stage["gate_ids"]) if stage["gate_ids"] else None
+    traceability = requirements_traceability_score(conn, run_id, stage, stage_output)
+    if traceability is not None:
+        gate_scores["requirements_traceability"] = traceability
 
-    ratio = _gate_pass_ratio(gate_scores)
+    ratio = _gate_pass_ratio(gate_scores, stage_gate_ids)
     passed = ratio >= stage["min_gate_pass_ratio"]
     if stage["mode"] == "parallel_delegated" and not gate_scores["delegation_check"]["passed"]:
         passed = False
@@ -1137,6 +1257,25 @@ def _execute_stage_attempt(
             budget_exceeded = retries_so_far >= task_row["max_retry_budget"]
 
         if attempt < stage["max_retry"] and not budget_exceeded:
+            target = return_target_stage(conn, stage)
+            if target is not None:
+                # 검토 실패 → 지정한 앞 단계(작성)로 돌아가 검토 의견을 반영해 다시 쓰게 한다. 그
+                # 단계가 통과하면 평소처럼 이 단계까지 다시 진행되고, 이 단계의 시도 횟수는 계속
+                # 늘어나 `max_retry`를 넘으면 사람 검토로 넘어간다(무한 반복 없음).
+                conn.execute(
+                    "UPDATE pipeline_runs SET current_stage_seq = ? WHERE id = ?",
+                    (target["seq_order"], run_id),
+                )
+                audit.record(
+                    conn, actor_id, "pipeline_stage_rework_requested", "pipeline_run_stage",
+                    run_stage_id, after={"return_to_stage_id": target["id"], "attempt": attempt},
+                )
+                conn.commit()
+                if on_stage_resolved is not None:
+                    on_stage_resolved()
+                run = conn.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+                _execute_stage_attempt(conn, run, target, actor_id, on_stage_resolved)
+                return
             conn.commit()
             if on_stage_resolved is not None:
                 on_stage_resolved()
@@ -1278,6 +1417,15 @@ def resolve_stage_decision(
     ).fetchone()
     assert stage is not None
     run_id = run["id"]
+    # 결정 대상 확인(2026-11-22, "모든 파이프라인 점검" 실측) — 지금까지는 아무 단계 행이나 받아,
+    # 5단계가 사람 검토로 넘어간(escalated) 실행에서 이미 끝난 4단계 행을 승인하자 5단계를 건너뛰고
+    # 6단계로 진행됐다. 실행이 승인 대기 중이고, 그 행이 지금 단계의 결정 대기 행일 때만 받는다.
+    if (
+        run["status"] != "paused_for_approval"
+        or run_stage["status"] not in ("passed", "escalated")
+        or stage["seq_order"] != run["current_stage_seq"]
+    ):
+        raise ValueError("pipeline_run_stage_not_awaiting_decision")
 
     if approved:
         conn.execute(

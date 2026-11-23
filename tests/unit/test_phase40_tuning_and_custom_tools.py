@@ -173,7 +173,8 @@ def test_min_length_guardrail_rejects_short_and_accepts_long_output():
     long_text = "충분히 구체적인 산출물 내용입니다 " * 3
     ok, value = crew_runtime._min_length_guardrail(_FakeOutput(long_text))
     assert ok is True
-    assert value == long_text
+    # 2026-11-21 — 가드레일은 추론·도구 호출 흔적을 걷어 낸 정리본(model_output.clean)을 돌려준다.
+    assert value == long_text.strip()
 
 
 # ---------- 4) custom_python 도구 ----------

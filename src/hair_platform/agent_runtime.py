@@ -142,6 +142,10 @@ def retrieve_context(
             hits = vectorstore.search(conn, query)
         except Exception:  # noqa: BLE001 — 임베딩 API 실패를 보강 실패로만 취급
             hits = []
+        # 요청과 단어가 거의 안 겹치는 청크는 강제 주입하지 않는다(2026-11-22 실측 —
+        # `vectorstore.lexically_relevant_hits()` 참고). 다 빠지면 아래 "찾지 못했습니다"로
+        # 검색을 시도했다는 사실은 그대로 알린다.
+        hits = vectorstore.lexically_relevant_hits(query, hits)
         # 사용자 요청(2026-11-17, "Human Agency Scale... ReAct 루프가
         # 없는 단발 경로는 검색 결과가 부족해도 다시 찾아보지 못한다는
         # 한계를 최소한 투명하게라도 드러내야 한다" → "구현 시작") —
@@ -374,16 +378,20 @@ def execute_agent(
     # 함수 호출로 native/custom_python 도구를 실제로 호출할 수 있게
     # 한다(`agent_id`를 넘겨 `agent_tool_links`로 명시 연결된 도구까지
     # 포함 — skill 기반 매칭만 보는 "기본 AI"보다 범위가 넓다).
+    tool_calls: list[tuple[str, str]] = []
     if callable_tools:
-        output = llm.call_llm_with_tools(
-            resolved_provider,
-            resolved_model,
-            system,
-            augmented_prompt,
-            callable_tools,
-            timeout_seconds=timeout_seconds,
-            **tool_extra,
-        )
+        with tool_calling.record_calls() as tool_calls:
+            output = llm.call_llm_with_tools(
+                resolved_provider,
+                resolved_model,
+                system,
+                augmented_prompt,
+                callable_tools,
+                timeout_seconds=timeout_seconds,
+                **tool_extra,
+            )
+        # 차트 생성기 결과를 답에서 빼먹으면 붙인다(`tool_calling.ensure_charts_included()`).
+        output = tool_calling.ensure_charts_included(output, tool_calls)
     else:
         output = llm.call_llm(
             resolved_provider,
@@ -428,6 +436,7 @@ def execute_agent(
             resolved_model,
             timeout_seconds,
             llm_extra,
+            evidence=_review_evidence(retrieved_context, tool_calls),
         )
         if retrieval_sink is not None:
             retrieval_sink["self_review"] = review_status
@@ -449,6 +458,16 @@ def execute_agent(
     return output
 
 
+def _review_evidence(retrieved_context: str | None, tool_calls: list[tuple[str, str]]) -> str:
+    """자체 검토자가 초안의 수치를 대조할 근거 — 이번 실행에서 받은 조회 결과와 도구 결과
+    (2026-11-22, `skill_prompting.self_review_prompt()` 참고). 실패한 도구 호출(형식 안내 등)도
+    그대로 넣는다 — 검토자가 "도구가 계산하지 못한 값"을 구분할 수 있어야 한다."""
+    parts = [f"[도구 {name} 결과]\n{result}" for name, result in tool_calls]
+    if retrieved_context:
+        parts.append(f"[조회 결과]\n{retrieved_context}")
+    return "\n\n".join(parts)
+
+
 def _self_review(
     conn: sqlite3.Connection,
     agent: sqlite3.Row,
@@ -459,6 +478,7 @@ def _self_review(
     model: str,
     timeout_seconds: float | None,
     llm_extra: dict,
+    evidence: str | None = None,
 ) -> tuple[str, str]:
     """(최종 출력, 상태) — 상태: applied(검토본 채택) / rejected(검토본이 기준
     미달이라 초안 유지) / failed(호출 실패, 초안 유지)."""
@@ -475,7 +495,7 @@ def _self_review(
             provider,
             model,
             system,
-            skill_prompting.self_review_prompt(request, draft),
+            skill_prompting.self_review_prompt(request, draft, evidence),
             timeout_seconds=timeout_seconds,
             **llm_extra,
         )

@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hair-platform"
-version = "0.1.6"
+version = "0.2.0"
 description = "HAIR(Human-AI Resource Management) 협업 플랫폼 — 사람과 AI Agent를 하나의 조직도에서 배치·배분·승인·성과리뷰하는 도구. AgentForge의 자매 프로젝트."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -172,6 +172,14 @@ pythonpath = ["."]
 # 어긋나면서 phoenix의 import 자체가 깨져 pytest 실행 전체가 막힌다(이 프로젝트와
 # 무관한 플러그인) — 이 프로젝트 범위에서만 명시적으로 비활성화한다.
 addopts = "-p no:phoenix"
+
+[tool.pyright]
+# 타입 검사기 설정을 도구와 무관하게 한 곳에(2026-11-23) — VS Code의 `.vscode/settings.json`
+# (`python.analysis.extraPaths`)은 Pylance만 읽어, 다른 pyright 기반 도구(CLI·다른 편집기의
+# 언어 서버)는 src 레이아웃을 몰라 실제로 있는 `hair_platform.model_options` 등을 "unknown
+# import symbol"로 표시했다. 인터프리터는 각자 환경에서 고른다(conda HAIR 또는 .venv).
+include = ["src", "tests"]
+extraPaths = ["src"]
 
 [tool.ruff.lint]
 # B008: FastAPI의 Depends()는 함수 기본값 호출이 의도된 패턴이다(FastAPI 공식 권장) — 오탐 무시.

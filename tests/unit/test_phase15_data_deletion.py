@@ -126,7 +126,7 @@ def test_gc118_delete_brief_cascades_everything_below_it(client_and_conn):
     )
     task_id_2 = resp2.json()["tasks"][0]["id"]
     resp3 = client.post(
-        f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id_2]}
+        f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id_2]}
     )
     assert resp3.status_code == 201
 
@@ -567,6 +567,7 @@ def test_gc_delete_brief_cascades_pipeline_runs_and_stages(client_and_conn):
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         return {
             "final_output": "x",
@@ -736,10 +737,10 @@ def test_reset_to_factory_state_wipes_teams(client_and_conn):
 def test_reset_to_factory_state_protects_named_team_from_deletion(client_and_conn):
     """사용자 요청(2026-11-18, "데이터 초기화에 팀 삭제 되지 않도록
     개선") — "데이터 분석·시각화 전담팀"은 위 2026-11-10 결정("팀은
-    재시드 안 되니 지워도 된다")의 예외다(`data_admin._FACTORY_RESET_
-    PROTECTED_TEAM_NAMES`). 보호 대상이 아닌 다른 팀("테스트 팀")은
-    여전히 그대로 지워져야 한다 — 보호가 이름 하나에만 정확히 scoped
-    됐는지가 이 테스트의 핵심."""
+    재시드 안 되니 지워도 된다")의 예외다. 2026-11-21부터 보호는 팀 이름이
+    아니라 팀별 "초기화 보호" 표시(`teams.protect_on_reset`, admin이 켬)로
+    정한다. 보호 표시가 없는 다른 팀("테스트 팀")은 여전히 그대로 지워져야
+    한다 — 보호가 표시한 팀에만 정확히 scoped 됐는지가 이 테스트의 핵심."""
     _client, conn = client_and_conn
     admin_id = conn.execute(
         "SELECT id FROM users WHERE username = 'admin1'"
@@ -747,6 +748,7 @@ def test_reset_to_factory_state_protects_named_team_from_deletion(client_and_con
     agent_id = conn.execute("SELECT id FROM agent_pool LIMIT 1").fetchone()["id"]
     protected_team_id = teams.create_team(conn, admin_id, "데이터 분석·시각화 전담팀")
     teams.add_team_member(conn, admin_id, protected_team_id, "agent", agent_id)
+    teams.set_team_reset_protection(conn, admin_id, protected_team_id, True)
     other_team_id = teams.create_team(conn, admin_id, "테스트 팀")
     teams.add_team_member(conn, admin_id, other_team_id, "agent", agent_id)
 
@@ -891,4 +893,4 @@ def test_reset_to_factory_state_then_bootstrap_admin_works(client_and_conn):
     # 2026-11-08 "콘텐츠 카피라이팅" 추가(사업/기획 업무 처리 파이프라인
     # 신설, AGENT_SPECS 정규 목록에 포함)로 22 → 23. 2026-11-11 "데이터
     # 분석가"/"제안서 작성자"/"실적 보고서 작성자" 추가로 23 → 26.
-    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 26
+    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 29  # +3: 업무 문서 파이프라인 Agent(2026-11-21)

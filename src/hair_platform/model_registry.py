@@ -112,6 +112,8 @@ def list_models(conn: sqlite3.Connection, provider: str | None = None) -> list[d
             "optimization_tiers": json.loads(r["optimization_tiers"] or "[]"),
             "context_window": r["context_window"],
             "sampling_options": json.loads(r["sampling_options"] or "{}"),
+            "price_input_per_1m": r["price_input_per_1m"],
+            "price_output_per_1m": r["price_output_per_1m"],
             "latest_benchmark": latest_by_model.get(r["id"]),
         }
         for r in rows
@@ -225,6 +227,39 @@ def set_sampling_options(
     conn.commit()
     model_options.set_cached(row["provider"], row["name"], cleaned)
     return cleaned
+
+
+def set_pricing(
+    conn: sqlite3.Connection,
+    actor_id: int,
+    model_id: int,
+    price_input_per_1m: float | None,
+    price_output_per_1m: float | None,
+) -> dict:
+    """모델별 단가(100만 토큰당, 입력/출력) — admin 입력(2026-11-22, 하드코딩·스텁 점검 3순위).
+    `llm_usage.report()`가 이 값이 있는 모델만 금액을 계산한다(없으면 토큰 수만). 단가표를
+    코드에 넣지 않는다(provider·계약마다 다르고 자주 바뀐다). 로컬 모델은 0으로 둘 수 있다."""
+    for value in (price_input_per_1m, price_output_per_1m):
+        if value is not None and value < 0:
+            raise ValueError("negative_price")
+    row = conn.execute("SELECT * FROM model_registry WHERE id = ?", (model_id,)).fetchone()
+    if row is None:
+        raise ValueError("model_not_found")
+    conn.execute(
+        "UPDATE model_registry SET price_input_per_1m = ?, price_output_per_1m = ? WHERE id = ?",
+        (price_input_per_1m, price_output_per_1m, model_id),
+    )
+    audit.record(
+        conn,
+        actor_id,
+        "model_registry_pricing_changed",
+        "model_registry",
+        model_id,
+        before={"input": row["price_input_per_1m"], "output": row["price_output_per_1m"]},
+        after={"input": price_input_per_1m, "output": price_output_per_1m},
+    )
+    conn.commit()
+    return {"price_input_per_1m": price_input_per_1m, "price_output_per_1m": price_output_per_1m}
 
 
 def set_model_active(

@@ -87,7 +87,7 @@ def test_gc59_agent_pool_listing_includes_pending_onboarding(client_and_conn):
         json={"tasks": [{"role_name": "디자이너", "required_skills": ["figma"]}]},
     )
     task_id = resp.json()["tasks"][0]["id"]
-    client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
+    client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]})
 
     resp = client.get("/api/agent-pool")
     assert resp.status_code == 200
@@ -149,7 +149,7 @@ def test_gc61_full_ui_flow_end_to_end(client_and_conn):
     assert resp.json()["generate_new"] is True
 
     # 5) Agent 생성
-    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
+    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]})
     assert resp.json()["status"] == "succeeded"
     agent_id = next(
         a["id"]

@@ -45,6 +45,9 @@ skill_names()`가 여전히 이 두 종류만 "호출 불가"로 판정하도록
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import json
 import sqlite3
 
 from hair_platform import pool_registry
@@ -147,6 +150,97 @@ def tool_schema_anthropic(tool) -> dict:
     }
 
 
+# 호출 기록(2026-11-22, "스킬, 툴, 에이전트 각각의 실행 품질을 점검해줘" 실측) — 실적 보고서
+# 작성자가 차트 생성기를 불러 설정을 받고도 최종 답에 ```chart를 빼먹어, 화면에 그래프가
+# 안 나왔다. provider별 도구 루프 3개의 시그니처를 바꾸지 않고, 호출부가 `record_calls()`
+# 안에서 실행하면 이번 실행의 (도구 이름, 결과)를 모은다.
+_CALL_LOG: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "tool_call_log", default=None
+)
+
+
+@contextlib.contextmanager
+def record_calls():
+    log: list[tuple[str, str]] = []
+    token = _CALL_LOG.set(log)
+    try:
+        yield log
+    finally:
+        _CALL_LOG.reset(token)
+
+
+_CHART_TYPES = ("bar", "line", "pie", "doughnut", "radar")
+
+
+def _chart_config(result: str) -> str | None:
+    """도구 결과가 Chart.js 설정(차트 생성기의 성공 결과)이면 그 JSON 문자열을 돌려준다."""
+    try:
+        cfg = json.loads(result)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if (
+        isinstance(cfg, dict)
+        and cfg.get("type") in _CHART_TYPES
+        and isinstance(cfg.get("data"), dict)
+        and isinstance(cfg["data"].get("datasets"), list)
+    ):
+        return result
+    return None
+
+
+def ensure_charts_included(output: str, calls: list[tuple[str, str]]) -> str:
+    """차트 생성기가 설정을 만들어 줬는데 최종 답에 차트 펜스가 하나도 없으면, 만든 차트를
+    답 끝에 붙인다(같은 설정은 한 번만). 답에 이미 ```chart가 있으면 모델이 넣은 것을 존중한다."""
+    if not output or "```chart" in output:
+        return output
+    charts: list[str] = []
+    for _name, result in calls:
+        cfg = _chart_config(result)
+        if cfg and cfg not in charts:
+            charts.append(cfg)
+    if not charts:
+        return output
+    blocks = "\n\n".join(f"```chart\n{cfg}\n```" for cfg in charts)
+    return f"{output.rstrip()}\n\n{blocks}\n"
+
+
+# 도구 호출 턴의 본문 보존(2026-11-22 재실행 실측) — 스펙 작성자는 첫 턴에 Spec 본문(1,283자)을
+# 쓰면서 동시에 린터·실패모드 도구를 불렀고, 최종 턴에는 검증 결과만 썼다. provider별 도구
+# 루프 3개가 모두 "도구를 부르지 않은 마지막 턴의 텍스트"만 돌려줘, 요청한 Spec 본문이 결과에서
+# 사라졌다(프롬프트 지침을 추가해도 재현). 도구 호출 턴에 쓴 본문을 최종 답 앞에 살린다.
+_INTERIM_MIN_CHARS = 300
+_INTERIM_COVERED_RATIO = 0.5
+
+
+def merge_interim_text(interim: list[str], final: str) -> str:
+    """도구 호출 턴에 쓴 텍스트 중 실제 본문만 최종 답 앞에 붙인다.
+
+    - 제목(`#`)이 있으면 첫 제목 앞의 진행 안내("먼저 ~하겠습니다")는 버린다.
+    - 제목이 없고 짧으면(`_INTERIM_MIN_CHARS` 미만) 진행 안내로 보고 버린다.
+    - 최종 답이 이미 그 본문을 다시 실었으면(내용 줄의 절반 이상이 최종 답에 있음) 붙이지 않는다.
+    """
+    kept: list[str] = []
+    for text in interim:
+        text = (text or "").strip()
+        lines = text.splitlines()
+        heading = next((i for i, ln in enumerate(lines) if ln.lstrip().startswith("#")), None)
+        if heading is not None:
+            text = "\n".join(lines[heading:]).strip()
+        elif len(text) < _INTERIM_MIN_CHARS:
+            continue
+        if not text:
+            continue
+        body_lines = [ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 20]
+        if body_lines:
+            covered = sum(1 for ln in body_lines if ln in final)
+            if covered / len(body_lines) >= _INTERIM_COVERED_RATIO:
+                continue
+        kept.append(text)
+    if not kept:
+        return final
+    return "\n\n".join([*kept, final]) if final.strip() else "\n\n".join(kept)
+
+
 def run_tool(tools_by_name: dict, name: str, arguments: dict) -> str:
     """`arguments`가 도구의 실제 파라미터와 안 맞거나(모델이 틀린 인자를
     지어냄) 도구 실행 자체가 실패해도 예외를 밖으로 내보내지 않는다 —
@@ -156,8 +250,13 @@ def run_tool(tools_by_name: dict, name: str, arguments: dict) -> str:
     스스로 재시도하거나 포기할 수 있게 한다."""
     tool = tools_by_name.get(name)
     if tool is None:
-        return f"알 수 없는 도구입니다: {name}"
-    try:
-        return str(tool.run(**arguments))
-    except Exception as exc:  # noqa: BLE001
-        return f"도구 실행 중 오류가 발생했습니다: {exc}"
+        result = f"알 수 없는 도구입니다: {name}"
+    else:
+        try:
+            result = str(tool.run(**arguments))
+        except Exception as exc:  # noqa: BLE001
+            result = f"도구 실행 중 오류가 발생했습니다: {exc}"
+    log = _CALL_LOG.get()
+    if log is not None:
+        log.append((name, result))
+    return result

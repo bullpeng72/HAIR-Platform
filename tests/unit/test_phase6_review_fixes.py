@@ -98,7 +98,7 @@ def test_gc49_audit_log_pagination_and_filter(client_and_conn):
     # 남기므로 이를 이용해 여러 건을 만든다.
     for i in range(3):
         brief_id, task_id = _make_brief_with_task(client, f"역할-{i}")
-        client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
+        client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]})
 
     _login(client, "admin1", "adminpass")
     resp = client.get("/api/audit-log", params={"limit": 2})

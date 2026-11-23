@@ -17,7 +17,7 @@ from __future__ import annotations
 import html
 import json
 
-from hair_platform import presentation_deck
+from hair_platform import get_version, presentation_deck
 
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ko">
@@ -75,6 +75,7 @@ INDEX_HTML = """<!DOCTYPE html>
   body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 0; background: var(--color-bg); color: var(--color-text); }
   header { background: var(--color-primary); color: #fff; padding: 0.75rem 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   header h1 { font-size: 1.1rem; margin: 0; }
+  header h1 .app-version { font-size: 0.72rem; font-weight: 500; opacity: 0.8; margin-left: 0.35rem; letter-spacing: 0.02em; }
   header .spacer { flex: 1; }
   header button { background: var(--color-accent); border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; }
   nav { background: var(--color-surface); border-bottom: 1px solid #ddd; }
@@ -596,7 +597,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
 <div id="app-view" style="display:none">
   <header>
-    <h1>HAIR-Platform</h1>
+    <h1>HAIR-Platform <span class="app-version" title="hair --version: hair __APP_VERSION__">v__APP_VERSION__</span></h1>
     <span class="spacer"></span>
     <span id="whoami" class="muted"></span>
     <button id="logout-btn">로그아웃</button>
@@ -2544,6 +2545,17 @@ function initSkillPicker(pickerId, hiddenId, initial) {
 }
 
 let ME = null;
+// 조직 정책(2026-11-21, "사번 형식 … 설정화") — 사번 입력란 안내 문구. 형식 검증은 서버가
+// 한다(관리자가 정한 정규식이 브라우저 정규식과 문법이 다를 수 있어 pattern 속성은 쓰지 않음).
+let ORG_POLICY = { employee_id: { hint: "숫자 8~12자리", is_default: true } };
+async function loadOrgPolicy() {
+  try { ORG_POLICY = await api("GET", "/api/org-policy"); } catch (e) { /* 기본 안내 유지 */ }
+}
+function empIdHint() { return (ORG_POLICY.employee_id && ORG_POLICY.employee_id.hint) || "숫자 8~12자리"; }
+function empIdInputAttrs(optional) {
+  const hint = empIdHint();
+  return ' placeholder="' + escAttr("사번(" + (optional ? "선택, " : "") + hint + ")") + '" title="' + escAttr(hint) + '"';
+}
 
 /* 코드 재점검(2026-09-26) 사용자 요청 — 관리자 기능과 일반 업무 기능을
    화면상에서도 명확히 구분한다.
@@ -2617,6 +2629,7 @@ const TABS = [
 async function boot() {
   try {
     ME = await api("GET", "/api/me");
+    await loadOrgPolicy();
     document.getElementById("login-view").style.display = "none";
     document.getElementById("app-view").style.display = "block";
     document.getElementById("whoami").textContent = ME.username + " (" + ME.role + ")";
@@ -3313,7 +3326,7 @@ function _conversationSingleShotBadge(m) {
   if (m.delegation_count !== null && m.delegation_count !== undefined) return "";
   if (!m.llm_provider) return "";
   return ' <span class="gate-badge gate-na" ' +
-    'title="검색/도구 결과를 1회만 반영해 답했습니다 — 결과가 부족해도 스스로 다시 찾아보지 않습니다(실제 CrewAI 실행과 다른 점입니다).">' +
+    'title="단발 실행으로 답했습니다 — 계산·차트 같은 커스텀 도구는 필요할 때 직접 호출하지만, 검색 결과는 요청 직전에 한 번 조회한 것만 반영하고 스스로 다시 찾아보지 않습니다(팀·Crew 실행과 다른 점입니다).">' +
     '단발 응답</span>';
 }
 
@@ -5709,13 +5722,13 @@ async function renderBriefs(content) {
   if (canWrite) {
     html += helpBox(
       '<ul class="muted help-list">' +
-      '<li>여기서 하는 일은 "제안된 역할" 칸을 채우는 것뿐입니다 — 실제 AI 분석이 아니라 입력한 텍스트를 줄바꿈 단위로 그대로 나누는 규칙 기반 처리라 비용이 없고 즉시 끝납니다.</li>' +
+      '<li>여기서 하는 일은 "제안된 역할" 칸을 채우는 것뿐입니다 — 짧은 줄로 역할을 나열하면 그 줄들이 그대로, 문장으로 업무를 적으면 업무 내용과 역할·스킬이 맞는 기존 Agent 역할이 제안됩니다(LLM을 쓰지 않는 규칙 기반이라 비용이 없고 즉시 끝납니다 — 맞는 역할이 없으면 줄 단위로 나눈 것이 뜹니다).</li>' +
       '<li>이 제안은 참고용이고, 실제 인원 배정 단위인 "할 일(Task)"은 아래 "할 일로 나누기"에서 직접 만들어야 합니다.</li>' +
       '<li>뷰어(viewer) role은 조회만 가능하고 제출은 못 합니다.</li>' +
       '</ul>'
     ) +
       '<form class="inline" id="brief-form">' +
-      '<textarea id="brief-text" placeholder="한 줄에 역할 하나씩 입력하세요(줄바꿈 단위로 나뉩니다). 예:&#10;백엔드 개발자 1명&#10;UI/UX 디자이너 1명" rows="3" style="flex:1;min-width:240px"></textarea>' +
+      '<textarea id="brief-text" placeholder="업무 내용을 적거나, 한 줄에 역할 하나씩 나열하세요. 예:&#10;백엔드 개발자 1명&#10;UI/UX 디자이너 1명" rows="3" style="flex:1;min-width:240px"></textarea>' +
       '<button class="primary" type="submit">제출</button></form>';
   }
   html += "</section><section class=\\"card\\"><h2>업무 요청 목록</h2>" +
@@ -5777,7 +5790,7 @@ async function renderBriefs(content) {
 async function renderDecomposeForm(briefId, stubRoles) {
   const detail = document.getElementById("brief-detail");
   const suggestions = (stubRoles || []).length
-    ? '<p class="muted">제안된 역할(클릭하면 아래 입력창에 채워집니다 — 브리프를 줄바꿈으로 나눈 것뿐이라 다듬어서 쓰세요): ' +
+    ? '<p class="muted">제안된 역할(클릭하면 아래 입력창에 채워집니다 — 업무 내용과 역할·스킬이 맞는 기존 Agent 역할이며, 맞는 역할이 없으면 요청을 줄 단위로 나눈 것입니다): ' +
       stubRoles.map(r => '<button type="button" class="small" data-fill-role="' + esc(r) + '">' + esc(r) + '</button>').join(" ") +
       "</p>"
     : "";
@@ -6053,7 +6066,7 @@ async function renderTaskDetailPanel(task, forceWorkspace = false) {
         '<select id="task-detail-pipeline-select" required>' +
         activePipelines.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join("") +
         '</select><button class="small" type="submit">이 파이프라인에 배정 요청</button></form>'
-      : '<p class="muted">등록된 활성 파이프라인이 없습니다 — "파이프라인" 탭에서 먼저 만드세요.</p>';
+      : '<p class="muted">등록된 활성 파이프라인이 없습니다 — "파이프라인 관리" 탭에서 먼저 만드세요.</p>';
   }
 
   // 실사용 리뷰로 발견한 갭(2026-10-07) — "다중 confirmed 허용" 이후
@@ -6192,8 +6205,8 @@ async function renderMatch(content) {
     helpBox(
       '<ul class="muted help-list">' +
       '<li>아래 목록은 "업무 요청" 탭에서 "할 일로 나누기"로 만든 할 일 전체입니다(브리프별로 묶음).</li>' +
-      '<li>역할명이 서로 포함 관계(부분일치 — 예: "프론트엔드 개발" ↔ "프론트엔드 개발자")인 후보 중 필요 스킬까지 다 가진 후보가 있으면 그것부터 보여주고, 없으면 가용성40%·적합도35%·비용25% 가중치로 점수를 매겨 상위 3명을 제시합니다(사람 후보가 아직 성과점수를 안 받았으면 적합도를 빼고 가용성60%·비용40%로 재계산).</li>' +
-      '<li>역할명이 부분일치로도 전혀 안 걸리는 후보가 없으면(예: "콘텐츠 카피라이팅" ↔ "카피라이팅 에이전트"처럼 문자열이 서로 포함되지 않는 경우), "AI로 추천 받기"로 LLM이 전체 Pool에서 의미상 맞는 후보를 찾아줍니다(비용 발생 가능, 명시적으로 눌러야만 호출됨).</li>' +
+      '<li>후보는 역할명이 서로 포함 관계(부분일치 — 예: "프론트엔드 개발" ↔ "프론트엔드 개발자")이거나, 역할명은 달라도 필요 스킬(2개 이상)을 전부 가진 사람·Agent입니다(예: "Backend Engineer" ↔ "백엔드 개발자"). 역할명이 맞고 필요 스킬까지 다 가진 후보가 있으면 그것부터 보여주고, 없으면 가용성40%·적합도35%·비용25% 가중치로 점수를 매겨 상위 3명을 제시합니다(적합도 점수가 없는 후보는 적합도를 빼고 가용성60%·비용40%로, 같은 점수면 필요 스킬을 더 많이 가진 후보가 앞). Agent의 적합도는 관리자가 입력한 성과점수, 없으면 그 Agent 결과물의 Gate A 평균(평가 3건 이상)입니다.</li>' +
+      '<li>위 기준으로 후보가 하나도 없으면(예: "콘텐츠 카피라이팅" ↔ "광고 문안 담당"처럼 이름도 스킬도 겹치지 않는 경우), "AI로 추천 받기"로 LLM이 전체 Pool에서 의미상 맞는 후보를 찾아줍니다(비용 발생 가능, 명시적으로 눌러야만 호출됨).</li>' +
       '<li>"배정 요청"을 누르면 즉시 확정되는 게 아니라 "결재" 탭에서 승인 절차를 거쳐야 확정(confirmed)됩니다(단, 본인 셀프배정은 결재 없이 즉시 확정됩니다).</li>' +
       '</ul>'
     ) +
@@ -6546,9 +6559,9 @@ async function renderJobs(content) {
     '<div id="job-tasks-picker" class="muted" style="margin-bottom:0.75rem">업무 요청을 선택하면 그 아래 할 일 목록이 뜹니다.</div>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li><b>stub</b>(무료): LLM을 전혀 호출하지 않는 규칙 기반 스텁입니다 — 역할명·스킬로 자리표시자 산출물만 만들고 즉시 끝납니다. 조직도/배정 흐름만 비용 없이 채워보고 싶을 때 씁니다.</li>' +
+      '<li><b>crewai</b>(기본 선택, 비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 내부지식검색/조직배정관계조회 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 빌더"·팀·파이프라인에서 바로 협업시킬 Agent를 만들 때 씁니다.</li>' +
       '<li><b>simple_llm</b>(비용 발생): 실제 LLM API를 딱 한 번만 호출해 "이 역할이 처음 맡을 산출물 하나"를 받아옵니다. CrewAI 같은 프레임워크 오버헤드 없이 가장 가벼운 실제 호출입니다.</li>' +
-      '<li><b>crewai</b>(비용 발생, 보통 더 큼): 실제 CrewAI Agent+Task+Crew를 구성해 실행합니다 — 필요 스킬에 내부지식검색/조직배정관계조회 같은 게 있으면 Skill Pool이 매칭해주는 실제 도구를 생성 시점부터 붙여서 태어나므로, 이후 "Crew 실행" 탭에서 바로 협업시킬 Agent를 만들 때 씁니다.</li>' +
+      '<li><b>stub</b>(무료): LLM을 전혀 호출하지 않는 규칙 기반 스텁입니다 — 역할명·스킬로 자리표시자 산출물만 만들고 즉시 끝납니다(실제로 일하지는 못함). 조직도/배정 흐름만 비용 없이 채워보고 싶을 때 씁니다.</li>' +
       '<li>만든 Agent는 이 탭이 아니라 "AI 에이전트 관리" 탭에서 온보딩 승인(pending_onboarding → active) 후에야 실제 업무 배정·실행에 쓸 수 있습니다.</li>' +
       '<li><b>중복 방지</b>: 같은 할 일(역할)에 이미 생성된 Agent가 있으면 새 Agent를 만들지 않고 기존 것을 재사용합니다 — 이 경우 "AI 에이전트 관리"에 새 행이 안 생기는데, 결과에 "재사용" 배지와 안내가 표시됩니다. 새 Agent를 만들려면 다른 할 일을 고르세요.</li>' +
       '</ul>'
@@ -6780,12 +6793,12 @@ async function renderHumanPool(content) {
     // 사용자 요청(2026-10-27, "사람의 경우 ID는 향후 사번 적용 예정으로
     // 8자리~12자리 입력 및 표시 가능해야 함") — 아직 전사 사번 체계가
     // 없는 사람이 많아 선택 입력(비워도 등록 가능).
-    '<input id="hp-employee-id" placeholder="사번(선택, 숫자 8~12자리)" pattern="\\d{8,12}" title="숫자 8~12자리" style="width:160px">' +
+    '<input id="hp-employee-id"' + empIdInputAttrs(true) + ' style="width:160px">' +
     '<button class="primary" type="submit">등록</button></form>' +
     helpBox(
       '<ul class="muted help-list">' +
       '<li><b>계정 선택</b>은 "사용자 관리"에서 먼저 만든 로그인 계정 중 아직 다른 사람 인력에 연결 안 된 것만 보여줍니다 — 계정 없이 등록하면 그 사람은 로그인할 수 없어 매칭·배정이 돼도 실제로 업무를 볼 수 없으니, 계정을 먼저 "사용자 관리"에서 만드세요.</li>' +
-      '<li><b>사번</b>은 선택 입력입니다 — 비워두면 목록에 "#id"로 표시되고, 나중에 목록의 "사번 저장"으로 언제든 채울 수 있습니다(숫자 8~12자리만 허용, 중복 불가).</li>' +
+      '<li><b>사번</b>은 선택 입력입니다 — 비워두면 목록에 "#id"로 표시되고, 나중에 목록의 "사번 저장"으로 언제든 채울 수 있습니다(' + esc(empIdHint()) + ' 형식만 허용, 중복 불가 — 형식은 관리자가 "사용자 관리 → 조직 정책"에서 바꿀 수 있음).</li>' +
       '<li>스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거) — 목록에 없는 이름도 자유롭게 추가할 수 있습니다.</li>' +
       '<li><b>비용</b>은 인력 매칭 점수의 25%(또는 성과점수가 없으면 40%)를 차지합니다 — 낮을수록 유리합니다.</li>' +
       '<li>아직 성과 데이터가 없으니 초기엔 "가능" 상태여야 매칭 후보로 잡히고(가용성이 매칭 점수의 40~60%), 스킬은 할 일의 필요 스킬과 겹칠수록 유리합니다.</li>' +
@@ -6810,7 +6823,7 @@ async function renderHumanPool(content) {
           (p.performance_consent ? "동의 철회" : "동의") + "</button>" +
         '<span class="pair"><input type="number" step="0.01" min="0" max="1" placeholder="점수" id="score-' + p.id + '">' +
         '<button class="small" data-set-score="' + p.id + '">점수입력</button></span>' +
-        '<span class="pair"><input placeholder="사번(숫자 8~12자리)" pattern="\\d{8,12}" title="숫자 8~12자리" id="empid-' + p.id + '" value="' + escAttr(p.employee_id || "") + '" style="width:150px">' +
+        '<span class="pair"><input' + empIdInputAttrs(false) + ' id="empid-' + p.id + '" value="' + escAttr(p.employee_id || "") + '" style="width:150px">' +
         '<button class="small" data-set-employee-id="' + p.id + '">사번 저장</button></span>' +
         '<span class="pair"><select id="linkuser-' + p.id + '">' + linkableOptionsHtml(p.user_id) + '</select>' +
         '<button class="small" data-link-user="' + p.id + '">계정 연결</button></span>' +
@@ -7203,7 +7216,7 @@ async function renderAgentPool(content) {
             providers.map(p => '<option value="' + p + '"' + (p === a.llm_provider ? " selected" : "") + ">" + p + "</option>").join("") +
             "</select>" + modelSelectHtml("model-" + a.id),
             "현재: " + (a.llm_provider ? esc(a.llm_provider) + " / " + esc(a.llm_model || "") : "전역 기본값") +
-            ". 생성 옵션(top_k·top_p)은 모델 레지스트리에서 모델별로 정합니다.") +
+            ". 생성 옵션(top_k·top_p·최대 출력)은 모델 레지스트리에서 모델별로 정합니다.") +
           _asRow("MCP 서버", "JSON",
             '<input class="as-wide" placeholder="예: [{&quot;url&quot;:&quot;http://localhost:8000/mcp&quot;,&quot;transport&quot;:&quot;streamable-http&quot;}]" id="mcp-' + a.id + '" value="' +
             esc(a.mcp_servers && a.mcp_servers.length ? JSON.stringify(a.mcp_servers) : "").replace(/"/g, "&quot;") + '">',
@@ -7684,8 +7697,8 @@ async function renderPoolRegistry(content) {
     '<section class="card"><h2>Tool Pool — 재사용 가능한 도구</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>MCP 서버나 native 도구(VectorDB/GraphDB/실시간 웹 검색)를 이름으로 등록해 여러 Agent가 재사용합니다.</li>' +
-    '<li>native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"} 또는 {"native_id": "tavily_search"}(Tavily 실시간 웹 검색, API 키 필요(TAVILY_API_KEY) — skill_tags에 "실시간웹검색"을 넣으면 매칭됩니다)를 지원합니다.</li>' +
+      '<li>MCP 서버나 native 도구(VectorDB/GraphDB/실시간 웹 검색/최근 뉴스 검색/스킬·도구 목록 조회)를 이름으로 등록해 여러 Agent가 재사용합니다.</li>' +
+    '<li>native는 config에 {"native_id": "vectordb_search"} 또는 {"native_id": "graphdb_query"} 또는 {"native_id": "tavily_search"}(Tavily 실시간 웹 검색, API 키 필요(TAVILY_API_KEY) — skill_tags에 "실시간웹검색"을 넣으면 매칭됩니다), {"native_id": "tavily_news_search"}(최근 7일 뉴스 검색, 같은 API 키), {"native_id": "skill_catalog_lookup"}(등록된 스킬·도구 목록 조회)를 지원합니다.</li>' +
     '<li>mcp_stdio/mcp_remote는 {"command":...,"args":[...]} 또는 {"url":...,"transport":...} 형태입니다 — 이 두 종류는 Agent가 실행될 때마다 실제로 서버(로컬 프로세스 또는 원격)에 접속을 시도하므로, 잘못된 command/url을 등록해두면 그 스킬을 가진 Agent 실행이 접속 단계에서 실패합니다.</li>' +
     // 사용자 요청(2026-10-13, "@데코레이터 툴을 추가 생성할 수 있는 기능을
     // 제공해줘") — mcp_stdio와 같은 신뢰 등급(admin 전용)이라는 걸 화면에도
@@ -7736,8 +7749,8 @@ async function renderPoolRegistry(content) {
       '<ul class="muted help-list">' +
       '<li>모드 "tool"인 스킬은 기본 도구 ID가 가리키는 도구를 이 스킬(이름이 정확히 일치)을 가진 모든 Agent에게 실행할 때마다 자동으로 붙입니다(run_crew/crewai_agent_generator 실행마다 다시 계산 — 나중에 스킬 설정을 바꾸면 이미 만들어진 Agent에도 다음 실행부터 바로 반영됩니다).</li>' +
     '<li>모드 "none"은 도구 연결 없이 이름표만 붙이는 용도입니다 — 하니스 방법론/agent-evaluator 절차 스킬 17개가 여기 해당합니다(사람 판단이 필요한 절차라 자동 도구화가 안 됨).</li>' +
-    '<li>"recommend-fix-workflow" 하나만 예외로 실제 MCP 도구(정적 Gate 조치 지식 조회)가 붙어 있습니다.</li>' +
-    '<li><b>대화창 표시</b>를 꺼두면 대화창의 스킬 선택 드롭다운에는 안 보이지만(선택해서 고를 수 없음), Agent의 skill_tags로는 그대로 쓸 수 있습니다 — mcp_remote/mcp_stdio/custom_python 도구가 붙은 스킬은 대화창 기본 AI(단발 호출, 실행 루프 없음)에서는 실제로 호출이 안 돼 기본값이 꺼짐으로 돼 있습니다(실제 CrewAI Agent 실행에서는 똑같이 동작합니다).</li>' +
+    '<li>하니스 절차 스킬 중에서는 "recommend-fix-workflow" 하나만 예외로 실제 MCP 도구(정적 Gate 조치 지식 조회)가 붙어 있습니다.</li>' +
+    '<li><b>대화창 표시</b>를 꺼두면 대화창의 스킬 선택 드롭다운에는 안 보이지만(선택해서 고를 수 없음), Agent의 skill_tags로는 그대로 쓸 수 있습니다 — mcp_remote/mcp_stdio 도구가 붙은 스킬은 대화창 기본 AI·단일 Agent 멘션에서는 실제로 호출되지 않아(팀·Crew 실행에서만 동작) 꺼 두는 것이 맞습니다. custom_python 도구(수치 데이터 분석기·차트 생성기 등)는 대화창에서도 함수 호출로 실제 실행되므로 이런 스킬은 기본으로 켜져 있습니다.</li>' +
     '<li><b>분류</b>(사용자 요청, 2026-11-11, "SW개발업무와 일반업무로 구분, 개발업무는 Default로 대화창에 안 보이고 필요시 노출") — "개발업무"로 분류된 스킬/도구는 대화창 드롭다운에 default로 안 보이지만 완전히 숨겨진 건 아닙니다 — 대화창의 "개발업무 스킬도 보기" 체크박스를 켠 사용자에게는 보입니다("대화창 표시"가 꺼진 스킬과는 다른 축으로, 둘 다 적용됩니다 — show_in_conversation이 꺼져 있으면 체크박스를 켜도 안 보입니다). Agent/Task의 skill_tags 자동완성에는 분류와 무관하게 항상 둘 다 뜹니다(그 경로는 CrewAI 실행이라 개발업무 스킬도 실제로 동작하기 때문). 위쪽 "분류 필터"로 목록을 좁혀볼 수 있고, 수정 화면에서 바로 바꿀 수 있습니다.</li>' +
     '<li><b>삭제</b>(관리자 전용)는 이 스킬 레코드만 지웁니다 — 같은 이름의 skill_tags를 가진 Agent/사람은 그대로 남고, 다음 실행부터 자동 도구 연결만 안 됩니다.</li>' +
     // 사용자 요청(2026-11-17, "외부에서 마크다운 포멧의 Skill을
@@ -8311,6 +8324,10 @@ async function renderTeams(content) {
       (t.is_active ? "비활성화" : "활성화") + '</button>') +
       '<button class="small" data-view-team-history="' + t.id + '">실행 이력 보기</button>' +
       (isAdmin ? '<button class="small danger" data-delete-team="' + t.id + '">팀 삭제</button>' : "") +
+      // 공장 초기화 시 보호(2026-11-21 설정화 — 예전엔 팀 이름으로만 보호).
+      (isAdmin ? '<button class="small" data-toggle-reset-protect="' + t.id + '" data-next="' + (t.protect_on_reset ? "0" : "1") +
+        '" title="켜면 공장 초기화(reset-data) 때 이 팀과 멤버 구성을 지우지 않습니다">초기화 보호: ' +
+        (t.protect_on_reset ? "켜짐" : "꺼짐") + '</button>' : "") +
       '</div>' +
       '<div id="team-history-' + t.id + '"></div>' +
       '</section>';
@@ -8323,7 +8340,7 @@ async function renderTeams(content) {
       '<li>사람(human_pool)·Agent(agent_pool) 멤버를 역할 라벨과 함께 묶어두면, "업무 요청" 탭의 할 일 상세에서 이 팀 전체를 한 할 일에 배정(resource_type="team")할 수 있습니다.</li>' +
     '<li>팀 배정의 결재 주체는 팀 리더(기본값은 배정 요청자, 확정 전까지 변경 가능)입니다 — 배정이 승인되면 팀의 사람 멤버(계정 연결된 경우)·팀 리더 모두 그 할 일의 협업 워크스페이스에 결과물을 쓸 수 있습니다.</li>' +
     '<li>그 워크스페이스의 "팀 Agent 실행" 버튼으로 이 팀의 온보딩된 Agent 멤버 전원을 실제 CrewAI Crew로 함께 실행할 수 있습니다(결과는 Agent별 결과물+결재 체인으로 그대로 쌓입니다).</li>' +
-    '<li><b>기본 process/매니저</b>를 저장해두면 "팀 Agent 실행"에서 매번 새로 고르지 않아도 이 값이 기본으로 쓰입니다(그 자리에서 여전히 바꿀 수 있습니다) — 매니저는 hierarchical일 때만 쓰이고, 후보는 이 팀의 온보딩된 Agent 멤버로 제한됩니다.</li>' +
+    '<li><b>기본 process/매니저</b>를 저장해두면 "팀 Agent 실행"에서 매번 새로 고르지 않아도 이 값이 기본으로 쓰입니다(그 자리에서 여전히 바꿀 수 있습니다). 단 <b>hierarchical(매니저 위임)은 새로 지정할 수 없습니다</b> — 신뢰성 문제로 막혀 있어, 이미 위임형으로 쓰던 팀만 매니저를 바꾸거나 유지할 수 있습니다. 새 팀은 sequential로 두고, 단계가 필요한 업무는 "연결 파이프라인"을 쓰세요. 새 팀에는 역할 라벨에 "매니저"가 들어간 Agent 멤버도 추가할 수 없습니다(매니저로 인식돼 위임형이 되기 때문).</li>' +
     '<li>Agent를 이 탭에서 바로 만들려면 "AI 에이전트 생성"에서 여러 할 일을 한 번에 골라 생성한 뒤 그 결과 화면의 "팀으로 묶기"를 쓰는 게 더 빠릅니다.</li>' +
     '<li>Task ID/Brief ID를 지정해 만들면 "TF팀"(그 업무에 종속된 팀)이 됩니다 — 생성 즉시 "온보딩 대기" 상태로 시작해, "온보딩 시작"을 눌러야 @멘션/배정 후보에 노출됩니다. 비워두면 기존처럼 바로 쓸 수 있는 범용 팀이 됩니다.</li>' +
       '</ul>'
@@ -8401,6 +8418,17 @@ async function renderTeams(content) {
     };
   });
 
+  content.querySelectorAll("[data-toggle-reset-protect]").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        await api("PATCH", "/api/teams/" + btn.dataset.toggleResetProtect + "/reset-protection", {
+          protect_on_reset: btn.dataset.next === "1",
+        });
+        showMsg("global-msg", btn.dataset.next === "1" ? "공장 초기화 때 이 팀을 보호합니다." : "초기화 보호를 껐습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
   content.querySelectorAll("[data-toggle-active]").forEach(btn => {
     btn.onclick = async () => {
       try {
@@ -8535,7 +8563,20 @@ function _pipelineStageCollaborationBadge(stage) {
   return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + ' (참고용 근사치 — HAS 척도 기반)">' + label + '</span>';
 }
 
-function pipelineStageCardHtml(templateId, stage, index, total) {
+// 검토 실패 시 되돌아갈 단계(2026-11-22, 하드코딩·스텁 점검 4순위) — Gate 기준이 있는 단계에서만
+// 의미가 있다. 이 단계보다 앞선 단계만 고를 수 있다.
+function _stageReturnSelectHtml(stage, stages) {
+  const earlier = (stages || []).filter(s => s.seq_order < stage.seq_order);
+  if (!earlier.length || !(stage.min_gate_pass_ratio > 0)) return "";
+  return '<label class="inline" style="gap:0.3rem" title="이 단계가 Gate 기준에 못 미치면, 같은 검토를 다시 돌리는 대신 고른 단계로 돌아가 검토 의견을 반영해 다시 쓰게 합니다">' +
+    '검토 실패 시 <select data-stage-return="' + stage.id + '">' +
+    '<option value="0">이 단계만 재시도</option>' +
+    earlier.map(s => '<option value="' + s.id + '"' + (s.id === stage.on_fail_return_stage_id ? " selected" : "") + ">" +
+      s.seq_order + ". " + esc(s.name) + "로 되돌림</option>").join("") +
+    "</select></label>";
+}
+
+function pipelineStageCardHtml(templateId, stage, index, total, stages) {
   const agentsText = stage.agents.map(a =>
     esc(a.role_name) + (a.role_name === stage.lead_role_name ? " (리드)" : "")
   ).join(", ");
@@ -8544,6 +8585,8 @@ function pipelineStageCardHtml(templateId, stage, index, total) {
     '<b>' + stage.seq_order + ". " + esc(stage.name) + "</b>" +
     '<span class="muted">' + (PIPELINE_MODE_LABEL[stage.mode] || stage.mode) +
     (stage.is_primary_deliverable ? ' <span class="gate-badge gate-ok">최종 결과물 단계</span>' : "") +
+    (stage.is_requirements_source ? ' <span class="gate-badge">요구사항 정의</span>' : "") +
+    (stage.checks_requirements_traceability ? ' <span class="gate-badge">추적성 검사</span>' : "") +
     "</span>" +
     "</div>" +
     (stage.instructions ? '<p class="muted">' + esc(stage.instructions) + "</p>" : "") +
@@ -8552,9 +8595,14 @@ function pipelineStageCardHtml(templateId, stage, index, total) {
     '<p class="muted">Gate 통과 기준 ' + Math.round(stage.min_gate_pass_ratio * 100) + "% · 최대 재시도 " +
     stage.max_retry + "회 · 사람 승인 " + (stage.requires_human_approval ? "필요" : "불필요") +
     " " + _pipelineStageCollaborationBadge(stage) + "</p>" +
+    _stageReturnSelectHtml(stage, stages) +
     '<div class="actions">' +
     (index > 0 ? '<button class="small" data-reorder-stage="' + stage.id + ':up">↑</button>' : "") +
     (index < total - 1 ? '<button class="small" data-reorder-stage="' + stage.id + ':down">↓</button>' : "") +
+    '<button class="small" data-toggle-stage-flag="' + stage.id + ':is_requirements_source:' + (stage.is_requirements_source ? "0" : "1") + '">' +
+      (stage.is_requirements_source ? "요구사항 정의 해제" : "요구사항 정의 단계로") + "</button>" +
+    '<button class="small" data-toggle-stage-flag="' + stage.id + ':checks_requirements_traceability:' + (stage.checks_requirements_traceability ? "0" : "1") + '">' +
+      (stage.checks_requirements_traceability ? "추적성 검사 끄기" : "추적성 검사 켜기") + "</button>" +
     '<button class="small danger" data-delete-stage="' + stage.id + '">단계 삭제</button>' +
     "</div></div>";
 }
@@ -8585,6 +8633,10 @@ function pipelineAddStageFormHtml(templateId, activeAgents) {
     // deliverable"로 폴백). 보통 "구현/작성" 성격의 단계 하나에만
     // 체크한다 — 검증/보고 단계는 보통 아니다.
     '<label class="inline" style="gap:0.3rem"><input type="checkbox" class="stage-is-primary"> 이 단계 산출물이 최종 결과물</label>' +
+    // 요구사항 추적성(2026-11-22, 하드코딩·스텁 점검 4순위) — 어느 단계가 요구사항을 정의하고, 어느
+    // 단계가 그 요구사항 대비 검증되는지 화면에서 지정한다(예전엔 1단계 고정, 검사 여부는 화면에 없었다).
+    '<label class="inline" style="gap:0.3rem" title="요구사항 추적성의 기준 문서를 내는 단계 — 지정이 없으면 1단계"><input type="checkbox" class="stage-is-req-source"> 요구사항 정의 단계</label>' +
+    '<label class="inline" style="gap:0.3rem" title="이 단계 산출물이 요구사항을 빠짐없이 반영했는지 LLM이 판정"><input type="checkbox" class="stage-checks-trace"> 요구사항 추적성 검사</label>' +
     '</div>' +
     '<div class="inline" style="margin-top:0.3rem">' +
     '<label>최대 재시도 <input type="number" class="stage-max-retry" value="2" min="1" max="10" style="width:60px"></label>' +
@@ -8602,7 +8654,7 @@ function pipelineTemplateCardHtml(t, detail, activeAgents) {
     ' <span class="muted">(' + esc(t.domain) + ")</span></h3>" +
     (t.description ? '<p class="muted">' + esc(t.description) + "</p>" : "") +
     (stages.length
-      ? stages.map((s, i) => pipelineStageCardHtml(t.id, s, i, stages.length)).join("")
+      ? stages.map((s, i) => pipelineStageCardHtml(t.id, s, i, stages.length, stages)).join("")
       : '<p class="muted">아직 단계가 없습니다 — 아래에서 추가하세요.</p>') +
     pipelineAddStageFormHtml(t.id, activeAgents) +
     '<div class="actions" style="margin-top:0.5rem">' +
@@ -8629,8 +8681,10 @@ async function renderPipelines(content) {
     helpBox(
       '<ul class="muted help-list">' +
       '<li>"단계(stage)"를 순서대로 쌓아 파이프라인을 만듭니다 — 각 단계는 <b>단독(1명)</b>, <b>순차 릴레이(N명이 순서대로 이어받음)</b>, <b>병행 위임(리드 1명이 코워커들에게 실제로 하위 과업을 쪼개 위임)</b> 중 하나로 동작합니다.</li>' +
-      '<li>단계별로 Gate A-G 통과 기준·최대 재시도·"사람 승인 필요" 여부를 정할 수 있습니다 — 승인이 필요 없는 단계는 Gate만 통과하면 자동으로 다음 단계로 넘어갑니다(최소 HITL). 반복해도 기준을 못 넘기면 그때만 결재함으로 올라갑니다(최소 HOTL).</li>' +
-      '<li>실행은 할 일(Task)의 협업 워크스페이스에서 "파이프라인 실행"으로 시작합니다 — 이 화면은 템플릿(설계도)만 관리합니다.</li>' +
+      '<li>단계별로 통과 판정에 쓸 Gate 목록·통과 비율·최대 재시도·"사람 승인 필요" 여부를 정할 수 있습니다 — 승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어갑니다(최소 HITL). 반복해도 기준을 못 넘기면 그때만 결재함으로 올라갑니다(최소 HOTL). 기본 템플릿의 검증 단계는 Gate A와 요구사항 추적성(둘 다 필수), 구현 단계는 실행 가능성 Gate로 판정합니다 — C·D·F·G는 내용과 무관하게 비슷한 값이 나와 기록만 합니다.</li>' +
+      '<li>단계 카드에서 <b>요구사항 정의 단계</b>(요구사항 추적성의 기준 — 지정이 없으면 1단계)와 <b>요구사항 추적성 검사</b>를 켜고 끌 수 있고, Gate 기준이 있는 단계는 <b>검토 실패 시</b> 같은 검토를 다시 돌리는 대신 앞 단계(작성·구현)로 되돌려 검토 의견을 반영해 다시 쓰게 할 수 있습니다.</li>' +
+      '<li><b>병행 위임</b>은 리드가 실제로 위임하지 않고 계획만 요약하는 경우가 반복 확인돼 신중히 쓰세요 — 리드가 위임했는지 "위임확인" Gate로 따로 검사해 위임이 없으면 재시도합니다. 여러 명이 이어받으면 되는 일은 순차 릴레이가 더 안정적입니다(기본 템플릿 4종 모두 순차 릴레이 사용).</li>' +
+      '<li>실행은 할 일(Task)의 협업 워크스페이스에서 "파이프라인 실행"으로 시작합니다 — 이 화면은 템플릿(설계도)만 관리합니다. 실행할 때 "신규 실행엔진(LangGraph)"을 고를 수 있지만, 병행 위임 단계가 있는 템플릿은 그 엔진을 지원하지 않습니다.</li>' +
       '<li>SW 개발뿐 아니라 시장조사-분석(3C/SWOT)-전략/기획 같은 다른 업무도 같은 방식으로 만들 수 있습니다(역할만 다를 뿐 엔진은 동일).</li>' +
       "</ul>"
     ) +
@@ -8690,6 +8744,8 @@ async function renderPipelines(content) {
         min_gate_pass_ratio: (Number(form.querySelector(".stage-min-gate-ratio").value) || 0) / 100,
         requires_human_approval: form.querySelector(".stage-requires-approval").checked,
         is_primary_deliverable: form.querySelector(".stage-is-primary").checked,
+        is_requirements_source: form.querySelector(".stage-is-req-source").checked,
+        checks_requirements_traceability: form.querySelector(".stage-checks-trace").checked,
         expected_output: form.querySelector(".stage-expected-output").value,
       };
       if (mode === "parallel_delegated") payload.lead_role_name = roleAgents[0].role_name;
@@ -8712,6 +8768,28 @@ async function renderPipelines(content) {
     };
   });
 
+  content.querySelectorAll("[data-stage-return]").forEach(sel => {
+    sel.onchange = async () => {
+      const templateId = sel.closest("[data-pipeline-template-card]").dataset.pipelineTemplateCard;
+      try {
+        await api("PATCH", "/api/pipeline-templates/" + templateId + "/stages/" + sel.dataset.stageReturn,
+          { on_fail_return_stage_id: Number(sel.value) });
+        showMsg("global-msg", "검토 실패 시 동작을 바꿨습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-toggle-stage-flag]").forEach(btn => {
+    btn.onclick = async () => {
+      const [stageId, field, value] = btn.dataset.toggleStageFlag.split(":");
+      const templateId = btn.closest("[data-pipeline-template-card]").dataset.pipelineTemplateCard;
+      try {
+        await api("PATCH", "/api/pipeline-templates/" + templateId + "/stages/" + stageId, { [field]: value === "1" });
+        showMsg("global-msg", "단계 설정을 바꿨습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
   content.querySelectorAll("[data-delete-stage]").forEach(btn => {
     btn.onclick = async () => {
       if (!(await confirmModal("이 단계를 지웁니다. 계속할까요?"))) return;
@@ -8802,6 +8880,10 @@ async function renderModelRegistry(content) {
     return topK +
       '<input type="number" min="0.01" max="1" step="0.01" class="mr-top-p" data-model-id="' + m.id + '" placeholder="top_p" ' +
       'value="' + (o.top_p ?? "") + '" style="width:5.5rem" title="top_p(0~1) — 비우면 모델 기본값">' +
+      (m.provider === "anthropic" ? "" :
+        '<input type="number" min="256" step="256" class="mr-max-out" data-model-id="' + m.id + '" placeholder="최대 출력" ' +
+        'value="' + (o.max_output_tokens ?? "") + '" style="width:6.5rem" title="한 번 응답의 최대 출력 토큰(사고 토큰 포함) — ' +
+        (m.provider === "ollama" ? "비우면 32768(사고 토큰 포함 — Ollama 기본은 무제한이라 반복 루프에 빠지면 끝나지 않음)" : "비우면 provider 기본값") + '">') +
       '<button class="small" data-save-sampling-options="' + m.id + '">저장</button>';
   };
   // 사용자 요청(2026-11-12, "ollama, openai 등 프로바이더의 모델 성능
@@ -8827,15 +8909,24 @@ async function renderModelRegistry(content) {
     }
     return resultHtml + '<br><button class="small" data-run-benchmark="' + m.id + '">성능 테스트</button>';
   };
+  // 모델별 단가(2026-11-22, 하드코딩·스텁 점검 3순위) — 100만 토큰당 입력/출력. 비우면 금액을
+  // 계산하지 않고 토큰 수만 보인다(단가표를 코드에 넣지 않는다). 로컬 모델은 0으로 둘 수 있다.
+  const pricingHtml = (m) =>
+    '<input type="number" min="0" step="0.01" class="mr-price-in" data-model-id="' + m.id + '" placeholder="입력" ' +
+    'value="' + (m.price_input_per_1m ?? "") + '" style="width:5.5rem" title="100만 토큰당 입력 단가">' +
+    '<input type="number" min="0" step="0.01" class="mr-price-out" data-model-id="' + m.id + '" placeholder="출력" ' +
+    'value="' + (m.price_output_per_1m ?? "") + '" style="width:5.5rem" title="100만 토큰당 출력 단가">' +
+    '<button class="small" data-save-pricing="' + m.id + '">저장</button>';
   const providerTableHtml = (provider) => {
     const rows = byProvider(provider);
     return "<h3>" + providerLabel[provider] + "</h3>" +
-      table(["모델명", "상태", "최적화 Tier 매핑", "컨텍스트 한도(토큰)", "생성 옵션", "성능 테스트", "동작"], rows.map(m => [
+      table(["모델명", "상태", "최적화 Tier 매핑", "컨텍스트 한도(토큰)", "생성 옵션", "단가(100만 토큰당 입력/출력)", "성능 테스트", "동작"], rows.map(m => [
         esc(m.name),
         m.is_active ? "활성" : "비활성",
         tierMappingHtml(m),
         contextWindowHtml(m),
         samplingOptionsHtml(m),
+        pricingHtml(m),
         benchmarkHtml(m),
         '<div class="actions">' +
           '<button class="small" data-toggle-model-active="' + m.id + '" data-active="' + (m.is_active ? "0" : "1") + '">' +
@@ -8871,7 +8962,20 @@ async function renderModelRegistry(content) {
     providerTableHtml("anthropic") +
     providerTableHtml("openai") +
     providerTableHtml("ollama") +
+    '<h3>실제 사용량(최근 30일)</h3><div id="mr-usage"><p class="muted">불러오는 중…</p></div>' +
     "</section>";
+  // 실제 토큰 사용량(2026-11-22) — 모든 LLM 호출(대화·Agent 실행·파이프라인·판정)을 provider·모델별로.
+  api("GET", "/api/llm-usage?days=30").then(u => {
+    const box = document.getElementById("mr-usage");
+    if (!box) return;
+    if (!u.models.length) { box.innerHTML = '<p class="muted">아직 기록된 사용량이 없습니다.</p>'; return; }
+    const fmt = n => Number(n || 0).toLocaleString();
+    box.innerHTML = table(["provider", "모델", "호출", "입력 토큰", "출력 토큰", "금액"], u.models.map(r => [
+      esc(r.provider), esc(r.model), fmt(r.calls), fmt(r.prompt_tokens), fmt(r.completion_tokens),
+      r.cost === null ? '<span class="muted">단가 미입력</span>' : r.cost.toLocaleString(undefined, { maximumFractionDigits: 4 }),
+    ])) + '<p class="muted">금액 합계(단가가 입력된 모델만): ' + u.total_cost.toLocaleString(undefined, { maximumFractionDigits: 4 }) +
+      (u.unpriced_models ? ' · 단가 미입력 모델 ' + u.unpriced_models + '개는 토큰 수만 표시' : "") + "</p>";
+  }).catch(() => {});
 
   document.getElementById("mr-fetch-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -8972,17 +9076,37 @@ async function renderModelRegistry(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+  content.querySelectorAll("[data-save-pricing]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.savePricing;
+      const val = (cls) => {
+        const el = content.querySelector("." + cls + '[data-model-id="' + id + '"]');
+        const raw = el ? el.value.trim() : "";
+        return raw === "" ? null : Number(raw);
+      };
+      try {
+        await api("PATCH", "/api/model-registry/" + id + "/pricing", {
+          price_input_per_1m: val("mr-price-in"), price_output_per_1m: val("mr-price-out"),
+        });
+        showMsg("global-msg", "단가를 저장했습니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
   content.querySelectorAll("[data-save-sampling-options]").forEach(btn => {
     btn.onclick = async () => {
       const modelId = btn.dataset.saveSamplingOptions;
       const k = content.querySelector('.mr-top-k[data-model-id="' + modelId + '"]');
       const p = content.querySelector('.mr-top-p[data-model-id="' + modelId + '"]');
+      const mo = content.querySelector('.mr-max-out[data-model-id="' + modelId + '"]');
       const kRaw = k ? k.value.trim() : "";
       const pRaw = p ? p.value.trim() : "";
+      const moRaw = mo ? mo.value.trim() : "";
       try {
         await api("PATCH", "/api/model-registry/" + modelId + "/sampling-options", {
           top_k: kRaw === "" ? null : Number(kRaw),
           top_p: pRaw === "" ? null : Number(pRaw),
+          max_output_tokens: moRaw === "" ? null : Number(moRaw),
         });
         showMsg("global-msg", "생성 옵션을 저장했습니다.", "ok");
         refresh();
@@ -9147,6 +9271,7 @@ async function renderKnowledgeBase(content) {
       '<ul class="muted help-list">' +
       '<li>top_k: 검색 1회당 가져올 결과 개수(기본 3개).</li>' +
       '<li>min_score: 관련성 하한(코사인 유사도, 0.0~1.0) — 이보다 낮은 결과는 무관한 것으로 보고 제외합니다(기본 0.2). 너무 높이면 관련 있는 결과도 걸러질 수 있습니다.</li>' +
+      '<li>대화·단일 Agent 실행에서 "내부지식검색" 결과를 요청 앞에 자동으로 넣을 때는 한 단계를 더 거칩니다 — 코사인이 아주 높거나(0.9 이상) 요청과 단어가 실제로 겹치는 결과만 넣습니다(임베딩 모델에 따라 무관한 자료도 코사인이 높게 나와, 요청과 상관없는 지식이 매번 끼어드는 것을 막기 위함). 걸러져 남는 게 없으면 "관련 자료를 찾지 못했다"고 알립니다.</li>' +
       '</ul>'
     ) +
     '<p>' + (ragSearchConfig.is_explicit ? '<b>설정됨</b>' : '<span class="muted">기본값 사용 중(아직 명시적으로 설정 안 함)</span>') +
@@ -9967,7 +10092,8 @@ async function renderCrew(content) {
       '<li>아래는 그 전에 조합·프롬프트를 미리 테스트해보고 싶을 때만 쓰세요.</li>' +
       '<li>Agent를 드롭다운으로 고르고 그 옆에 할 일을 입력하세요 — "+ Agent 추가"로 참여 인원을 늘릴 수 있습니다.</li>' +
       '<li><b>sequential</b>이면 앞줄 에이전트의 산출물이 다음 에이전트에게 자동으로 전달됩니다(순서대로 릴레이).</li>' +
-      '<li><b>hierarchical</b>은 "매니저 Agent"를 지정하면 그 매니저가 작업을 조율·위임만 하고 직접 산출물을 내지는 않습니다(비워두면 CrewAI가 자동으로 매니저 LLM을 하나 배정) — 아래 결과의 "Agent별 산출물"에서 매니저 행은 항상 "(없음)"으로 나옵니다.</li>' +
+      '<li><b>sequential</b>에서 Agent 행의 <b>"병렬(독립 작업)"</b>을 체크하면 그 Agent는 앞 Agent 결과를 기다리지 않고 동시에 시작합니다(앞 사람 결과를 받지 않는 독립 작업에만 쓰세요). hierarchical에서는 체크할 수 없습니다.</li>' +
+    '<li><b>hierarchical</b>은 "매니저 Agent"를 지정하면 그 매니저가 작업을 조율·위임만 하고 직접 산출물을 내지는 않습니다(비워두면 CrewAI가 자동으로 매니저 LLM을 하나 배정) — 아래 결과의 "Agent별 산출물"에서 매니저 행은 항상 "(없음)"으로 나옵니다. 매니저가 실제로 위임하지 않고 끝나는 경우가 많아("실제 위임/협업 발생 내역"이 0건) sequential을 권장합니다.</li>' +
       '<li>모든 Agent는 위임(allow_delegation)이 켜져 있어 필요하면 서로에게 실제로 질문·재위임할 수 있고, 그 내역이 "실제 위임/협업 발생 내역"에 기록됩니다.</li>' +
       '<li>온보딩(active) 안 된 Agent는 드롭다운에 안 뜨고 지정할 수도 없습니다.</li>' +
       '<li>실제 LLM API를 호출하므로 비용이 발생합니다(참여 Agent 수만큼 커질 수 있음).</li>' +
@@ -10905,6 +11031,31 @@ async function renderAudit(content) {
 
 /* ---------- 관리자 ---------- */
 
+// 조직 정책 — 사번 형식(2026-11-21). 정규식은 서버(Python re)가 전체 일치로 검사한다.
+function orgPolicyFormHtml() {
+  const p = ORG_POLICY.employee_id || {};
+  return '<section class="card"><h2>조직 정책 — 사번 형식</h2>' +
+    '<p class="muted">사번 입력 검사에 쓰는 형식(정규식, 전체 일치)과 입력란에 보여 줄 설명입니다. ' +
+    '비우고 저장하면 기본값(숫자 8~12자리)으로 돌아갑니다. 이미 등록된 사번은 바뀌지 않으며, 새 형식에 맞지 않는 건수를 알려 드립니다.</p>' +
+    '<form class="inline" id="org-policy-form">' +
+    '<input id="op-pattern" placeholder="정규식(예: ^EMP-\\\\d{6}$)" value="' + escAttr(p.is_default ? "" : (p.pattern || "")) + '" style="width:260px">' +
+    '<input id="op-hint" placeholder="설명(예: EMP- 뒤 숫자 6자리)" value="' + escAttr(p.is_default ? "" : (p.hint || "")) + '" style="width:240px">' +
+    '<button class="primary" type="submit">저장</button>' +
+    '<span class="muted">현재: ' + esc(p.hint || "숫자 8~12자리") + (p.is_default ? " (기본값)" : " · " + esc(p.pattern || "")) + '</span>' +
+    '</form>' +
+    // 결과물 언어(2026-11-22, 하드코딩·스텁 점검 4순위)
+    (() => {
+      const lang = ORG_POLICY.output_language || { code: "ko", options: [{ code: "ko", name: "한국어" }] };
+      return '<h3>결과물 언어</h3>' +
+        '<p class="muted">에이전트가 결과물을 쓰는 언어입니다. 한국어가 아니면 모든 에이전트에 그 언어로 쓰라고 지시하고, ' +
+        '한국어 전용 자동 교정(한자·가나 등을 한국어로 바꾸는 기능)은 꺼집니다.</p>' +
+        '<form class="inline" id="output-language-form"><select id="op-language">' +
+        lang.options.map(o => '<option value="' + escAttr(o.code) + '"' + (o.code === lang.code ? " selected" : "") + ">" + esc(o.name) + "</option>").join("") +
+        '</select><button class="primary" type="submit">저장</button></form>';
+    })() +
+    '</section>';
+}
+
 async function renderAdmin(content) {
   const users = await api("GET", "/api/users");
   content.innerHTML =
@@ -10926,9 +11077,10 @@ async function renderAdmin(content) {
     '<option value="member" selected>팀원</option><option value="viewer">뷰어</option></select>' +
     // 사용자 요청(2026-10-27, "사용자 등록에 사번 입력 및 표시되도록
     // UI개선") — human_pool과 같은 선택 입력(숫자 8~12자리).
-    '<input id="u-employee-id" placeholder="사번(선택, 숫자 8~12자리)" pattern="\\d{8,12}" title="숫자 8~12자리" style="width:160px">' +
+    '<input id="u-employee-id"' + empIdInputAttrs(true) + ' style="width:160px">' +
     '<button class="primary" type="submit">생성</button></form>' +
     "</section>" +
+    orgPolicyFormHtml() +
     '<section class="card"><h2>사용자 목록</h2>' +
     // 사용자 요청(2026-09-29, "생성과 상사 지정만 가능... (1) 비밀번호
     // 조회/초기화 (2) 사용자 삭제 (3) '동작'의 의미 불명") — 비밀번호는
@@ -10965,7 +11117,7 @@ async function renderAdmin(content) {
         '</select><button class="small" data-set-manager="' + u.id + '">저장</button></span></div>',
         '<div class="actions"><span class="pair"><input type="password" id="pw-' + u.id + '" placeholder="새 비밀번호" style="width:120px">' +
           '<button class="small" data-reset-password="' + u.id + '">초기화</button></span></div>',
-        '<div class="actions"><span class="pair"><input id="uempid-' + u.id + '" placeholder="사번(숫자 8~12자리)" pattern="\\d{8,12}" title="숫자 8~12자리" value="' + escAttr(u.employee_id || "") + '" style="width:120px">' +
+        '<div class="actions"><span class="pair"><input id="uempid-' + u.id + '"' + empIdInputAttrs(false) + ' value="' + escAttr(u.employee_id || "") + '" style="width:120px">' +
           '<button class="small" data-set-user-employee-id="' + u.id + '">저장</button></span></div>',
         isSelf
           ? '<span class="muted">본인 계정</span>'
@@ -10975,6 +11127,28 @@ async function renderAdmin(content) {
       ];
     })) + "</section>";
 
+  document.getElementById("output-language-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      const res = await api("PUT", "/api/org-policy/output-language", { code: document.getElementById("op-language").value });
+      ORG_POLICY.output_language = res;
+      showMsg("global-msg", "결과물 언어를 " + res.name + "(으)로 저장했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+  document.getElementById("org-policy-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      const res = await api("PUT", "/api/org-policy", {
+        employee_id_pattern: document.getElementById("op-pattern").value,
+        employee_id_hint: document.getElementById("op-hint").value,
+      });
+      ORG_POLICY = Object.assign({}, ORG_POLICY, { employee_id: res.employee_id });
+      const n = res.employee_id.existing_mismatched || 0;
+      showMsg("global-msg", "사번 형식을 저장했습니다." + (n ? " 이미 등록된 사번 중 " + n + "건이 새 형식에 맞지 않습니다(값은 그대로 둠)." : ""), n ? "warn" : "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
   document.getElementById("user-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const employeeIdValue = document.getElementById("u-employee-id").value.trim();
@@ -11074,7 +11248,7 @@ const MANUAL_MARKDOWN = [
 '8. [메뉴 전체 지도](#menu)',
 '9. [자주 겪는 문제](#trouble)',
 '',
-'> 🔰 **처음이라 바쁘다면** — 1절만 가볍게 읽고 바로 [2절](#chat)로 가서 따라 해보세요. 나머지 절은 필요할 때 찾아보면 됩니다. 이미 **26개의 활성 Agent**가 등록돼 있어, 아무것도 새로 만들지 않고도 지금 바로 체험할 수 있습니다.',
+'> 🔰 **처음이라 바쁘다면** — 1절만 가볍게 읽고 바로 [2절](#chat)로 가서 따라 해보세요. 나머지 절은 필요할 때 찾아보면 됩니다. 이미 **29개의 활성 Agent**가 등록돼 있어, 아무것도 새로 만들지 않고도 지금 바로 체험할 수 있습니다.',
 '',
 '<h2 id="ov">1. 개요</h2>',
 '',
@@ -11083,10 +11257,10 @@ const MANUAL_MARKDOWN = [
 '',
 '- **사람과 Agent는 같은 테이블, 다른 역할입니다** — 일단 조직에 들어온 뒤로는 배치·배분·승인·팀 구성이 사람이든 Agent든 같은 절차·같은 화면("리소스 매칭/배정"·"결재"·"조직도")을 씁니다. Agent를 만들고 온보딩하는 화면, 사람을 등록하는 화면은 각자 성격이 달라 따로 있습니다 — 통일된 건 그 이후의 절차입니다.',
 '- **승인 없이 조직에 반영되는 변화는 없습니다** — Agent가 뭘 만들어도 그게 "확정된 결과"가 되려면 반드시 사람의 결재를 거칩니다(이런 "사람이 중간에서 확인하는 구조"를 줄여서 **HITL**(Human-In-The-Loop)이라고 부릅니다 — 이 가이드 여러 곳에 나오는 말입니다).',
-'  단, 파이프라인의 자동 진행 단계는 Gate A-G 기준을 통과하면 "통과 자체가 곧 승인"이라 사람 개입이 최소화됩니다.',
+'  단, 파이프라인의 자동 진행 단계는 그 단계에 정한 Gate 기준을 통과하면 "통과 자체가 곧 승인"이라 사람 개입이 최소화됩니다.',
 '- **측정 없이 신뢰하지 않습니다** — Agent가 만든 모든 결과물은 Gate A-G(목표달성·행동무결성·신뢰성·성능계약·보안경계·다중에이전트협업·관측성)로 자동 채점됩니다.',
 '',
-'업무를 시키는 방법은 크게 두 갈래입니다 — **가벼운 대화**(3절)와 **정식 업무 절차**(4절).',
+'업무를 시키는 방법은 크게 두 갈래입니다 — **가벼운 대화**(2절)와 **정식 업무 절차**(3절).',
 '둘 다 같은 Agent/팀 등록을 공유하므로 아무 때나 오갈 수 있습니다.',
 '',
 '<h2 id="chat">2. 가장 빠른 시작 — 대화로 바로 호출하기</h2>',
@@ -11104,13 +11278,13 @@ const MANUAL_MARKDOWN = [
 '처음이면 **"새 대화 제목(선택)"** 입력란(비워도 됩니다)에 적고 "**새 대화 시작**"을 누르세요.',
 '기존 대화가 있으면 목록에서 "**열기**"를 누릅니다.',
 '',
-'> 💡 **뭘 물어볼지 막막하다면** — 이미 등록돼 바로 쓸 수 있는 활성 Agent가 26개 있습니다(새로 만들 필요 없음). 예를 들어 `@코드 검증가 이 함수 리뷰해줘`, `@데이터 분석가 이 숫자들의 증감률을 계산해줘`, `@외부 자료 조사가 ○○ 시장 동향을 조사해줘`처럼 바로 불러보세요. 전체 목록은 "**인력 검색**" 탭에서 확인할 수 있습니다.',
+'> 💡 **뭘 물어볼지 막막하다면** — 이미 등록돼 바로 쓸 수 있는 활성 Agent가 29개 있습니다(새로 만들 필요 없음). 예를 들어 `@코드 검증가 이 함수 리뷰해줘`, `@데이터 분석가 이 숫자들의 증감률을 계산해줘`, `@외부 자료 조사가 ○○ 시장 동향을 조사해줘`처럼 바로 불러보세요. 전체 목록은 "**인력 검색**" 탭에서 확인할 수 있습니다.',
 '',
 '### 2단계 — 메시지 입력창의 컨트롤 이해하기',
 '',
 '화면 맨 아래 입력 영역에 왼쪽부터 순서대로:',
 '',
-'- **"개발업무 스킬도 보기" 체크박스**(기본값 꺼짐) — 바로 옆 스킬 선택 드롭다운에는 기본적으로 **일반업무**(기획·전략·자료조사·보고서·데이터분석·제안서·실적서 등) 스킬만 보입니다. 소프트웨어 개발/Gate 채점처럼 **개발업무**용 스킬은 완전히 없어진 게 아니라 "기본적으로 안 보이게" 숨겨뒀을 뿐이라 — 이 체크박스를 켜면 바로 보입니다. 일반 업무를 하는 사용자는 이 체크박스를 켤 일이 거의 없습니다(어느 스킬이 어느 분류인지는 "도구/스킬 Pool" 관리 화면에서 확인·변경할 수 있습니다 — admin/manager 전용, 8절 메뉴 지도에서 위치를 찾을 수 있습니다).',
+'- **"개발업무 스킬도 보기" 체크박스**(기본값 꺼짐) — 바로 옆 스킬 선택 드롭다운에는 기본적으로 **일반업무**(기획·전략·자료조사·보고서·데이터분석·차트·제안서·실적서 등) 스킬만 보입니다. 소프트웨어 개발/Gate 채점처럼 **개발업무**용 스킬은 완전히 없어진 게 아니라 "기본적으로 안 보이게" 숨겨뒀을 뿐이라 — 이 체크박스를 켜면 바로 보입니다. 일반 업무를 하는 사용자는 이 체크박스를 켤 일이 거의 없습니다(어느 스킬이 어느 분류인지는 "도구/스킬 Pool" 관리 화면에서 확인·변경할 수 있습니다 — admin/manager 전용, 8절 메뉴 지도에서 위치를 찾을 수 있습니다).',
 '- **스킬 선택 드롭다운**(기본값 "스킬 선택 안 함") — 비워두고 질문만 보내도 되지만, 멘션 없이 보내는 응답을 특정 스킬로 "그라운딩"하고 싶을 때 씁니다.',
 '  예를 들어 실시간 정보가 필요한 질문이면 "**실시간웹검색**"을 골라두세요 — Tavily로 실제 웹 검색을 한 뒤 그 결과를 참고해 답합니다(서버에 `TAVILY_API_KEY` 설정이 먼저 돼 있어야 합니다 — 관리자에게 문의). "**내부지식검색**"(VectorDB)·"**일반웹검색**"·"**최신정보필수확인**"·"**딥리서치**"·"**AI업계동향브리핑**" 등 조사 성격의 스킬은 전부 답변에 **출처(제목·URL 또는 참고한 과거 산출물의 식별자)를 반드시 밝히도록** 되어 있습니다 — 출처가 안 보이는 답변이 오면 스킬이 실제로 그라운딩됐는지부터 의심해보세요.',
 '  **멘션을 하나라도 넣으면 이 선택은 자동으로 비워집니다** — 멘션이 있으면 그 호출이 우선이고, 스킬 선택은 "아무도 안 불렀을 때(기본 AI가 답할 때) 어떤 지식/도구로 그라운딩할지"를 고르는 용도이기 때문입니다.',
@@ -11120,7 +11294,7 @@ const MANUAL_MARKDOWN = [
 '### 3단계 — 멘션으로 누구를 부를지 정하고 메시지 전송',
 '',
 '- **특정 Agent를 `@역할명` 또는 `@지정한이름`으로 멘션**하면 그 Agent만 실행됩니다(예: `@DA 이 기능의 데이터 모델을 설계해줘`).',
-'- **Team을 `@팀이름`으로 멘션**하면 그 팀의 Agent 멤버 전원이 실행됩니다(4절 "N:N 조합" 참고 — 매니저가 있으면 자동으로 위임 구조로 돕니다).',
+'- **Team을 `@팀이름`으로 멘션**하면 그 팀의 Agent 멤버 전원이 실행됩니다(4절 "N:N 조합" 참고 — 파이프라인이 연결된 팀이면 그 파이프라인이 단계별로 진행되고, 아니면 멤버가 순서대로 실행됩니다. 예전에 위임형(매니저)으로 설정해 둔 팀만 매니저 위임으로 돕니다).',
 '- **사람을 `@아이디`로 멘션**하면 AI가 끼어들지 않고 그 사람이 직접 답해야 하는 대화로 남습니다.',
 '- **아무도 멘션하지 않으면** 대화의 **"AI 자동응답"** 체크박스 상태에 따라 기본 모델이 대신 답합니다(켜져 있으면 멘션 없는 모든 메시지마다 LLM이 호출돼 비용이 발생합니다 — 체크박스는 대화 상단에 있습니다).',
 '',
@@ -11128,7 +11302,7 @@ const MANUAL_MARKDOWN = [
 '',
 '대화 상단의 provider/모델 select에서 고르고 "**모델 설정 저장**"을 눌러야 반영됩니다.',
 '',
-'> ⚠️ 흔히 헷갈리는 부분: 이 설정은 **멘션 없는 기본 AI 응답에만** 적용됩니다. `@Agent이름`으로 부르면 그 Agent 자신에게 저장된 모델이, `@Team이름`으로 부르면 서버가 자동 판별한 모델이 쓰입니다(이 설정과 무관). 각 메시지에 실제로 쓰인 모델은 메시지 작성자 줄에 표시됩니다.',
+'> ⚠️ 흔히 헷갈리는 부분: 이 설정은 **멘션 없는 기본 AI 응답에만** 적용됩니다. `@Agent이름`으로 부르면 그 Agent 자신에게 저장된 모델이, `@Team이름`으로 부르면 팀 전체가 모델 하나를 함께 씁니다 — 매니저가 있는 팀은 매니저 Agent의 모델, 없으면 "플랫폼 공통 기본 LLM"(아래 ①)입니다(이 설정과 무관). 각 메시지에 실제로 쓰인 모델은 메시지 작성자 줄에 표시됩니다.',
 '>',
 '> provider/model을 둘 다 "**기본값 사용**"으로 두면 ① 관리자가 "**LLM 설정 최적화**" 탭(admin 전용)의 "플랫폼 공통 기본 LLM" 카드에서 지정해둔 모델 → ② 없으면 서버 환경변수 → ③ 그래도 없으면 API 키 존재 여부로 자동 판별합니다. provider는 직접 고르고 model만 "기본값 사용"으로 두면 ①을 건너뛰고 그 provider의 표준 기본 모델이 쓰입니다.',
 '',
@@ -11136,12 +11310,12 @@ const MANUAL_MARKDOWN = [
 '',
 '실행에는 실제 LLM API 호출이 들어가므로 **비용이 발생**합니다 — 결과는 잠시 뒤 메시지로 도착하고(비동기 처리, 화면에 "응답을 기다리는 중…" 표시), 실패하면 원인이 메시지로 안내됩니다.',
 '',
-'AI 메시지 작성자 줄에는 그 응답이 실제로 어떻게 만들어졌는지 보여주는 배지가 붙습니다 — **"단발 응답"**(기본 AI·단일 Agent 멘션 — 검색이 됐어도 1회성 조회일 뿐, Agent가 스스로 다시 찾아보는 루프는 없습니다)과 **"위임 N건"**(Team 멘션 — 실제 CrewAI 위임이 몇 건 있었는지, 0건이면 매니저 혼자 처리했다는 뜻). 어느 쪽도 안 보이면(Gate 배지만 있거나 아예 없으면) 파이프라인 진행 알림처럼 LLM 호출 자체가 없는 메시지입니다.',
+'AI 메시지 작성자 줄에는 그 응답이 실제로 어떻게 만들어졌는지 보여주는 배지가 붙습니다 — **"단발 응답"**(기본 AI·단일 Agent 멘션 — 수치 계산·차트 생성처럼 관리자가 등록한 커스텀 도구는 필요할 때 직접 호출하지만, 검색(내부지식·웹·뉴스)은 요청 직전에 한 번 조회한 결과만 반영하고 스스로 다시 찾아보지는 않습니다)과 **"위임 N건"**(Team 멘션 — 실제 CrewAI 위임이 몇 건 있었는지, 0건이면 매니저 혼자 처리했다는 뜻). 어느 쪽도 안 보이면(Gate 배지만 있거나 아예 없으면) 파이프라인 진행 알림처럼 LLM 호출 자체가 없는 메시지입니다.',
 '',
 '각 메시지 줄에는 두 가지 "보내기" 버튼이 있습니다(대화의 모든 메시지가 자동으로 쌓이지 않고, 남길 만하다고 직접 고른 메시지만 보냅니다):',
 '',
 '- **갤러리로 보내기**(모든 참가자) — 이 메시지 하나를 결과물로 승격해 "갤러리" 탭에서 모아볼 수 있게 합니다(비용 없는 단순 저장).',
-'- **지식베이스로 보내기**(admin/manager 전용) — 이 메시지를 임베딩해 VectorDB에 색인합니다(실제 임베딩 API 호출 — 비용 발생). 색인된 내용은 이후 대화에서 스킬 선택 드롭다운의 "**내부지식검색**"를 고르거나, "내부지식검색" 스킬을 가진 Agent를 실행하면 실시간으로 검색돼 답변에 반영됩니다.',
+'- **지식베이스로 보내기**(대화 참가자) — 이 메시지를 지식으로 등록해 달라고 **제출**합니다. 제출된 건은 "**결재**" 탭에서 admin이 승인해야 실제로 임베딩·VectorDB 색인됩니다(그때 임베딩 API 비용 발생). 버튼 문구가 "지식 결재 대기" → "지식 등록 중" → "지식 등록됨 · 갱신 요청"(반려되면 "지식베이스로 보내기(반려됨)")으로 바뀌어 진행 상황을 보여줍니다. 등록된 내용은 이후 대화에서 스킬 선택 드롭다운의 "**내부지식검색**"를 고르거나, "내부지식검색" 스킬을 가진 Agent를 실행하면 검색돼 답변에 반영됩니다.',
 '',
 '### 6단계 — (선택) 정식 절차로 넘기기',
 '',
@@ -11159,8 +11333,8 @@ const MANUAL_MARKDOWN = [
 '📍 **메뉴**: 업무 요청',
 '',
 '**"업무 요청"** 탭을 엽니다.',
-'**"한 줄에 역할 하나씩"** 입력하세요(예: 입력창 placeholder 그대로 "백엔드 개발자 1명" 다음 줄에 "UI/UX 디자이너 1명") → **"제출"**.',
-'이건 실제 AI 분석이 아니라 입력한 텍스트를 줄바꿈 단위로 그대로 나누는 **규칙 기반 처리**라 비용이 없고 즉시 끝납니다 — 아래 "제안된 역할" 칸에 채워질 뿐인 **참고용 제안**입니다(뷰어 role은 조회만 가능, 제출 불가).',
+'업무 내용을 적고 **"제출"**을 누릅니다. 필요한 역할을 이미 알면 **"한 줄에 역할 하나씩"** 짧게 나열해도 됩니다(예: 입력창 placeholder 그대로 "백엔드 개발자 1명" 다음 줄에 "UI/UX 디자이너 1명").',
+'제출하면 아래 "제안된 역할" 칸에 **참고용 역할 후보**가 채워집니다 — 짧은 줄로 나열했으면 그 줄들이 그대로, 문장으로 적었으면 **업무 내용과 역할·스킬이 맞는 기존 Agent 역할**이 제안됩니다(LLM을 쓰지 않는 규칙 기반이라 비용이 없고 즉시 끝납니다. 맞는 역할이 없으면 줄 단위로 나눈 것이 대신 뜹니다). 뷰어 role은 조회만 가능하고 제출할 수 없습니다.',
 '',
 '### 2단계 — 할 일(Task)로 나누기(실제 배분 단위 만들기)',
 '',
@@ -11169,7 +11343,7 @@ const MANUAL_MARKDOWN = [
 '방금 제출한 업무 요청 행에서 "**할 일로 나누기**"를 누릅니다.',
 '제안된 역할 칩을 클릭하면 아래 입력란에 그대로 채워집니다(다듬어서 쓰세요). 직접 채울 항목:',
 '',
-'- **필요한 역할**(예: "백엔드 개발자") — 필수. 💡 이미 등록된 레퍼런스 Agent(26개)와 이름이 겹치면("백엔드 개발자"/"코드 검증가"/"데이터 분석가" 등), 사람/Agent를 새로 만들지 않아도 다음 3단계의 후보 매칭에서 바로 그 Agent가 뜹니다.',
+'- **필요한 역할**(예: "백엔드 개발자") — 필수. 💡 이미 등록된 레퍼런스 Agent(29개)와 이름이 겹치면("백엔드 개발자"/"코드 검증가"/"데이터 분석가" 등), 사람/Agent를 새로 만들지 않아도 다음 3단계의 후보 매칭에서 바로 그 Agent가 뜹니다.',
 '- **필요 스킬** — 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(칩의 ×로 제거, 여러 개 등록 가능, 목록에 없는 이름도 자유 입력 가능). 자동완성 중 **"실시간웹검색"**(Tavily)은 대화창·Crew 실행 양쪽에서 동작하고, **"일반웹검색"**(Parallel Search)은 Crew 실행에서만 동작합니다 — 이 둘의 차이는 꼭 기억해두세요(9절 "자주 겪는 문제"에도 관련 내용이 있습니다).',
 '- **인원 수**(기본 1).',
 '',
@@ -11185,7 +11359,7 @@ const MANUAL_MARKDOWN = [
 '',
 '*(A) 후보를 찾아서 배정 요청(사람/Agent)*',
 '',
-'"할 일 보기" 목록에서 "**상세**"를 누르고 **"후보 매칭하기"**(또는 "리소스 매칭/배정" 탭에서 할 일을 고르고 **"찾기"**) — 역할명이 서로 포함 관계(부분일치)인 후보 중 필요 스킬까지 다 가진 후보가 있으면 그것부터, 없으면 **가용성 40%·적합도 35%·비용 25%** 가중치로(사람 후보가 아직 성과점수를 못 받았으면 적합도를 빼고 가용성 60%·비용 40%로) 점수 매긴 상위 3명을 보여줍니다. 부분일치로도 후보가 전혀 없으면 "**AI로 추천 받기**" 버튼으로 LLM이 전체 Pool에서 의미상 맞는 후보를 찾아줍니다(비용 발생 가능, 눌러야만 호출됨).',
+'"할 일 보기" 목록에서 "**상세**"를 누르고 **"후보 매칭하기"**(또는 "리소스 매칭/배정" 탭에서 할 일을 고르고 **"찾기"**) — 역할명이 서로 포함 관계(부분일치)인 후보와, 역할명은 달라도 **필요 스킬(2개 이상)을 전부 가진 후보**(예: "Backend Engineer"와 "백엔드 개발자")를 대상으로, 역할명이 맞고 필요 스킬까지 다 가진 후보가 있으면 그것부터, 없으면 **가용성 40%·적합도 35%·비용 25%** 가중치로(적합도 점수가 없는 후보는 적합도를 빼고 가용성 60%·비용 40%로) 점수 매긴 상위 3명을 보여줍니다(같은 점수면 필요 스킬을 더 많이 가진 후보가 앞). Agent의 적합도는 관리자가 입력한 성과점수, 없으면 그 Agent 결과물의 Gate A 평균(평가 3건 이상일 때)을 씁니다. 부분일치로도 후보가 전혀 없으면 "**AI로 추천 받기**" 버튼으로 LLM이 전체 Pool에서 의미상 맞는 후보를 찾아줍니다(비용 발생 가능, 눌러야만 호출됨).',
 '원하는 후보 줄에서 "**배정 요청**"을 누르면 조직도 매니저 체인을 따라 결재 단계가 자동 생성됩니다 — 아직 승인 전 상태입니다. **단, 본인 자신을 배정 요청하는 셀프배정은 예외입니다** — 본인 시간만 쓰는 배정이라 결재 체인 자체를 만들지 않고 그 자리에서 바로 확정됩니다(4단계를 거치지 않고 바로 5단계로 진행 가능).',
 '',
 '*(B) 아직 쓸 Agent가 없다면*',
@@ -11216,7 +11390,7 @@ const MANUAL_MARKDOWN = [
 '',
 '- **"이 업무의 AI 에이전트 실행(비용 발생)"**: Agent 1명에게 온디맨드로 맡깁니다. 실행 버튼 옆 "**📎 참고자료**"로 이번 1회 실행에만 쓸 파일을 첨부할 수 있습니다(2절의 대화 첨부와 같은 원리 — 추출한 텍스트만 프롬프트에 쓰이고 파일 자체나 텍스트는 저장되지 않습니다).',
 '- **"팀 Agent 실행(Crew, 비용 발생)"**: 배정된 팀의 Agent 멤버 전원을 실제 CrewAI Crew로 함께 실행합니다(4절).',
-'- **"파이프라인 실행(비용 발생)"**: 등록된 파이프라인 템플릿을 골라 처음부터 끝까지 단계별로 자동 진행시킵니다(6절).',
+'- **"파이프라인 실행(비용 발생)"**: 등록된 파이프라인 템플릿을 골라 처음부터 끝까지 단계별로 자동 진행시킵니다(6절). 아래 **"신규 실행엔진(LangGraph) 사용"**을 켜면 서버가 재시작돼도 멈춘 지점부터 이어서 진행합니다 — 서버에 `graph` 확장 설치가 필요하고, 병행 위임 단계가 있는 템플릿은 이 엔진으로 돌릴 수 없습니다.',
 '- 사람이 직접 쓴 결과물도 "**검토 요청**"을 누르면 Agent 결과물과 같은 결재 체인을 거칩니다.',
 '- (admin/manager 전용) **"재시도 예산"** 입력 — 이 할 일이 파이프라인·Crew 재시도를 합쳐서 총 몇 번까지 시도할 수 있는지 상한을 걸어둘 수 있습니다(빈 값=무제한). 상한에 걸리면 그 단계의 자체 재시도 횟수가 남아 있어도 즉시 사람 승인으로 에스컬레이션됩니다 — 같은 할 일을 반복 재시도하며 비용만 계속 쓰는 걸 막는 안전장치입니다.',
 '- (admin/manager 전용) **"사람 판단 필수"** 체크박스 — 켜두면 이 할 일이 어떤 파이프라인을 타든, 그 단계 자체는 "사람 승인 불필요"로 설정돼 있어도 **Gate 점수와 무관하게 항상 결재를 거칩니다**. 협상·민감한 대외 커뮤니케이션처럼 Gate 통과 여부와 별개로 사람이 반드시 봐야 하는 업무에 씁니다.',
@@ -11247,18 +11421,17 @@ const MANUAL_MARKDOWN = [
 '',
 '1. **"팀 관리"** 탭(admin/manager 전용) → "팀 등록"에 이름·설명을 넣습니다. **Task ID/Brief ID를 입력하면 "TF팀"**(그 업무에 종속된 조직)이 되고, 비워두면 여러 업무에 걸쳐 재사용하는 **범용 팀**이 됩니다(둘의 차이는 아래 "팀의 상태(생명주기)" 참고).',
 '2. 만든 팀 카드에서 **"멤버 추가"** — 사람(human_pool)과 Agent를 역할 라벨과 함께 몇 명이든 추가합니다(예: 사람 2명 + Agent 10명을 한 팀에).',
-'3. **위임형(hierarchical) 협업을 원하면**, 매니저를 맡을 Agent를 추가할 때 역할 라벨에 **"매니저"라는 단어를 포함**시키세요(예: "매니저(hierarchical 실행 시 지정)").',
-'   그러면 이 팀을 실행할 때 그 Agent가 자동으로 매니저로 지정돼, 나머지 팀원에게 하위 과업을 실제로 쪼개 위임합니다.',
-'   역할 라벨에 "매니저"가 없으면 전원이 순차(sequential)로 각자 수행합니다. 팀 카드의 "**기본값 저장**" 폼에서 기본 process/매니저를 미리 지정해두면 실행할 때마다 다시 고르지 않아도 됩니다.',
+'3. **실행 방식** — 팀은 기본적으로 순차(sequential)로 실행됩니다(멤버 추가 순서대로 앞 사람 결과를 이어받음). 여러 단계에 걸친 업무라면 아래 6번처럼 **파이프라인을 연결**하는 것이 가장 안정적입니다.',
+'   ⚠️ **위임형(hierarchical, 매니저가 팀원에게 하위 과업을 쪼개 위임)은 새로 지정할 수 없습니다** — 실측에서 매니저가 실제로 위임하지 않고 계획만 요약하거나 혼자 처리하는 문제가 반복돼, "기본값 저장"에서 process를 hierarchical로 두거나 매니저를 지정하면 "신규로 hierarchical 모드를 지정할 수 없습니다" 오류가 납니다. 예전에 위임형으로 설정해 둔 팀(기본값이 hierarchical이거나 역할 라벨에 "매니저"가 들어간 멤버가 있는 팀)만 계속 위임형으로 동작합니다 — 같은 이유로 새 팀에는 역할 라벨에 "매니저"가 들어간 Agent 멤버를 추가할 수 없습니다(그 멤버가 매니저로 인식돼 위임형이 되기 때문 — "리드"·"PM" 같은 다른 라벨을 쓰세요).',
 '4. **팀의 상태(생명주기)** — Agent 1명과 똑같은 3단계를 팀도 따릅니다(팀 카드 제목 옆 배지로 표시):',
 '   - **온보딩 대기**: Task ID/Brief ID를 지정해 만든 TF팀은 이 상태로 시작합니다 — 검증 전까지는 **대화 @멘션이나 할 일 배정 후보 목록에 뜨지 않습니다**. Task ID/Brief ID 없이 만든 범용 팀은 바로 "활성"으로 시작합니다.',
 '   - **활성**: "**온보딩 시작**" 버튼을 누르면 이 상태가 되고, 그 순간부터 @멘션·배정이 가능해집니다.',
 '   - **비활성화됨**: "비활성화" 버튼(기존 활성화/비활성화 토글) 또는 TF팀의 경우 "**미션 완료**" 버튼(연결된 업무가 끝났을 때, 완료 시각이 함께 기록됩니다)으로 전환합니다. 이후로는 다시 @멘션·배정 후보에 뜨지 않습니다.',
 '   - **팀 삭제**는 그 팀에 확정된 배정이 남아 있으면 막힙니다(오류 메시지로 안내) — 할 일 상세의 "배정 취소"로 먼저 정리하세요(사람/Agent/할 일 삭제와 같은 보호 규칙입니다).',
 '5. 이 팀은 두 군데서 실행할 수 있습니다:',
-'   - 대화에서 **`@팀이름`** 멘션(2절) — 매니저가 있으면 위임형, 없으면 전원 실행 후 각자 결과를 메시지로 올립니다.',
+'   - 대화에서 **`@팀이름`** 멘션(2절) — 파이프라인이 연결돼 있으면 그 파이프라인이, 아니면 멤버가 순서대로 실행돼 결과를 메시지로 올립니다(기존 위임형 팀은 매니저가 위임).',
 '   - 업무(Task)에 팀을 배정한 뒤 협업 워크스페이스의 **"팀 Agent 실행"** 버튼, 또는 3절의 (C) 방법대로 직접 "팀에 배정 요청" — 결과가 Agent별 결과물+결재 체인으로 그 업무에 그대로 쌓입니다.',
-'6. **파이프라인 연결**(누구나 설정 가능, 1개 팀 한정 아님) — 팀 카드의 "기본값 저장" 폼에서 "**연결 파이프라인**"을 고르면, 그 팀을 `@멘션`할 때 단발 실행 대신 그 파이프라인(6절)을 그대로 탑니다. 예를 들어 팀에 "소프트웨어 개발 파이프라인"을 연결해두면, 그 팀을 `@멘션`하는 순간 요구분석부터 품질 관리까지 7단계(코드 검증·QA·품질 관리 단계는 Gate 기준 자동 재시도/승인 대기)가 그대로 진행됩니다. 연결 안 된 팀은 기존처럼 한 번에 실행됩니다. "자율 개발 크루"는 기본으로 만들어져 있는 팀이 아닙니다 — "팀 관리"에서 정확히 그 이름으로 직접 만들어야 합니다(만들면 서버가 자동으로 멤버 구성을 7단계 전체 참조 역할로 채우고 "소프트웨어 개발 파이프라인"에 연결해줍니다). 이 팀도 `hair reset-data`로 초기화 대상입니다(9절 참고) — Agent 자체(요구사항 분석가·AA·DA·개발 계획 수립가·개발자 4명·UI 기획자·코드 검증가·테스트 계획 수립가·QA 기능테스터·품질 관리자 등)는 초기화돼도 그대로 남아 있으니, 초기화 후에도 같은 이름으로 팀만 다시 만들면 됩니다.',
+'6. **파이프라인 연결**(admin/manager, 어느 팀에나 연결 가능) — 팀 카드의 "기본값 저장" 폼에서 "**연결 파이프라인**"을 고르면, 그 팀을 `@멘션`할 때 단발 실행 대신 그 파이프라인(6절)을 그대로 탑니다. 예를 들어 팀에 "소프트웨어 개발 파이프라인"을 연결해두면, 그 팀을 `@멘션`하는 순간 요구분석부터 품질 관리까지 7단계(코드 검증·QA·품질 관리 단계는 Gate 기준 자동 재시도/승인 대기)가 그대로 진행됩니다. 연결 안 된 팀은 기존처럼 한 번에 실행됩니다. "자율 개발 크루"는 기본으로 만들어져 있는 팀이 아닙니다 — "팀 관리"에서 정확히 그 이름으로 직접 만들어야 합니다(만들면 서버가 자동으로 멤버 구성을 7단계 전체 참조 역할로 채우고 "소프트웨어 개발 파이프라인"에 연결해줍니다). 이 팀도 `hair reset-data`로 초기화 대상입니다(팀 카드에서 "초기화 시 보호"를 켜면 유지 — 9절 참고) — Agent 자체(요구사항 분석가·AA·DA·개발 계획 수립가·개발자 4명·UI 기획자·코드 검증가·테스트 계획 수립가·QA 기능테스터·품질 관리자 등)는 초기화돼도 그대로 남아 있으니, 초기화 후에도 같은 이름으로 팀만 다시 만들면 됩니다.',
 '7. **팀 관리 리포팅** — "성과 리뷰"·"비용" 탭에도 팀이 사람·Agent와 나란히 한 행으로 나옵니다(팀 자체의 성과점수·단가는 없어 "확정 배정 수"만 집계됩니다 — 비용은 멤버 Agent 쪽에 이미 개별로 잡힙니다). 팀 카드의 "**실행 이력 보기**" 버튼을 누르면 "Crew 빌더"의 실행 이력 목록이 그 팀의 실행 건으로 좁혀져 나옵니다.',
 '',
 '### 방법 B — Crew 빌더(즉석 1회성, 재사용 등록 없이)',
@@ -11267,11 +11440,11 @@ const MANUAL_MARKDOWN = [
 '',
 '**"Crew 빌더"** 탭(admin/manager 전용)에서 매번 Agent를 직접 골라 그 자리에서 협업시킵니다 — 팀으로 등록해둘 필요가 없는 일회성 조합에 적합합니다. 세 가지 하위 모드가 있습니다:',
 '',
-'- **"업무에 바로 실행"**: 실제 할 일(Task)에 결과를 남기며 실행합니다(기본 모드) — 여러 Agent를 고르고, 처리 방식(sequential/hierarchical)과 hierarchical일 때의 매니저 Agent를 직접 선택합니다. sequential이고 병행 실행이 아니면 **"자기 검토"** 체크박스도 켤 수 있습니다 — 각 Agent가 자기 초안을 원 요구사항과 대조해 스스로 한 번 더 검토·수정한 뒤에 제출합니다(member도 켤 수 있는 단순 품질 옵션, 결과물은 검토 후 최종본만 남고 초안은 실행 이력에서만 보임).',
+'- **"업무에 바로 실행"**: 실제 할 일(Task)에 결과를 남기며 실행합니다(기본 모드) — 여러 Agent를 고르고, 처리 방식(sequential/hierarchical)과 hierarchical일 때의 매니저 Agent를 직접 선택합니다(hierarchical은 매니저가 실제로 위임하지 않고 끝나는 경우가 많아 sequential을 권장합니다). sequential에서는 Agent 행마다 **"병렬(독립 작업)"**을 체크할 수 있습니다 — 체크한 Agent는 앞 Agent 결과를 기다리지 않고 동시에 시작합니다(서로 결과를 주고받을 필요 없는 독립 작업용 — 6절의 "병행 위임"과는 다른 기능입니다). sequential이고 "병렬"을 하나도 체크하지 않았으면 **"자기 검토"** 체크박스도 켤 수 있습니다 — 각 Agent가 자기 초안을 원 요구사항과 대조해 스스로 한 번 더 검토·수정한 뒤에 제출합니다(member도 켤 수 있는 단순 품질 옵션, 결과물은 검토 후 최종본만 남고 초안은 실행 이력에서만 보임).',
 '- **"즉석 테스트(저장 안 됨)"**: 업무에 연결하지 않고 협업 구조만 가볍게 실험해봅니다 — 결과가 할 일에 남지 않습니다.',
 '- **"실행 이력"**(admin/manager 전용): 과거 Crew 실행의 협업 다이어그램·토큰 사용량·Gate 점수를 그대로 다시 볼 수 있습니다. "팀 관리" 탭의 각 팀 카드에서 "실행 이력 보기"를 누르면 이 목록이 그 팀의 실행만으로 좁혀져 나옵니다. 같은 할 일에 재실행한 이력이 있으면 결과 화면에 **"이전 실행과 비교"** 버튼이 떠 — 최종 산출물·Agent별 산출물 모두 추가분(녹색)/삭제분(빨간색) 줄 단위 diff로 바로 비교할 수 있습니다(재시도할 때마다 전에 되던 기능이 조용히 사라지는지 한눈에 확인하는 용도).',
 '',
-'**이 조합을 팀/파이프라인으로 저장**: "업무에 바로 실행"으로 한 번 실행하면 결과 아래에 "이 조합을 저장해 다음에 재사용" 패널이 나타납니다(admin/manager 전용) — 방금 쓴 Agent 구성(+처리 방식/매니저)을 그대로 **"팀으로 저장"**(이후 "팀 관리"에서 재사용·배정 가능)하거나, 기존 파이프라인에 **"파이프라인 단계로 저장"**할 수 있습니다(hierarchical이면 매니저를 직접 지정해 실행했을 때만 — 자동 배정으로 실행했으면 저장 버튼이 비활성화됩니다). 매번 즉석으로 Agent를 고르는 게 번거로워졌다면 이 버튼으로 바로 정식 팀/파이프라인으로 승격시키세요.',
+'**이 조합을 팀/파이프라인으로 저장**: "업무에 바로 실행"으로 한 번 실행하면 결과 아래에 "이 조합을 저장해 다음에 재사용" 패널이 나타납니다(admin/manager 전용) — 방금 쓴 Agent 구성(+처리 방식/매니저)을 그대로 **"팀으로 저장"**(이후 "팀 관리"에서 재사용·배정 가능)하거나, 기존 파이프라인에 **"파이프라인 단계로 저장"**할 수 있습니다(hierarchical로 실행한 조합은 **병행 위임 단계**로 저장되며, 매니저를 직접 지정해 실행했을 때만 저장할 수 있습니다 — 6절의 병행 위임 주의사항을 참고하세요). 매번 즉석으로 Agent를 고르는 게 번거로워졌다면 이 버튼으로 바로 정식 팀/파이프라인으로 승격시키세요.',
 '',
 '<h2 id="agent">5. Agent / Agent 그룹 만들기</h2>',
 '',
@@ -11281,17 +11454,17 @@ const MANUAL_MARKDOWN = [
 '',
 '1. 먼저 **업무 요청 → 할 일**이 있어야 합니다(3절 1-2단계) — Agent는 "어떤 할 일을 맡을지" 역할명을 가지고 태어납니다.',
 '2. 할 일을 하나 이상 고르고, 생성 방식을 고릅니다:',
-'   - **stub**(무료): LLM 호출 없는 규칙 기반 자리표시자 — 흐름만 비용 없이 채워볼 때.',
+'   - **crewai**(기본 선택, 비용 발생): 실제 CrewAI Agent로 만듭니다 — 이후 "Crew 빌더"/"팀 Agent 실행"/파이프라인에서 다른 Agent와 실제로 협업·위임할 수 있는 건 이 방식뿐입니다.',
 '   - **simple_llm**(비용 발생): 실제 LLM을 한 번만 호출하는 가장 가벼운 실제 Agent.',
-'   - **crewai**(비용 발생): 실제 CrewAI Agent로 만듭니다 — 이후 "Crew 빌더"/"팀 Agent 실행"/파이프라인에서 다른 Agent와 실제로 협업·위임할 수 있는 건 이 방식뿐입니다.',
+'   - **stub**(무료): LLM 호출 없는 규칙 기반 자리표시자 — 흐름만 비용 없이 채워볼 때(실제로 일하지는 못합니다).',
 '     필요 스킬에 내부지식검색/조직배정관계조회 등이 있으면 관련 Tool이 생성 시점부터 자동으로 붙습니다.',
-'3. 만든 Agent는 "**AI 에이전트 관리**"에서 **온보딩 승인**(온보딩 대기 → 활성)을 눌러야 실제 배정·실행·대화 호출에 쓸 수 있습니다.',
+'3. 만든 Agent는 "**AI 에이전트 관리**"에서 **온보딩 승인**(온보딩 대기 → 활성, admin 전용)을 눌러야 실제 배정·실행·대화 호출에 쓸 수 있습니다.',
 '4. 같은 탭에서 Agent별로:',
 '   - **모델 설정**: 기본 LLM provider/model(비용 없음, 설정만 저장).',
-'   - **파인튜닝**: temperature·reasoning on/off·재시도 횟수 등 CrewAI 동작 파라미터(비용 없음, 설정만 저장 — "Crew 빌더"로 실제 CrewAI Crew에 투입될 때만 반영).',
+'   - **파인튜닝**: temperature·실행 시간 제한·최대 반복 횟수·추론 모드·품질 검토(자체 개선) 등 실행 동작 설정(비용 없음, 설정만 저장). 온도·실행 시간 제한·최대 반복·품질 검토는 대화 @멘션·업무 실행을 포함한 **모든 실행**에, 분당 호출 수·재시도·코드 실행·컨텍스트 자동 축소는 **Crew 실행에만** 적용됩니다(설정 창의 구역별 적용 범위 표시 참고). 품질 검토를 켜면 LLM 호출이 한 번 더 늘어 응답이 그만큼 느려집니다.',
 '   - **⚡ 최적화 추천**: 이 Agent의 역할 특성(심층추론/정밀·신속/표준 3단계 중 하나로 분류)에 맞는 provider/model/파인튜닝을 추천받습니다(규칙 기반, 비용 없음). "등록된 모델 중 선택" 드롭다운에 **레지스트리의 활성 모델 전체가 순위대로** 뜨므로 1위 추천 대신 다른 모델을 직접 골라도 됩니다(★ 표시는 관리자가 "모델 레지스트리"에서 그 tier에 직접 매핑해둔 모델 — 아래 참고). 추천값은 입력란에 채워지기만 하고 저장은 직접 눌러야 합니다. "AI 의견 보기"를 누르면 LLM에게 추가로 검토받을 수 있습니다(이건 비용 발생).',
 '5. 여러 Agent를 한꺼번에 최적화하려면 **"LLM 설정 최적화"** 탭(admin 전용)에서 전체 목록을 보고 체크한 Agent에 바로 적용합니다 — 이미 추천과 같거나 한 번 적용한 Agent도 다시 체크해서 다른 모델로 재적용할 수 있습니다.',
-'6. **"모델 레지스트리"** 탭(admin 전용)에서 모델별로 **"최적화 Tier 매핑"** 체크박스(심층추론/정밀·신속/표준, 모델 하나가 여러 tier에 동시 매핑 가능)를 지정해두면 ⚡ 최적화 추천이 이름 패턴 추정 대신 그 매핑을 항상 먼저 후보로 올립니다 — 새 모델이 나오거나 provider를 바꿀 때 코드 수정 없이 여기서 매핑만 바꾸면 되고, 몇 번이든 다시 바꿀 수 있습니다(아무것도 체크 안 하면 기존처럼 모델명 패턴 추정으로 동작). 어느 tier에 매핑할지 감이 안 오면 같은 화면의 **"성능 테스트"** 버튼으로 실제 응답 속도를 재볼 수 있습니다 — 고정 프롬프트 1건을 실제로 호출해 글자/초를 측정하고 그 속도만으로 tier를 추천합니다(품질 평가가 아니라 속도만 봅니다). "이 tier로 저장"을 누르면 위 체크박스에 바로 반영됩니다.',
+'6. **"모델 레지스트리"** 탭(admin 전용)에서 모델별로 **컨텍스트 한도**(Ollama 모델은 이 값이 실제 컨텍스트 창 `num_ctx`로 전달됩니다 — 크게 잡을수록 메모리를 더 씁니다)·**생성 옵션**(top_k·top_p·최대 출력 토큰 — 비우면 모델 기본값, Ollama는 최대 출력을 비우면 32,768)·**단가**(100만 토큰당 입력/출력 — 입력한 모델만 금액을 계산)를 정하고, 같은 화면 아래 **"실제 사용량(최근 30일)"** 표에서 provider·모델별 호출 수·토큰·금액을 확인합니다. 또 모델별 **"최적화 Tier 매핑"** 체크박스(심층추론/정밀·신속/표준, 모델 하나가 여러 tier에 동시 매핑 가능)를 지정해두면 ⚡ 최적화 추천이 이름 패턴 추정 대신 그 매핑을 항상 먼저 후보로 올립니다 — 새 모델이 나오거나 provider를 바꿀 때 코드 수정 없이 여기서 매핑만 바꾸면 되고, 몇 번이든 다시 바꿀 수 있습니다(아무것도 체크 안 하면 기존처럼 모델명 패턴 추정으로 동작). 어느 tier에 매핑할지 감이 안 오면 같은 화면의 **"성능 테스트"** 버튼으로 실제 응답 속도를 재볼 수 있습니다 — 고정 프롬프트 1건을 실제로 호출해 글자/초를 측정하고 그 속도만으로 tier를 추천합니다(품질 평가가 아니라 속도만 봅니다). "이 tier로 저장"을 누르면 위 체크박스에 바로 반영됩니다.',
 '',
 '### Agent 그룹(팀) 만들기',
 '',
@@ -11317,7 +11490,7 @@ const MANUAL_MARKDOWN = [
 '',
 '<h2 id="pipeline">6. 파이프라인 — 단계형 자동 진행 엔진</h2>',
 '',
-'사람이 **계획 확정 시점에 한 번만 승인**하면, 그 뒤로는 구현 → 검증 → 품질 관리가 Gate A-G 기준으로 자동 반복되는 엔진입니다 — 쉽게 말해 "처음에 방향만 한 번 확인해주면, 그다음은 기준을 통과할 때까지 알아서 반복하고, 정말 안 될 때만 다시 사람을 부르는" 방식입니다.',
+'사람이 **계획 확정 시점에 한 번만 승인**하면, 그 뒤로는 구현 → 검증 → 품질 관리가 단계별 Gate 기준으로 자동 반복되는 엔진입니다 — 쉽게 말해 "처음에 방향만 한 번 확인해주면, 그다음은 기준을 통과할 때까지 알아서 반복하고, 정말 안 될 때만 다시 사람을 부르는" 방식입니다.',
 '개발 외 업무(시장조사·전략 등)에도 역할만 바꿔 그대로 재사용할 수 있는 범용 엔진입니다.',
 '',
 '### 개념',
@@ -11331,8 +11504,9 @@ const MANUAL_MARKDOWN = [
 '| 순차 릴레이(sequential_relay) | N명이 순서대로 앞 사람 결과를 이어받음 | AA → DA |',
 '| 병행 위임(parallel_delegated) | 리드 1명이 코워커들에게 실제로 과업을 쪼개 위임 | (admin이 직접 구성) |',
 '',
-'단계마다 **Gate A-G 통과 기준·최대 재시도 횟수·"사람 승인 필요" 여부**를 정합니다.',
-'승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어가고(최소 HITL), 기준 미달이면 "어떤 Gate가 왜 부족한지" 피드백을 반영해 자동 재시도합니다.',
+'단계마다 **통과 판정에 쓸 Gate 목록과 통과 비율·최대 재시도 횟수·"사람 승인 필요" 여부**를 정합니다. 판정은 그 단계에 지정한 Gate만으로 합니다 — 기본 검증 단계는 **A(목표 달성)와 요구사항 추적성**(요구사항 정의 단계의 요구사항을 빠짐없이 반영했는지 LLM이 판정, 둘 다 통과해야 함), 구현 단계는 **실행 가능성 Gate**(그대로 실행되는 완성본인지)로 판정하고, 나머지 Gate(C 신뢰성·D 응답시간·F 협업구조·G 관측성)는 결과물 내용과 무관하게 비슷한 값이 나와 기록·표시만 합니다.',
+'승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어가고(최소 HITL), 기준 미달이면 "어떤 Gate가 왜 부족한지" 피드백을 반영해 자동 재시도합니다. 검증 단계에 **"검토 실패 시 되돌릴 단계"**를 정해두면, 같은 검토를 다시 돌리는 대신 그 단계(보통 작성·구현)로 돌아가 **검토 의견을 반영해 다시 쓰게** 합니다(기본 템플릿 4종은 모두 이렇게 설정돼 있습니다).',
+'Agent 출력에 섞인 내부 추론·작업 메모·같은 문장 반복·중간에 잘린 HTML은 저장 전에 걷어 내거나, 걷어 낼 수 없으면 결과물만 다시 쓰게 자동 재시도합니다(마지막 시도는 그대로 받아 Gate·사람 검토가 판단).',
 '재시도를 다 써도 못 넘기면 그때만 결재함으로 올라옵니다 — 자동 반복이 완전히 실패했을 때만 사람에게 옵니다.',
 '진행 중인 실행이 방향을 잘못 탔거나 더 이상 필요 없어졌다면, 협업 워크스페이스의 **"실행 중단 요청"** 버튼으로 멈출 수 있습니다 — 그 순간 바로 끊기는 게 아니라, 지금 진행 중인 단계(실제 LLM 호출)가 끝나는 다음 안전한 지점에서 멈춥니다. 이미 "사람 승인 대기" 상태(배경에서 실행 중인 게 없음)라면 요청 즉시 멈춥니다.',
 '',
@@ -11345,14 +11519,14 @@ const MANUAL_MARKDOWN = [
 '| # | 단계 | 모드 | 참여 | 사람 승인 |',
 '|---|---|---|---|---|',
 '| 1 | 요구분석/계획 확정 | 단독 | 요구사항 분석가 | **필요**(여기서만 사람이 1회 개입) |',
-'| 2 | 설계 | 순차 릴레이 | AA → DA | 불필요 |',
+'| 2 | 설계 | 순차 릴레이 | AA → DA → UI 기획자 | 불필요 |',
 '| 3 | 개발 계획 수립 | 단독 | 개발 계획 수립가 | 불필요 |',
-'| 4 | 구현 | 순차 릴레이 | UI 기획자 → 데이터/인프라 개발자 → 백엔드 개발자 → 프론트엔드 개발자 → 풀스택 개발자(최종 통합) | 불필요 |',
-'| 5 | 코드 검증 | 단독 | 코드 검증가 | 불필요 |',
-'| 6 | QA 기능테스트 | 순차 릴레이 | 테스트 계획 수립가 → QA 기능테스터 | 불필요 |',
-'| 7 | 품질 관리 최종 판정 | 단독 | 품질 관리자 | 불필요(반복 실패 시에만 자동 에스컬레이션) |',
+'| 4 | 구현 | 단독 | 풀스택 개발자(완성본을 한 번에 작성) | 불필요(실행 가능성 Gate 필수) |',
+'| 5 | 코드 검증 | 단독 | 코드 검증가 | 불필요(A+요구사항 추적성 필수, 미달 시 4단계로 되돌림) |',
+'| 6 | QA 기능테스트 | 순차 릴레이 | 테스트 계획 수립가 → QA 기능테스터 | 불필요(Gate A) |',
+'| 7 | 품질 관리 최종 판정 | 단독 | 품질 관리자 | 불필요(Gate A, 반복 실패 시에만 자동 에스컬레이션) |',
 '',
-'5·6·7단계(코드 검증/QA 기능테스트/품질 관리 최종 판정)는 Gate 통과 기준이 "측정된 Gate 절반 이상 통과"로 설정돼 있어 — 미달이면 사유를 반영해 자동 재시도합니다. 나머지 단계는 Gate를 측정·기록만 하고 자동으로 통과합니다. **마지막 자동 재시도에서는 자가검토가 자동으로 켜져** — Agent가 스스로 초안을 원 요구사항과 대조해 한 번 더 고친 뒤 제출합니다 — 그래도 기준을 못 넘기면 그때 사람 승인으로 올라갑니다(자동 반복이 완전히 실패했을 때만 사람에게 옵니다).',
+'4단계(구현)는 실행 가능성 Gate(완성된 단일 결과물이 있는지, 골격·자리표시자·구문 오류가 없는지)를, 5단계(코드 검증)는 Gate A와 요구사항 추적성을 둘 다 통과해야 하고 — 5단계가 미달이면 4단계로 돌아가 검토 의견을 반영해 다시 구현합니다. 6·7단계는 Gate A로 판정해 미달이면 사유를 반영해 자동 재시도합니다. 1~3단계는 Gate를 측정·기록만 하고 자동으로 통과합니다. **마지막 자동 재시도에서는 자가검토가 자동으로 켜져** — Agent가 스스로 초안을 원 요구사항과 대조해 한 번 더 고친 뒤 제출합니다 — 그래도 기준을 못 넘기면 그때 사람 승인으로 올라갑니다(자동 반복이 완전히 실패했을 때만 사람에게 옵니다).',
 '실행은 **업무(Task)의 협업 워크스페이스**에서 이 템플릿을 고르고 "파이프라인 실행(비용 발생)"을 누르면 시작되거나, 이 파이프라인에 연결된 팀(4절 참고)을 대화에서 `@팀이름`으로 멘션해도 똑같이 시작됩니다(3절 4단계) — 기본 제공 팀은 없으므로 연결하려면 직접 팀을 만들어야 합니다.',
 '진행 상황은 같은 화면에서 단계별 배지(대기/진행중/통과/재시도N/승인대기/반려)로 실시간 확인합니다 — 대화에서 시작한 경우 같은 정보가 진행 메시지로 대화에도 올라옵니다.',
 '',
@@ -11362,16 +11536,16 @@ const MANUAL_MARKDOWN = [
 '',
 '| # | 단계 | 모드 | 참여 | 사람 승인 |',
 '|---|---|---|---|---|',
-'| 1 | 요구사항 분석/계획 확정 | 단독 | 요구사항 분석가 | **필요** |',
+'| 1 | 요구사항 분석/계획 확정 | 단독 | 업무 요구사항 분석가 | **필요** |',
 '| 2 | 자료 조사·분석 | 순차 릴레이 | 외부 자료 조사가 → 데이터 분석가 → 3C4P SWOT 분석가 | 불필요 |',
 '| 3 | 기획 계획 수립 | 단독 | PM | 불필요 |',
-'| 4 | 작성 | 순차 릴레이 | 기획서 작성자 → 사업전략 수립가 → C-level 보고서 작성자 → 프레젠테이션 자료 작성자(최종 통합) | 불필요 |',
-'| 5 | 내용 검증 | 단독 | 품질 관리자 | 불필요(Gate 0.5) |',
-'| 6 | 표현 검토 | 순차 릴레이 | 콘텐츠 카피라이팅 | 불필요(Gate 0.5) |',
-'| 7 | 최종 승인 판정 | 단독 | PM | 불필요(Gate 0.5, 반복 실패 시에만 에스컬레이션) |',
+'| 4 | 작성 | 순차 릴레이 | 기획서 작성자 → 사업전략 수립가 → C-level 보고서 작성자 → 프레젠테이션 자료 작성자(최종 통합, 발표자료 덱) | 불필요 |',
+'| 5 | 내용 검증 | 단독 | 문서 검토자 | 불필요(A+요구사항 추적성 필수, 미달 시 4단계로 되돌림) |',
+'| 6 | 표현 검토 | 순차 릴레이 | 문서 교정자 | 불필요(Gate A) |',
+'| 7 | 최종 승인 판정 | 단독 | PM | 불필요(Gate A, 반복 실패 시에만 에스컬레이션) |',
 '',
 '단계 구성·Gate 규칙·최소 HITL 원칙 전부 "소프트웨어 개발 파이프라인"과 완전히 동일한 엔진입니다 — 역할만 사업/기획 쪽으로 바뀐 것뿐입니다.',
-'**"데이터 분석가"**는 `데이터분석` 스킬(실제 CrewAI Tool "수치 데이터 분석기" 연결)로 합계·평균·증감률·표준편차를 코드로 직접 계산합니다 — LLM이 숫자를 서술로 지어내지 않도록, 값이 부족하면(표준편차는 2개 미만, 증감률은 기준값 0) 추측 대신 계산 불가를 그대로 알립니다.',
+'**"데이터 분석가"**(제안서·실적 보고 파이프라인의 분석 단계)는 `데이터분석` 스킬(실제 CrewAI Tool "수치 데이터 분석기" 연결)로 합계·평균·증감률·표준편차를 코드로 직접 계산합니다 — LLM이 숫자를 서술로 지어내지 않도록, 값이 부족하면(표준편차는 2개 미만, 증감률은 기준값 0) 추측 대신 계산 불가를 그대로 알립니다.',
 '',
 '### 기본 제공 "제안서 작성 파이프라인"·"실적 보고 파이프라인"',
 '',
@@ -11379,12 +11553,12 @@ const MANUAL_MARKDOWN = [
 '',
 '| # | 제안서 작성 파이프라인 | 실적 보고 파이프라인 |',
 '|---|---|---|',
-'| 1 | 요구사항 분석/계획 확정(사람 승인 필요) | 요구사항 분석/계획 확정(사람 승인 필요) |',
-'| 2 | 자료 조사·분석(외부 자료 조사가 → 데이터 분석가) | 데이터 분석(데이터 분석가) |',
-'| 3 | 작성(제안서 작성자) | 작성(실적 보고서 작성자) |',
-'| 4 | 내용 검증(품질 관리자, Gate 0.5) | 최종 승인 판정(PM, 검증+요구사항 추적성 겸임, Gate 0.5) |',
-'| 5 | 표현 검토(콘텐츠 카피라이팅, Gate 0.5) | — |',
-'| 6 | 최종 승인 판정(PM, Gate 0.5) | — |',
+'| 1 | 요구사항 분석/계획 확정(업무 요구사항 분석가, 사람 승인 필요) | 요구사항 분석/계획 확정(업무 요구사항 분석가, 사람 승인 필요) |',
+'| 2 | 자료 조사·분석(외부 자료 조사가 → 데이터 분석가) | 데이터 분석(데이터 분석가 — 요청에 나온 모든 지표) |',
+'| 3 | 작성(제안서 작성자, 발표자료 덱 HTML) | 작성(실적 보고서 작성자) |',
+'| 4 | 내용 검증(문서 검토자, A+요구사항 추적성 필수, 미달 시 3단계로 되돌림) | 최종 승인 판정(PM, 검증+요구사항 추적성 겸임 — 둘 다 필수, 미달 시 3단계로 되돌림) |',
+'| 5 | 표현 검토(문서 교정자, Gate A) | — |',
+'| 6 | 최종 승인 판정(PM, Gate A) | — |',
 '',
 '제안서는 발주처 평가 기준(배점표) 대응과 경쟁사 대비 차별화가 핵심이라 "표현 검토" 단계까지 그대로 두었고, 실적서는 정기·정형 문서라 그 단계를 생략해 더 가볍게 구성했습니다.',
 '',
@@ -11394,8 +11568,9 @@ const MANUAL_MARKDOWN = [
 '',
 '1. "파이프라인 등록"으로 이름·설명·도메인(예: software_dev, biz_strategy)을 정합니다.',
 '2. "단계 추가"로 단계를 하나씩 쌓습니다 — 이름, 모드(단독/순차 릴레이/병행 위임)를 고르면 그 모드에 맞는 역할 선택 UI가 바뀝니다(단독=1명, 순차 릴레이=N명+순서, 병행 위임=리드 1명+코워커 여러 명).',
-'   공통 지시문, Gate 통과 비율(%), 최대 재시도, "사람 승인 필요" 체크박스, **산출물 형식**(텍스트/마크다운/HTML/코드 — 코드로 지정하면 결과 화면에 문법 강조가 자동 적용됩니다)도 이때 정합니다.',
-'   - ⚠️ **병행 위임(parallel_delegated) 모드는 신중하게 쓰세요** — 매니저가 "Delegate work to coworker" 도구로 그때그때 동적으로 위임하는 방식인데, 실측 결과 매니저가 실제 위임 대신 위임 계획만 요약하고 끝내는 경우가 반복 확인됐습니다. 여러 명이 순서대로 작업을 이어받으면 되는 경우라면 **순차 릴레이**가 더 안정적입니다(기본 제공 파이프라인 4개 전부, 다인원 단계가 전부 순차 릴레이인 이유).',
+'   공통 지시문, Gate 통과 비율(%), 최대 재시도, "사람 승인 필요" 체크박스, **산출물 형식**(텍스트/마크다운/HTML/코드 — 코드로 지정하면 결과 화면에 문법 강조가 자동 적용됩니다), **"요구사항 정의 단계"**(요구사항 추적성의 기준 문서를 내는 단계 — 지정이 없으면 1단계), **"요구사항 추적성 검사"**(이 단계 산출물을 그 요구사항과 대조) 체크박스도 이때 정합니다.',
+'   만든 뒤에는 단계 카드에서 요구사항 정의 단계 지정·추적성 검사를 켜고 끌 수 있고, Gate 기준이 있는 단계에는 **"검토 실패 시"** 선택(이 단계만 재시도 / 앞 단계로 되돌림)이 보입니다.',
+'   - ⚠️ **병행 위임(parallel_delegated) 모드는 신중하게 쓰세요** — 매니저가 "Delegate work to coworker" 도구로 그때그때 동적으로 위임하는 방식인데, 실측 결과 매니저가 실제 위임 대신 위임 계획만 요약하고 끝내는 경우가 반복 확인됐습니다. 여러 명이 순서대로 작업을 이어받으면 되는 경우라면 **순차 릴레이**가 더 안정적입니다(기본 제공 파이프라인 4개 전부, 다인원 단계가 전부 순차 릴레이인 이유). 병행 위임 단계는 리드가 실제로 위임했는지 **"위임확인" Gate**로 따로 검사해, 위임 없이 끝나면 Gate 점수와 무관하게 그 단계를 재시도합니다. 또 병행 위임 단계가 하나라도 있는 템플릿은 "신규 실행엔진(LangGraph)"으로 실행할 수 없고 기존 엔진으로만 돕니다.',
 '3. 단계 순서는 카드의 위/아래 이동 버튼으로 나중에도 바꿀 수 있습니다.',
 '',
 '<h2 id="scenario">7. 실전 시나리오 4가지</h2>',
@@ -11416,7 +11591,7 @@ const MANUAL_MARKDOWN = [
 '',
 '### 시나리오 D — 시장조사·전략 보고서',
 '📍 **메뉴**: 팀 관리 (또는 파이프라인 관리)',
-'경영/사업전략 역할군(외부 자료 조사가·3C4P SWOT 분석가·사업전략 수립가 등, 이미 기본 등록됨)을 팀으로 묶거나, 6절의 시장조사-전략 파이프라인 예시대로 빌더에서 새 템플릿을 만들어 실행합니다.',
+'기본 제공 "**사업/기획 업무 처리 파이프라인**"(6절)을 그대로 실행하거나(조사·분석 → 기획 → 작성 → 검증), 경영/사업전략 역할군(외부 자료 조사가·3C4P SWOT 분석가·사업전략 수립가 등, 이미 기본 등록됨)을 팀으로 묶어 그 파이프라인에 연결합니다. 단계 구성을 바꾸고 싶으면 "파이프라인 관리"에서 새 템플릿을 만드세요.',
 '',
 '<h2 id="menu">8. 메뉴 전체 지도</h2>',
 '',
@@ -11424,13 +11599,14 @@ const MANUAL_MARKDOWN = [
 '',
 '**조회(common, 전원 접근)**: 인력 검색 · 조직도 · 이용 가이드(이 화면)',
 '',
-'**설정/운영(admin·manager 전용, 일부 admin 전용)**: 대시보드 · 비용 · 공정성 지표 · 활동 기록 · 리소스 매칭/배정 · AI 에이전트 생성 · AI 에이전트 관리 · 사람 인력 관리 · 도구/스킬 Pool · 팀 관리 · 파이프라인 관리 · 지식 베이스 · Crew 빌더 · LLM 설정 최적화(admin 전용) · 모델 레지스트리(admin 전용) · 사용자 관리(admin 전용)',
+'**설정/운영(admin·manager 전용, 일부 admin 전용)**: 대시보드 · 비용 · 공정성 지표 · 활동 기록 · 리소스 매칭/배정 · AI 에이전트 생성 · AI 에이전트 관리 · 사람 인력 관리 · 도구/스킬 Pool · 팀 관리 · 파이프라인 관리 · 지식 베이스 · Crew 빌더 · LLM 설정 최적화(admin 전용) · 모델 레지스트리(admin 전용 — 컨텍스트 한도·생성 옵션·단가·실제 사용량) · 사용자 관리(admin 전용 — 조직 정책: 사번 형식·결과물 언어 포함)',
 '',
 '<h2 id="trouble">9. 자주 겪는 문제</h2>',
 '',
 '- **`@멘션`했는데 아무 반응이 없다** → 그 Agent/Team/사람이 이 대화의 참가자가 아닐 가능성이 가장 큽니다.',
 '  메시지창에서 `@`를 다시 입력해 자동완성 목록에서 직접 골라 초대부터 되게 하세요.',
-'- **방금 만든 Agent가 배정/실행 목록에 안 보인다** → "AI 에이전트 관리"에서 온보딩 승인(온보딩 대기 → 활성)을 먼저 눌러야 합니다.',
+'- **방금 만든 Agent가 배정/실행 목록에 안 보인다** → "AI 에이전트 관리"에서 온보딩 승인(온보딩 대기 → 활성)을 먼저 눌러야 합니다(admin 전용 — manager라면 admin에게 요청하세요).',
+'- **팀 "기본값 저장"에서 "신규로 hierarchical 모드를 지정할 수 없습니다" 오류가 난다** → 위임형(hierarchical)은 신뢰성 문제로 새로 지정할 수 없습니다(4절 3번). 처리 방식을 sequential로 두거나, 단계별로 나눠야 하는 업무라면 팀에 파이프라인을 연결하세요. 멤버 추가 때 같은 이유의 오류가 나면 역할 라벨에서 "매니저"를 빼세요.',
 '- **Task ID/Brief ID를 넣어 만든 팀(TF팀)이 `@멘션`·배정 후보에 안 보인다** → TF팀은 "온보딩 대기" 상태로 시작합니다. "팀 관리"에서 그 팀 카드의 "**온보딩 시작**" 버튼을 눌러야 활성화됩니다(4절 참고).',
 '- **팀을 지우려는데 안 지워진다** → 그 팀에 확정된 배정이 남아 있으면 삭제가 막힙니다 — 할 일 상세의 "배정 취소"로 먼저 정리하세요.',
 '- **"조직도"와 "팀 관리"의 "TF팀"이 같은 개념 아닌가?** → 다릅니다. "조직도" 메뉴는 확정된 배정만 모아 보여주는 **읽기 전용 스냅샷**(생성/삭제 불가)이고, "TF팀"은 "팀 관리"에서 **직접 만들고 온보딩·해체시키는 실제 조직**입니다. 헷갈리면 조직도 화면 상단 안내문을 참고하세요.',
@@ -11438,11 +11614,13 @@ const MANUAL_MARKDOWN = [
 '  새로 만들려면 다른 할 일을 고르세요.',
 '- **팀/파이프라인 실행이 너무 오래 걸리거나 실패한다** → 참여 인원이 많을수록(특히 순차 릴레이·병행 위임 단계) LLM 왕복 호출이 많아져 시간이 걸립니다.',
 '  "AI 에이전트 관리"의 파인튜닝에서 `reasoning`을 꺼 호출 수를 줄일 수 있습니다(5절의 "⚡ 최적화 추천"을 먼저 써보세요).',
-'  로컬(Ollama) 모델을 쓰는 단계는 클라우드보다 타임아웃을 길게(5400초) 잡아두지만, 그래도 모델이 크면 수십 분 걸릴 수 있습니다 — "인박스"에서 실행 실패/장시간 대기를 확인하세요.',
+'  로컬(Ollama) 모델을 쓰는 단계는 클라우드보다 타임아웃을 길게(5400초) 잡아두지만, 그래도 모델이 크면 수십 분 걸릴 수 있습니다 — "인박스"에서 실행 실패/장시간 대기를 확인하세요. 서버 PC가 잠자기에 들어가면 로컬 생성도 멈추므로, 긴 실행 중에는 잠자기를 꺼 두세요.',
+'  긴 결과물(발표자료 덱·단일 파일 앱)이 중간에 잘린다면 "모델 레지스트리"에서 그 모델의 **컨텍스트 한도**를 늘려 보세요(Ollama는 이 값이 실제 컨텍스트 창이 됩니다 — 메모리를 더 씁니다).',
 '- **실행 버튼을 눌렀는데 비용이 걱정된다** → "실행"이라는 이름이 붙은 버튼(AI 에이전트 실행 / 팀 Agent 실행 / 파이프라인 실행 / Crew 실행 / AI 의견 보기)은 전부 실제 LLM API를 호출해 비용이 발생합니다.',
 '  설정 저장(모델 설정·파인튜닝·팀/파이프라인 등록 자체)은 비용이 없습니다.',
 '- **자기 자신이 요청한 걸 자기가 승인하고 싶다** → **본인을 배정하는 셀프배정이라면 애초에 결재가 뜨지 않습니다** — 본인 시간만 쓰는 배정은 요청 즉시 자동 확정됩니다(approval_id 없음). 다른 사람·Agent·팀을 배정 요청한 경우에만 결재가 생기고, 그건 요청자 본인이 승인할 수 없게 의도적으로 막혀 있습니다(self-approval 방지) — 다른 관리자가 대신 승인해야 합니다.',
-'- **방금 만든 팀이 `hair reset-data` 이후 사라졌다** → 팀(team)도 초기화 대상입니다(Agent/Tool/Skill/파이프라인 템플릿과 달리 팀은 재기동 시 자동으로 다시 채워지지 않는 데이터라서) — 다시 "팀 관리"에서 등록해야 합니다.',
+'- **방금 만든 팀이 `hair reset-data` 이후 사라졌다** → 팀(team)도 초기화 대상입니다(Agent/Tool/Skill/파이프라인 템플릿과 달리 팀은 재기동 시 자동으로 다시 채워지지 않는 데이터라서) — 다시 "팀 관리"에서 등록해야 합니다. 초기화해도 남겨야 하는 팀은 팀 카드에서 **"초기화 시 보호"**를 켜 두세요.',
+'- **결과물이 한국어가 아닌 언어로 나와야 한다** → "사용자 관리" 탭(admin 전용)의 조직 정책에서 **결과물 언어**를 바꾸면 모든 Agent에 그 언어로 쓰라고 지시합니다(한국어가 아니면 한국어 전용 자동 교정은 꺼집니다).',
 ].join("\\n");
 
 async function renderManual(content) {
@@ -11463,6 +11641,8 @@ INDEX_HTML = INDEX_HTML.replace(
 # Chart.js 주소·버전도 한 곳(`presentation_deck.CHART_JS_URL`)에서 — 플랫폼 화면과 덱이 같은
 # 버전으로 그린다(2026-11-21 하드코딩 재점검: 두 곳에 같은 URL이 따로 적혀 있었다).
 INDEX_HTML = INDEX_HTML.replace("__CHART_JS_URL__", presentation_deck.CHART_JS_URL)
+# 상단 버전 표기(2026-11-23) — `hair --version`과 같은 값(`hair_platform.get_version()`).
+INDEX_HTML = INDEX_HTML.replace("__APP_VERSION__", html.escape(get_version()))
 
 
 def render_deliverable_view_page(deliverable: dict, task_role_name: str | None) -> str:

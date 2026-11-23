@@ -164,7 +164,8 @@ def test_sequential_relay_filters_draft_entries_when_self_review():
 # ---------- 시드된 "소프트웨어 개발 파이프라인" 자체 구조 확인 ----------
 
 
-def test_seeded_implementation_stage_is_sequential_relay_without_lead():
+def test_seeded_implementation_stage_is_single_author_without_lead():
+    """2026-11-22 C안 — sequential_relay(4명)에서 풀스택 개발자 단일 작성으로 바꿨다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     template = conn.execute(
@@ -175,7 +176,7 @@ def test_seeded_implementation_stage_is_sequential_relay_without_lead():
         "AND name = '구현'",
         (template["id"],),
     ).fetchone()
-    assert stage["mode"] == "sequential_relay"
+    assert stage["mode"] == "single"
     assert stage["lead_role_name"] is None
 
 
@@ -246,7 +247,8 @@ def test_restart_migrates_old_hierarchical_implementation_stage_to_sequential_re
         "SELECT mode, lead_role_name, instructions FROM pipeline_stages WHERE id = ?",
         (stage_id,),
     ).fetchone()
-    assert stage["mode"] == "sequential_relay"
+    # 옛 hierarchical 형태는 지금 시드 정의(2026-11-22 C안: 풀스택 개발자 단일 작성)로 교체된다.
+    assert stage["mode"] == "single"
     assert stage["lead_role_name"] is None
     assert "Delegate work to coworker" not in stage["instructions"]
 
@@ -258,13 +260,8 @@ def test_restart_migrates_old_hierarchical_implementation_stage_to_sequential_re
             (stage_id,),
         ).fetchall()
     ]
-    assert roles == [
-        "UI 기획자",
-        "데이터/인프라 개발자",
-        "백엔드 개발자",
-        "프론트엔드 개발자",
-        "풀스택 개발자",
-    ]
+    # 2026-11-21 — UI 기획자는 "설계" 단계로, 2026-11-22 C안 — 구현은 풀스택 개발자 단일 작성.
+    assert roles == ["풀스택 개발자"]
 
 
 def test_migration_does_not_touch_admin_customized_implementation_stage_mode():
@@ -368,7 +365,7 @@ def test_migration_is_idempotent_on_already_migrated_db():
         "AND name = '구현'",
         (template["id"],),
     ).fetchone()
-    assert stage["mode"] == "sequential_relay"
+    assert stage["mode"] == "single"  # 2026-11-22 C안
     assert stage["lead_role_name"] is None
 
 

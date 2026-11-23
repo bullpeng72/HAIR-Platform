@@ -186,6 +186,7 @@ def _bad_run_crew_tracking(calls):
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         calls.append(1)
         return {

@@ -1170,6 +1170,12 @@ def _transcript_reserve_tokens(latest_human_content: str | None, provider: str) 
     ) + token_budget.count_tokens(_ANTI_ANCHORING_NOTE, provider)
 
 
+def _graph_engine_available() -> bool:
+    from hair_platform import graph_engine_available
+
+    return graph_engine_available()
+
+
 def _build_transcript(
     conn: sqlite3.Connection,
     conversation_id: int,
@@ -1850,7 +1856,9 @@ def run_team_mention_job(
             team_id,
             team_row["pipeline_template_id"],
             actor_id,
-            use_graph_engine=bool(team_row["use_graph_engine"]),
+            # 그래프 엔진 의존성(`graph` extra)이 없는 설치본이면 기존 엔진으로 돈다(2026-11-23) —
+            # 다른 환경에서 켜 둔 팀 설정이 남아 있어도 백그라운드에서 ImportError로 죽지 않게.
+            use_graph_engine=bool(team_row["use_graph_engine"]) and _graph_engine_available(),
         )
         return
     try:

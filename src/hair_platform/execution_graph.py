@@ -73,6 +73,7 @@ import sqlite3
 import threading
 from typing import Literal, TypedDict
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
@@ -86,6 +87,7 @@ from hair_platform import (
     presentation_deck,
 )
 from hair_platform import pipeline_runtime as pr
+
 
 class PipelineGraphState(TypedDict):
     run_id: int
@@ -230,6 +232,7 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
         model=stage_model,
         expected_outputs=expected_outputs,
         self_review=use_self_review,
+        eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
     )
 
     final_entries = [
@@ -252,7 +255,19 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
         gate_scores["code_syntax"] = agent_evaluation.compute_code_syntax_check(
             stage_output
         )
-    ratio = pr._gate_pass_ratio(gate_scores)
+    # 실행 가능성 Gate(2026-11-22 C안) — 단계 gate_ids에 있을 때만 잰다(SW 개발 "구현").
+    if "deliverable_runnable" in json.loads(stage["gate_ids"] or "[]"):
+        gate_scores["deliverable_runnable"] = agent_evaluation.compute_deliverable_runnable(
+            stage_output
+        )
+    # 요구사항 추적성·단계 gate_ids 반영(2026-11-21) — 기존 엔진과 같은 판정.
+    traceability = pr.requirements_traceability_score(
+        conn, state["run_id"], stage, stage_output
+    )
+    if traceability is not None:
+        gate_scores["requirements_traceability"] = traceability
+    stage_gate_ids = json.loads(stage["gate_ids"]) if stage["gate_ids"] else None
+    ratio = pr._gate_pass_ratio(gate_scores, stage_gate_ids)
     passed = ratio >= stage["min_gate_pass_ratio"]
 
     task_row = conn.execute(
@@ -416,7 +431,50 @@ def _route_after_stage(
     return "human_approval"
 
 
-def _node_prepare_retry(state: PipelineGraphState) -> dict:
+def _next_attempt(conn: sqlite3.Connection, run_id: int, stage_id: int) -> int:
+    """이 실행에서 그 단계의 다음 시도 번호 — DB 기록 기준(2026-11-22). 상태값으로만 세면 검토
+    실패 후 앞 단계로 돌아갔다 다시 올 때 1로 초기화돼, 검토 재시도 한도가 무의미해진다."""
+    return (
+        conn.execute(
+            "SELECT COALESCE(MAX(attempt), 0) FROM pipeline_run_stages "
+            "WHERE pipeline_run_id = ? AND stage_id = ?",
+            (run_id, stage_id),
+        ).fetchone()[0]
+        + 1
+    )
+
+
+def _node_prepare_retry(state: PipelineGraphState, config) -> dict:
+    conn: sqlite3.Connection = config["configurable"]["conn"]
+    stage = conn.execute(
+        "SELECT * FROM pipeline_stages WHERE pipeline_template_id = ? AND seq_order = ?",
+        (state["pipeline_template_id"], state["seq_orders"][state["seq_index"]]),
+    ).fetchone()
+    target = pr.return_target_stage(conn, stage) if stage is not None else None
+    if target is not None and target["seq_order"] in state["seq_orders"]:
+        # 검토 실패 → 지정한 앞 단계(작성)로 돌아가 검토 의견을 반영해 다시 쓴다(기존 엔진과 같은 동작).
+        draft = conn.execute(
+            "SELECT output FROM pipeline_run_stages WHERE pipeline_run_id = ? AND stage_id = ? "
+            "AND status IN ('passed', 'approved') ORDER BY id DESC LIMIT 1",
+            (state["run_id"], target["id"]),
+        ).fetchone()
+        conn.execute(
+            "UPDATE pipeline_runs SET current_stage_seq = ? WHERE id = ?",
+            (target["seq_order"], state["run_id"]),
+        )
+        audit.record(
+            conn, state["actor_id"], "pipeline_stage_rework_requested", "pipeline_run_stage",
+            state.get("stage_row_id"), after={"return_to_stage_id": target["id"]},
+        )
+        conn.commit()
+        return {
+            "seq_index": state["seq_orders"].index(target["seq_order"]),
+            "attempt": _next_attempt(conn, state["run_id"], target["id"]),
+            "retry_feedback": pr.rework_feedback(conn, state["run_id"], target),
+            "base_input": pr.with_brief_reference(
+                conn, state["task_id"], draft["output"] if draft else state["base_input"]
+            ),
+        }
     feedback = pr._gate_failure_summary(state["gate_scores"] or {})
     return {
         "attempt": state["attempt"] + 1,
@@ -506,16 +564,30 @@ def _node_advance(state: PipelineGraphState, config) -> dict:
         (state["seq_orders"][next_index], state["run_id"]),
     )
     conn.commit()
+    next_stage = conn.execute(
+        "SELECT id FROM pipeline_stages WHERE pipeline_template_id = ? AND seq_order = ?",
+        (state["pipeline_template_id"], state["seq_orders"][next_index]),
+    ).fetchone()
     return {
         "seq_index": next_index,
-        "base_input": state["stage_output"],
-        "attempt": 1,
+        # 원 요청(Brief)을 모든 단계에 함께(2026-11-21, `pipeline_runtime.with_brief_reference`).
+        "base_input": pr.with_brief_reference(conn, state["task_id"], state["stage_output"] or ""),
+        # DB 기준 시도 번호(처음 오는 단계는 1) — 검토 실패로 돌아갔다 다시 와도 이어서 센다.
+        "attempt": _next_attempt(conn, state["run_id"], next_stage["id"]) if next_stage else 1,
         "retry_feedback": "",
     }
 
 
-def _route_after_advance(state: PipelineGraphState) -> Literal["run_stage", "__end__"]:
+def _route_after_advance(state: PipelineGraphState) -> str:
+    # 반환값은 노드 이름 또는 END("__end__") — LangGraph의 END 상수는 타입상 그냥 str라
+    # Literal 반환형과 맞지 않아(Pylance reportReturnType) str로 선언한다(2026-11-23).
     return END if state["seq_index"] >= len(state["seq_orders"]) else "run_stage"
+
+
+def _run_config(conn: sqlite3.Connection, run_id: int) -> RunnableConfig:
+    """그래프 실행 설정 — 실행마다 같은 thread_id(체크포인트 키)와 DB 연결을 노드에 넘긴다.
+    네 곳(실행·재개 × invoke·stream)이 같은 모양이라 한 곳에 둔다(RunnableConfig 타입 명시)."""
+    return {"configurable": {"thread_id": f"pipeline_run_{run_id}", "conn": conn}}
 
 
 def build_graph():
@@ -595,7 +667,7 @@ def run_pipeline_graph(
     conn.commit()
     initial_state = _build_initial_state(conn, run_id, actor_id, run)
     graph = build_graph().compile(checkpointer=checkpointer)
-    config = {"configurable": {"thread_id": f"pipeline_run_{run_id}", "conn": conn}}
+    config = _run_config(conn, run_id)
     result = graph.invoke(initial_state, config=config)
     _cleanup_checkpoint_if_terminal(conn, run_id, checkpointer)
     return result
@@ -632,7 +704,7 @@ def run_pipeline_graph_with_callback(
     conn.commit()
     initial_state = _build_initial_state(conn, run_id, actor_id, run)
     graph = build_graph().compile(checkpointer=checkpointer)
-    config = {"configurable": {"thread_id": f"pipeline_run_{run_id}", "conn": conn}}
+    config = _run_config(conn, run_id)
     for step in graph.stream(initial_state, config=config, stream_mode="updates"):
         if on_stage_resolved is not None and _PER_STAGE_STEP_KEYS & set(step.keys()):
             on_stage_resolved()
@@ -649,7 +721,7 @@ def resume_pipeline_graph(
     이어감), 사람 승인/반려 결정을 전달한다(`{"decision": "approve"|
     "reject", "reason": str}`)."""
     graph = build_graph().compile(checkpointer=checkpointer)
-    config = {"configurable": {"thread_id": f"pipeline_run_{run_id}", "conn": conn}}
+    config = _run_config(conn, run_id)
     resume_value = Command(resume=decision) if decision is not None else None
     result = graph.invoke(resume_value, config=config)
     _cleanup_checkpoint_if_terminal(conn, run_id, checkpointer)
@@ -666,7 +738,7 @@ def resume_pipeline_graph_with_callback(
     """`resume_pipeline_graph()`의 스트리밍 버전(`run_pipeline_graph_
     with_callback()`과 동일한 이유 — 위 모듈 레벨 주석 참고)."""
     graph = build_graph().compile(checkpointer=checkpointer)
-    config = {"configurable": {"thread_id": f"pipeline_run_{run_id}", "conn": conn}}
+    config = _run_config(conn, run_id)
     resume_value = Command(resume=decision) if decision is not None else None
     for step in graph.stream(resume_value, config=config, stream_mode="updates"):
         if on_stage_resolved is not None and _PER_STAGE_STEP_KEYS & set(step.keys()):

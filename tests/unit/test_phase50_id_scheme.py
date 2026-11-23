@@ -100,18 +100,18 @@ def test_init_schema_assigns_codes_to_all_reference_rows():
     # 2026-11-18 "excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프
     # 출력 등이 가능하도록... 전담 팀을 구성해"로 Tool "차트 생성기" 1개
     # 추가(13 → 14), Skill "데이터시각화" 1개 추가(54 → 55).
-    assert len(agent_codes) == 26
+    assert len(agent_codes) == 29
     assert all(c is not None for c in agent_codes)
     assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 26종 전원 레퍼런스
-    assert len(set(agent_codes)) == 26  # 전부 유일
+    assert len(set(agent_codes)) == 29  # 전부 유일
 
     assert len(tool_codes) == 15
     assert all(c is not None for c in tool_codes)
     assert len(set(tool_codes)) == 15
 
-    assert len(skill_codes) == 62  # +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21)
+    assert len(skill_codes) == 68  # +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21)
     assert all(c is not None for c in skill_codes)
-    assert len(set(skill_codes)) == 62
+    assert len(set(skill_codes)) == 68
 
 
 def test_init_schema_tool_codes_reflect_kind():
@@ -185,7 +185,7 @@ def test_reset_and_reassign_codes_wipes_then_reassigns_deterministically():
 
     counts = id_scheme.reset_and_reassign_codes(conn)
 
-    assert counts == {"agent_pool": 26, "tool_pool": 15, "skill_pool": 62}
+    assert counts == {"agent_pool": 29, "tool_pool": 15, "skill_pool": 68}
     after = {
         table: [
             r["code"]
@@ -243,7 +243,7 @@ def test_agent_pool_list_endpoint_exposes_code(client_and_conn):
     resp = client.get("/api/agent-pool")
     assert resp.status_code == 200, resp.text
     agents = resp.json()
-    assert len(agents) == 26
+    assert len(agents) == 29
     assert all(a["code"] and a["code"].startswith("AGT-REF-") for a in agents)
 
 

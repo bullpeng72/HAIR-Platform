@@ -52,6 +52,22 @@ def _cost_score(cost: float, candidates: list[ResourceCandidate]) -> float:
     return 1.0 - (cost - lo) / (hi - lo)
 
 
+# 역할명이 달라도 같은 역할로 보는 기준 — 요구 스킬이 2개 이상이고 그 전부를 가졌을 때만(2026-11-22).
+# 처음엔 "절반 이상"이었는데, 요구 스킬 일부만 우연히 가진 무관한 역할(예: python을 아는 디자이너)이
+# 백엔드 후보로 들어왔다(GC51b 회귀). 스킬 하나만 요구하면 역할명 일치로만 찾는다.
+SKILL_MATCH_MIN_FIT = 1.0
+SKILL_MATCH_MIN_REQUIRED = 2
+
+
+def _skill_fit(candidate: ResourceCandidate, required: set[str]) -> float:
+    """요구 스킬 중 후보가 가진 비율(요구 스킬이 없으면 1.0) — 대소문자·양끝 공백 무시."""
+    if not required:
+        return 1.0
+    have = {t.strip().lower() for t in candidate.skill_tags}
+    need = {t.strip().lower() for t in required}
+    return len(need & have) / len(need)
+
+
 def _role_matches(candidate_role: str, required_role: str) -> bool:
     """역할명 부분일치 — 한쪽 문자열이 다른 쪽에 포함되면 일치로 본다
     (대소문자/양끝 공백 무시). `/api/pool/search`의 `role LIKE '%...%'`
@@ -95,7 +111,18 @@ def match_candidates(
     # 개발자를 찾는데 Pool에 디자이너만 있어도 top 3로 제시되고 generate_new=False가
     # 나왔다) — 가중치 스코어링은 role이 일치하는 후보로만 좁힌다. role 일치 후보가
     # 아예 없으면 완전히 없는 것과 동일하게 생성을 제안한다.
-    role_relevant = [c for c in candidates if _role_matches(c.role, required_role)]
+    # 하드코딩·스텁 점검(2026-11-22) 2순위 — 역할명 부분일치만으로는 "Backend Engineer"와
+    # "백엔드 개발자"처럼 표기만 다른 같은 역할을 못 찾아 바로 '신규 생성'을 제안했다. 동의어 사전을
+    # 하드코딩하지 않고, 요구 스킬(2개 이상)을 전부 갖춘 후보도 역할 일치로 본다(데이터 기반).
+    role_relevant = [
+        c
+        for c in candidates
+        if _role_matches(c.role, required_role)
+        or (
+            len(required_skill_set) >= SKILL_MATCH_MIN_REQUIRED
+            and _skill_fit(c, required_skill_set) >= SKILL_MATCH_MIN_FIT
+        )
+    ]
     if not role_relevant:
         return MatchResult(top=[], generate_new=True)
 
@@ -120,5 +147,9 @@ def match_candidates(
             )
         )
 
-    scored.sort(key=lambda s: s.score, reverse=True)
+    # 점수 가중치(ADR — 가용성·적합도·비용)는 그대로 두고, 같은 점수면 요구 스킬을 더 많이 갖춘
+    # 후보를 앞에 둔다.
+    scored.sort(
+        key=lambda s: (s.score, _skill_fit(s.candidate, required_skill_set)), reverse=True
+    )
     return MatchResult(top=scored[:3], generate_new=False)

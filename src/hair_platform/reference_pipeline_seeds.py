@@ -50,7 +50,7 @@ TEST_CASE_DERIVER_SOURCE = 'def tool_fn(query: str) -> str:\n    import json, re
 # 표준편차처럼 데이터가 부족하면 `None`을 돌려주고(개수 1개일 때),
 # 증감률도 기준값이 0이면 계산하지 않고 사유를 명시한다 — 전부 Python
 # `statistics` 표준 라이브러리만 쓴다(외부 의존성 추가 없음).
-DATA_ANALYZER_SOURCE = """def tool_fn(query: str) -> str:
+DATA_ANALYZER_SOURCE_V1 = """def tool_fn(query: str) -> str:
     import json
     import statistics
 
@@ -126,6 +126,50 @@ DATA_ANALYZER_SOURCE = """def tool_fn(query: str) -> str:
 
     return '입력에 "series"(시계열 비교) 또는 "values"(단순 통계) 중 하나가 있어야 합니다.'
 """
+
+# 입력 관용화(2026-11-22, "스킬, 툴, 에이전트 각각의 실행 품질을 점검해줘" 실측) — 모델이
+# 첫 호출에 "매출 42, 48, 55"처럼 숫자를 나열한 문장을 넘겨 실패하고 한 번 더 왕복했다
+# (로컬 모델에선 왕복당 1~2분). JSON 배열(`[42, 48, 55]`)은 AttributeError 트레이스백이
+# 그대로 반환됐다. 숫자만 나열한 입력(앞의 이름표 하나는 허용)과 JSON 배열은 values로 받고,
+# 기간 이름이 섞인 문장("1분기 42억")처럼 숫자를 잘못 읽을 수 있는 입력은 여전히 거절한다
+# (계산을 지어내지 않는다는 이 도구의 원칙). 천 단위 쉼표("1,234")는 구분자와 헷갈려 거절.
+_DATA_ANALYZER_PARSE_V1 = """    try:
+        payload = json.loads(query)
+    except (json.JSONDecodeError, ValueError):
+        return (
+            '입력은 JSON 문자열이어야 합니다: '
+            '{"series": {"2024": 100, "2025": 130}} (시계열 비교) 또는 '
+            '{"values": [1, 2, 3]} (단순 통계) 중 하나.'
+        )
+"""
+_DATA_ANALYZER_PARSE = """    import re
+
+    usage = (
+        '입력은 JSON 문자열이어야 합니다: '
+        '{"series": {"2024": 100, "2025": 130}} (시계열 비교) 또는 '
+        '{"values": [1, 2, 3]} (단순 통계) 중 하나. 값은 단위 없는 숫자만 넣습니다.'
+    )
+    try:
+        payload = json.loads(query)
+    except (json.JSONDecodeError, ValueError):
+        payload = None
+    if isinstance(payload, list):
+        payload = {"values": payload}
+    if payload is None:
+        body = re.sub(r"^[^0-9+-]*", "", query).strip()
+        if re.search(r"[0-9],[0-9]{3}(?![0-9])", body):
+            return usage + ' (천 단위 쉼표는 구분자와 헷갈려 받지 않습니다.)'
+        number = r"[+-]?[0-9]+(?:[.][0-9]+)?"
+        if not re.fullmatch(number + r"(?:\\s*[,\\s]\\s*" + number + r")*", body):
+            return usage
+        payload = {"values": [float(v) for v in re.split(r"[,\\s]+", body) if v]}
+    if not isinstance(payload, dict):
+        return usage
+"""
+assert _DATA_ANALYZER_PARSE_V1 in DATA_ANALYZER_SOURCE_V1
+DATA_ANALYZER_SOURCE = DATA_ANALYZER_SOURCE_V1.replace(
+    _DATA_ANALYZER_PARSE_V1, _DATA_ANALYZER_PARSE
+)
 
 # 사용자 요청(2026-11-18, "excel 파일 등 수치가 담긴 데이터를 입력
 # 받아, 실제 계산을 하고 그래프 출력 등이 가능하도록... 전담 팀을
@@ -324,6 +368,38 @@ TOOL_SPECS: list[tuple[str, str, str, int]] = [
     ),
 ]
 
+# 입력 형식 안내(2026-11-22, "스킬, 툴, 에이전트 각각의 실행 품질을 점검해줘" 실측) — 도구
+# 파라미터는 전부 `query: str` 하나라, 모델이 보는 건 이 설명뿐이다. 그런데 JSON을 요구하는
+# 도구의 설명·연결 스킬 어디에도 형식이 없어 데이터 분석가·QA 기능테스터가 첫 호출에 실패하고
+# 한 번 더 왕복했다. 스펙 작성자는 린터에 요구사항 4줄만 넘겨 남아 있던
+# [NEEDS CLARIFICATION]을 놓치고 "통과"라고 답했다. 설명 끝에 입력 형식을 붙인다.
+TOOL_INPUT_NOTES: dict[str, str] = {
+    "Spec EARS 린터": "입력: Spec 전문(미해결 태그를 놓치지 않게 일부가 아니라 전체를 넣는다).",
+    "골든셋 커버리지 체커": (
+        '입력(JSON 문자열): {"criteria": ["기준1", "기준2"], "output": "점검할 산출물 전문"}.'
+    ),
+    "분석 프레임워크 템플릿 생성기": (
+        '입력(JSON 문자열): {"framework": "SWOT", "subject": "분석 대상"} — framework는 3C/4P/SWOT 중 하나.'
+    ),
+    "수치 데이터 분석기": (
+        '입력(JSON 문자열): 기간별 비교는 {"series": {"1분기": 42, "2분기": 48, "3분기": 55}}'
+        '(구간별 증감률까지 한 번에 계산되니 구간마다 나눠 부르지 않는다), 단순 통계는 '
+        '{"values": [42, 48, 55]}. 값은 단위 없는 숫자만 넣는다.'
+    ),
+    "차트 생성기": (
+        '입력(JSON 문자열): {"type": "bar", "title": "월별 매출", "labels": ["1월", "2월"], '
+        '"series": {"매출": [100, 150]}, "unit": "억 원"}. 반환된 설정은 최종 답에 ```chart '
+        "코드펜스로 그대로 넣는다."
+    ),
+}
+TOOL_DESCRIPTIONS_V1: dict[str, str] = {
+    name: description for name, description, _, _ in TOOL_SPECS if name in TOOL_INPUT_NOTES
+}
+TOOL_SPECS = [
+    (name, f"{description} {TOOL_INPUT_NOTES[name]}" if name in TOOL_INPUT_NOTES else description, source, timeout)
+    for name, description, source, timeout in TOOL_SPECS
+]
+
 # (skill_name, description, tool_name) — tool_name은 위 TOOL_SPECS의 name과 매칭해 default_tool_pool_ids를 채운다.
 TOOL_SKILL_SPECS: list[tuple[str, str, str]] = [
     (
@@ -461,6 +537,13 @@ KNOWLEDGE_SKILL_SPECS: list[tuple[str, str]] = [
 
 # (role_name, skill_tags, tuning_config)
 AGENT_SPECS: list[tuple[str, list[str], dict]] = [
+    # 업무 문서 파이프라인 전용(2026-11-21, "파이프라인 품질 점검") — 사업/기획·제안서·실적 보고
+    # 파이프라인의 요구사항·내용 검증·표현 검토 단계에 SW 개발용 Agent(요구사항 분석가: EARS 명세,
+    # 품질 관리자: Gate A-G·코드 커버리지)와 광고 카피 Agent가 배정돼 있던 것을 대신한다
+    # (`db._reassign_business_pipeline_agents`가 기존 DB의 단계 배정을 한 번 바꾼다).
+    ("업무 요구사항 분석가", ["업무요구사항정리", "문서작성"], {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3}),
+    ("문서 검토자", ["문서품질검토", "커버리지체크"], {"temperature": 0.2}),
+    ("문서 교정자", ["문서교정"], {"temperature": 0.3}),
     # --- Harness Methodology 개발 파이프라인(2026-10-13) ---
     (
         "요구사항 분석가",
@@ -787,7 +870,7 @@ DEV_CREW_TEAM_MEMBER_SPECS: list[tuple[str, str]] = [
     ("프론트엔드 개발자", "4단계: 구현(프론트엔드)"),
     ("데이터/인프라 개발자", "4단계: 구현(데이터/인프라)"),
     ("풀스택 개발자", "4단계: 구현(풀스택, 유동 배치)"),
-    ("UI 기획자", "4단계: 구현(UI/UX)"),
+    ("UI 기획자", "2단계: 설계(UI/UX)"),
     ("코드 검증가", "5단계: 코드 검증(Gate 0.5)"),
     ("테스트 계획 수립가", "6단계: QA 기능테스트(테스트 설계)"),
     ("QA 기능테스터", "6단계: QA 기능테스트(실행, Gate 0.5)"),
@@ -907,6 +990,42 @@ DEV_PIPELINE_DESCRIPTION = (
     "품질 관리 최종 판정까지, Gate A-G 기준으로 자동 반복하며 진행하는 정식 "
     "개발 파이프라인(BMAD-METHOD 대응 — 계획 확정 시점에만 사람이 개입한다)."
 )
+# 2026-11-21 "모든 파이프라인 점검" — UI 기획자는 기획 역할이라 "구현" 릴레이 맨 앞이 아니라
+# "설계" 단계에서 화면 흐름을 정리한다(구현 단계 개발자는 설계 산출물로 받는다).
+UI_PLANNER_ROLE = "UI 기획자"
+UI_PLANNER_DESIGN_INSTRUCTION = (
+    "앞서 나온 아키텍처·데이터 모델을 바탕으로 화면 흐름과 인터랙션(화면 목록, 화면 간 이동, "
+    "입력·피드백)을 정리해 구현 단계 개발자들에게 전달하세요."
+)
+PERFORMANCE_DATA_ANALYSIS_INSTRUCTION_V1 = (
+    "앞 단계의 요구사항에 해당하는 실적 수치를 목표 대비/전기 대비 등으로 실제로 계산해 분석하세요."
+)
+PERFORMANCE_DATA_ANALYSIS_INSTRUCTION = (
+    "앞 단계의 요구사항과 원 요청에 나온 모든 실적 수치(매출만이 아니라 이익·비용·지역/제품별 "
+    "비중 등 요청에 있는 지표 전부)를 목표 대비/전기 대비 등으로 실제로 계산해 분석하세요. "
+    "지표마다 계산식과 결과를 표로 보이고, 요청에 있는데 분석하지 못한 지표는 이유와 함께 밝히세요."
+)
+# 2026-11-22 "모든 파이프라인 점검" C안 — "구현"을 4명 릴레이(데이터/인프라 → 백엔드 → 프론트엔드
+# → 풀스택 통합)에서 풀스택 개발자 한 명이 한 번에 완성본을 쓰는 단일 단계로 바꾼다. 실측: 릴레이는
+# 앞 개발자들이 코드 조각을 남기고 마지막 통합 담당이 그 조각들을 합치려다 실행 가능한 완성본 없이
+# 끝났다(구현 산출물 12.8만 자, 완전한 HTML 문서는 1천 자 미만 골격뿐).
+IMPLEMENTATION_ROLE = "풀스택 개발자"
+IMPLEMENTATION_RELAY_ROLES_V1 = ["데이터/인프라 개발자", "백엔드 개발자", "프론트엔드 개발자", "풀스택 개발자"]
+IMPLEMENTATION_INSTRUCTION = (
+    "앞 단계의 개발 계획(요구사항-모듈 매핑)에 있는 모든 모듈을 직접 구현해, 요청한 형태(예: 단일 "
+    "HTML 파일)로 바로 실행되는 완성본 하나를 제출하세요. 설계 논의·의사코드·코드 조각 나열로 끝내지 "
+    "말고, 생략('...')이나 자리표시자 없이 처음부터 끝까지 전체 코드를 한 번에 쓰세요. 모든 요구사항이 "
+    "코드에 실제로 구현돼야 합니다."
+)
+# 구현 단계 Gate — 실행 가능성(`agent_evaluation.compute_deliverable_runnable`)이 통과해야 넘어간다.
+IMPLEMENTATION_GATE_IDS = ["deliverable_runnable"]
+# 검증 단계 Gate — 파이프라인(CrewAI) 경로에서 C(실행 안정성)·D(응답 30초 SLA)·F(크루 협업
+# 구조)·G(추론 노출)는 산출물 내용과 무관하게 늘 같은 값이라(실측 2026-11-21) 통과 판정에서
+# 뺀다. 점수는 그대로 기록·표시된다. 요구사항 추적성을 재는 단계는 그 점수도 판정에 넣는다.
+REVIEW_GATE_IDS = ["A"]
+REVIEW_GATE_IDS_WITH_TRACEABILITY = ["A", "requirements_traceability"]
+
+
 # (name, mode, lead_role_name, instructions, requires_human_approval,
 #  agents=[(role_name, instructions), ...])
 # (name, mode, lead_role_name, instructions, requires_human_approval,
@@ -962,6 +1081,7 @@ DEV_PIPELINE_STAGES: list[
         [
             ("AA", "모듈 경계와 모듈 간 인터페이스를 설계하세요."),
             ("DA", "앞서 나온 아키텍처를 바탕으로 데이터 모델(ERD)을 설계하세요."),
+            (UI_PLANNER_ROLE, UI_PLANNER_DESIGN_INSTRUCTION),
         ],
         False,
         "text",
@@ -987,29 +1107,12 @@ DEV_PIPELINE_STAGES: list[
     ),
     (
         "구현",
-        "sequential_relay",
+        "single",
         None,
-        (
-            "앞 단계의 개발 계획(요구사항-모듈 매핑)에서 당신에게 배정된 모듈을 "
-            "찾아, 그 모듈이 커버해야 할 요구사항을 전부 충족하는 실제로 동작하는 "
-            "완성된 코드를 작성하세요 — 설계 논의나 의사코드로 끝내지 마세요. "
-            "이전 개발자가 이미 작성한 코드는 그대로 유지하고(다시 쓰거나 지우지 "
-            "말 것), 당신이 맡은 부분만 이어서 작성하세요."
-        ),
+        IMPLEMENTATION_INSTRUCTION,
         False,
         True,
-        [
-            ("UI 기획자", "구현에 필요한 화면 흐름/인터랙션을 먼저 정리해 다음 개발자들에게 전달하세요."),
-            ("데이터/인프라 개발자", "데이터 모델/상태 구조를 구현하세요."),
-            ("백엔드 개발자", "게임/업무 로직(규칙·판정·상태 전이)을 구현하세요."),
-            ("프론트엔드 개발자", "화면 렌더링과 입력 처리를 구현하세요."),
-            (
-                "풀스택 개발자",
-                ("지금까지 작성된 모든 모듈(UI 흐름/데이터/로직/렌더링)을 검토해 "
-                "빠진 기능을 직접 채워 넣고, 하나의 실행 가능한 완성본으로 통합해 "
-                "제출하세요."),
-            ),
-        ],
+        [(IMPLEMENTATION_ROLE, "")],
         False,
         "code",
     ),
@@ -1380,7 +1483,7 @@ PROPOSAL_PIPELINE_STAGES: list[
         True,
         [("제안서 작성자", "")],
         False,
-        "text",
+        "html",  # 2026-11-21 — 제안서 작성자는 덱(HTML)으로 낸다.
     ),
     (
         "내용 검증",
@@ -1518,7 +1621,7 @@ PERFORMANCE_REPORT_PIPELINE_STAGES: list[
         "데이터 분석",
         "single",
         None,
-        "앞 단계의 요구사항에 해당하는 실적 수치를 목표 대비/전기 대비 등으로 실제로 계산해 분석하세요.",
+        PERFORMANCE_DATA_ANALYSIS_INSTRUCTION,
         False,
         False,
         [("데이터 분석가", "")],

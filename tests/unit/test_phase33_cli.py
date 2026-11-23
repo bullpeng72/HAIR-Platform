@@ -178,7 +178,7 @@ def test_gc_reset_data_then_bootstrap_admin_end_to_end(tmp_path, capsys, monkeyp
     # 2026-11-08 "콘텐츠 카피라이팅" 추가(사업/기획 업무 처리 파이프라인
     # 신설, AGENT_SPECS 정규 목록에 포함)로 22 → 23. 2026-11-11 "데이터
     # 분석가"/"제안서 작성자"/"실적 보고서 작성자" 추가로 23 → 26.
-    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 26
+    assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 29  # +3: 업무 문서 파이프라인 Agent(2026-11-21)
     conn.close()
 
 

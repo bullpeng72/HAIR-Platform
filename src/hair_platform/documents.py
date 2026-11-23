@@ -389,10 +389,16 @@ def _extract_pptx_text(raw_bytes: bytes) -> str:
     for i, slide in enumerate(prs.slides, 1):
         slide_lines: list[str] = []
         for shape in slide.shapes:
-            if shape.has_text_frame and shape.text_frame.text.strip():
-                slide_lines.append(shape.text_frame.text.strip())
+            # `has_text_frame`이 참인 도형만 `text_frame`이 있다 — BaseShape 타입에는 없어
+            # getattr로 읽는다(Pylance reportAttributeAccessIssue, 2026-11-23).
+            text_frame = getattr(shape, "text_frame", None) if shape.has_text_frame else None
+            if text_frame is not None and text_frame.text.strip():
+                slide_lines.append(text_frame.text.strip())
         if slide.has_notes_slide:
-            notes = slide.notes_slide.notes_text_frame.text.strip()
+            # 노트 슬라이드에 본문 자리표시자가 없으면 `notes_text_frame`이 None이다 — 예전엔
+            # 그대로 `.text`를 읽어 AttributeError로 업로드 전체가 실패했다(2026-11-23).
+            notes_frame = slide.notes_slide.notes_text_frame
+            notes = notes_frame.text.strip() if notes_frame is not None else ""
             if notes:
                 slide_lines.append(f"[발표자 노트] {notes}")
         if slide_lines:

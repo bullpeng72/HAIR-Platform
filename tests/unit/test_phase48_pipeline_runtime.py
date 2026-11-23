@@ -59,6 +59,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         return {
             "final_output": "최종산출물",
@@ -182,11 +183,12 @@ def test_default_software_dev_pipeline_is_seeded_idempotently():
     tpl = pr.get_pipeline_template(conn, templates[0]["id"])
     assert len(tpl["stages"]) == 7
     modes = [s["mode"] for s in tpl["stages"]]
+    # 2026-11-22 C안 — "구현"(4번째)은 풀스택 개발자 단일 작성(실행 가능성 Gate).
     assert modes == [
         "single",
         "sequential_relay",
         "single",
-        "sequential_relay",
+        "single",
         "single",
         "sequential_relay",
         "single",
@@ -199,9 +201,10 @@ def test_default_software_dev_pipeline_is_seeded_idempotently():
     # "구현" 단계를 parallel_delegated에서 sequential_relay로 전환 —
     # 더 이상 매니저(lead_role_name)가 없다.
     assert impl_stage["lead_role_name"] is None
-    # UI 기획자 → 데이터/인프라 개발자 → 백엔드 개발자 → 프론트엔드
-    # 개발자 → 풀스택 개발자(최종 통합) = 5명, 매니저 역할 없음.
-    assert len(impl_stage["agents"]) == 5
+    # 2026-11-22 C안 — 4명 릴레이(조각을 마지막에 통합)가 실행 가능한 완성본 없이 끝난 실측 후
+    # 풀스택 개발자 한 명이 한 번에 완성본을 쓴다. UI 기획자는 "설계" 단계(AA → DA → UI 기획자).
+    assert [a["role_name"] for a in impl_stage["agents"]] == ["풀스택 개발자"]
+    assert [a["role_name"] for a in tpl["stages"][1]["agents"]][-1] == "UI 기획자"
 
 
 # ---------- 실행 엔진: 3가지 mode ----------
@@ -281,6 +284,7 @@ def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval(
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         calls.append(
             {
@@ -509,6 +513,7 @@ def test_execute_stage_attempt_passes_stage_expected_output_to_run_crew():
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         calls.append(expected_outputs)
         return _good_run_crew()(
@@ -564,6 +569,7 @@ def test_gate_failure_retries_with_feedback_then_escalates():
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         descriptions_seen.append(task_descriptions[0])
         return _good_run_crew(gate_scores=bad_gate, tcr=10.0)(
@@ -733,6 +739,7 @@ def test_reject_reason_is_fed_into_the_retry_instructions():
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         descriptions_by_attempt.append(task_descriptions[0])
         return _good_run_crew()(
@@ -810,6 +817,7 @@ def test_reject_without_reason_still_retries_with_generic_notice():
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         descriptions_by_attempt.append(task_descriptions[0])
         return _good_run_crew()(

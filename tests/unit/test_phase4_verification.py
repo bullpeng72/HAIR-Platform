@@ -6,6 +6,7 @@ AgentForge agent-evaluator SDK가 vendor/import되지 않아(오픈 이슈) 이 
 
 from __future__ import annotations
 
+import sqlite3
 from unittest.mock import patch
 
 from hair_platform.jobs import default_stub_generator
@@ -35,14 +36,14 @@ def test_gc37_duplicate_generation_request_reuses_existing_item_nf7(client_and_c
     brief_id, task_id = _make_brief_with_task(client)
 
     resp1 = client.post(
-        f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]}
+        f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]}
     )
     assert resp1.status_code == 201
     first_item_id = resp1.json()["items"][0]["id"]
 
     # 같은 역할(task)에 대해 다시 생성을 요청해도 새 agent_pool 항목이 또 생기면 안 된다.
     resp2 = client.post(
-        f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]}
+        f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]}
     )
     assert resp2.status_code == 201
     second_item_id = resp2.json()["items"][0]["id"]
@@ -74,7 +75,7 @@ def test_gc37b_dedup_response_flags_reused_items(client_and_conn):
     brief_id, task_id = _make_brief_with_task(client)
 
     resp1 = client.post(
-        f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]}
+        f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]}
     )
     assert resp1.status_code == 201
     item1 = resp1.json()["items"][0]
@@ -84,7 +85,7 @@ def test_gc37b_dedup_response_flags_reused_items(client_and_conn):
     assert item1["agent_pool_role_name"] == "백엔드 개발자"
 
     resp2 = client.post(
-        f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]}
+        f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]}
     )
     assert resp2.status_code == 201
     body = resp2.json()
@@ -113,7 +114,7 @@ def test_gc38_sandbox_failure_cannot_be_bypassed_into_success(client_and_conn):
         return_value=SandboxResult(ok=False, stderr="sandbox check failed"),
     ):
         resp = client.post(
-            f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]}
+            f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]}
         )
     assert resp.status_code == 201
     body = resp.json()
@@ -179,5 +180,6 @@ def test_gc40_fairness_report_rbac_admin_manager_only(client_and_conn):
 def test_gc41_stub_generator_still_used_as_module_level_default():
     # 회귀 방지: default_stub_generator 참조가 여전히 모듈에서 임포트 가능해야 한다
     # (jobs.py 리팩터링 중 실수로 이름이 바뀌면 이 테스트가 즉시 잡는다).
-    result = default_stub_generator(None, "백엔드 개발자", ["python"])
+    # conn은 이 생성기가 쓰지 않지만 GeneratorFn 계약상 Connection을 받는다 — None 대신 실제 연결.
+    result = default_stub_generator(sqlite3.connect(":memory:"), "백엔드 개발자", ["python"])
     assert result["role_name"] == "백엔드 개발자"

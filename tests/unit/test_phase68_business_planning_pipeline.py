@@ -265,4 +265,5 @@ def test_business_planning_pipeline_runs_end_to_end_with_requirement_coverage():
 
     verification_gate = json.loads(stages[4]["gate_scores"])
     assert verification_gate["requirements_traceability"]["covered"] == 3
-    assert verification_gate["requirements_traceability"]["not_measured"] is True
+    # 2026-11-21 — 검증 단계 gate_ids에 요구사항 추적성이 들어가 통과 판정에 참여한다.
+    assert verification_gate["requirements_traceability"]["not_measured"] is False

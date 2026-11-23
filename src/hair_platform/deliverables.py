@@ -1033,7 +1033,19 @@ def run_comment_triggered_execution_job(
     `author_type='agent'`로 응답만 남긴다** — deliverable·Gate 평가·
     결재 체인은 전혀 만들지 않는다(사용자 결정 a)."""
     try:
-        output = agent_runtime.execute_agent(conn, agent_id, actor_id, prompt)
+        sink: dict = {}
+        output = agent_runtime.execute_agent(
+            conn, agent_id, actor_id, prompt, retrieval_sink=sink
+        )
+        # 언어 품질 검사(2026-11-22 점검 — 이 댓글 응답 경로만 빠져 있었다, `language_qa.py`).
+        output = language_qa.repair_output(
+            conn,
+            output,
+            sink.get("llm_provider"),
+            sink.get("llm_model"),
+            actor_id,
+            "deliverable_comment_reply",
+        )
         cur = conn.execute(
             "INSERT INTO deliverable_comments (deliverable_id, author_type, "
             "author_id, content) VALUES (?, 'agent', ?, ?)",
@@ -1439,6 +1451,7 @@ def run_agent_execution_job(
                 model,
                 retrieval_sink=retrieval_sink,
             ),
+            task_type=agent_evaluation.eval_task_type_for(content_type),
         )
         # 언어 품질 검사 + 자동 교정 1회(2026-11-20, `language_qa.py`).
         output = language_qa.repair_output(

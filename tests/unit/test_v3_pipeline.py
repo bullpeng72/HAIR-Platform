@@ -34,7 +34,7 @@ def test_gc19_generate_batch_succeeds_and_onboards_pending_agent(client_and_conn
     _login(client, "manager1", "managerpass")
     brief_id, task_id = _make_brief_with_task(client)
 
-    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
+    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]})
     assert resp.status_code == 201
     body = resp.json()
     assert body["status"] == "succeeded"
@@ -48,7 +48,7 @@ def test_gc19_generate_batch_succeeds_and_onboards_pending_agent(client_and_conn
 
     # 팀원은 생성 권한이 없다(RBAC)
     _login(client, "member1", "memberpass")
-    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
+    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]})
     assert resp.status_code == 403
 
 
@@ -72,7 +72,7 @@ def test_gc20_partial_failure_and_retry_of_failed_items_only(client_and_conn):
     ):
         resp = client.post(
             f"/api/briefs/{brief_id}/generate",
-            json={"task_ids": [task_ok, task_fail]},
+            json={"framework": "stub", "task_ids": [task_ok, task_fail]},
         )
     assert resp.status_code == 201
     body = resp.json()
@@ -119,7 +119,7 @@ def test_gc22_onboard_then_deprecate_agent_controls_visibility(client_and_conn):
     client, conn = client_and_conn
     _login(client, "manager1", "managerpass")
     brief_id, task_id = _make_brief_with_task(client, "QA 엔지니어")
-    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
+    resp = client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]})
     assert resp.json()["items"][0]["result"] is not None
 
     agent_row = conn.execute(
@@ -157,7 +157,7 @@ def test_gc23_audit_log_records_writes_and_is_role_restricted(client_and_conn):
     client, _ = client_and_conn
     _login(client, "manager1", "managerpass")
     brief_id, task_id = _make_brief_with_task(client, "PM")
-    client.post(f"/api/briefs/{brief_id}/generate", json={"task_ids": [task_id]})
+    client.post(f"/api/briefs/{brief_id}/generate", json={"framework": "stub", "task_ids": [task_id]})
 
     resp = client.get("/api/audit-log")
     assert resp.status_code == 200

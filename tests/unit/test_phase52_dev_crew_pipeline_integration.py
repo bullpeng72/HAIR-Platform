@@ -47,6 +47,7 @@ def _good_run_crew(gate_scores=None, tcr=90.0):
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         return {
             "final_output": "단계 산출물",
@@ -156,6 +157,7 @@ def test_gc_dev_crew_mention_without_linked_task_creates_synthetic_task_and_paus
         expected_outputs=None,
         self_review=False,
         memory=True,
+        **_kwargs,
     ):
         captured_descriptions.append(task_descriptions[0])
         return _good_run_crew()(
@@ -326,7 +328,21 @@ def test_gc_dev_crew_approval_resume_posts_followup_message_to_conversation(
     ).fetchone()
     assert approval is not None
 
-    with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
+    # 2026-11-21 A안 — "코드 검증" 단계는 요구사항 추적성까지 통과해야 넘어간다. 추적성은
+    # 실제 LLM 판정이라(이 테스트는 crew만 mock) 통과로 고정한다.
+    full_coverage = {
+        "score": 1.0, "status": "pass", "not_measured": False, "passed": True,
+        "total_requirements": 3, "covered": 3, "missing": [],
+    }
+    # 2026-11-22 C안 — "구현" 단계는 실행 가능성 Gate를 통과해야 한다. 이 테스트의 crew mock
+    # 산출물은 진짜 앱이 아니라(대화 진행 메시지 흐름만 본다) 통과로 고정한다.
+    runnable = {"score": 1.0, "status": "pass", "not_measured": False, "passed": True, "reasons": []}
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()), patch(
+        "hair_platform.requirements_traceability_llm.assess_traceability",
+        return_value=full_coverage,
+    ), patch(
+        "hair_platform.agent_evaluation.compute_deliverable_runnable", return_value=runnable
+    ):
         resp = client.post(
             f"/api/approvals/{approval['id']}/decide", json={"approve": True}
         )
