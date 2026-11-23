@@ -108,6 +108,7 @@ from hair_platform.models import (
     AssistRequest,
     ActiveToggle,
     ApiKeyCreate,
+    ConfigCheckApply,
     BriefDraftRequest,
     BriefSubmission,
     NotifyConfigUpdate,
@@ -556,6 +557,21 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail="본인 키만 폐기할 수 있습니다") from exc
         return {"id": key_id, "revoked": True}
+
+    # ---------- 기본 구성 점검(2026-11-23, P2-10 — `config_check.py`, admin) ----------
+    @app.get("/api/admin/config-check")
+    def config_check_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import config_check
+
+        return config_check.check(conn)
+
+    @app.post("/api/admin/config-check/apply")
+    def config_check_apply_endpoint(
+        payload: ConfigCheckApply, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        from hair_platform import config_check
+
+        return config_check.apply(conn, user["id"], payload.item_ids)
 
     # ---------- 외부 알림 웹훅(2026-11-23, P1-5 — `integrations.py`, admin) ----------
     @app.get("/api/integrations/notify")

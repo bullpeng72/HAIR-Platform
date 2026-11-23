@@ -11189,7 +11189,39 @@ function orgPolicyFormHtml() {
     '</section>';
 }
 
+// 기본 구성 점검(2026-11-23, P2-10 — `config_check.py`). 운영 DB를 지금 코드의 기본 구성과 비교해
+// 빠진 것(단계 참여 역할·Agent 기본 스킬·기본 스킬/도구)은 골라 반영하고, 값이 다른 것은 보여만 준다.
+async function renderConfigCheckSection() {
+  const box = document.getElementById("config-check-section");
+  if (!box) return;
+  let items;
+  try { items = await api("GET", "/api/admin/config-check"); }
+  catch (e) { box.innerHTML = '<h2>기본 구성 점검</h2><p class="muted">' + esc(e.message) + "</p>"; return; }
+  const fixable = items.filter(i => i.fixable);
+  const rows = items.map(i =>
+    "<tr><td>" + (i.fixable ? '<input type="checkbox" class="cfg-item" value="' + escAttr(i.id) + '" checked>' : "") + "</td>" +
+    "<td>" + esc(i.target) + "</td><td>" + esc(i.detail) + "</td><td>" + (i.fixable ? "반영 가능" : "직접 확인") + "</td></tr>"
+  ).join("");
+  box.innerHTML = "<h2>기본 구성 점검</h2>" +
+    '<p class="muted">운영 중인 파이프라인·Agent·스킬·도구를 지금 버전의 기본 구성과 비교합니다. 업그레이드 뒤 기본 구성에 추가된 것은 기존 데이터에 자동으로 들어가지 않으므로, 여기서 빠진 것을 골라 반영하세요. 값이 다른 항목은 관리자가 일부러 바꿨을 수 있어 표시만 합니다(고치려면 해당 관리 화면에서 직접).</p>' +
+    (items.length
+      ? '<div class="table-wrap"><table><thead><tr><th></th><th>대상</th><th>차이</th><th>처리</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
+        (fixable.length ? '<button class="primary" id="cfg-apply">선택한 항목 반영</button>' : "")
+      : '<p class="muted">기본 구성과 다른 곳이 없습니다.</p>');
+  const btn = document.getElementById("cfg-apply");
+  if (btn) btn.addEventListener("click", async () => {
+    const ids = [...box.querySelectorAll(".cfg-item:checked")].map(c => c.value);
+    if (!ids.length) { showMsg("global-msg", "반영할 항목을 고르세요.", "error"); return; }
+    try {
+      const r = await api("POST", "/api/admin/config-check/apply", { item_ids: ids });
+      showMsg("global-msg", r.applied.length + "건을 반영했습니다.", "ok");
+      renderConfigCheckSection();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+}
+
 async function renderAdmin(content) {
+  setTimeout(renderConfigCheckSection, 0);
   const users = await api("GET", "/api/users");
   content.innerHTML =
     '<section class="card"><h2>사용자 생성</h2>' +
@@ -11214,6 +11246,8 @@ async function renderAdmin(content) {
     '<button class="primary" type="submit">생성</button></form>' +
     "</section>" +
     orgPolicyFormHtml() +
+    // 기본 구성 점검(2026-11-23, P2-10) — 아래 함수가 이 자리를 채운다.
+    '<section class="card" id="config-check-section"><h2>기본 구성 점검</h2><p class="muted">불러오는 중…</p></section>' +
     '<section class="card"><h2>사용자 목록</h2>' +
     // 사용자 요청(2026-09-29, "생성과 상사 지정만 가능... (1) 비밀번호
     // 조회/초기화 (2) 사용자 삭제 (3) '동작'의 의미 불명") — 비밀번호는
@@ -11749,6 +11783,7 @@ const MANUAL_MARKDOWN = [
 '- **`@멘션`했는데 아무 반응이 없다** → 그 Agent/Team/사람이 이 대화의 참가자가 아닐 가능성이 가장 큽니다.',
 '  메시지창에서 `@`를 다시 입력해 자동완성 목록에서 직접 골라 초대부터 되게 하세요.',
 '- **방금 만든 Agent가 배정/실행 목록에 안 보인다** → "AI 에이전트 관리"에서 온보딩 승인(온보딩 대기 → 활성)을 먼저 눌러야 합니다(admin 전용 — manager라면 admin에게 요청하세요).',
+'- **업그레이드 뒤 기본 파이프라인·Agent 구성이 이 가이드와 다르다**(예: 사업/기획 파이프라인 2단계에 데이터 분석가가 없음) → 새 버전에서 기본 구성에 추가된 것은 이미 쓰던 데이터에 자동으로 들어가지 않습니다. "사용자 관리" 탭(admin 전용)의 **"기본 구성 점검"**에서 빠진 단계 참여 역할·Agent 기본 스킬·기본 스킬·도구를 골라 반영하세요. 관리자가 바꾼 설정(모드·판정 기준·사람 승인)은 차이만 보여 주고 덮어쓰지 않습니다.',
 '- **팀 "기본값 저장"에서 "신규로 hierarchical 모드를 지정할 수 없습니다" 오류가 난다** → 위임형(hierarchical)은 신뢰성 문제로 새로 지정할 수 없습니다(4절 3번). 처리 방식을 sequential로 두거나, 단계별로 나눠야 하는 업무라면 팀에 파이프라인을 연결하세요. 멤버 추가 때 같은 이유의 오류가 나면 역할 라벨에서 "매니저"를 빼세요.',
 '- **Task ID/Brief ID를 넣어 만든 팀(TF팀)이 `@멘션`·배정 후보에 안 보인다** → TF팀은 "온보딩 대기" 상태로 시작합니다. "팀 관리"에서 그 팀 카드의 "**온보딩 시작**" 버튼을 눌러야 활성화됩니다(4절 참고).',
 '- **팀을 지우려는데 안 지워진다** → 그 팀에 확정된 배정이 남아 있으면 삭제가 막힙니다 — 할 일 상세의 "배정 취소"로 먼저 정리하세요.',

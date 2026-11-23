@@ -128,6 +128,12 @@ class PipelineScheduleCreate(BaseModel):
     weekday: int | None = None
 
 
+class ConfigCheckApply(BaseModel):
+    """기본 구성 점검 결과 중 반영할 항목 id 목록(2026-11-23, P2-10)."""
+
+    item_ids: list[str]
+
+
 class ActiveToggle(BaseModel):
     active: bool
 
