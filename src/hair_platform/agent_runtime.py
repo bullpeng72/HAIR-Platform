@@ -43,6 +43,7 @@ from hair_platform import (
     vectorstore,
     websearch,
 )
+from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 
 VECTORDB_SKILL_TAGS = {"내부지식검색"}
 GRAPHDB_SKILL_TAGS = {"조직배정관계조회"}
@@ -245,6 +246,7 @@ def _looks_truncated(text: str) -> bool:
     return False
 
 
+@llm_usage.with_scope(agent_id="agent_id")
 def execute_agent(
     conn: sqlite3.Connection,
     agent_id: int,

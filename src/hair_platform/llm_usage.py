@@ -20,12 +20,62 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import functools
+import inspect
 import sqlite3
 import threading
 from typing import Any
 
 _LOCK = threading.Lock()
 _CONN: sqlite3.Connection | None = None
+
+# 업무 맥락(2026-11-23, "P2 진행해줘" — P2-11 업무별 효율·비용). 지금까지는 provider·모델별 합계뿐이라
+# "어느 업무·Agent·파이프라인에 얼마가 들었나"를 알 수 없었다. 작업 실행기가 `with_scope`(또는
+# `scope`)로 맥락을 정하면 그 안의 모든 호출 기록에 붙는다(바깥 맥락과 합쳐진다).
+SCOPE_KEYS = ("task_id", "agent_id", "pipeline_run_id", "conversation_id")
+_SCOPE: contextvars.ContextVar[dict] = contextvars.ContextVar("llm_usage_scope", default={})
+
+
+@contextlib.contextmanager
+def scope(**values: Any):
+    merged = {**_SCOPE.get(), **{k: v for k, v in values.items() if k in SCOPE_KEYS and v is not None}}
+    token = _SCOPE.set(merged)
+    try:
+        yield
+    finally:
+        _SCOPE.reset(token)
+
+
+def with_scope(**fields: Any):
+    """작업 함수 데코레이터 — 값은 그 함수의 인자 이름(문자열)이거나, 묶인 인자 dict를 받는 함수.
+    예: `@with_scope(task_id="task_id")`, `@with_scope(task_id=lambda a: ...)`. 맥락을 못 구해도
+    실행은 그대로 한다."""
+
+    def deco(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            values: dict[str, Any] = {}
+            try:
+                bound = sig.bind_partial(*args, **kwargs).arguments
+                for key, how in fields.items():
+                    values[key] = bound.get(how) if isinstance(how, str) else how(bound)
+            except Exception:  # noqa: BLE001 — 맥락 계산 실패가 실행을 막으면 안 된다
+                pass
+            with scope(**values):
+                return fn(*args, **kwargs)
+
+        return wrapper
+
+    return deco
+
+
+def task_of_pipeline_run(bound: dict) -> int | None:
+    row = bound["conn"].execute("SELECT task_id FROM pipeline_runs WHERE id = ?", (bound["run_id"],)).fetchone()
+    return row[0] if row else None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS llm_usage (
@@ -57,11 +107,13 @@ def record(provider: str, model: str, prompt_tokens: Any, completion_tokens: Any
         c = int(completion_tokens or 0)
         if p == 0 and c == 0:
             return
+        ctx = _SCOPE.get()
         with _LOCK:
             conn.execute(
-                "INSERT INTO llm_usage (provider, model, prompt_tokens, completion_tokens, source) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (provider, model, p, c, source),
+                "INSERT INTO llm_usage (provider, model, prompt_tokens, completion_tokens, source, "
+                "task_id, agent_id, pipeline_run_id, conversation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (provider, model, p, c, source, ctx.get("task_id"), ctx.get("agent_id"),
+                 ctx.get("pipeline_run_id"), ctx.get("conversation_id")),
             )
             conn.commit()
     except Exception:  # noqa: BLE001 — 기록 실패가 LLM 호출을 깨뜨리지 않게
@@ -149,3 +201,87 @@ def report(conn: sqlite3.Connection, days: int | None = 30) -> dict:
             }
         )
     return {"days": days, "models": models, "total_cost": total_cost, "unpriced_models": unpriced}
+
+
+def ensure_scope_columns(conn: sqlite3.Connection) -> None:
+    """업무 맥락 컬럼(2026-11-23, P2-11) — 예전 행은 NULL(맥락 없음)로 남는다."""
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(llm_usage)")}
+    for column in SCOPE_KEYS:
+        if column not in existing:
+            conn.execute(f"ALTER TABLE llm_usage ADD COLUMN {column} INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_task_id ON llm_usage(task_id)")
+
+
+def _cost(row) -> float | None:
+    if row["price_input_per_1m"] is None or row["price_output_per_1m"] is None:
+        return None
+    return (row["prompt_tokens"] / 1_000_000 * row["price_input_per_1m"]
+            + row["completion_tokens"] / 1_000_000 * row["price_output_per_1m"])
+
+
+def work_report(conn: sqlite3.Connection, days: int | None = 30, limit: int = 50) -> dict:
+    """업무(할 일)별·Agent별 실제 사용량과 효율 지표(2026-11-23, P2-11).
+
+    업무별: LLM 호출 수·토큰·금액(단가가 있는 모델만 — 하나라도 없으면 `cost_partial`), 파이프라인
+    실행 수와 평균 소요 시간(분), 사람이 처리한 결재 수(이 업무의 결과물·파이프라인 단계 결재 중
+    승인/반려된 것), 결과물 수. Agent별: 호출 수·토큰·금액. 맥락 없이 기록된 사용량(이 기능 이전
+    기록, 맥락 밖 호출)은 `unattributed`로 따로 센다 — 지어서 나누지 않는다."""
+    where = "WHERE u.created_at >= datetime('now', ?)" if days else "WHERE 1 = 1"
+    params: tuple = (f"-{int(days)} days",) if days else ()
+    base = (
+        "SELECT u.task_id, u.agent_id, u.prompt_tokens, u.completion_tokens, m.price_input_per_1m, "
+        "m.price_output_per_1m FROM llm_usage u LEFT JOIN model_registry m "
+        f"ON m.provider = u.provider AND m.name = u.model {where}"
+    )
+    tasks: dict[int, dict] = {}
+    agents: dict[int, dict] = {}
+    unattributed = {"calls": 0, "tokens": 0}
+    for r in conn.execute(base, params).fetchall():
+        tokens = r["prompt_tokens"] + r["completion_tokens"]
+        cost = _cost(r)
+        if r["task_id"] is None and r["agent_id"] is None:
+            unattributed["calls"] += 1
+            unattributed["tokens"] += tokens
+        for key, bucket in ((r["task_id"], tasks), (r["agent_id"], agents)):
+            if key is None:
+                continue
+            b = bucket.setdefault(key, {"calls": 0, "tokens": 0, "cost": 0.0, "cost_partial": False})
+            b["calls"] += 1
+            b["tokens"] += tokens
+            if cost is None:
+                b["cost_partial"] = True
+            else:
+                b["cost"] += cost
+    task_rows = []
+    for task_id, b in sorted(tasks.items(), key=lambda kv: -kv[1]["tokens"])[:limit]:
+        t = conn.execute(
+            "SELECT t.role_name, b.raw_text FROM tasks t JOIN briefs b ON b.id = t.brief_id WHERE t.id = ?",
+            (task_id,),
+        ).fetchone()
+        runs = conn.execute(
+            "SELECT COUNT(*) AS n, AVG((julianday(finished_at) - julianday(created_at)) * 1440) AS minutes "
+            "FROM pipeline_runs WHERE task_id = ? AND finished_at IS NOT NULL", (task_id,),
+        ).fetchone()
+        approvals = conn.execute(
+            "SELECT COUNT(*) FROM approvals a WHERE a.status IN ('approved', 'rejected') AND ("
+            "(a.subject_type = 'deliverable' AND a.subject_id IN (SELECT id FROM deliverables WHERE task_id = ?)) OR "
+            "(a.subject_type = 'pipeline_run_stage' AND a.subject_id IN (SELECT prs.id FROM pipeline_run_stages prs "
+            "JOIN pipeline_runs pr ON pr.id = prs.pipeline_run_id WHERE pr.task_id = ?)))",
+            (task_id, task_id),
+        ).fetchone()[0]
+        deliverable_count = conn.execute("SELECT COUNT(*) FROM deliverables WHERE task_id = ?", (task_id,)).fetchone()[0]
+        task_rows.append({
+            "task_id": task_id,
+            "role_name": t["role_name"] if t else None,
+            "brief": (t["raw_text"] or "")[:80] if t else None,
+            **b,
+            "pipeline_runs": runs["n"],
+            "avg_run_minutes": round(runs["minutes"], 1) if runs["minutes"] is not None else None,
+            "human_decisions": approvals,
+            "deliverables": deliverable_count,
+        })
+    agent_rows = []
+    for agent_id, b in sorted(agents.items(), key=lambda kv: -kv[1]["tokens"])[:limit]:
+        a = conn.execute("SELECT role_name, name FROM agent_pool WHERE id = ?", (agent_id,)).fetchone()
+        agent_rows.append({"agent_id": agent_id, "name": (a["name"] or a["role_name"]) if a else None, **b})
+    return {"days": days, "tasks": task_rows, "agents": agent_rows, "unattributed": unattributed}

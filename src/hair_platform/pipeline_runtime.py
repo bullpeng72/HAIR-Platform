@@ -72,6 +72,7 @@ from hair_platform import (
     presentation_deck,
     requirements_traceability_llm,
 )
+from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 
 VALID_MODES = ("single", "sequential_relay", "parallel_delegated")
 GATE_IDS = ["A", "B", "C", "D", "E", "F", "G"]
@@ -835,6 +836,7 @@ def _resolve_stage_llm(
     return agent_row["llm_provider"], agent_row["llm_model"]
 
 
+@llm_usage.with_scope(task_id=llm_usage.task_of_pipeline_run, pipeline_run_id="run_id")
 def run_pipeline_stage_job(
     conn: sqlite3.Connection,
     run_id: int,

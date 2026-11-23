@@ -4266,6 +4266,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
         """provider·모델별 실제 토큰 사용량과(단가가 입력된 모델만) 금액(2026-11-22)."""
         return llm_usage.report(conn, days if days > 0 else None)
 
+    @app.get("/api/llm-usage/work")
+    def get_llm_usage_by_work(
+        days: int = 30,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """업무(할 일)별·Agent별 실제 사용량과 효율 지표(2026-11-23, P2-11 — `llm_usage.work_report`)."""
+        return llm_usage.work_report(conn, days if days > 0 else None)
+
     @app.post("/api/model-registry/{model_id}/benchmark", status_code=201)
     def run_model_registry_benchmark(
         model_id: int,

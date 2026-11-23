@@ -64,6 +64,7 @@ from hair_platform import (
     token_budget,
     tool_calling,
 )
+from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 
 _DEFAULT_SYSTEM_PROMPT = (
     "당신은 HAIR-Platform의 대화형 작업공간에 참여하는 AI 비서입니다. "
@@ -1608,6 +1609,7 @@ def start_agent_mention_job(
     return job_id
 
 
+@llm_usage.with_scope(conversation_id="conversation_id", agent_id="agent_id")
 def _run_agent_mention_job(
     conn: sqlite3.Connection,
     job_id: int,
@@ -1785,6 +1787,7 @@ def start_team_mention_job(
     return job_id
 
 
+@llm_usage.with_scope(conversation_id="conversation_id")
 def run_team_mention_job(
     conn: sqlite3.Connection,
     job_id: int,
@@ -2533,6 +2536,7 @@ def start_default_ai_job(
     return job_id
 
 
+@llm_usage.with_scope(conversation_id="conversation_id")
 def _run_default_ai_job(
     conn: sqlite3.Connection,
     job_id: int,

@@ -81,6 +81,7 @@ from hair_platform import (
     presentation_deck,
     teams,
 )
+from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 
 
 def _confirmed_assignments_for_task(
@@ -1028,6 +1029,7 @@ def start_comment_triggered_execution(
     return job_id
 
 
+@llm_usage.with_scope(agent_id="agent_id", task_id=lambda a: a["conn"].execute("SELECT task_id FROM deliverables WHERE id = ?", (a["deliverable_id"],)).fetchone()[0])
 def run_comment_triggered_execution_job(
     conn: sqlite3.Connection,
     job_id: int,
@@ -1415,6 +1417,7 @@ def _prompt_snapshot_json(retrieval_sink: dict) -> str | None:
     return json.dumps(snapshot, ensure_ascii=False) if snapshot else None
 
 
+@llm_usage.with_scope(task_id="task_id", agent_id="agent_id")
 def _run_agent_execution_job(
     conn: sqlite3.Connection,
     job_id: int,
@@ -1797,6 +1800,7 @@ def _persist_partial_crew_outputs(
         )
 
 
+@llm_usage.with_scope(task_id="task_id")
 def run_adhoc_crew_job(
     conn: sqlite3.Connection,
     job_by_agent_id: dict[int, int],
@@ -1985,6 +1989,7 @@ def run_adhoc_crew_job(
         conn.commit()
 
 
+@llm_usage.with_scope(task_id="task_id")
 def run_team_crew_job(
     conn: sqlite3.Connection,
     job_by_agent_id: dict[int, int],

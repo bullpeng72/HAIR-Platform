@@ -86,6 +86,7 @@ from hair_platform import (
     deliverables,
     presentation_deck,
 )
+from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 from hair_platform import pipeline_runtime as pr
 
 
@@ -844,6 +845,7 @@ def get_checkpointer(conn: sqlite3.Connection):
         return saver
 
 
+@llm_usage.with_scope(task_id=llm_usage.task_of_pipeline_run, pipeline_run_id="run_id")
 def run_pipeline_graph_job(conn: sqlite3.Connection, run_id: int, actor_id: int) -> dict:
     """`app.py`의 `trigger_pipeline_execution()`이 `payload.use_graph_
     engine=True`일 때 `BackgroundTasks`로 거는 진입점 — 공유
@@ -851,6 +853,7 @@ def run_pipeline_graph_job(conn: sqlite3.Connection, run_id: int, actor_id: int)
     return run_pipeline_graph(conn, run_id, actor_id, get_checkpointer(conn))
 
 
+@llm_usage.with_scope(task_id=llm_usage.task_of_pipeline_run, pipeline_run_id="run_id")
 def run_pipeline_graph_job_with_callback(
     conn: sqlite3.Connection, run_id: int, actor_id: int, on_stage_resolved=None
 ) -> None:

@@ -11053,7 +11053,38 @@ async function renderCost(content) {
       esc(label(r.type)), esc(r.code || ("#" + r.id)), esc(r.name || r.role), esc(r.role),
       r.cost_estimate === null ? "-" : r.cost_estimate, r.confirmed_assignments,
       r.total_cost === null ? "-" : r.total_cost,
-    ])) + "</section>";
+    ])) + "</section>" +
+    '<section class="card" id="work-usage-section"><h2>실제 AI 사용량 — 업무별·Agent별(최근 30일)</h2><p class="muted">불러오는 중…</p></section>';
+  // 업무별 효율·비용(2026-11-23, P2-11 — `llm_usage.work_report`). 위 표(수동 단가 추정)와 달리
+  // 실제 LLM 호출 기록을 업무·Agent에 붙여 센다.
+  const box = document.getElementById("work-usage-section");
+  try {
+    const w = await api("GET", "/api/llm-usage/work?days=30");
+    const money = r => r.cost_partial ? (r.cost > 0 ? r.cost.toFixed(2) + " + 단가 미입력분" : "단가 미입력") : r.cost.toFixed(2);
+    const fmtTok = n => n.toLocaleString();
+    box.innerHTML = "<h2>실제 AI 사용량 — 업무별·Agent별(최근 30일)</h2>" +
+      helpBox(
+        '<ul class="muted help-list">' +
+        "<li>실제 LLM 호출 기록을 그 호출이 일어난 업무(할 일)·Agent에 붙여 셉니다 — 위 표의 수동 단가 추정과 다른, 실제 사용량입니다.</li>" +
+        '<li>금액은 "모델 레지스트리"에 단가(100만 토큰당)를 입력한 모델만 계산합니다 — 단가가 없는 모델이 섞이면 "단가 미입력분"으로 표시합니다(금액을 지어내지 않습니다).</li>' +
+        "<li>사람 결재는 이 업무의 결과물·파이프라인 단계 결재 중 실제로 승인/반려된 건수입니다 — 많을수록 사람 손이 많이 간 업무입니다.</li>" +
+        "<li>이 기능이 생기기 전(2026-11-23 이전)의 사용량과, 업무 밖에서 쓴 호출(대화의 기본 AI 등)은 아래 '업무에 연결되지 않은 사용량'으로 따로 셉니다.</li>" +
+        "</ul>"
+      ) +
+      "<h3>업무별</h3>" +
+      (w.tasks.length ? table(["할 일", "업무 요청", "LLM 호출", "토큰", "금액", "파이프라인 실행", "평균 소요(분)", "사람 결재", "결과물"],
+        w.tasks.map(t => [
+          "#" + t.task_id + " " + esc(t.role_name || ""), esc(t.brief || ""), t.calls, fmtTok(t.tokens), money(t),
+          t.pipeline_runs, t.avg_run_minutes === null ? "-" : t.avg_run_minutes, t.human_decisions, t.deliverables,
+        ])) : '<p class="muted">업무에 연결된 사용량이 아직 없습니다.</p>') +
+      "<h3>Agent별</h3>" +
+      (w.agents.length ? table(["Agent", "LLM 호출", "토큰", "금액"],
+        w.agents.map(a => [esc(a.name || ("#" + a.agent_id)), a.calls, fmtTok(a.tokens), money(a)]))
+        : '<p class="muted">Agent에 연결된 사용량이 아직 없습니다.</p>') +
+      '<p class="muted">업무에 연결되지 않은 사용량: 호출 ' + w.unattributed.calls + "건 · 토큰 " + fmtTok(w.unattributed.tokens) + "</p>";
+  } catch (e) {
+    box.innerHTML = '<h2>실제 AI 사용량</h2><p class="muted">' + esc(e.message) + "</p>";
+  }
 }
 
 /* ---------- 공정성 ---------- */
