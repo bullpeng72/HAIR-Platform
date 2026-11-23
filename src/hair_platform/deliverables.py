@@ -1405,7 +1405,7 @@ def _prompt_snapshot_json(retrieval_sink: dict) -> str | None:
     return json.dumps(snapshot, ensure_ascii=False) if snapshot else None
 
 
-def run_agent_execution_job(
+def _run_agent_execution_job(
     conn: sqlite3.Connection,
     job_id: int,
     task_id: int,
@@ -1470,6 +1470,10 @@ def run_agent_execution_job(
         )
         deliverable_id = cur.lastrowid
         assert deliverable_id is not None
+        # 수치 근거·테스트 실제 실행(2026-11-23, P0-1·P0-3). 근거 = 실행 때 실제로 넣은 프롬프트.
+        agent_evaluation.attach_quality_checks(
+            eval_result["gate_scores"], output, retrieval_sink.get("augmented_prompt") or prompt
+        )
         agent_evaluation.record_evaluation(
             conn, deliverable_id, eval_result["gate_scores"], eval_result["tcr"]
         )
@@ -1749,6 +1753,7 @@ def _persist_partial_crew_outputs(
         agent_gate_scores["code_syntax"] = content_validators.validate_by_content_type(
             content_type, output_raw
         )
+        agent_evaluation.attach_quality_checks(agent_gate_scores, output_raw)
         cur = conn.execute(
             "INSERT INTO deliverables (task_id, author_type, author_id, content, "
             "content_type, status) VALUES (?, 'agent', ?, ?, ?, 'pending_review')",
@@ -2742,3 +2747,26 @@ def task_activity(conn: sqlite3.Connection, task_id: int) -> list[dict]:
         )
         result.append(entry)
     return result
+
+
+# 실행 중 단계 표시(2026-11-23, P0-2 — `progress.py`) — 협업 워크스페이스의 단일 Agent 실행도
+# 조회·생성·도구 실행·검토·교정 단계를 작업 행(`agent_execution_jobs.progress`)에 남긴다.
+def run_agent_execution_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    task_id: int,
+    agent_id: int,
+    actor_id: int,
+    role_name: str,
+    prompt: str,
+    provider: str | None,
+    model: str | None,
+    content_type: str = "text",
+) -> None:
+    from hair_platform import progress
+
+    with progress.reporting(conn, "agent_execution_jobs", job_id):
+        return _run_agent_execution_job(
+            conn, job_id, task_id, agent_id, actor_id, role_name, prompt, provider, model,
+            content_type,
+        )

@@ -488,3 +488,22 @@ def auto_fit_score(conn: sqlite3.Connection, agent_id: int) -> float | None:
         return None
     value = (summary.get("gate_averages") or {}).get("A")
     return None if value is None else max(0.0, min(1.0, float(value)))
+
+
+def attach_quality_checks(gate_scores: dict, output: str, evidence: str | None = None) -> dict:
+    """결정적 품질 검사 두 가지를 측정됐을 때만 점수에 붙인다(2026-11-23, P0-1·P0-3) —
+    `numeric_grounding`(퍼센트가 근거 숫자로 재현되는지, `numeric_check.py`)과
+    `test_execution`(결과물의 Python 테스트를 격리 환경에서 실제로 실행, `code_tests.py`).
+    단일 Agent 실행·Crew 실행·두 파이프라인 엔진이 같은 함수를 쓴다. 파이프라인 단계는
+    `gate_ids`에 이 키를 넣었을 때만 통과 판정에 참여한다(기본은 기록·배지 표시)."""
+    from hair_platform import code_tests, numeric_check
+
+    if evidence:
+        numeric = numeric_check.gate_score(output or "", evidence)
+        if not numeric["not_measured"]:
+            gate_scores["numeric_grounding"] = numeric
+    tests = code_tests.compute_test_execution(output or "")
+    if not tests["not_measured"] or "Docker" in (tests.get("reason") or ""):
+        # 테스트가 있는데 격리 환경이 없어 못 돌린 경우도 "미평가" 배지로 남겨 사람이 알게 한다.
+        gate_scores["test_execution"] = tests
+    return gate_scores

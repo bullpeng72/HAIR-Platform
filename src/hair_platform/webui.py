@@ -2970,7 +2970,24 @@ function _finalizeConversationPendingPanel(allSucceeded) {
 // 6분) 그 문구가 그대로 남아 있어 "멈췄다/안 된다"로 오인하게 했다.
 // Task 워크스페이스의 `pollExecutionJob()`과 같은 패턴을 대화 쪽에도
 // 적용해 완료/실패를 실제로 확인하고 상태 문구를 갱신한다.
-async function pollConversationJob(conversationId, jobId, intervalMs, timeoutMs) {
+// 실행 중 단계 표시(2026-11-23, P0-2) — 작업 행의 `progress`(지금 하는 일)와 시작 후 경과 시간을
+// 진행 패널의 그 작업 줄에 보여 준다. `created_at`은 SQLite `datetime('now')`라 UTC다.
+function _updateConversationJobProgress(jobId, job) {
+  const li = document.querySelector('[data-job-progress-id="' + jobId + '"]');
+  if (!li || !job || job.status !== "running") return;
+  let el = li.querySelector(".job-progress-step");
+  if (!el) {
+    el = document.createElement("span");
+    el.className = "job-progress-step muted";
+    li.appendChild(el);
+  }
+  const started = Date.parse(String(job.created_at || "").replace(" ", "T") + "Z");
+  const sec = isNaN(started) ? null : Math.max(0, Math.round((Date.now() - started) / 1000));
+  const elapsed = sec === null ? "" : (sec >= 60 ? Math.floor(sec / 60) + "분 " + (sec % 60) + "초" : sec + "초");
+  el.textContent = "— " + (job.progress || "준비 중") + (elapsed ? " · " + elapsed + " 경과" : "");
+}
+
+async function pollConversationJob(conversationId, jobId, intervalMs, timeoutMs, onTick) {
   // 사용자 보고(2026-10-14, "일부 응답이 실패했습니다: timed out") 재발 —
   // 백엔드 Ollama 타임아웃을 300초에서 600초로 올리면서(`llm.py`의
   // `_call_ollama()` 참고, 실측: 느린 로컬 35B 모델이 337.7초 만에
@@ -2994,6 +3011,7 @@ async function pollConversationJob(conversationId, jobId, intervalMs, timeoutMs)
     const jobs = await api("GET", "/api/conversations/" + conversationId + "/jobs");
     const job = jobs.find(j => j.id === jobId);
     if (job && job.status !== "running") return job;
+    if (job && onTick) onTick(job);
     await new Promise(r => setTimeout(r, intervalMs || 2000));
   }
   throw new Error("응답 완료 확인 시간이 초과됐습니다 — 잠시 후 새로고침해 주세요.");
@@ -3020,7 +3038,8 @@ function _watchConversationJobs(conversationId, jobEntries, participants, conv) 
   _renderConversationPendingPanel(jobMeta);
   Promise.allSettled(
     jobMeta.map(m =>
-      pollConversationJob(conversationId, m.jobId).then(job => {
+      pollConversationJob(conversationId, m.jobId, undefined, undefined,
+        job => _updateConversationJobProgress(m.jobId, job)).then(job => {
         _updateConversationJobStatus(m.jobId, job.status, job.error);
         refreshConversationMessages(conversationId, participants, conv);
         return job;
@@ -4757,7 +4776,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 있다. 아래 렌더링은 원래 제네릭하게 모든 키를 순회하므로 자동으로
   // 배지가 뜨지만, 긴 영문 키를 그대로 배지 글자로 쓰면 어색해 짧은
   // 한글 라벨로 바꿔 보여준다(A-G는 그대로 글자 자체가 식별자).
-  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인" };
+  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인", numeric_grounding: "수치근거", deliverable_runnable: "실행가능", test_execution: "테스트실행" };
   const pipelineTimelineHtml = (run) => {
     if (!run) return "";
     const rows = run.stage_results.map(sr => {

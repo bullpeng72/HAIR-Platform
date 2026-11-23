@@ -248,6 +248,9 @@ def run_tool(tools_by_name: dict, name: str, arguments: dict) -> str:
     (`agent_runtime.retrieve_context()`의 vectordb 조회와 동일)을 여기도
     적용한다. 실패 사유를 문자열로 그대로 돌려줘 모델이 다음 턴에
     스스로 재시도하거나 포기할 수 있게 한다."""
+    from hair_platform import progress  # 실행 중 단계 표시(2026-11-23, P0-2)
+
+    progress.report(f"도구 실행 중: {progress.TOOL_LABELS.get(name, name)}")
     tool = tools_by_name.get(name)
     if tool is None:
         result = f"알 수 없는 도구입니다: {name}"

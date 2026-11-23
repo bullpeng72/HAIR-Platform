@@ -292,6 +292,9 @@ def execute_agent(
     # 호출 가능한 도구를 먼저 정한 뒤, 그 조건에 맞는 시스템 프롬프트를 만든다(예전엔
     # 도구가 붙어 있어도 "도구를 호출할 수 없다"는 안내가 항상 들어갔다). 요청과
     # 관련 있는 스킬을 앞에 두려고 요청 문장도 넘긴다.
+    from hair_platform import progress  # 실행 중 단계 표시(2026-11-23, P0-2)
+
+    progress.report("자료 조회 중")
     augmented_prompt, retrieved_context = augment_with_retrieval(
         conn, skills, prompt, retrieval_query
     )
@@ -379,6 +382,7 @@ def execute_agent(
     # 한다(`agent_id`를 넘겨 `agent_tool_links`로 명시 연결된 도구까지
     # 포함 — skill 기반 매칭만 보는 "기본 AI"보다 범위가 넓다).
     tool_calls: list[tuple[str, str]] = []
+    progress.report(f"응답 생성 중 — {resolved_model}")
     if callable_tools:
         with tool_calling.record_calls() as tool_calls:
             output = llm.call_llm_with_tools(
@@ -408,6 +412,7 @@ def execute_agent(
     for _ in range(_MAX_CONTINUATION_ATTEMPTS):
         if not _looks_truncated(output):
             break
+        progress.report("끊긴 응답 이어 쓰는 중")
         continuation = llm.call_llm(
             resolved_provider,
             resolved_model,
@@ -426,6 +431,7 @@ def execute_agent(
     # 기준·결과 품질 기준으로 한 번 점검해 고친 최종본으로 바꾼다. 실패하거나 결과가
     # 이상하면(비었음·크게 짧아짐·끊김) 초안을 그대로 쓴다 — 검토가 응답을 막지 않는다.
     if tuning.get("self_review") is True and output.strip():
+        progress.report("자체 검토 중")
         output, review_status = _self_review(
             conn,
             agent,
@@ -440,6 +446,20 @@ def execute_agent(
         )
         if retrieval_sink is not None:
             retrieval_sink["self_review"] = review_status
+
+    # 수치 근거 검사(2026-11-23, P0-1 — `numeric_check.py`) — 퍼센트 수치가 요청·조회·도구
+    # 결과의 숫자로 재현되지 않으면 그 문장만 한 번 고친다(맞으면 계산식이 붙을 뿐).
+    from hair_platform import numeric_check
+
+    numeric_evidence = "\n\n".join(
+        [augmented_prompt] + [result for _name, result in tool_calls]
+    )
+    output, numeric_report = numeric_check.repair_output(
+        conn, output, numeric_evidence, resolved_provider, resolved_model, actor_id,
+        "agent_execute",
+    )
+    if retrieval_sink is not None and numeric_report is not None:
+        retrieval_sink["numeric_check"] = numeric_report
 
     conn.execute(
         "UPDATE agent_pool SET last_output = ?, llm_provider = ?, llm_model = ? WHERE id = ?",

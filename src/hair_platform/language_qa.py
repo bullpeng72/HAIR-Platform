@@ -304,7 +304,9 @@ def repair_output(
     감사로그(`language_qa_repaired`)를 남긴다. 어떤 예외도 밖으로 내보내지 않는다."""
     if not enabled() or not provider or not model or not find_issue_segments(text):
         return text
-    from hair_platform import audit  # 지연 import — 순수 검사 함수는 의존성 없이 테스트
+    from hair_platform import audit, progress  # 지연 import — 순수 검사 함수는 의존성 없이 테스트
+
+    progress.report("언어 품질 교정 중")
 
     repaired, report = repair(text, lambda system, prompt: _call(provider, model, system, prompt))
     try:

@@ -1150,6 +1150,10 @@ def _execute_stage_attempt(
         gate_scores["code_syntax"] = agent_evaluation.compute_code_syntax_check(
             stage_output
         )
+    # 수치 근거·테스트 실제 실행(2026-11-23, P0-1·P0-3 — `agent_evaluation.attach_quality_checks`).
+    # 근거는 이 단계 입력(앞 단계 산출물 + 원 업무 요청). 단계 gate_ids에 넣지 않으면
+    # `_gate_pass_ratio()`가 세지 않으므로 통과 판정은 바꾸지 않는다(정보 제공·배지 표시).
+    agent_evaluation.attach_quality_checks(gate_scores, stage_output, combined_base)
     # 실행 가능성 Gate(2026-11-22 C안) — 단계 gate_ids에 있을 때만 잰다(SW 개발 "구현").
     if "deliverable_runnable" in json.loads(stage["gate_ids"] or "[]"):
         gate_scores["deliverable_runnable"] = agent_evaluation.compute_deliverable_runnable(

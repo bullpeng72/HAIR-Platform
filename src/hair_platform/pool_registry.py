@@ -144,6 +144,9 @@ def _custom_python_crewai_tool(row: sqlite3.Row):
     # 날려 빈 함수명 예외가 난다. tool_pool.id가 유일하므로 ASCII로
     # 안전하다.
     ascii_tool_name = f"custom_tool_{row['id']}"
+    from hair_platform import progress  # 진행 표시용 이름(2026-11-23)
+
+    progress.TOOL_LABELS[ascii_tool_name] = row["name"]
 
     def _dynamic(query: str) -> str:
         return _run_custom_python_tool(source, query, timeout)

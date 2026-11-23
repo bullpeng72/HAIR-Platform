@@ -1323,6 +1323,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 실행(`run_agent_execution_job()`)과 직접 연결된
     # `agent_execution_jobs`에 그 시점 스냅샷을 JSON으로 남긴다.
     _ensure_column(conn, "agent_execution_jobs", "prompt_snapshot", "TEXT")
+    # 실행 중 단계 표시(2026-11-23, P0-2 — `progress.py`).
+    for _table in ("conversation_jobs", "agent_execution_jobs"):
+        _ensure_column(conn, _table, "progress", "TEXT")
+        _ensure_column(conn, _table, "progress_at", "TEXT")
 
     # 사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해 Finetuning
     # 하는 기능") — 실제 LLM 가중치 재학습이 아니라(사용자 확인) CrewAI

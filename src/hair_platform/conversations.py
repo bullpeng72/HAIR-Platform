@@ -1608,7 +1608,7 @@ def start_agent_mention_job(
     return job_id
 
 
-def run_agent_mention_job(
+def _run_agent_mention_job(
     conn: sqlite3.Connection,
     job_id: int,
     conversation_id: int,
@@ -2533,7 +2533,7 @@ def start_default_ai_job(
     return job_id
 
 
-def run_default_ai_job(
+def _run_default_ai_job(
     conn: sqlite3.Connection,
     job_id: int,
     conversation_id: int,
@@ -2795,3 +2795,33 @@ def run_default_ai_job(
         )
     except Exception as exc:  # noqa: BLE001
         _fail_job(conn, job_id, actor_id, exc, provider=provider)
+
+
+# 실행 중 단계 표시(2026-11-23, P0-2 — `progress.py`) — 단일 Agent 멘션·기본 AI 작업은 그 안의
+# 조회·생성·도구 실행·검토·교정 단계를 작업 행에 남긴다. 팀 멘션(CrewAI)은 실행 중 이벤트를
+# 받을 수 없어 대상이 아니다.
+def run_agent_mention_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    conversation_id: int,
+    agent_id: int,
+    actor_id: int,
+) -> None:
+    from hair_platform import progress
+
+    with progress.reporting(conn, "conversation_jobs", job_id):
+        return _run_agent_mention_job(conn, job_id, conversation_id, agent_id, actor_id)
+
+
+def run_default_ai_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    conversation_id: int,
+    actor_id: int,
+    skill: str | None = None,
+) -> None:
+    from hair_platform import progress
+
+    with progress.reporting(conn, "conversation_jobs", job_id):
+        progress.report("응답 생성 중")
+        return _run_default_ai_job(conn, job_id, conversation_id, actor_id, skill)
