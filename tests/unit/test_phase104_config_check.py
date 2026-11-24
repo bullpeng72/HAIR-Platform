@@ -89,3 +89,15 @@ def test_endpoints_are_admin_only(client_and_conn):
     client.post("/login", json={"username": "admin1", "password": "adminpass"})
     assert client.get("/api/admin/config-check").json() == []
     assert client.post("/api/admin/config-check/apply", json={"item_ids": ["nope"]}).json() == {"applied": [], "skipped": ["nope"]}
+
+
+def test_admin_screen_fills_config_check_after_content_is_drawn():
+    """2026-11-25 회귀(사용자 보고 — 사용자 관리의 "기본 구성 점검"이 "불러오는 중…"으로 멈춤): renderAdmin 앞에서
+    setTimeout(…, 0)으로 부르면 /api/users 응답 전에 실행돼 칸이 아직 없어 그냥 끝났다. 화면을 그린 뒤 불러야 한다."""
+    from hair_platform import webui
+
+    html = webui.INDEX_HTML
+    body = html[html.index("async function renderAdmin(content) {"):]
+    body = body[: body.index("\n}\n")]
+    assert "setTimeout(renderConfigCheckSection" not in body
+    assert body.index('id="config-check-section"') < body.index("renderConfigCheckSection();")

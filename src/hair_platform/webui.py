@@ -11774,7 +11774,6 @@ async function renderConfigCheckSection() {
 }
 
 async function renderAdmin(content) {
-  setTimeout(renderConfigCheckSection, 0);
   const users = await api("GET", "/api/users");
   content.innerHTML =
     '<section class="card"><h2>사용자 생성</h2>' +
@@ -11847,6 +11846,9 @@ async function renderAdmin(content) {
       ];
     })) + "</section>";
 
+  // 2026-11-25 수정 — 예전엔 renderAdmin 맨 앞에서 setTimeout(…, 0)으로 불러, /api/users 응답보다 먼저 실행돼
+  // 이 칸(config-check-section)이 아직 없어서 그냥 끝나고 "불러오는 중…"으로 멈췄다. 화면을 그린 뒤에 채운다.
+  renderConfigCheckSection();
   document.getElementById("output-language-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     try {
