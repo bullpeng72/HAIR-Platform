@@ -108,10 +108,11 @@ def test_self_review_keeps_draft_when_review_is_bad_or_fails():
     sink: dict = {}
     with patch("hair_platform.llm.call_llm", side_effect=[draft, "짧음"]):
         out = agent_runtime.execute_agent(conn, aid, _admin(conn), "요청", retrieval_sink=sink, provider="ollama", model="m")
-    assert out == draft and sink["self_review"] == "rejected"
+    # 단일 Agent 출력은 `model_output.clean()`을 거쳐 앞뒤 공백이 정리된다(2026-11-24).
+    assert out == draft.strip() and sink["self_review"] == "rejected"
     with patch("hair_platform.llm.call_llm", side_effect=[draft, RuntimeError("timeout")]):
         out = agent_runtime.execute_agent(conn, aid, _admin(conn), "요청", retrieval_sink=sink, provider="ollama", model="m")
-    assert out == draft and sink["self_review"] == "failed"
+    assert out == draft.strip() and sink["self_review"] == "failed"
 
 
 def test_self_review_off_by_default_makes_single_call():

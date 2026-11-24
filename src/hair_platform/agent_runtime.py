@@ -37,6 +37,7 @@ from hair_platform import (
     graphquery,
     id_scheme,
     llm,
+    model_output,
     pool_catalog,
     pool_registry,
     tool_calling,
@@ -236,7 +237,9 @@ def _looks_truncated(text: str) -> bool:
     더 이어쓰기를 시도해도 손해가 없다(기존 내용을 안 버리고 이어
     붙이기만 하므로)."""
     stripped = text.rstrip()
-    if stripped.count("```") % 2 == 1:
+    # 줄 머리의 펜스만 센다(2026-11-24 실측 — 본문이 "코드 블록(` ``` `) 밖"처럼 펜스를 문장 안에서
+    # 언급해 홀수로 세어져, 완성된 답에 이어쓰기가 돌았다).
+    if len(re.findall(r"^[ \t]*```", stripped, re.MULTILINE)) % 2 == 1:
         return True
     has_html_open = bool(
         re.search(r"<!DOCTYPE\s+html|<html[\s>]", stripped, re.IGNORECASE)
@@ -244,6 +247,24 @@ def _looks_truncated(text: str) -> bool:
     if has_html_open and "</html>" not in stripped.lower():
         return True
     return False
+
+
+def _acceptable_continuation(output: str, continuation: str | None) -> bool:
+    """이어쓰기 결과를 본문에 붙여도 되는지 — 비었거나, 본문은 한국어인데 이어쓴 글은 영어 위주이거나,
+    혼잣말 문단("Let me…", "Wait…")이 여럿이면 거절한다(코드만 이어 쓴 경우는 언어를 따지지 않는다)."""
+    text = model_output.clean(continuation)
+    if not text.strip():
+        return False
+    # 본문이 펜스를 열어 둔 채 끊겼으면 이어쓴 글의 첫 펜스는 "닫는" 펜스다 — 그 상태를 이어받아야
+    # 펜스 뒤의 혼잣말이 코드로 잘못 취급돼 검사에서 빠지지 않는다(실측 모양이 정확히 이랬다).
+    opened = len(re.findall(r"^[ \t]*```", output, re.MULTILINE)) % 2 == 1
+    probe = ("```\n" + text) if opened else text
+    if model_output.self_talk_paragraphs(probe) >= 2:
+        return False
+    prose = re.sub(r"```.*?(?:```|\Z)", "", probe, flags=re.DOTALL)
+    if model_output.hangul_share(output) >= 0.5 and len(prose.strip()) >= 200 and model_output.hangul_share(prose) < 0.3:
+        return False
+    return True
 
 
 @llm_usage.with_scope(agent_id="agent_id")
@@ -411,6 +432,13 @@ def execute_agent(
     # 모듈 docstring 참고) — 최대 `_MAX_CONTINUATION_ATTEMPTS`번까지만
     # 시도해, 같은 이유로 매번 또 끊기는 드문 경우에도 무한히 돌지
     # 않는다. 이전까지 쓴 내용은 절대 버리지 않고 이어 붙이기만 한다.
+    # 출력 정리(2026-11-24, P0-3 실측) — 단일 Agent 경로는 지금까지 `model_output.clean()`을 거치지
+    # 않아, 로컬 모델이 답을 다 쓴 뒤 본문에 텍스트로 적은 `<tool_call><function=…>` 블록이 그대로
+    # 남았고, 그 때문에 "끊긴 응답"으로 판정돼 이어쓰기까지 돌았다. CrewAI 경로와 같은 정리를 먼저 한다
+    # (정리 결과가 비면 원문 유지 — 결과물을 잃지 않는다).
+    cleaned = model_output.clean(output)
+    if cleaned:
+        output = cleaned
     for _ in range(_MAX_CONTINUATION_ATTEMPTS):
         if not _looks_truncated(output):
             break
@@ -427,7 +455,12 @@ def execute_agent(
             timeout_seconds=timeout_seconds,
             **llm_extra,
         )
-        output = output + continuation
+        # 이어쓰기 결과 검사(2026-11-24 실측) — 추론형 로컬 모델이 이어쓰기 대신 "the user asked me
+        # to continue from the cut-off point…" 같은 영어 혼잣말 1만 자를 돌려줘 결과물 끝에 그대로
+        # 붙었다. 정리 후 비었거나, 한국어 본문에 영어 문단이 붙거나, 혼잣말 문단이 많으면 버리고 멈춘다.
+        if not _acceptable_continuation(output, continuation):
+            break
+        output = output + model_output.clean(continuation)
 
     # 자체 검토(2026-11-21, 파인튜닝 "품질 검토(자체 개선)" 켜짐) — 초안을 요청·스킬
     # 기준·결과 품질 기준으로 한 번 점검해 고친 최종본으로 바꾼다. 실패하거나 결과가

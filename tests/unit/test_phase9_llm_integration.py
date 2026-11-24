@@ -503,3 +503,59 @@ def test_gc68_execute_endpoint_rbac_and_status_codes(client_and_conn):
         )
     assert resp.status_code == 200
     assert resp.json()["output"] == "완료된 작업 결과"
+
+
+# ---------- 단일 Agent 출력 정리·이어쓰기 검사(2026-11-24, P0-3 실측 회귀) ----------
+# 로컬 모델이 답을 다 쓴 뒤 본문에 텍스트로 `<tool_call><function=…>`을 적었고, 그게 "끊긴 응답"으로
+# 판정돼 이어쓰기가 돌았으며, 이어쓰기 응답(영어 혼잣말 1만 자)이 결과물 끝에 그대로 붙었다.
+
+_DONE_ANSWER = (
+    "## gate_score 판정\n\n근거 없는 퍼센트가 하나라도 있으면 경고로 판정한다(`numeric_check.py:133`). "
+    "코드 블록(` ``` `) 밖의 문장만 본다.\n\n```python\nstatus = 'pass' if not bad else 'warn'\n```\n\n"
+    "## 확인한 파일\n\n| 경로 | 줄 | 용도 |\n|---|---|---|\n| `numeric_check.py` | 122-138 | 판정 |"
+)
+_TEXT_TOOL_CALL = (
+    "<tool_call>\n<function=code_repository>\n<function_name>\nrepos\n</function_name>\n"
+    "<function_parameters>\n{}\n</function_parameters>\n</function>\n</tool_call>"
+)
+_ENGLISH_SELF_TALK = "\n```\n\n" + "\n\n".join(
+    ["Oh! I see now. There's a tool call tag before the function call and the response got cut off."] * 3
+    + ["Wait, let me reconsider whether the document truly needs more content before I continue."] * 3
+    + ["Let me just make a clean decision: I'll complete the tool call and then provide a closing note."] * 3
+)
+
+
+def _make_agent(conn, role):
+    cur = conn.execute(
+        "INSERT INTO agent_pool (role_name, skill_tags, status) VALUES (?, '[]', 'active')", (role,)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def test_inline_fence_mention_is_not_truncation():
+    assert not agent_runtime._looks_truncated(_DONE_ANSWER)
+    assert agent_runtime._looks_truncated("설명\n```python\nx = 1\n")  # 줄 머리의 열린 펜스는 여전히 감지
+
+
+def test_text_tool_call_is_stripped_and_does_not_trigger_continuation(client_and_conn):
+    _client, conn = client_and_conn
+    admin_id = conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()["id"]
+    agent_id = _make_agent(conn, "코드 분석 Agent")
+    with patch("hair_platform.llm.call_llm", return_value=_DONE_ANSWER + _TEXT_TOOL_CALL) as m:
+        output = agent_runtime.execute_agent(conn, agent_id, admin_id, "판정 기준 설명")
+    assert m.call_count == 1
+    assert "<tool_call>" not in output and "<function=" not in output
+    assert output.rstrip().endswith("| 판정 |")
+
+
+def test_english_self_talk_continuation_is_rejected(client_and_conn):
+    _client, conn = client_and_conn
+    admin_id = conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()["id"]
+    agent_id = _make_agent(conn, "보고서 Agent")
+    truncated = "## 결론\n\n" + "마케팅 예산을 재배정해야 한다. " * 20 + "\n\n```python\nx = 1\n"
+    with patch("hair_platform.llm.call_llm", side_effect=[truncated, _ENGLISH_SELF_TALK]) as m:
+        output = agent_runtime.execute_agent(conn, agent_id, admin_id, "보고서")
+    assert m.call_count == 2  # 이어쓰기는 시도했지만
+    assert "Oh! I see" not in output and "Let me" not in output  # 혼잣말은 붙이지 않는다
+    assert output.startswith("## 결론")

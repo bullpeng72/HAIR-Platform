@@ -67,6 +67,11 @@ def _hangul_share(text: str) -> float:
     return hangul / (hangul + latin) if hangul + latin else 0.0
 
 
+def hangul_share(text: str | None) -> float:
+    """한글 글자 비율(한글 ÷ (한글+로마자)) — 이어쓰기 결과가 본문과 같은 언어인지 볼 때 쓴다."""
+    return _hangul_share(text or "")
+
+
 def _drop_english_preface(out: str) -> str:
     """한국어 결과물 앞에 붙은 영어 작업 메모를 걷어 낸다.
     1) HTML/덱 마크업 앞부분이 대부분 영어(한글 비율 30% 미만)면 마크업부터만 남긴다 —
