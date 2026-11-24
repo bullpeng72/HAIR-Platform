@@ -795,6 +795,29 @@ def _resolve_role_agent_id(conn: sqlite3.Connection, role_name: str) -> int:
     return row["id"]
 
 
+def repair_stage_language(
+    conn: sqlite3.Connection,
+    stage_output: str,
+    stage_provider: str | None,
+    stage_model: str | None,
+    actor_id: int,
+) -> str:
+    """언어 품질 검사 + 자동 교정 1회(2026-11-24, P2-12 실측) — 대화·댓글·단독 실행 경로는
+    이미 `language_qa.repair_output`을 거치는데 파이프라인 단계 산출물만 빠져 있어, 재무
+    보고서 "작성" 단계에 "1周内" 같은 한자가 그대로 남아 검토 단계에서야 지적됐다. 두 엔진
+    (classic·graph)이 Gate 채점 전에 이 함수로 교정해 다음 단계·최종 결과물이 교정본을 받는다.
+    교정 모델은 단계가 실제로 쓴 모델(대표 Agent 설정 → 플랫폼 기본)이고, 문제 조각이 없으면
+    LLM을 호출하지 않는다."""
+    from hair_platform import language_qa
+    from hair_platform import llm as _llm
+
+    try:
+        provider, model = _llm.resolve_provider_and_model(stage_provider, stage_model)
+    except Exception:  # noqa: BLE001 — 교정 모델을 못 정하면 교정 없이 진행
+        return stage_output
+    return language_qa.repair_output(conn, stage_output, provider, model, actor_id, "pipeline_stage")
+
+
 def _resolve_stage_llm(
     conn: sqlite3.Connection, stage: sqlite3.Row
 ) -> tuple[str | None, str | None]:
@@ -1152,6 +1175,8 @@ def _execute_stage_attempt(
         if final_stage_entries
         else run_agent_ids[-1]
     )
+
+    stage_output = repair_stage_language(conn, stage_output, stage_provider, stage_model, actor_id)
 
     # 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사 + 요구사항
     # 추적성 자동 채점") — Gate A-G는 순수 휴리스틱이라 "구현" 단계

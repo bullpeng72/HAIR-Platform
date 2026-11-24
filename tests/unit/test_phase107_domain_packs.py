@@ -106,3 +106,23 @@ def test_seed_is_idempotent_and_keeps_admin_edits(conn):
     assert conn.execute("SELECT COUNT(*) FROM agent_pool WHERE role_name = '재무 분석가'").fetchone()[0] == 1
     assert conn.execute("SELECT skill_tags FROM agent_pool WHERE role_name = '재무 분석가'").fetchone()[0] == "[]"
     assert conn.execute("SELECT instructions FROM pipeline_stages WHERE name = '조항 검토'").fetchone()[0] == "관리자 수정"
+
+
+def test_pipeline_stage_output_gets_language_repair():
+    """파이프라인 단계 산출물도 언어 교정을 거친다(2026-11-24 실측 — 재무 보고서에 "1周内"가 남았다)."""
+    from unittest.mock import patch
+
+    from hair_platform import pipeline_runtime
+
+    c = db.get_connection(":memory:")
+    db.init_schema(c)
+    report = "## 권고\n\n마케팅 초과 집행 내역을 1周内 확인한다. 교육 예산 집행 계획을 확정한다. 투자안은 검증 후 승인한다."
+    answers = iter([json.dumps(["마케팅 초과 집행 내역을 1주 이내 확인한다. 교육 예산 집행 계획을 확정한다. 투자안은 검증 후 승인한다."])])
+    with patch("hair_platform.llm.resolve_provider_and_model", return_value=("anthropic", "m")), \
+            patch("hair_platform.llm.call_llm", side_effect=lambda *a, **k: next(answers)):
+        fixed = pipeline_runtime.repair_stage_language(c, report, None, None, 1)
+    assert "周" not in fixed and "1주 이내" in fixed
+    # 문제 조각이 없으면 LLM을 부르지 않는다
+    with patch("hair_platform.llm.call_llm", side_effect=AssertionError("호출하면 안 된다")):
+        clean = "## 권고\n\n마케팅 초과 집행 내역을 확인한다."
+        assert pipeline_runtime.repair_stage_language(c, clean, "ollama", "m", 1) == clean

@@ -265,6 +265,10 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
         stage_output = final_entries[-1]["output"]
     else:
         stage_output = result["final_output"]
+    # 언어 품질 교정 — classic 엔진과 같은 함수(`pr.repair_stage_language`).
+    stage_output = pr.repair_stage_language(
+        conn, stage_output, stage_provider, stage_model, state["actor_id"]
+    )
     author_agent_id = (
         final_entries[-1]["agent_id"] if final_entries else agent_ids[-1]
     )
