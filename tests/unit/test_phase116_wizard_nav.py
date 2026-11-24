@@ -95,3 +95,15 @@ def test_wizard_pipeline_action_chain_for_manager(client_and_conn):
     assert r.status_code == 202, r.text
     run = conn.execute("SELECT pipeline_template_id, status FROM pipeline_runs WHERE task_id = ?", (task_id,)).fetchone()
     assert run["pipeline_template_id"] == rec["template_id"]
+
+
+def test_settings_menu_is_one_row_of_group_dropdowns():
+    """2026-11-25(사용자 요청 — admin 메뉴가 그룹마다 한 줄씩 펼쳐져 화면을 많이 차지): "설정" 한 줄 + 그룹 드롭다운."""
+    html = webui.INDEX_HTML
+    build = html[html.index("function buildNav() {"): html.index("function _closeNavDropdowns()")]
+    assert 'settingsTag.textContent = "설정"' in build
+    assert 'document.createElement(group.collapsible ? "details" : "div")' not in build  # 그룹별 줄(예전 방식) 없음
+    assert "nav-dropdown-menu" in build and "menu.hidden = true" in build
+    assert 'ev.key === "Escape"' in html and '.closest(".nav-dropdown")' in html  # 바깥 클릭·Esc로 닫힘
+    assert "_syncNavDropdowns();  // 설정 그룹 버튼에 지금 화면 표시" in html
+    assert 'badge.textContent = "관리자 전용"' not in html and 'btn.title = "관리자 전용"' in html

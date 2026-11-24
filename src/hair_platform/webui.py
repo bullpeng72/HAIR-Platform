@@ -120,6 +120,16 @@ INDEX_HTML = """<!DOCTYPE html>
      말고 나머지 자식을 안 그리는 건 브라우저가 알아서 한다. 여기선
      `<summary>`만 클릭 가능해 보이게 손본다. */
   .nav-more-toggle { opacity: 0.75; }
+  /* 설정 메뉴 한 줄 + 그룹 드롭다운(2026-11-25) */
+  .nav-dropdown { position: relative; display: inline-block; }
+  .nav-dropdown-trigger.active { background: var(--color-admin); color: #fff; border-color: var(--color-admin); }
+  .nav-dropdown-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 60; display: flex; flex-wrap: wrap;
+    align-items: center; gap: 0.25rem; width: max-content; max-width: min(92vw, 640px); padding: 0.5rem;
+    background: var(--color-surface); border: 1px solid var(--color-admin-border, var(--color-border));
+    border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
+  .nav-dropdown-menu[hidden] { display: none; }
+  .nav-dropdown-menu .nav-divider { align-self: stretch; }
+  .badge-adminonly-icon { font-size: 0.75em; }
   #nav-extra-tabs[hidden] { display: none !important; }
   .nav-group.nav-collapsible { cursor: default; }
   .nav-group.nav-collapsible > summary.nav-label { cursor: pointer; user-select: none; }
@@ -2769,9 +2779,11 @@ function buildNav() {
     const btn = document.createElement("button");
     btn.textContent = t.label;
     if (t.adminOnly) {
+      // 2026-11-25 — "관리자 전용" 글자 배지가 버튼을 넓혀 🔒 표시 + 마우스를 올리면 설명으로 줄였다.
       const badge = document.createElement("span");
-      badge.className = "badge-adminonly";
-      badge.textContent = "관리자 전용";
+      badge.className = "badge-adminonly-icon";
+      badge.textContent = " 🔒";
+      btn.title = "관리자 전용";
       btn.appendChild(badge);
     }
     // 사용자 요청(2026-11-12, "업무를 요청하고, 협업공간에서 진행과정과
@@ -2823,32 +2835,89 @@ function buildNav() {
     _setNavMore(_navMorePref(), extra.length);
   }
 
+  // 설정 메뉴 한 줄(2026-11-25, 사용자 요청 "admin 메뉴가 아래로 넓게 펼쳐져 화면을 많이 차지" → A안) —
+  // 예전엔 SETTINGS_GROUPS 그룹마다 한 줄씩(4줄) 그렸다. 이제 "설정" 한 줄에 그룹 버튼 4개를 두고, 누르면 그
+  // 버튼 아래에 그 그룹의 화면 버튼이 작은 메뉴로 뜬다(바깥을 누르거나 Esc로 닫힘, 한 번에 하나만 열림).
+  // 지금 보고 있는 화면이 속한 그룹 버튼에는 "그룹 · 화면 이름"이 보인다(`_syncNavDropdowns`).
+  const settingsRow = document.createElement("div");
+  settingsRow.className = "nav-group admin-group";
+  const settingsTag = document.createElement("span");
+  settingsTag.className = "nav-label";
+  settingsTag.textContent = "설정";
+  settingsRow.appendChild(settingsTag);
   for (const group of SETTINGS_GROUPS) {
-    const row = document.createElement(group.collapsible ? "details" : "div");
-    const tag = document.createElement(group.collapsible ? "summary" : "span");
-    tag.className = "nav-label";
-    tag.textContent = group.label;
-    const children = [tag];
-    let hasVisible = false;
+    const items = [];
     for (const entry of group.entries) {
       if (entry === "__divider__") {
-        const divider = document.createElement("span");
-        divider.className = "nav-divider";
-        children.push(divider);
+        if (items.length && items[items.length - 1] !== "__divider__") items.push("__divider__");
         continue;
       }
       const t = byId[entry];
-      if (t && t.roles.includes(ME.role)) {
-        children.push(makeButton(t));
-        hasVisible = true;
+      if (t && t.roles.includes(ME.role)) items.push(t);
+    }
+    while (items.length && items[items.length - 1] === "__divider__") items.pop();
+    if (!items.length) continue;
+    const wrap = document.createElement("span");
+    wrap.className = "nav-dropdown";
+    wrap.dataset.groupLabel = group.label;
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "nav-dropdown-trigger";
+    trigger.setAttribute("aria-haspopup", "true");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.textContent = group.label + " ▾";
+    const menu = document.createElement("div");
+    menu.className = "nav-dropdown-menu";
+    menu.hidden = true;
+    for (const item of items) {
+      if (item === "__divider__") {
+        const divider = document.createElement("span");
+        divider.className = "nav-divider";
+        menu.appendChild(divider);
+      } else {
+        const btn = makeButton(item);
+        const go = btn.onclick;
+        btn.onclick = () => { _closeNavDropdowns(); go(); };
+        menu.appendChild(btn);
       }
     }
-    if (!hasVisible) continue;
-    row.className = "nav-group admin-group" + (group.collapsible ? " nav-collapsible" : "");
-    children.forEach(c => row.appendChild(c));
-    nav.appendChild(row);
+    trigger.onclick = (ev) => {
+      ev.stopPropagation();
+      const willOpen = menu.hidden;
+      _closeNavDropdowns();
+      menu.hidden = !willOpen;
+      trigger.setAttribute("aria-expanded", String(willOpen));
+    };
+    wrap.appendChild(trigger);
+    wrap.appendChild(menu);
+    settingsRow.appendChild(wrap);
   }
+  if (settingsRow.querySelector(".nav-dropdown")) nav.appendChild(settingsRow);
+  _syncNavDropdowns();
 }
+
+function _closeNavDropdowns() {
+  document.querySelectorAll(".nav-dropdown-menu").forEach(m => { m.hidden = true; });
+  document.querySelectorAll(".nav-dropdown-trigger").forEach(b => b.setAttribute("aria-expanded", "false"));
+}
+
+// 지금 화면이 속한 그룹 버튼에 "그룹 · 화면 이름"을 보이고 강조한다(메뉴가 닫혀 있어도 위치를 알 수 있게).
+function _syncNavDropdowns() {
+  document.querySelectorAll(".nav-dropdown").forEach(wrap => {
+    const trigger = wrap.querySelector(".nav-dropdown-trigger");
+    const active = wrap.querySelector(".nav-dropdown-menu button.active");
+    const name = active ? active.firstChild.textContent : "";
+    trigger.textContent = wrap.dataset.groupLabel + (name ? " · " + name : "") + " ▾";
+    trigger.classList.toggle("active", Boolean(active));
+  });
+}
+
+document.addEventListener("click", (ev) => {
+  if (!ev.target.closest(".nav-dropdown")) _closeNavDropdowns();
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") _closeNavDropdowns();
+});
 
 let currentTab = null;
 
@@ -2878,6 +2947,7 @@ async function selectTab(id, opts) {
   for (const btn of document.querySelectorAll("#tabs button")) {
     btn.classList.toggle("active", btn.dataset.tab === id);
   }
+  _syncNavDropdowns();  // 설정 그룹 버튼에 지금 화면 표시(2026-11-25)
   showMsg("global-msg", "", "ok");
   const tab = TABS.find(t => t.id === id);
   const content = document.getElementById("content");
@@ -12291,6 +12361,7 @@ const MANUAL_MARKDOWN = [
 '**조회(common, 전원 접근)**: 인력 검색 · 조직도 · 이용 가이드(이 화면)',
 '',
 '**설정/운영(admin·manager 전용, 일부 admin 전용)**: 대시보드 · 비용 · 공정성 지표 · 활동 기록 · 리소스 매칭/배정 · AI 에이전트 생성 · AI 에이전트 관리 · 사람 인력 관리 · 도구/스킬 Pool · 팀 관리 · 파이프라인 관리 · 지식 베이스 · Crew 빌더 · LLM 설정 최적화(admin 전용) · 모델 레지스트리(admin 전용 — 컨텍스트 한도·생성 옵션·단가·실제 사용량) · 사용자 관리(admin 전용 — 조직 정책: 사번 형식·결과물 언어 포함)',
+'> 설정 화면들은 메뉴 두 번째 줄 **"설정"** 한 줄에 그룹 버튼 4개(리소스 관리·그라운딩 관리·모델 관리·운영 관리)로 모여 있습니다 — 그룹 버튼을 누르면 그 아래에 화면 목록이 작게 뜨고(바깥을 누르거나 Esc로 닫힘), 지금 보고 있는 화면이 속한 그룹 버튼에는 "모델 관리 · 모델 레지스트리"처럼 화면 이름이 함께 보입니다. 🔒 표시는 admin 전용 화면입니다.',
 '',
 '<h2 id="trouble">9. 자주 겪는 문제</h2>',
 '',
