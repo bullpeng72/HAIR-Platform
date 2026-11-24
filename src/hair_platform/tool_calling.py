@@ -54,6 +54,16 @@ from hair_platform import pool_registry
 
 MAX_TOOL_CALL_ITERATIONS = 5
 
+# 동적으로 호출할 수 있는 native 도구(2026-11-24, P0-3) — 정적 주입 경로가 없는 native 도구만
+# 여기 넣는다(코드 저장소 조회는 "무엇을 읽을지"를 모델이 정해야 해 미리 주입할 수 없다). 정적
+# 주입되는 native(vectordb/graphdb/tavily/스킬 목록)는 위 독스트링 이유로 계속 뺀다.
+DYNAMIC_NATIVE_IDS = ("code_repository_read",)
+_CALLABLE_KIND_SQL = (
+    "(kind = 'custom_python' OR (kind = 'native' AND json_extract(config, '$.native_id') IN ("
+    + ",".join(f"'{nid}'" for nid in DYNAMIC_NATIVE_IDS)
+    + ")))"
+)
+
 
 def _supported_tool_ids(conn: sqlite3.Connection, skills: list[str]) -> set[int]:
     import json
@@ -70,7 +80,7 @@ def _supported_tool_ids(conn: sqlite3.Connection, skills: list[str]) -> set[int]
     placeholders = ",".join("?" * len(tool_pool_ids))
     rows = conn.execute(
         f"SELECT id FROM tool_pool WHERE id IN ({placeholders}) "
-        f"AND kind = 'custom_python' AND is_active = 1",
+        f"AND {_CALLABLE_KIND_SQL} AND is_active = 1",
         tuple(tool_pool_ids),
     ).fetchall()
     return {r["id"] for r in rows}
@@ -95,7 +105,7 @@ def resolve_callable_tools(
             placeholders = ",".join("?" * len(linked_ids))
             rows = conn.execute(
                 f"SELECT id FROM tool_pool WHERE id IN ({placeholders}) "
-                f"AND kind = 'custom_python' AND is_active = 1",
+                f"AND {_CALLABLE_KIND_SQL} AND is_active = 1",
                 tuple(linked_ids),
             ).fetchall()
             tool_ids.update(r["id"] for r in rows)
@@ -108,6 +118,11 @@ def resolve_callable_tools(
             "SELECT * FROM tool_pool WHERE id = ? AND is_active = 1", (tool_id,)
         ).fetchone()
         if row is None:
+            continue
+        if row["kind"] == "native":
+            factory = pool_registry.NATIVE_TOOL_FACTORIES.get(json.loads(row["config"]).get("native_id"))
+            if factory is not None:
+                tools.append(factory(conn))
             continue
         tools.append(pool_registry._custom_python_crewai_tool(row))
     return tools

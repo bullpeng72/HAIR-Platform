@@ -152,6 +152,8 @@ from hair_platform.models import (
     PipelineTemplateCreate,
     PlatformLlmConfigUpdate,
     AuxiliaryLlmConfigUpdate,
+    CodeRepositoryActive,
+    CodeRepositoryCreate,
     RagSearchConfigUpdate,
     SkillMarkdownImport,
     SkillPoolCreate,
@@ -558,6 +560,46 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail="본인 키만 폐기할 수 있습니다") from exc
         return {"id": key_id, "revoked": True}
+
+    # ---------- 코드 저장소 읽기 연동(2026-11-24, P0-3 1단계 — `code_repos.py`, admin) ----------
+    _REPO_ERROR_KO = {
+        "invalid_name": "저장소 이름은 글자·숫자·._- 60자 이내로 입력하세요(Agent가 이 이름으로 부릅니다)",
+        "path_not_found": "서버에 그 경로가 없습니다(이 서버 PC 안의 폴더 경로를 입력하세요)",
+        "not_a_git_repository": "Git 저장소가 아닙니다",
+        "name_already_exists": "같은 이름의 저장소가 이미 있습니다",
+        "repository_not_found": "저장소를 찾을 수 없습니다",
+        "git_not_installed": "서버에 git이 설치돼 있지 않습니다",
+    }
+
+    @app.get("/api/code-repositories")
+    def list_code_repositories_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import code_repos
+
+        return code_repos.list_repositories(conn, include_inactive=True)
+
+    @app.post("/api/code-repositories", status_code=201)
+    def register_code_repository_endpoint(
+        payload: CodeRepositoryCreate, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        from hair_platform import code_repos
+
+        try:
+            return code_repos.register_repository(conn, user["id"], payload.name, payload.path, payload.description)
+        except code_repos.RepoError as exc:
+            # 커밋이 하나도 없는 저장소 등 git 자체 메시지는 그대로 보여 준다.
+            raise HTTPException(status_code=400, detail=_REPO_ERROR_KO.get(str(exc), str(exc))) from exc
+
+    @app.patch("/api/code-repositories/{repo_id}")
+    def set_code_repository_active_endpoint(
+        repo_id: int, payload: CodeRepositoryActive, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        from hair_platform import code_repos
+
+        try:
+            code_repos.set_repository_active(conn, user["id"], repo_id, payload.is_active)
+        except code_repos.RepoError as exc:
+            raise HTTPException(status_code=404, detail=_REPO_ERROR_KO.get(str(exc), str(exc))) from exc
+        return {"id": repo_id, "is_active": payload.is_active}
 
     # ---------- 기본 구성 점검(2026-11-23, P2-10 — `config_check.py`, admin) ----------
     @app.get("/api/admin/config-check")

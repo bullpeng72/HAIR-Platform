@@ -11900,6 +11900,7 @@ const MANUAL_MARKDOWN = [
 '- **정기 실행**(admin/manager) — 이름·파이프라인·할 일 역할·업무 요청 내용과 주기(매일/평일/매주 ○요일)·시각을 정하면, 그 시각마다 업무 요청 → 할 일 → 파이프라인 실행을 자동으로 만듭니다(예: 매주 월요일 09:00 "실적 보고 파이프라인"). **만든 사람의 이름으로** 실행되므로 1단계 사람 승인 같은 결재는 직접 실행할 때와 똑같이 거칩니다. 시각은 서버 PC의 현지 시각이고, `hair serve`로 띄운 서버가 30초마다 확인합니다(서버가 꺼져 있거나 PC가 잠자기면 그동안은 돌지 않습니다). 표의 "끄기"로 잠시 멈출 수 있습니다.',
 '- **외부 알림**(admin) — Slack·Teams의 수신 웹훅(Incoming Webhook) URL과 받을 일(결재 대기·파이프라인 사람 승인 대기·완료·실패·Agent 실행 실패)을 고르면, 그 일이 생길 때마다 한 번씩 메시지를 보냅니다. 처음 저장할 때 이미 있던 일은 보내지 않습니다. "테스트 전송"으로 연결을 먼저 확인하세요.',
 '- **내 API 키**(admin/manager/member) — 외부 시스템(cron·메일 규칙·지라 등)이 **내 계정·권한 그대로** HAIR API를 부를 때 씁니다. 발급한 키는 그 자리에서 한 번만 보이니 바로 복사해 두고, 요청 헤더에 `Authorization: Bearer 키`로 넣습니다(예: `POST /api/briefs`로 업무 요청 올리기, `POST /api/tasks/{id}/execute-pipeline`으로 파이프라인 시작). 키는 권한을 넓히지 않고, 폐기하거나 계정이 비활성화되면 즉시 막힙니다.',
+'- **코드 저장소**(admin) — 이 서버 PC에 클론해 둔 Git 저장소의 이름·경로를 등록하면, 개발 Agent(코드베이스 분석가·백엔드/프론트엔드/풀스택/데이터·인프라 개발자·코드 검증가·AA — **코드저장소조회** 스킬)가 사람이 코드를 붙여 주지 않아도 파일 목록·내용·코드 검색·최근 커밋을 직접 읽고 "경로:줄"을 근거로 답합니다. **읽기 전용**이고 **커밋된 파일만** 보입니다 — 미커밋 변경과 `.gitignore`로 빠진 파일, `.env`·키 같은 비밀 파일은 읽지 않습니다. 최신 코드를 보게 하려면 그 폴더에서 `git pull`을 해 두세요. 대화에서는 "@코드베이스 분석가 shop-api 저장소의 주문 취소 흐름을 설명해 줘"처럼 저장소 이름을 함께 적으면 됩니다.',
 '',
 '<h2 id="scenario">7. 실전 시나리오 4가지</h2>',
 '',
@@ -11961,12 +11962,20 @@ async function renderIntegrations(content) {
   const isAdmin = ME.role === "admin";
   const canSchedule = ["admin", "manager"].includes(ME.role);
   const fmt = v => v ? esc(String(v).replace("T", " ")) : "-";
-  const [keys, schedules, templates, notify] = await Promise.all([
+  const [keys, schedules, templates, notify, repos] = await Promise.all([
     api("GET", "/api/api-keys"),
     canSchedule ? api("GET", "/api/pipeline-schedules") : Promise.resolve([]),
     canSchedule ? api("GET", "/api/pipeline-templates") : Promise.resolve([]),
     isAdmin ? api("GET", "/api/integrations/notify") : Promise.resolve(null),
+    isAdmin ? api("GET", "/api/code-repositories") : Promise.resolve([]),
   ]);
+  // 코드 저장소(2026-11-24, P0-3 1단계 — 읽기 전용).
+  const repoRows = repos.map(r =>
+    "<tr><td><code>" + esc(r.name) + "</code></td><td><code>" + esc(r.path) + "</code></td><td>" + esc(r.description || "-") +
+    "</td><td>" + (r.is_active ? "사용 중" : "꺼짐") + "</td><td>" +
+    '<button class="small" data-toggle-repo="' + r.id + '" data-active="' + (r.is_active ? "0" : "1") + '">' +
+    (r.is_active ? "끄기" : "켜기") + "</button></td></tr>"
+  ).join("");
   const origin = location.origin;
   const keyRows = keys.map(k =>
     "<tr><td>" + esc(k.name) + "</td><td><code>" + esc(k.key_prefix) + "…</code></td><td>" + fmt(k.created_at) +
@@ -12029,7 +12038,17 @@ async function renderIntegrations(content) {
       "<div>" + eventBoxes + "</div>" +
       '<div class="inline"><button class="primary" id="notify-save">저장</button><button id="notify-test">테스트 전송</button>' +
       '<span class="muted">' + (notify.last_sent_at ? "마지막 전송 " + fmt(notify.last_sent_at) : "") +
-      (notify.last_error ? " · ⚠ " + esc(notify.last_error) : "") + "</span></div></div>"
+      (notify.last_error ? " · ⚠ " + esc(notify.last_error) : "") + "</span></div></div>" +
+      "<h3>코드 저장소(admin)</h3>" +
+      '<p class="muted">이 서버 PC에 있는 Git 저장소(클론한 폴더)를 등록하면, <b>코드저장소조회</b> 스킬이 있는 개발 Agent(코드베이스 분석가·개발자·코드 검증가·AA)가 파일 목록·내용·코드 검색·최근 커밋을 직접 읽습니다. ' +
+      '<b>읽기 전용</b>이고 <b>커밋된 파일만</b> 보입니다 — 미커밋 변경, <code>.gitignore</code>로 빠진 파일, <code>.env</code>·키 같은 비밀 파일은 읽지 않습니다. 최신 코드를 보게 하려면 그 폴더에서 <code>git pull</code>을 해 두세요.</p>' +
+      '<form id="repo-form" class="inline" style="flex-wrap:wrap">' +
+      '<input id="repo-name" placeholder="이름(예: shop-api)" required maxlength="60">' +
+      '<input id="repo-path" placeholder="서버 경로(예: /Users/me/src/shop-api)" required style="min-width:18rem">' +
+      '<input id="repo-desc" placeholder="설명(선택)" maxlength="500">' +
+      '<button class="primary" type="submit">저장소 등록</button></form>' +
+      (repos.length ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>경로</th><th>설명</th><th>상태</th><th></th></tr></thead><tbody>' + repoRows + "</tbody></table></div>"
+        : '<p class="muted">등록된 코드 저장소가 없습니다.</p>')
       : "");
 
   document.getElementById("apikey-form").addEventListener("submit", async ev => {
@@ -12102,6 +12121,24 @@ async function renderIntegrations(content) {
         showMsg("global-msg", r.ok ? "테스트 메시지를 보냈습니다." : "전송 실패: " + r.error, r.ok ? "ok" : "error");
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     });
+    document.getElementById("repo-form").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      try {
+        const r = await api("POST", "/api/code-repositories", {
+          name: document.getElementById("repo-name").value.trim(),
+          path: document.getElementById("repo-path").value.trim(),
+          description: document.getElementById("repo-desc").value.trim(),
+        });
+        showMsg("global-msg", "코드 저장소 '" + r.name + "'을(를) 등록했습니다 — " + r.path, "ok");
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+    content.querySelectorAll("[data-toggle-repo]").forEach(btn => btn.addEventListener("click", async () => {
+      try {
+        await api("PATCH", "/api/code-repositories/" + btn.dataset.toggleRepo, { is_active: btn.dataset.active === "1" });
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    }));
   }
 }
 

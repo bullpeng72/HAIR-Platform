@@ -30,6 +30,7 @@ from contextlib import ExitStack
 
 from hair_platform import (
     audit,
+    code_repos,
     graphquery,
     id_scheme,
     pool_catalog,
@@ -54,6 +55,8 @@ NATIVE_TOOL_FACTORIES = {
     "tavily_news_search": websearch.as_tavily_news_crewai_tool,
     # 스킬·도구 목록 조회(2026-11-21) — "스킬생성"이 중복 확인·도구 참조에 쓴다.
     pool_catalog.NATIVE_ID: pool_catalog.as_crewai_tool,
+    # 코드 저장소 읽기(2026-11-24, P0-3 1단계 — `code_repos.py`).
+    code_repos.NATIVE_ID: code_repos.as_crewai_tool,
 }
 
 

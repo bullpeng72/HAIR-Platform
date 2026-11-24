@@ -1389,6 +1389,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import integrations
 
     integrations.ensure_schema(conn)
+    # 코드 저장소 읽기 연동(2026-11-24, P0-3 — `code_repos.py`).
+    from hair_platform import code_repos
+
+    code_repos.ensure_schema(conn)
     # 대화에서 전환한 업무 요청의 출처(2026-11-23, P1-4).
     _ensure_column(conn, "briefs", "source_conversation_id", "INTEGER REFERENCES conversations(id)")
     # 실행 중 단계 표시(2026-11-23, P0-2 — `progress.py`).
@@ -2937,6 +2941,15 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
             ),
             "tavily_news_search",
         ),
+        (
+            "코드 저장소 조회",
+            (
+                "관리자가 등록한 Git 저장소의 커밋된 파일을 읽는 네이티브 Tool(읽기 전용) — 파일 목록·"
+                "파일 내용(줄 범위)·코드 검색·최근 커밋. 미추적·무시된 파일과 비밀 파일(.env·키 등)은 "
+                "읽지 않는다(2026-11-24, P0-3 저장소 연동 1단계, `code_repos.py`)."
+            ),
+            "code_repository_read",
+        ),
     ]
     # 사용자 요청(2026-10-26, "도구/skill에서 동작하지 않는 검색은
     # 삭제해줘(한시적인 오류인 경우 잠정 보류)") — "외부 자료 검색
@@ -2954,11 +2967,14 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
     _rename_native_tools(conn)
     tool_ids: dict[str, int] = {}
     for name, description, native_id in native_tools:
-        conn.execute(
+        inserted = conn.execute(
             "INSERT OR IGNORE INTO tool_pool (name, description, kind, config) "
             "VALUES (?, ?, 'native', ?)",
             (name, description, json.dumps({"native_id": native_id})),
-        )
+        ).rowcount
+        if inserted and native_id == "code_repository_read":
+            # 개발업무 도구(2026-11-24) — 처음 만들 때만 분류를 정한다(이후 admin 변경 존중).
+            conn.execute("UPDATE tool_pool SET category = 'sw_dev' WHERE name = ?", (name,))
         row = conn.execute(
             "SELECT id FROM tool_pool WHERE name = ?", (name,)
         ).fetchone()

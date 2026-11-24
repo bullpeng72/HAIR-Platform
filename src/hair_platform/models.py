@@ -1073,6 +1073,18 @@ class PlatformLlmConfigUpdate(BaseModel):
     model: str
 
 
+class CodeRepositoryCreate(BaseModel):
+    """코드 저장소 등록(2026-11-24, P0-3 1단계) — 서버 PC 안의 Git 작업 트리 경로."""
+
+    name: str = Field(min_length=1, max_length=60)
+    path: str = Field(min_length=1, max_length=1000)
+    description: str = Field(default="", max_length=500)
+
+
+class CodeRepositoryActive(BaseModel):
+    is_active: bool
+
+
 class AuxiliaryLlmConfigUpdate(BaseModel):
     """보조 작업 모델(2026-11-24, P0-2) — 언어·수치 교정용. 둘 다 비우면(None/빈 문자열) 해제."""
 
