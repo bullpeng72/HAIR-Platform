@@ -114,3 +114,54 @@ def test_run_crew_passes_max_reasoning_attempts_to_crewai_agent(client_and_conn)
             provider="openai",
         )
     assert result["final_output"] == "결과"
+
+
+# ---------- 3) Ollama + reasoning — 단계별 LLM 관찰을 끈다(2026-11-24 실측 회귀) ----------
+
+
+def _kickoff_capturing(captured):
+    from crewai import Crew
+
+    def _fake(self, *args, **kwargs):
+        captured.append(self)
+        return _crew_output("결과", ["결과"])
+
+    return patch.object(Crew, "kickoff", autospec=True, side_effect=_fake)
+
+
+def _reasoning_agent(conn):
+    agent_id = _make_active_agent(conn, "백엔드 개발자", [])
+    conn.execute(
+        "UPDATE agent_pool SET tuning_config = ? WHERE id = ?",
+        (json.dumps({"reasoning": True, "max_reasoning_attempts": 2}), agent_id),
+    )
+    conn.commit()
+    return agent_id
+
+
+def test_ollama_reasoning_agent_uses_low_effort_planning(client_and_conn):
+    """crewai의 단계별 PlannerObserver 호출은 instructor 경로라 `num_ctx`·timeout을
+    litellm에 넘기지 않는다 — Ollama에서는 그 호출이 생기지 않게 `reasoning_effort="low"`."""
+    _client, conn = client_and_conn
+    agent_id = _reasoning_agent(conn)
+    captured: list = []
+    with _kickoff_capturing(captured):
+        crew_runtime.run_crew(conn, [agent_id], ["업무"], _admin_id(conn),
+                              process="sequential", provider="ollama", model="llama3.1")
+    cfg = captured[0].agents[0].planning_config
+    assert cfg is not None
+    assert cfg.reasoning_effort == "low"
+    assert cfg.max_attempts == 2
+
+
+def test_cloud_reasoning_agent_keeps_crewai_default_planning(client_and_conn):
+    _client, conn = client_and_conn
+    agent_id = _reasoning_agent(conn)
+    captured: list = []
+    with _kickoff_capturing(captured):
+        crew_runtime.run_crew(conn, [agent_id], ["업무"], _admin_id(conn),
+                              process="sequential", provider="openai")
+    cfg = captured[0].agents[0].planning_config
+    assert cfg is not None
+    assert cfg.reasoning_effort == "medium"
+    assert cfg.max_attempts == 2

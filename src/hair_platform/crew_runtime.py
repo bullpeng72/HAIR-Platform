@@ -285,7 +285,13 @@ def _crewai_llm(provider: str, model: str, temperature: float | None = None):
     # 실패한다. 그래서 CrewAI 경로의 네이티브 도구 호출이 전부 실패하고 텍스트 파싱으로
     # 떨어져 `<tool_call>` 문자열이 산출물에 섞였다(실측 재현). 이 플랫폼은 litellm의 MCP
     # 프록시 기능을 쓰지 않으므로(MCP 도구는 CrewAI가 직접 붙인다) 핸들러를 건너뛴다.
-    kwargs: dict[str, Any] = {"timeout": timeout_seconds, "_skip_mcp_handler": True}
+    #
+    # 단, 이 인자는 litellm 경로에서만 보낸다(2026-11-24, P2-12 실측 회귀) — crewai 1.15는 ollama/·
+    # anthropic/·openai/ 모델을 litellm이 아니라 자체 네이티브 클라이언트(OpenAICompatibleCompletion
+    # 등)로 보내고, 그 클라이언트는 모르는 인자를 그대로 SDK에 넘겨 `Completions.create() got an
+    # unexpected keyword argument '_skip_mcp_handler'`로 **모든 호출이 실패**했다(Ollama 파이프라인·
+    # Crew 실행 전부). 아래에서 실제로 litellm 경로가 된 경우에만 붙여 다시 만든다.
+    kwargs: dict[str, Any] = {"timeout": timeout_seconds}
     # 모델별 생성 옵션(2026-11-21, `model_options.py`) — 모델 레지스트리에 admin이
     # 등록한 값만 보낸다(특정 모델용 하드코딩 없음). provider가 받지 않는 키는
     # `for_model`이 이미 걸러 낸다(예: OpenAI는 top_k 없음). top_p는 crewai LLM의
@@ -296,9 +302,20 @@ def _crewai_llm(provider: str, model: str, temperature: float | None = None):
     if temperature is not None:
         kwargs["temperature"] = temperature
     if provider == "ollama":
+        # Ollama는 litellm `ollama_chat/` 경로로 고정한다(2026-11-24, P2-12 실측 회귀). crewai 1.15는
+        # `ollama/` 모델을 네이티브 OpenAI 호환 클라이언트로 보내 `model_options.for_model()`의 Ollama
+        # 옵션(`num_ctx` — 2026-11-22 컨텍스트 창 A안)과 `_skip_mcp_handler`를 SDK가 거부해 모든 호출이
+        # 실패했다. litellm은 이 옵션들을 Ollama에 그대로 전달하고(실측: n_ctx_slot = 49152), `ollama/`
+        # (/api/generate)와 달리 `ollama_chat/`(/api/chat)은 모델의 사고 과정을 본문과 분리해 준다
+        # (실측: `ollama/`는 영어 추론 문장이 답에 섞였다).
         base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        return LLM(model=f"ollama/{model}", base_url=base_url, **kwargs)
-    return LLM(model=f"{provider}/{model}", **kwargs)
+        return LLM(model=f"ollama_chat/{model}", base_url=base_url, is_litellm=True,
+                   _skip_mcp_handler=True, **kwargs)
+    llm_model = f"{provider}/{model}"
+    instance = LLM(model=llm_model, **kwargs)
+    if getattr(instance, "is_litellm", False):
+        instance = LLM(model=llm_model, _skip_mcp_handler=True, **kwargs)
+    return instance
 
 
 # 사용자 요청(2026-10-13, "위 1~2까지 반영") — Gate A-G는 산출물이 이미
@@ -737,6 +754,22 @@ def run_crew(
         # 품질 검토(자체 개선)는 직접 호출 경로 전용 — CrewAI Agent 인자가 아니다.
         tuning.pop("self_review", None)
         tuning.setdefault("max_iter", DELEGATION_MAX_ITER)
+        # Ollama + reasoning(2026-11-24, P2-12 실측) — `reasoning=True`를 그대로 넘기면 crewai가
+        # `PlanningConfig(reasoning_effort="medium")`을 만들어 단계마다 PlannerObserver LLM 호출을
+        # 하는데, 그 호출은 `response_model`(instructor) 경로라 litellm에 model·messages만 넘기고
+        # `num_ctx`·timeout·base_url을 버린다. 그래서 Ollama가 기본 컨텍스트(32,768)로 모델을
+        # 재로딩하며 49,152와 번갈아 오가고, 긴 문맥은 컨텍스트 초과·600초 타임아웃으로 실패해
+        # 1단계 하나가 2시간 넘게 끝나지 않았다(실측). 사전 계획은 일반 호출이라 그대로 두고
+        # 단계별 LLM 관찰만 끈다(`reasoning_effort="low"` — 휴리스틱 관찰). 클라우드 provider는
+        # 네이티브 클라이언트가 구조화 출력을 직접 처리하므로 기존 동작 그대로다.
+        if resolved_provider == "ollama" and tuning.pop("reasoning", False):
+            from crewai.agent.planning_config import PlanningConfig
+
+            planning_kwargs: dict[str, Any] = {"reasoning_effort": "low"}
+            attempts = tuning.pop("max_reasoning_attempts", None)
+            if attempts is not None:
+                planning_kwargs["max_attempts"] = attempts
+            tuning["planning_config"] = PlanningConfig(**planning_kwargs)
         tuning["llm"] = (
             crew_llm
             if temperature is None

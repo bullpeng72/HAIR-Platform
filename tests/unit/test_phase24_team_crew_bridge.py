@@ -1066,10 +1066,10 @@ def test_run_crew_manager_llm_uses_separate_manager_provider_when_auto_manager(
             manager_model="llama3.1",
         )
     # openai는 crewai가 "네이티브 provider"로 다뤄 `self.model`에서
-    # provider 접두어를 벗겨내고(`"gpt-4o-mini"`), ollama는 네이티브가
-    # 아니라 LiteLLM로 폴백해 접두어를 그대로 유지한다(`"ollama/..."`)
-    # — 둘 다 crewai 자신의 실제 동작이라 그대로 검증한다.
-    assert captured["manager_llm_model"] == "ollama/llama3.1"
+    # provider 접두어를 벗겨내고(`"gpt-4o-mini"`), ollama는 플랫폼이 litellm
+    # `ollama_chat/` 경로로 고정해(2026-11-24 — crewai 1.15가 ollama를 네이티브로
+    # 보내며 num_ctx 등 Ollama 옵션이 거부되던 회귀 수정) 접두어가 유지된다.
+    assert captured["manager_llm_model"] == "ollama_chat/llama3.1"
     assert captured["worker_llm_model"] == "gpt-4o-mini"
     assert captured["manager_llm_model"] != captured["worker_llm_model"]
 

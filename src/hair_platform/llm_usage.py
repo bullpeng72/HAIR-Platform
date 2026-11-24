@@ -137,11 +137,20 @@ def record_ollama(model: str, data: Any) -> None:
 
 def _litellm_success(kwargs, completion_response, start_time, end_time) -> None:  # noqa: ARG001
     try:
+        # litellm은 콜백의 `model`에서 provider 접두사를 떼어 넘기므로(`ollama_chat/hf.co/a/b` →
+        # `hf.co/a/b`) 첫 `/`로 나누면 `hf.co`가 provider가 된다(2026-11-24 실측). provider는
+        # `custom_llm_provider`를 먼저 보고, Ollama의 `ollama_chat` 경로는 모델 레지스트리와
+        # 같은 `ollama`로 맞춘다.
         full = str(kwargs.get("model") or "")
-        provider, _, model = full.partition("/")
-        if not model:
-            provider = str((kwargs.get("litellm_params") or {}).get("custom_llm_provider") or "")
-            model = full
+        provider = str((kwargs.get("litellm_params") or {}).get("custom_llm_provider") or "")
+        if provider:
+            model = full[len(provider) + 1:] if full.startswith(provider + "/") else full
+        else:
+            provider, _, model = full.partition("/")
+            if not model:
+                provider, model = "", full
+        if provider == "ollama_chat":
+            provider = "ollama"
         usage = getattr(completion_response, "usage", None)
         if usage is None and isinstance(completion_response, dict):
             usage = completion_response.get("usage")

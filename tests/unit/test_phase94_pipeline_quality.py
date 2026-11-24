@@ -222,11 +222,32 @@ def test_registry_output_cap_overrides_default(monkeypatch):
 
 
 def test_crewai_llm_skips_litellm_mcp_handler():
+    """2026-11-24 실측 회귀: crewai 1.15는 `ollama/` 모델을 네이티브 OpenAI 호환 클라이언트로 보내,
+    litellm 전용 인자(`_skip_mcp_handler`)·Ollama 옵션(`num_ctx`)을 SDK가 `unexpected keyword
+    argument`로 거부해 Ollama 파이프라인·Crew 실행이 전부 실패했다. Ollama는 litellm `ollama_chat/`로
+    고정하고, 네이티브로 가는 다른 provider에는 litellm 전용 인자를 붙이지 않는다."""
+    from unittest.mock import patch
+
     from hair_platform import crew_runtime
 
-    llm_obj = crew_runtime._crewai_llm("ollama", "x")
-    params = getattr(llm_obj, "additional_params", None) or {}
-    assert params.get("_skip_mcp_handler") is True
+    ollama = crew_runtime._crewai_llm("ollama", "x")
+    assert getattr(ollama, "is_litellm", False) is True
+    assert ollama.model == "ollama_chat/x"
+    assert (getattr(ollama, "additional_params", None) or {}).get("_skip_mcp_handler") is True
+
+    made = []
+
+    class FakeLLM:
+        def __init__(self, model, **kwargs):
+            made.append((model, kwargs))
+            self.is_litellm = len(made) == 1 and model.startswith("litellm-only/")
+
+    with patch("crewai.LLM", FakeLLM):
+        crew_runtime._crewai_llm("openai", "gpt-x")  # 네이티브 → 인자 없이 한 번만
+        assert len(made) == 1 and "_skip_mcp_handler" not in made[0][1]
+        made.clear()
+        crew_runtime._crewai_llm("litellm-only", "m")  # litellm으로 떨어지면 인자를 붙여 다시 만든다
+        assert "_skip_mcp_handler" not in made[0][1] and made[1][1]["_skip_mcp_handler"] is True
 
 
 # ---------- 9. 정해진 시작 문구 없이 붙은 영어 작업 메모(사업/기획 파이프라인 실측) ----------
@@ -579,10 +600,16 @@ def test_direct_and_crewai_calls_record_usage_and_price_only_when_entered(monkey
         llm_usage._litellm_success(
             {"model": "openai/gpt-x"}, SimpleNamespace(usage=SimpleNamespace(prompt_tokens=1_000_000, completion_tokens=500_000)), 0, 0
         )
+        # litellm은 provider 접두사를 떼고 넘긴다 — `ollama_chat/hf.co/org/m` → model `hf.co/org/m`
+        llm_usage._litellm_success(
+            {"model": "hf.co/org/m:latest", "litellm_params": {"custom_llm_provider": "ollama_chat"}},
+            SimpleNamespace(usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5)), 0, 0,
+        )
         report = llm_usage.report(conn)
         by = {(m["provider"], m["model"]): m for m in report["models"]}
         assert by[("ollama", "local-m")]["prompt_tokens"] == 1200 and by[("ollama", "local-m")]["cost"] is None
-        assert by[("openai", "gpt-x")]["cost"] is None and report["unpriced_models"] == 2  # 단가 미입력 → 금액 없음
+        assert by[("ollama", "hf.co/org/m:latest")]["completion_tokens"] == 5
+        assert by[("openai", "gpt-x")]["cost"] is None and report["unpriced_models"] == 3  # 단가 미입력 → 금액 없음
         admin = create_user(conn, "admin_price", "adminpass", Role.ADMIN)
         model_id = model_registry.create_model(conn, admin, "openai", "gpt-x")
         model_registry.set_pricing(conn, admin, model_id, 2.0, 8.0)  # 100만 토큰당
