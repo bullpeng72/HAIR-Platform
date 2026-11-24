@@ -222,37 +222,40 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
     expected_outputs = [stage["expected_output"]] * len(agent_ids)
     stage_provider, stage_model = pr._resolve_stage_llm(conn, stage)
 
-    if stage["mode"] == "plan_merge":
-        # 계획 분담(2026-11-23, P2-9) — 기존 엔진과 같은 `plan_merge.run()`. 병합본이 단계 산출물.
-        from hair_platform import plan_merge
+    # 진행 표시(2026-11-24, P0-2 파이프라인 진행률) — 단계 시작 시각·지금 하는 일·작성 중 미리보기를
+    # 실행 행에 남긴다(`stage_progress`).
+    with pr.stage_progress(conn, state["run_id"], stage):
+        if stage["mode"] == "plan_merge":
+            # 계획 분담(2026-11-23, P2-9) — 기존 엔진과 같은 `plan_merge.run()`. 병합본이 단계 산출물.
+            from hair_platform import plan_merge
 
-        lead_name = stage["lead_role_name"]
-        result = plan_merge.run(
-            conn,
-            {"agent_id": pr._resolve_role_agent_id(conn, lead_name), "role_name": lead_name, "instructions": ""},
-            [{"agent_id": aid, "role_name": a["role_name"], "instructions": a["instructions"]}
-             for a, aid in zip(stage_agents, agent_ids) if a["role_name"] != lead_name],
-            combined_base,
-            state["actor_id"],
-            expected_output=stage["expected_output"],
-            provider=stage_provider,
-            model=stage_model,
-            eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
-        )
-    else:
-        result = crew_runtime.run_crew(
-            conn,
-            agent_ids,
-            task_descriptions,
-            state["actor_id"],
-            process="sequential",
-            memory=False,
-            provider=stage_provider,
-            model=stage_model,
-            expected_outputs=expected_outputs,
-            self_review=use_self_review,
-            eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
-        )
+            lead_name = stage["lead_role_name"]
+            result = plan_merge.run(
+                conn,
+                {"agent_id": pr._resolve_role_agent_id(conn, lead_name), "role_name": lead_name, "instructions": ""},
+                [{"agent_id": aid, "role_name": a["role_name"], "instructions": a["instructions"]}
+                 for a, aid in zip(stage_agents, agent_ids) if a["role_name"] != lead_name],
+                combined_base,
+                state["actor_id"],
+                expected_output=stage["expected_output"],
+                provider=stage_provider,
+                model=stage_model,
+                eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
+            )
+        else:
+            result = crew_runtime.run_crew(
+                conn,
+                agent_ids,
+                task_descriptions,
+                state["actor_id"],
+                process="sequential",
+                memory=False,
+                provider=stage_provider,
+                model=stage_model,
+                expected_outputs=expected_outputs,
+                self_review=use_self_review,
+                eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
+            )
 
     final_entries = [
         a for a in result["agents"] if a.get("stage", "final") == "final"

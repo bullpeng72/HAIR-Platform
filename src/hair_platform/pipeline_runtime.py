@@ -58,9 +58,10 @@ pipeline()` 참고. 연결 안 된 다른 팀은 여전히 기존 단발 Crew �
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 
 from hair_platform import (
     agent_evaluation,
@@ -925,6 +926,26 @@ def run_pipeline_stage_job(
             on_stage_resolved()
 
 
+@contextlib.contextmanager
+def stage_progress(conn: sqlite3.Connection, run_id: int, stage) -> Iterator[None]:
+    """단계 실행 중 진행 표시(2026-11-24, P0-2 "파이프라인 진행률") — 두 엔진이 단계를 돌리는 동안 감싼다.
+    단계 시작 시각과 첫 문구를 남기고, 그 안의 `progress.report()`(CrewAI 작업·도구 이벤트, 단일 Agent
+    호출의 조회·생성·교정 단계)와 작성 중 미리보기가 이 실행 행에 기록된다."""
+    from hair_platform import progress
+
+    try:
+        conn.execute(
+            "UPDATE pipeline_runs SET stage_started_at = datetime('now'), progress = ?, "
+            "progress_at = datetime('now') WHERE id = ?",
+            (f"'{stage['name']}' 시작", run_id),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:  # 컬럼이 생기기 전(마이그레이션 도중) — 표시 없이 진행
+        pass
+    with progress.reporting(conn, "pipeline_runs", run_id):
+        yield
+
+
 def _execute_stage_attempt(
     conn: sqlite3.Connection,
     run: sqlite3.Row,
@@ -1110,39 +1131,43 @@ def _execute_stage_attempt(
     expected_outputs = [stage["expected_output"]] * len(run_agent_ids)
     stage_provider, stage_model = _resolve_stage_llm(conn, stage)
 
-    if stage["mode"] == "plan_merge":
-        from hair_platform import plan_merge
+    # 진행 표시(2026-11-24, P0-2 파이프라인 진행률) — 단계 시작 시각·지금 하는 일·작성 중 미리보기를
+    # 실행 행에 남긴다(`stage_progress`).
+    with stage_progress(conn, run_id, stage):
+        if stage["mode"] == "plan_merge":
+            from hair_platform import plan_merge
 
-        result = plan_merge.run(
-            conn, plan_lead, plan_workers, combined_base, actor_id,
-            expected_output=stage["expected_output"], provider=stage_provider, model=stage_model,
-            eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
-        )
-    else:
-        result = crew_runtime.run_crew(
-            conn,
-            run_agent_ids,
-            task_descriptions,
-            actor_id,
-            process=process,
-            # 실측(2026-11-06, park_member 로드러너 게임 데모, Ollama 검증
-            # 중) — `run_crew()`의 `memory=True`(기본값)는 provider와
-            # 무관하게 항상 OpenAI 임베딩 API를 쓴다(`run_crew()` 자체
-            # docstring에 이미 경고돼 있던 제약). "구현" 단계 출력처럼 긴
-            # 산출물을 임베딩하려 하면 OpenAI 임베딩 API의 입력 길이 한도
-            # (8192 토큰)를 넘겨 `BadRequestError`가 났다 — provider를
-            # Ollama로 고쳐도 이 메모리 레이어만은 몰래 OpenAI에 의존해
-            # 깨졌다. 이 모듈은 이미 단계 간 출력을 `base_input`으로 직접
-            # 체이닝하므로(위 "요구분석" 섹션 참고) CrewAI 자체 메모리가
-            # 따로 필요 없다 — 꺼서 이 숨은 OpenAI 의존을 완전히 없앤다.
-            memory=False,
-            eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
-            provider=stage_provider,
-            model=stage_model,
-            manager_agent_id=manager_agent_id,
-            expected_outputs=expected_outputs,
-            self_review=use_self_review_tier,
-        )
+            result = plan_merge.run(
+                conn, plan_lead, plan_workers, combined_base, actor_id,
+                expected_output=stage["expected_output"], provider=stage_provider, model=stage_model,
+                eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
+            )
+        else:
+            result = crew_runtime.run_crew(
+                conn,
+                run_agent_ids,
+                task_descriptions,
+                actor_id,
+                process=process,
+                # 실측(2026-11-06, park_member 로드러너 게임 데모, Ollama 검증
+                # 중) — `run_crew()`의 `memory=True`(기본값)는 provider와
+                # 무관하게 항상 OpenAI 임베딩 API를 쓴다(`run_crew()` 자체
+                # docstring에 이미 경고돼 있던 제약). "구현" 단계 출력처럼 긴
+                # 산출물을 임베딩하려 하면 OpenAI 임베딩 API의 입력 길이 한도
+                # (8192 토큰)를 넘겨 `BadRequestError`가 났다 — provider를
+                # Ollama로 고쳐도 이 메모리 레이어만은 몰래 OpenAI에 의존해
+                # 깨졌다. 이 모듈은 이미 단계 간 출력을 `base_input`으로 직접
+                # 체이닝하므로(위 "요구분석" 섹션 참고) CrewAI 자체 메모리가
+                # 따로 필요 없다 — 꺼서 이 숨은 OpenAI 의존을 완전히 없앤다.
+                memory=False,
+                eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
+                provider=stage_provider,
+                model=stage_model,
+                manager_agent_id=manager_agent_id,
+                expected_outputs=expected_outputs,
+                self_review=use_self_review_tier,
+            )
+
     tcr = result["tcr"]
 
     # 실측 발견(2026-11-07, "구현" 단계를 sequential_relay로 전환하며
@@ -1571,6 +1596,24 @@ def resolve_stage_decision(
     return run_id
 
 
+def _run_progress_fields(conn: sqlite3.Connection, run: sqlite3.Row) -> dict:
+    stages = conn.execute(
+        "SELECT seq_order, name FROM pipeline_stages WHERE pipeline_template_id = ? ORDER BY seq_order",
+        (run["pipeline_template_id"],),
+    ).fetchall()
+    current = next((s for s in stages if s["seq_order"] == run["current_stage_seq"]), None)
+    keys = run.keys()
+    return {
+        "total_stages": len(stages),
+        "current_stage_index": (stages.index(current) + 1) if current else None,
+        "current_stage_name": current["name"] if current else None,
+        "progress": run["progress"] if "progress" in keys else None,
+        "progress_at": run["progress_at"] if "progress_at" in keys else None,
+        "stage_started_at": run["stage_started_at"] if "stage_started_at" in keys else None,
+        "partial_output": run["partial_output"] if "partial_output" in keys else None,
+    }
+
+
 def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[dict]:
     """Task 협업 워크스페이스 진행상황 카드가 폴링한다."""
     runs = conn.execute(
@@ -1605,6 +1648,8 @@ def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[
                 "engine": run["engine"],
                 "created_at": run["created_at"],
                 "finished_at": run["finished_at"],
+                # 진행률(2026-11-24, P0-2) — 실행 중인 단계의 이름·지금 하는 일·시작 시각·작성 중 미리보기.
+                **_run_progress_fields(conn, run),
                 "stage_results": [
                     {
                         "id": sr["id"],

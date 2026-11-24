@@ -65,6 +65,7 @@ from hair_platform import (
     tool_calling,
 )
 from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
+from hair_platform import progress as _progress  # 작성 중 미리보기(2026-11-24, P0-2)
 
 _DEFAULT_SYSTEM_PROMPT = (
     "당신은 HAIR-Platform의 대화형 작업공간에 참여하는 AI 비서입니다. "
@@ -2729,7 +2730,9 @@ def _run_default_ai_job(
             lambda: (
                 llm.call_llm_with_tools(provider, model, system, transcript, callable_tools)
                 if callable_tools
-                else llm.call_llm(provider, model, system, transcript)
+                # 작성 중 미리보기(2026-11-24, P0-2) — 작업 안에서만 스트리밍.
+                else llm.call_llm(provider, model, system, transcript,
+                                  **({"on_partial": _partial} if (_partial := _progress.partial_sink()) else {}))
             ),
         )
         output = eval_result["output"]

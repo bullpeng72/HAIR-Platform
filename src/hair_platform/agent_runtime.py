@@ -420,6 +420,8 @@ def execute_agent(
         # 차트 생성기 결과를 답에서 빼먹으면 붙인다(`tool_calling.ensure_charts_included()`).
         output = tool_calling.ensure_charts_included(output, tool_calls)
     else:
+        # 작성 중 미리보기(2026-11-24, P0-2) — 작업(대화·워크스페이스) 안에서만 스트리밍으로 받는다.
+        sink = progress.partial_sink()
         output = llm.call_llm(
             resolved_provider,
             resolved_model,
@@ -427,6 +429,7 @@ def execute_agent(
             augmented_prompt,
             timeout_seconds=timeout_seconds,
             **llm_extra,
+            **({"on_partial": sink} if sink else {}),
         )
     # 중간에 끊긴 것으로 보이면 이어서 완성시킨다(`_looks_truncated()`
     # 모듈 docstring 참고) — 최대 `_MAX_CONTINUATION_ATTEMPTS`번까지만

@@ -250,6 +250,11 @@ INDEX_HTML = """<!DOCTYPE html>
   .home-way h3 { margin: 0 0 0.3rem; font-size: 1rem; }
   .home-way p { margin: 0.2rem 0 0.5rem; }
   .job-progress-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.15rem 0; }
+  .pipeline-live { margin: 0.4rem 0 0.6rem; display: grid; gap: 0.3rem; }
+  /* 작성 중 미리보기(2026-11-24, P0-2) */
+  .job-partial-output { flex-basis: 100%; min-width: 0; margin: 0.2rem 0 0.3rem; }
+  .job-partial-output pre { margin: 0.2rem 0 0; max-height: 12rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    font-size: 0.85rem; padding: 0.4rem 0.6rem; border-left: 3px solid #c7d2fe; background: rgba(127,127,127,0.06); }
   .job-status-badge { font-size: 0.8em; border-radius: 3px; padding: 0.05rem 0.4rem; flex-shrink: 0; white-space: nowrap; }
   .job-status-badge.running { background: #eef2ff; color: #4338ca; }
   .job-status-badge.succeeded { background: var(--status-success-bg); color: var(--status-success-fg); }
@@ -3002,6 +3007,26 @@ function _updateConversationJobProgress(jobId, job) {
   const sec = isNaN(started) ? null : Math.max(0, Math.round((Date.now() - started) / 1000));
   const elapsed = sec === null ? "" : (sec >= 60 ? Math.floor(sec / 60) + "분 " + (sec % 60) + "초" : sec + "초");
   el.textContent = "— " + (job.progress || "준비 중") + (elapsed ? " · " + elapsed + " 경과" : "");
+  _showPartialOutput(li, job.partial_output);
+}
+
+// 작성 중 미리보기(2026-11-24, P0-2 응답 스트리밍) — 작업 행의 `partial_output`(지금까지 받은 글)을
+// 진행 줄 아래에 보여 준다. 마크다운 렌더링 없이 그대로(완성본은 응답 메시지로 따로 나간다), 끝부분만.
+function _showPartialOutput(container, text) {
+  let box = container.querySelector(".job-partial-output");
+  if (!text) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement("div");
+    box.className = "job-partial-output";
+    box.innerHTML = '<div class="muted">작성 중… (완성되면 응답으로 바뀝니다)</div><pre></pre>';
+    container.appendChild(box);
+  }
+  const pre = box.querySelector("pre");
+  const shown = text.length > 2000 ? "…" + text.slice(-2000) : text;
+  if (pre.textContent !== shown) {
+    pre.textContent = shown;
+    pre.scrollTop = pre.scrollHeight;
+  }
 }
 
 async function pollConversationJob(conversationId, jobId, intervalMs, timeoutMs, onTick) {
@@ -4418,6 +4443,13 @@ async function pollExecutionJob(taskId, jobId, intervalMs, timeoutMs) {
     const jobs = await api("GET", "/api/tasks/" + taskId + "/agent-execution-jobs");
     const job = jobs.find(j => j.id === jobId);
     if (job && job.status !== "running") return job;
+    // 진행 단계·작성 중 미리보기(2026-11-24, P0-2) — 워크스페이스의 "생성 중…" 카드에 갱신.
+    const card = job && document.getElementById("ws-running-job-" + job.id);
+    if (card) {
+      const step = card.querySelector(".job-progress-step");
+      if (step) step.textContent = job.progress ? "— " + job.progress : "";
+      _showPartialOutput(card, job.partial_output);
+    }
     await new Promise(r => setTimeout(r, intervalMs || 1500));
   }
   throw new Error("실행 완료 확인 시간이 초과됐습니다 — 잠시 후 새로고침해 주세요.");
@@ -4508,6 +4540,48 @@ function renderDependencyGraphSvg(graph, currentTaskId) {
 // 탭의 #mywork-detail에만 그릴 수 있었는데, "업무 요청" 탭의 할 일 상세
 // 패널에도 같은 워크스페이스를 그대로 재사용하기 위함(중복 구현 금지).
 // 기본값을 기존 id로 둬서 "내 업무" 쪽 기존 호출부는 전혀 안 바꿔도 된다.
+// 파이프라인 진행률(2026-11-24, P0-2 "파이프라인 진행률") — 실행 중 단계 행은 단계가 끝나야 생겨,
+// 지금까지는 진행 중인 단계가 무엇을 하는지·얼마나 됐는지 알 수 없었다. 실행 행의 진행 정보로 보여 준다.
+function _utcElapsed(ts) {
+  const t = Date.parse(String(ts || "").replace(" ", "T") + "Z");
+  if (isNaN(t)) return "";
+  const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  return sec >= 3600 ? Math.floor(sec / 3600) + "시간 " + Math.floor((sec % 3600) / 60) + "분"
+    : sec >= 60 ? Math.floor(sec / 60) + "분 " + (sec % 60) + "초" : sec + "초";
+}
+function _pipelineLiveHtml(run) {
+  if (!run || run.status !== "running" || !run.total_stages) return "";
+  const idx = run.current_stage_index || 1;
+  const pct = Math.round(((idx - 1) / run.total_stages) * 100);
+  const elapsed = _utcElapsed(run.stage_started_at);
+  const preview = run.partial_output
+    ? '<div class="job-partial-output"><div class="muted">작성 중…</div><pre>' +
+      esc(run.partial_output.length > 2000 ? "…" + run.partial_output.slice(-2000) : run.partial_output) + "</pre></div>"
+    : "";
+  return '<div class="pipeline-live">' +
+    '<div><b>▶ ' + idx + "/" + run.total_stages + " 단계 · " + esc(run.current_stage_name || "") + "</b>" +
+    ' <span class="muted">— ' + esc(run.progress || "진행 중") + (elapsed ? " · 이 단계 " + elapsed + " 경과" : "") + "</span></div>" +
+    '<div class="progress-bar" title="완료한 단계 ' + (idx - 1) + "/" + run.total_stages + '"><div class="progress-bar-fill" style="width:' + pct + '%"></div></div>' +
+    preview + "</div>";
+}
+let _pipelineLiveToken = 0;  // 화면을 다시 그릴 때마다 새 폴러가 생기므로, 가장 최근 것만 돈다
+async function _pollPipelineLive(taskId, containerId, runId) {
+  const token = ++_pipelineLiveToken;
+  while (isViewingWorkspace(taskId, containerId)) {
+    await new Promise(r => setTimeout(r, 5000));
+    if (token !== _pipelineLiveToken || !isViewingWorkspace(taskId, containerId)) return;
+    let runs;
+    try { runs = await api("GET", "/api/tasks/" + taskId + "/pipeline-runs"); } catch (e) { return; }
+    const run = runs.find(r => r.id === runId);
+    if (!run || run.status !== "running") { renderCollabWorkspace(taskId, containerId); return; }
+    const box = document.getElementById("pipeline-live-" + runId);
+    if (!box) return;
+    box.innerHTML = _pipelineLiveHtml(run);
+    const pre = box.querySelector("pre");
+    if (pre) pre.scrollTop = pre.scrollHeight;
+  }
+}
+
 async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   const detail = document.getElementById(containerId);
   detail.dataset.taskId = String(taskId);
@@ -4594,7 +4668,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     : "";
   const latestJob = jobs[0];
   const jobCard = (latestJob && latestJob.status === "running")
-    ? '<div class="deliverable-card chat-agent"><div class="muted">AI 에이전트 · 생성 중…</div></div>'
+    ? '<div class="deliverable-card chat-agent" id="ws-running-job-' + latestJob.id + '"><div class="muted">AI 에이전트 · 생성 중… <span class="job-progress-step">' + esc(latestJob.progress ? "— " + latestJob.progress : "") + '</span></div></div>'
     : (latestJob && latestJob.status === "failed"
       ? '<div class="deliverable-card chat-agent"><div class="muted">AI 에이전트 · 실행 실패(' + esc(fmtTime(latestJob.finished_at)) + ')</div>' +
         '<div>' + esc(latestJob.error || "알 수 없는 오류") + '</div>' +
@@ -4923,6 +4997,8 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       (run.engine === "graph" ? ' <span class="muted" title="LangGraph 실행엔진(신규) — 서버 재시작에도 중단 지점부터 정확히 재개됩니다">⚡신규엔진</span>' : "") +
       "</summary>" +
       pipelineBreadcrumbHtml(run) +
+      // 실행 중 단계 진행률(2026-11-24, P0-2) — 아래 폴링이 이 블록만 갱신한다.
+      '<div id="pipeline-live-' + run.id + '">' + _pipelineLiveHtml(run) + '</div>' +
       GATE_LEGEND_HTML +
       '<ul class="job-progress-list">' + rows + "</ul>" +
       (run.status === "paused_for_approval"
@@ -5573,6 +5649,10 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 페이지를 새로고침했거나 다른 탭에 갔다 왔을 때도, 이미 돌고 있던
   // job이 있으면 자동으로 이어서 폴링해 끝나는 대로 갱신한다 — 버튼을
   // 눌러야만 완료를 알 수 있는 건 아니다.
+  // 실행 중인 파이프라인이면 진행률 블록을 주기적으로 갱신한다(2026-11-24, P0-2).
+  if (latestPipelineRun && latestPipelineRun.status === "running") {
+    _pollPipelineLive(taskId, containerId, latestPipelineRun.id);
+  }
   if (hasRunningJob) {
     pollExecutionJob(taskId, latestJob.id).then(job => {
       if (!isViewingWorkspace(taskId, containerId)) return;
@@ -11674,6 +11754,8 @@ const MANUAL_MARKDOWN = [
 '',
 '실행에는 실제 LLM API 호출이 들어가므로 **비용이 발생**합니다 — 결과는 잠시 뒤 메시지로 도착하고(비동기 처리, 화면에 "응답을 기다리는 중…" 표시), 실패하면 원인이 메시지로 안내됩니다.',
 '',
+'💬 **응답이 만들어지는 동안**에는 메시지 아래 진행 패널에 지금 하는 일(자료 조회 중 → 생각 중 — N자 → 답변 작성 중 → 언어 품질 교정 중)과 경과 시간이 보이고, 답변을 쓰기 시작하면 **작성 중인 글이 그대로 미리 보입니다**(완성되면 정식 응답 메시지로 바뀝니다). 협업 워크스페이스의 AI 에이전트 실행도 "생성 중…" 카드에 같은 미리보기가 나옵니다. 방향이 틀렸으면 끝까지 기다리지 않고 바로 다시 요청할 수 있습니다.',
+'',
 'AI 메시지 작성자 줄에는 그 응답이 실제로 어떻게 만들어졌는지 보여주는 배지가 붙습니다 — **"단발 응답"**(기본 AI·단일 Agent 멘션 — 수치 계산·차트 생성처럼 관리자가 등록한 커스텀 도구는 필요할 때 직접 호출하지만, 검색(내부지식·웹·뉴스)은 요청 직전에 한 번 조회한 결과만 반영하고 스스로 다시 찾아보지는 않습니다)과 **"위임 N건"**(Team 멘션 — 실제 CrewAI 위임이 몇 건 있었는지, 0건이면 매니저 혼자 처리했다는 뜻). 어느 쪽도 안 보이면(Gate 배지만 있거나 아예 없으면) 파이프라인 진행 알림처럼 LLM 호출 자체가 없는 메시지입니다.',
 '',
 '각 메시지 줄에는 두 가지 "보내기" 버튼이 있습니다(대화의 모든 메시지가 자동으로 쌓이지 않고, 남길 만하다고 직접 고른 메시지만 보냅니다):',
@@ -11898,6 +11980,7 @@ const MANUAL_MARKDOWN = [
 '4단계(구현)는 실행 가능성 Gate(완성된 단일 결과물이 있는지, 골격·자리표시자·구문 오류가 없는지)를, 5단계(코드 검증)는 Gate A와 요구사항 추적성을 둘 다 통과해야 하고 — 5단계가 미달이면 4단계로 돌아가 검토 의견을 반영해 다시 구현합니다. 6·7단계는 Gate A로 판정해 미달이면 사유를 반영해 자동 재시도합니다. 1~3단계는 Gate를 측정·기록만 하고 자동으로 통과합니다. **마지막 자동 재시도에서는 자가검토가 자동으로 켜져** — Agent가 스스로 초안을 원 요구사항과 대조해 한 번 더 고친 뒤 제출합니다 — 그래도 기준을 못 넘기면 그때 사람 승인으로 올라갑니다(자동 반복이 완전히 실패했을 때만 사람에게 옵니다).',
 '실행은 **업무(Task)의 협업 워크스페이스**에서 이 템플릿을 고르고 "파이프라인 실행(비용 발생)"을 누르면 시작되거나, 이 파이프라인에 연결된 팀(4절 참고)을 대화에서 `@팀이름`으로 멘션해도 똑같이 시작됩니다(3절 4단계) — 기본 제공 팀은 없으므로 연결하려면 직접 팀을 만들어야 합니다.',
 '진행 상황은 같은 화면에서 단계별 배지(대기/진행중/통과/재시도N/승인대기/반려)로 실시간 확인합니다 — 대화에서 시작한 경우 같은 정보가 진행 메시지로 대화에도 올라옵니다.',
+'실행 중인 단계는 카드 위쪽에 **"▶ 2/5 단계 · 작성 — 기획서 작성자 작업 중 · 이 단계 3분 12초 경과"**처럼 몇 번째 단계인지, 지금 어느 Agent가 무엇을 하는지(작업 시작·도구 실행·위임), 그 단계가 얼마나 됐는지와 진행 막대가 5초마다 갱신됩니다. 계획 분담 단계처럼 Agent가 직접 글을 쓰는 동안은 **작성 중인 글**도 미리 보입니다.',
 '',
 '### 바로 써보기 — 기본 제공 "사업/기획 업무 처리 파이프라인"',
 '',

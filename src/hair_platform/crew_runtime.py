@@ -1152,8 +1152,41 @@ def run_crew(
                     }
                 )
 
+        # 실행 중 진행 표시(2026-11-24, P0-2 파이프라인 진행률) — 작업·파이프라인 실행 안이면 Agent별
+        # 작업 시작/완료·도구 호출을 진행 문구로 남긴다. CrewAI 이벤트는 다른 스레드에서 올 수 있어
+        # contextvar 대신 지금의 기록 함수를 미리 잡아 둔다(작업 밖이면 None — 아무 일도 안 함).
+        from crewai.events.types.task_events import TaskCompletedEvent, TaskStartedEvent
+        from crewai.events.types.tool_usage_events import ToolUsageStartedEvent
+
+        from hair_platform import progress as _progress
+
+        _reporter = _progress._REPORTER.get()
+
+        def _say(text: str) -> None:
+            if _reporter is not None:
+                try:
+                    _reporter(text[:200])
+                except Exception:  # noqa: BLE001, S110 — 진행 표시 실패가 실행을 막으면 안 된다
+                    pass
+
+        def _on_task_started(source, event) -> None:
+            _say(f"{event.agent_role or 'Agent'} 작업 중")
+
+        def _on_task_completed(source, event) -> None:
+            _say(f"{event.agent_role or 'Agent'} 작업 완료")
+
+        def _on_tool_started(source, event) -> None:
+            if not _looks_like_delegation(event.tool_name):
+                label = _progress.TOOL_LABELS.get(event.tool_name, event.tool_name)
+                _say(f"{event.agent_role or 'Agent'} — 도구 '{label}' 실행 중")
+            else:
+                _say(f"{event.agent_role or 'Agent'} — 동료에게 위임 중")
+
         with crewai_event_bus.scoped_handlers():
             crewai_event_bus.on(ToolUsageFinishedEvent)(_capture_delegation)
+            crewai_event_bus.on(TaskStartedEvent)(_on_task_started)
+            crewai_event_bus.on(TaskCompletedEvent)(_on_task_completed)
+            crewai_event_bus.on(ToolUsageStartedEvent)(_on_tool_started)
             # 사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
             # 연결해줘") — 지금까지 Gate A-G는 단일 실행 경로(`agent_runtime.
             # execute_agent()`)에만 연결돼 있었다. `framework="crewai"`를 쓰면

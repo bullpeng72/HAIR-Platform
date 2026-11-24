@@ -216,8 +216,13 @@ def call_llm(
     *,
     timeout_seconds: float | None = None,
     temperature: float | None = None,
+    on_partial=None,
 ) -> str:
     """실제 API 호출 지점 — 여기서만 비용/로컬 연산이 발생한다.
+
+    `on_partial`(2026-11-24, P0-2 응답 스트리밍) — 함수를 넘기면 provider의 스트리밍 API로 받으며
+    지금까지 받은 전체 글을 그 함수에 계속 넘긴다(`progress.partial_sink()`가 작업 행에 미리보기로
+    남긴다). 반환값·사용량 기록은 스트리밍이 아닐 때와 같다. 생략하면 기존 동작 그대로다.
 
     `timeout_seconds`를 생략하면(기존 모든 호출부가 그렇다) provider별
     기본값(클라우드 900초/Ollama 1800초 — Ollama가 더 길다)이 그대로
@@ -227,6 +232,8 @@ def call_llm(
     # `temperature`(2026-11-21) — 에이전트 파인튜닝 값. 지정됐을 때만 넘겨
     # 기존 호출 모양(테스트 대역 포함)을 그대로 둔다.
     extra = {"temperature": temperature} if temperature is not None else {}
+    if on_partial is not None and provider in ("anthropic", "openai", "ollama"):
+        return _STREAMERS[provider](model, system, prompt, timeout_seconds, on_partial, temperature)
     if provider == "anthropic":
         return _call_anthropic(model, system, prompt, timeout_seconds, **extra)
     if provider == "openai":
@@ -647,6 +654,123 @@ def _call_ollama(
     data = resp.json()
     llm_usage.record_ollama(model, data)
     return data["message"]["content"]
+
+
+# ---------- 스트리밍 호출(2026-11-24, P0-2) ----------
+# 실측: 로컬 35B 모델의 단일 응답이 3~19분 걸리는 동안 화면에는 "실행 중"만 보였다. 생성되는 글을
+# 그대로 보여 주면 사람이 기다리는 동안 방향을 확인하고, 틀렸으면 일찍 멈출 수 있다.
+
+
+def _report(text: str) -> None:
+    from hair_platform import progress as _progress
+
+    _progress.report(text)
+
+
+def _stream_anthropic(model, system, prompt, timeout_seconds, on_partial, temperature=None) -> str:
+    import anthropic  # 지연 import
+
+    client = anthropic.Anthropic(timeout=timeout_seconds or _CLOUD_LLM_TIMEOUT_SECONDS)
+    text = ""
+    with client.messages.stream(
+        model=model,
+        max_tokens=_ANTHROPIC_MAX_OUTPUT_TOKENS,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+        **model_options.request_options("anthropic", model, temperature),
+    ) as stream:
+        for piece in stream.text_stream:
+            if not text:
+                _report("답변 작성 중")
+            text += piece
+            on_partial(text)
+        final = stream.get_final_message()
+    llm_usage.record_anthropic(model, final)
+    return "".join(block.text for block in final.content if block.type == "text") or text
+
+
+def _stream_openai(model, system, prompt, timeout_seconds, on_partial, temperature=None) -> str:
+    import openai  # 지연 import
+
+    client = openai.OpenAI(timeout=timeout_seconds or _CLOUD_LLM_TIMEOUT_SECONDS)
+    text = ""
+    usage_chunk = None
+    for chunk in client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        stream=True,
+        stream_options={"include_usage": True},
+        **model_options.request_options("openai", model, temperature),
+    ):
+        if getattr(chunk, "usage", None):
+            usage_chunk = chunk
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+            if not text:
+                _report("답변 작성 중")
+            text += chunk.choices[0].delta.content
+            on_partial(text)
+    if usage_chunk is not None:
+        llm_usage.record_openai(model, usage_chunk)
+    return text
+
+
+def _stream_ollama(model, system, prompt, timeout_seconds, on_partial, temperature=None) -> str:
+    import json as _json
+
+    import httpx  # 지연 import
+
+    import time as _time
+
+    from hair_platform import progress as _progress
+
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    text = ""
+    thinking_chars = 0
+    last_thinking_report = 0.0
+    with httpx.stream(
+        "POST",
+        f"{base_url}/api/chat",
+        json={
+            "model": model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            "stream": True,
+            "options": model_options.request_options("ollama", model, temperature),
+        },
+        timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
+    ) as resp:
+        if resp.status_code >= 400:
+            resp.read()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                _raise_ollama_error_with_detail(resp, exc)
+        for line in resp.iter_lines():
+            if not line.strip():
+                continue
+            data = _json.loads(line)
+            if data.get("error"):
+                raise RuntimeError(f"Ollama 오류: {data['error']}")
+            # 추론형 모델의 사고 과정은 message.thinking으로 따로 오므로 content만 모은다. 답이 나오기 전
+            # 생각하는 동안(실측: 35B 모델은 수십 초~수 분)은 진행 표시에 "생각 중 — N자"만 남긴다.
+            thinking = (data.get("message") or {}).get("thinking") or ""
+            if thinking and not text:
+                thinking_chars += len(thinking)
+                now = _time.monotonic()
+                if now - last_thinking_report >= 3:
+                    last_thinking_report = now
+                    _progress.report(f"생각 중 — {thinking_chars:,}자")
+            piece = (data.get("message") or {}).get("content") or ""
+            if piece:
+                if not text:
+                    _progress.report("답변 작성 중")  # 생각이 끝나고 본문이 나오기 시작
+                text += piece
+                on_partial(text)
+            if data.get("done"):
+                llm_usage.record_ollama(model, data)
+    return text
+
+
+_STREAMERS = {"anthropic": _stream_anthropic, "openai": _stream_openai, "ollama": _stream_ollama}
 
 
 def _raise_ollama_error_with_detail(resp, exc: Exception) -> None:

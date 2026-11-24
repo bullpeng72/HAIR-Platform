@@ -129,6 +129,7 @@ def run(
             own = db.get_connection(path)
             try:
                 progress._REPORTER.set(None)
+                progress._PARTIAL.set(None)  # 작성 중 미리보기도 끈다(2026-11-24, P0-2)
                 return _work(item, own)
             finally:
                 own.close()

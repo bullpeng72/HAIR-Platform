@@ -1403,6 +1403,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     for _table in ("conversation_jobs", "agent_execution_jobs"):
         _ensure_column(conn, _table, "progress", "TEXT")
         _ensure_column(conn, _table, "progress_at", "TEXT")
+        # 작성 중인 응답 미리보기(2026-11-24, P0-2 스트리밍 — `progress.partial_sink()`).
+        _ensure_column(conn, _table, "partial_output", "TEXT")
+    # 파이프라인 진행률(2026-11-24, P0-2) — 실행 중인 단계의 지금 하는 일·시작 시각·작성 중 미리보기.
+    # 단계 행(pipeline_run_stages)은 단계가 끝나야 생겨, 지금까지는 진행 중 단계를 보여 줄 수 없었다.
+    for _column in ("progress", "progress_at", "stage_started_at", "partial_output"):
+        _ensure_column(conn, "pipeline_runs", _column, "TEXT")
 
     # 사용자 요청(2026-10-13, "생성된 CrewAI 에이전트를 선택해 Finetuning
     # 하는 기능") — 실제 LLM 가중치 재학습이 아니라(사용자 확인) CrewAI
