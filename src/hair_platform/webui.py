@@ -119,6 +119,8 @@ INDEX_HTML = """<!DOCTYPE html>
      레이아웃(라벨+버튼 한 줄)은 안 바뀐다 — 접힌 상태에서 `<summary>`
      말고 나머지 자식을 안 그리는 건 브라우저가 알아서 한다. 여기선
      `<summary>`만 클릭 가능해 보이게 손본다. */
+  .nav-more-toggle { opacity: 0.75; }
+  #nav-extra-tabs[hidden] { display: none !important; }
   .nav-group.nav-collapsible { cursor: default; }
   .nav-group.nav-collapsible > summary.nav-label { cursor: pointer; user-select: none; }
   .nav-group.nav-collapsible > summary.nav-label:hover { color: var(--color-admin); }
@@ -2735,6 +2737,24 @@ const SETTINGS_GROUPS = [
   },
 ];
 
+// 매일 쓰는 탭(2026-11-24, P2-8) — 그 밖의 "오늘 할 일" 탭(할 일 보드·성과 리뷰·인력 검색·조직도·연동 설정)은
+// "더 보기"로 접는다. 설정(admin/manager) 그룹은 기존처럼 그룹 단위로 접힌다.
+const ESSENTIAL_TABS = new Set(["home", "conversations", "inbox", "mywork", "briefs", "approvals", "gallery", "manual"]);
+
+function _navMorePref() {
+  try { return localStorage.getItem("hair_nav_more") === "1"; } catch (e) { return false; }
+}
+
+function _setNavMore(open, count) {
+  const wrap = document.getElementById("nav-extra-tabs");
+  const toggle = document.getElementById("nav-more-toggle");
+  if (!wrap || !toggle) return;
+  wrap.hidden = !open;
+  const n = count || wrap.children.length;
+  toggle.textContent = open ? "접기 ▴" : "더 보기(" + n + ") ▾";
+  try { localStorage.setItem("hair_nav_more", open ? "1" : "0"); } catch (e) { /* 저장 못 해도 동작 */ }
+}
+
 function buildNav() {
   const nav = document.getElementById("tabs");
   nav.innerHTML = "";
@@ -2783,7 +2803,25 @@ function buildNav() {
     nav.appendChild(row);
   };
 
-  addGroup("오늘 할 일", todayTabs, "");
+  // 자주 쓰는 탭만 기본으로(2026-11-24, P2-8 "화면 복잡도") — 나머지 "오늘 할 일" 탭은 "더 보기"로 접는다.
+  // 펼침 여부는 이 브라우저에만 기억한다(개인 편의). 접힌 탭으로 이동하면(홈의 바로가기 등) 자동으로 펼친다.
+  const essential = todayTabs.filter(t => ESSENTIAL_TABS.has(t.id));
+  const extra = todayTabs.filter(t => !ESSENTIAL_TABS.has(t.id));
+  addGroup("오늘 할 일", essential, "");
+  const row = nav.lastElementChild;
+  if (row && extra.length) {
+    const extraWrap = document.createElement("span");
+    extraWrap.id = "nav-extra-tabs";
+    extraWrap.style.display = "contents";
+    extra.forEach(t => extraWrap.appendChild(makeButton(t)));
+    const toggle = document.createElement("button");
+    toggle.className = "small nav-more-toggle";
+    toggle.id = "nav-more-toggle";
+    toggle.onclick = () => _setNavMore(extraWrap.hidden);
+    row.appendChild(extraWrap);
+    row.appendChild(toggle);
+    _setNavMore(_navMorePref(), extra.length);
+  }
 
   for (const group of SETTINGS_GROUPS) {
     const row = document.createElement(group.collapsible ? "details" : "div");
@@ -2830,6 +2868,11 @@ async function selectTab(id, opts) {
   // 시작하는 게 맞지만 "같은 탭을 제자리에서 새로고침"할 때는 아니다 —
   // `refresh()`만 `preserveScroll: true`로 불러 이 둘을 구분한다.
   const isTabSwitch = currentTab !== id;
+  // 접힌 "더 보기" 탭으로 이동하면 펼쳐서 지금 위치가 보이게 한다(2026-11-24, P2-8).
+  if (!ESSENTIAL_TABS.has(id)) {
+    const extraBtn = document.querySelector('#nav-extra-tabs button[data-tab="' + id + '"]');
+    if (extraBtn && document.getElementById("nav-extra-tabs").hidden) _setNavMore(true);
+  }
   const scrollY = opts && opts.preserveScroll ? window.scrollY : 0;
   currentTab = id;
   for (const btn of document.querySelectorAll("#tabs button")) {
@@ -4088,6 +4131,13 @@ async function renderHome(content) {
   if (usage && usage.unpriced_models) checks.push("단가가 없는 모델 " + usage.unpriced_models + '개 — 실제 비용을 보려면 <button class="small" data-go="modelregistry">모델 레지스트리</button>에서 단가 입력');
   content.innerHTML =
     "<h2>홈</h2>" +
+    // AI에게 일 맡기기 마법사(2026-11-24, P2-8) — 한 문장으로 적으면 방법을 골라 주고 바로 시작한다.
+    (role !== "viewer"
+      ? '<section class="card"><h3>AI에게 일 맡기기</h3>' +
+        '<p class="muted">어떤 일인지 한두 문장으로 적으면, 빠른 질문·특정 Agent·여러 단계 파이프라인·정기 실행 중 맞는 방법을 이유와 함께 추천하고 바로 시작합니다.</p>' +
+        '<div class="inline"><textarea id="wizard-text" rows="2" style="flex:1;min-width:16rem" placeholder="예: 3분기 부서 예산 집행 실적을 분석해 경영진 보고서를 써 줘 / 매주 월요일 지난주 실적 보고서 / 유지보수 계약서 손해배상 조항 검토"></textarea>' +
+        '<button class="primary" id="wizard-go">추천 받기</button></div><div id="wizard-result"></div></section>'
+      : "") +
     '<section class="card"><h3>처리할 일</h3><div class="home-stats">' + todo + "</div></section>" +
     '<section class="card"><h3>AI에게 일을 맡기는 방법</h3><div class="home-ways">' + ways + "</div>" +
     '<p class="muted">자세한 절차는 <button class="small" data-go="manual">이용 가이드</button>에 있습니다.</p></section>' +
@@ -4095,6 +4145,73 @@ async function renderHome(content) {
       (checks.length ? "<ul>" + checks.map(c => "<li>" + c + "</li>").join("") + "</ul>" : '<p class="muted">확인할 항목이 없습니다.</p>') +
       "</section>" : "");
   content.querySelectorAll("[data-go]").forEach(btn => btn.addEventListener("click", () => selectTab(btn.dataset.go)));
+  const wizardBtn = document.getElementById("wizard-go");
+  if (wizardBtn) wizardBtn.onclick = () => _runWizard(content);
+}
+
+// AI에게 일 맡기기(2026-11-24, P2-8) — 추천은 서버(`wizard.py`, LLM 없음), 실행은 기존 API를 이어 부른다
+// (권한은 각 API가 그대로 확인). 대화 계열은 새 대화를 만들고(Agent면 초대까지) 입력창에 글을 채워 둔다 —
+// 보내는 것은 사람이 확인하고 누른다.
+async function _runWizard(content) {
+  const text = document.getElementById("wizard-text").value.trim();
+  const box = document.getElementById("wizard-result");
+  if (!text) { showMsg("global-msg", "맡길 일을 먼저 적어 주세요", "error"); return; }
+  let rec;
+  try { rec = await api("POST", "/api/wizard/recommend", { text }); }
+  catch (e) { showMsg("global-msg", e.message, "error"); return; }
+  const icon = { chat: "💬", agent: "🤖", pipeline: "🔁", schedule: "⏰" };
+  const actionLabel = r => r.kind === "chat" ? "대화 열기" : r.kind === "agent" ? "이 Agent와 대화 열기"
+    : r.kind === "schedule" ? "정기 실행 설정으로" : (["admin", "manager"].includes(ME.role) ? "업무로 만들고 바로 실행" : "업무 요청으로 올리기");
+  box.innerHTML = '<div class="home-ways" style="margin-top:0.6rem">' + rec.recommendations.map((r, i) =>
+    '<div class="home-way"' + (r.recommended ? ' style="border-color:#2563eb"' : "") + ">" +
+    "<h3>" + icon[r.kind] + " " + esc(r.title) + (r.recommended ? ' <span class="badge-adminonly" style="background:#2563eb">추천</span>' : "") + "</h3>" +
+    "<p>" + esc(r.why) + "</p>" + (r.note ? '<p class="muted">' + esc(r.note) + "</p>" : "") +
+    (r.allowed ? '<button class="small' + (r.recommended ? " primary" : "") + '" data-wizard-pick="' + i + '">' + actionLabel(r) + "</button>" : "") +
+    "</div>"
+  ).join("") + "</div>";
+  box.querySelectorAll("[data-wizard-pick]").forEach(b => b.onclick = async () => {
+    const r = rec.recommendations[Number(b.dataset.wizardPick)];
+    b.disabled = true;
+    try { await _startWizardPick(r, text); } catch (e) { showMsg("global-msg", e.message, "error"); b.disabled = false; }
+  });
+}
+
+async function _startWizardPick(r, text) {
+  if (r.kind === "chat" || r.kind === "agent") {
+    const conv = await api("POST", "/api/conversations", { title: text.slice(0, 40) });
+    if (r.kind === "agent") {
+      await api("POST", "/api/conversations/" + conv.id + "/participants", { participant_type: "agent", participant_id: r.agent_id });
+    }
+    await selectTab("conversations");
+    await renderConversationDetail(conv.id, "conversation-detail");
+    const input = document.getElementById("conv-message-input");
+    if (input) {
+      input.value = (r.kind === "agent" ? "@" + r.role_name + " " : "") + text;
+      input.focus();
+    }
+    showMsg("global-msg", "대화를 열고 메시지를 채워 두었습니다 — 확인 후 보내기를 누르세요.", "ok");
+    return;
+  }
+  if (r.kind === "schedule") {
+    await selectTab("integrations");
+    const brief = document.getElementById("sch-brief");
+    if (brief) { brief.value = text; brief.scrollIntoView({ block: "center" }); }
+    showMsg("global-msg", "정기 실행 칸에 업무 내용을 채웠습니다 — 파이프라인·주기·시각을 고르고 추가하세요.", "ok");
+    return;
+  }
+  // pipeline
+  if (["admin", "manager"].includes(ME.role)) {
+    const brief = await api("POST", "/api/briefs", { raw_text: text });
+    const tasks = await api("POST", "/api/briefs/" + brief.id + "/tasks", { tasks: [{ role_name: r.template_name, required_skills: [] }] });
+    const taskId = tasks.tasks[0].id;
+    await api("POST", "/api/tasks/" + taskId + "/execute-pipeline", { pipeline_template_id: r.template_id });
+    showMsg("global-msg", "업무 요청 #" + brief.id + " · 할 일 #" + taskId + "로 '" + r.template_name + "'을 시작했습니다 — 계획 단계 승인이 오면 결재에서 처리하세요.", "ok");
+    await selectTab("mywork");
+    return;
+  }
+  const brief = await api("POST", "/api/briefs", { raw_text: text + "\\n\\n[추천 실행 방식] " + r.template_name });
+  showMsg("global-msg", "업무 요청 #" + brief.id + "를 올렸습니다(추천: " + r.template_name + ") — manager가 할 일로 나눠 실행합니다.", "ok");
+  await selectTab("briefs");
 }
 
 /* ---------- 통합 인박스(Phase 5, 사용자 요청 2026-09-28) ---------- */
@@ -12166,7 +12283,8 @@ const MANUAL_MARKDOWN = [
 '',
 '<h2 id="menu">8. 메뉴 전체 지도</h2>',
 '',
-'**오늘 할 일(user)**: 대화 · 홈(처리할 일 요약 + AI에게 일을 맡기는 방법 4가지 + admin 관리 점검 — 어디서 시작할지 모르겠으면 여기부터) · 인박스(결재 대기+실행 실패+낮은 Gate 경고 모음) · 내 업무 · 할 일 보드 · 갤러리(여러 할 일의 결과물 모아보기) · 업무 요청 · 결재 · 성과 리뷰 · 연동 설정(viewer 제외 — 내 API 키, 정기 실행은 admin/manager, 외부 알림은 admin)',
+'**오늘 할 일(user)**: 대화 · 홈(**AI에게 일 맡기기** — 할 일을 한두 문장으로 적으면 빠른 질문·특정 Agent·파이프라인·정기 실행 중 맞는 방법을 이유와 함께 추천하고 버튼 하나로 시작 + 처리할 일 요약 + 맡기는 방법 4가지 + admin 관리 점검 — 어디서 시작할지 모르겠으면 여기부터) · 인박스(결재 대기+실행 실패+낮은 Gate 경고 모음) · 내 업무 · 할 일 보드 · 갤러리(여러 할 일의 결과물 모아보기) · 업무 요청 · 결재 · 성과 리뷰 · 연동 설정(viewer 제외 — 내 API 키, 정기 실행은 admin/manager, 외부 알림은 admin)',
+'> 메뉴 줄에는 매일 쓰는 탭(홈·대화·인박스·내 업무·업무 요청·결재·갤러리·이용 가이드)만 기본으로 보입니다. 나머지(할 일 보드·성과 리뷰·인력 검색·조직도·연동 설정)는 **"더 보기"**를 누르면 펼쳐지고, 펼친 상태는 이 브라우저에 기억됩니다. 다른 화면의 바로가기로 접힌 탭에 가면 자동으로 펼쳐집니다.',
 '',
 '**조회(common, 전원 접근)**: 인력 검색 · 조직도 · 이용 가이드(이 화면)',
 '',

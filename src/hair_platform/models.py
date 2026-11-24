@@ -1085,6 +1085,12 @@ class CodeRepositoryActive(BaseModel):
     is_active: bool
 
 
+class WizardRequest(BaseModel):
+    """AI에게 일 맡기기 마법사(2026-11-24, P2-8)."""
+
+    text: str = Field(min_length=1, max_length=4000)
+
+
 class EditProposalCreate(BaseModel):
     """부분 재작성 제안(2026-11-24, P1-6) — 섹션 번호 또는 붙여 넣은 원문 구간 중 하나 + 요청."""
 

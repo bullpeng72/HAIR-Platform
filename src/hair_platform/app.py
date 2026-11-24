@@ -155,6 +155,7 @@ from hair_platform.models import (
     CodeRepositoryActive,
     CodeRepositoryCreate,
     EditProposalCreate,
+    WizardRequest,
     RepoCommitRequest,
     RagSearchConfigUpdate,
     SkillMarkdownImport,
@@ -520,6 +521,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
             conversations.record_brief_transfer(conn, source, user["id"], cur.lastrowid)
         return {"id": cur.lastrowid, "stub_roles": stub_roles, "status": "submitted",
                 "source_conversation_id": source}
+
+    # ---------- AI에게 일 맡기기 마법사(2026-11-24, P2-8 — `wizard.py`) ----------
+    @app.post("/api/wizard/recommend")
+    def wizard_recommend(payload: WizardRequest, user: sqlite3.Row = Depends(get_current_user)):
+        """적은 업무 한 문장 → 맞는 방법(빠른 질문·Agent·파이프라인·정기 실행) 추천(LLM 없음·무료)."""
+        from hair_platform import wizard
+
+        try:
+            return wizard.recommend(conn, payload.text, user["role"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="맡길 일을 한 문장 이상 적어 주세요") from exc
 
     # ---------- 개인 API 키(2026-11-23, P1-5 — `integrations.py`) ----------
     @app.get("/api/api-keys")
