@@ -239,6 +239,14 @@ def _apply_known_fixes(text: str) -> str:
 _OLLAMA_REPAIR_TIMEOUT_SECONDS = 120.0
 
 
+def helper_target(provider: str | None, model: str | None) -> tuple[str | None, str | None]:
+    """보조 호출(언어·수치 교정)을 보낼 모델 — admin이 보조 작업 모델을 정해 두면 그 모델,
+    아니면 본 작업 모델 그대로(2026-11-24, P0-2: 로컬 대형 모델 하나를 모든 호출이 기다리던 문제)."""
+    from hair_platform import model_options
+
+    return model_options.auxiliary_model() or (provider, model)
+
+
 def _call(provider: str, model: str, system: str, prompt: str) -> str:
     """교정 호출. Ollama는 사고 과정(thinking)을 끄고 짧은 타임아웃으로 직접
     호출한다 — 실측(2026-11-20, Ornith 35B 추론형 모델): 공통 `llm.call_llm()`
@@ -302,13 +310,17 @@ def repair_output(
 ) -> str | None:
     """응답 경로용 래퍼 — 같은 provider/model로 한 번 교정하고, 발견이 있었으면
     감사로그(`language_qa_repaired`)를 남긴다. 어떤 예외도 밖으로 내보내지 않는다."""
-    if not enabled() or not provider or not model or not find_issue_segments(text):
+    if not enabled() or not find_issue_segments(text):
+        return text
+    provider, model = helper_target(provider, model)  # 보조 작업 모델(있으면)
+    if not provider or not model:
         return text
     from hair_platform import audit, progress  # 지연 import — 순수 검사 함수는 의존성 없이 테스트
 
     progress.report("언어 품질 교정 중")
 
     repaired, report = repair(text, lambda system, prompt: _call(provider, model, system, prompt))
+    report = {**report, "model": f"{provider}/{model}"}
     try:
         audit.record(
             conn,

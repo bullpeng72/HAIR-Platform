@@ -85,6 +85,7 @@ def validate(options: dict | None) -> dict:
 # `llm.resolve_provider_and_model()`은 DB 연결 없이 불리는 곳이 많아 캐시로 둔다.
 _ACTIVE_MODELS: dict[str, list[str]] = {}
 _PLATFORM_DEFAULT: dict[str, str] = {}
+_AUXILIARY: dict[str, str] = {}  # 보조 작업 모델(`auxiliary_llm_config`, 2026-11-24 P0-2)
 # 모델명 → admin이 등록한 컨텍스트 한도(토큰). 임베딩 글자수 한도 계산에 쓴다
 # (`vectorstore.max_embed_chars`, 하드코딩 점검 3번).
 _CONTEXT_WINDOWS: dict[str, int] = {}
@@ -95,6 +96,7 @@ def refresh(conn: sqlite3.Connection) -> None:
     _CACHE.clear()
     _ACTIVE_MODELS.clear()
     _PLATFORM_DEFAULT.clear()
+    _AUXILIARY.clear()
     _CONTEXT_WINDOWS.clear()
     try:
         rows = conn.execute(
@@ -123,6 +125,20 @@ def refresh(conn: sqlite3.Connection) -> None:
         row = None
     if row is not None and row[0] and row[1]:
         _PLATFORM_DEFAULT.update(provider=row[0], model=row[1])
+    try:
+        aux = conn.execute("SELECT provider, model FROM auxiliary_llm_config WHERE id = 1").fetchone()
+    except sqlite3.OperationalError:
+        aux = None
+    # 레지스트리에서 비활성화·삭제된 모델이면 쓰지 않는다(본 작업 모델로 돌아간다).
+    if aux is not None and aux[0] and aux[1] and aux[1] in _ACTIVE_MODELS.get(aux[0], []):
+        _AUXILIARY.update(provider=aux[0], model=aux[1])
+
+
+def auxiliary_model() -> tuple[str, str] | None:
+    """admin이 정한 보조 작업 모델(언어·수치 교정용) — 없으면 None(본 작업 모델을 그대로 쓴다)."""
+    if _AUXILIARY.get("provider") and _AUXILIARY.get("model"):
+        return _AUXILIARY["provider"], _AUXILIARY["model"]
+    return None
 
 
 def platform_default() -> tuple[str, str] | None:

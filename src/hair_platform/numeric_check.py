@@ -214,12 +214,16 @@ def repair_output(conn, text: str | None, evidence: str, provider: str | None, m
                   actor_id: int, where: str) -> tuple[str | None, dict | None]:
     """응답 경로용 래퍼 — 근거 없는 퍼센트가 있으면 같은 provider/model로 한 번 교정하고 감사로그
     (`numeric_check_repaired`)를 남긴다. 어떤 예외도 밖으로 내보내지 않는다."""
-    if not enabled() or not text or not provider or not model:
+    if not enabled() or not text:
         return text, None
     bad = unsupported_claims(text, evidence)
     if not bad:
         return text, None
     from hair_platform import audit, language_qa, progress  # 지연 import — 순수 검사 함수는 의존성 없이 테스트
+
+    provider, model = language_qa.helper_target(provider, model)  # 보조 작업 모델(있으면)
+    if not provider or not model:
+        return text, None
 
     progress.report(f"수치 근거 확인·교정 중({len(bad)}건)")
 

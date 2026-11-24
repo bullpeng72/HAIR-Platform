@@ -94,6 +94,48 @@ def set_platform_default_llm(
     model_options.refresh(conn)  # 모델명 없는 호출의 기본 모델이 바로 따라오게
 
 
+def get_auxiliary_llm(conn: sqlite3.Connection) -> dict | None:
+    """보조 작업 모델(2026-11-24, P0-2) — 언어 교정·수치 문장 교정 같은 짧은 보조 호출 전용.
+    설정한 적 없으면 None(보조 호출도 본 작업 모델을 그대로 쓴다)."""
+    row = conn.execute("SELECT provider, model FROM auxiliary_llm_config WHERE id = 1").fetchone()
+    if row is None:
+        return None
+    return {"provider": row["provider"], "model": row["model"]}
+
+
+def set_auxiliary_llm(
+    conn: sqlite3.Connection, actor_id: int, provider: str | None, model: str | None
+) -> None:
+    """보조 작업 모델 지정 — provider·model이 비면 해제(본 작업 모델로 돌아감). 플랫폼 기본 LLM과
+    같은 조건으로 모델 레지스트리에 등록·활성화된 모델만 받는다."""
+    before = get_auxiliary_llm(conn)
+    model = (model or "").strip()
+    if not provider or not model:
+        conn.execute("DELETE FROM auxiliary_llm_config WHERE id = 1")
+        after = None
+    else:
+        if provider not in DEFAULT_MODELS:
+            raise ValueError(f"unsupported_provider:{provider!r}")
+        registered = conn.execute(
+            "SELECT 1 FROM model_registry WHERE provider = ? AND name = ? AND is_active = 1",
+            (provider, model),
+        ).fetchone()
+        if registered is None:
+            raise ValueError(f"model_not_registered:{provider}:{model}")
+        conn.execute(
+            "INSERT INTO auxiliary_llm_config (id, provider, model) VALUES (1, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, model = excluded.model",
+            (provider, model),
+        )
+        after = {"provider": provider, "model": model}
+    audit.record(
+        conn, actor_id, "auxiliary_llm_config_updated", "auxiliary_llm_config", 1,
+        before=before, after=after,
+    )
+    conn.commit()
+    model_options.refresh(conn)
+
+
 def resolve_provider_and_model(
     provider: str | None,
     model: str | None,

@@ -1073,6 +1073,13 @@ class PlatformLlmConfigUpdate(BaseModel):
     model: str
 
 
+class AuxiliaryLlmConfigUpdate(BaseModel):
+    """보조 작업 모델(2026-11-24, P0-2) — 언어·수치 교정용. 둘 다 비우면(None/빈 문자열) 해제."""
+
+    provider: LlmProvider | None = None
+    model: str | None = None
+
+
 class ManualKnowledgeTextCreate(BaseModel):
     """사용자 요청(2026-10-26, "Admin에 VectorDB... 관리 기능을 추가해줘
     (데이터 입력...)") — 파일 없이 "지식 베이스" 탭에서 텍스트를 바로

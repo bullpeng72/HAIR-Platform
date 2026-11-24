@@ -397,6 +397,15 @@ CREATE TABLE IF NOT EXISTS platform_llm_config (
     model TEXT NOT NULL
 );
 
+-- 보조 작업 모델(2026-11-24, P0-2 응답 속도) — 언어 교정·수치 문장 교정처럼 짧고 기계적인
+-- 보조 호출만 따로 보낼 모델. 비어 있으면 예전처럼 본 작업과 같은 모델을 쓴다. 로컬 대형
+-- 모델 하나를 모든 호출이 순서대로 기다려, 1초짜리 교정이 앞 요청 뒤에서 타임아웃 나던 문제.
+CREATE TABLE IF NOT EXISTS auxiliary_llm_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    provider TEXT NOT NULL CHECK (provider IN ('anthropic', 'openai', 'ollama')),
+    model TEXT NOT NULL
+);
+
 -- 사용자 요청(2026-11-03, "RAG 검색 품질 향상... 우선순위를 정해
 -- 진행해줘") — `vectorstore.search()`가 지금까지 관련성 임계값 없이
 -- top_k(모든 호출부에 3으로 하드코딩)만큼 무조건 반환했다(무관한

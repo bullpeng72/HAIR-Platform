@@ -151,6 +151,7 @@ from hair_platform.models import (
     PipelineTemplateActiveUpdate,
     PipelineTemplateCreate,
     PlatformLlmConfigUpdate,
+    AuxiliaryLlmConfigUpdate,
     RagSearchConfigUpdate,
     SkillMarkdownImport,
     SkillPoolCreate,
@@ -4420,6 +4421,33 @@ def create_app(db_path: str | None = None) -> FastAPI:
             llm.set_platform_default_llm(
                 conn, user["id"], payload.provider, payload.model
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"provider": payload.provider, "model": payload.model}
+
+    # 보조 작업 모델(2026-11-24, P0-2 응답 속도) — 언어·수치 교정 같은 짧은 보조 호출 전용.
+    @app.get("/api/auxiliary-llm-config")
+    def get_auxiliary_llm_config_endpoint(
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        from hair_platform import model_options
+
+        configured = llm.get_auxiliary_llm(conn)
+        active = model_options.auxiliary_model()
+        return {
+            "provider": configured["provider"] if configured else None,
+            "model": configured["model"] if configured else None,
+            # 설정했지만 레지스트리에서 비활성화돼 쓰이지 않는 경우를 화면에 알리기 위해
+            "in_use": bool(active),
+        }
+
+    @app.put("/api/auxiliary-llm-config")
+    def set_auxiliary_llm_config_endpoint(
+        payload: AuxiliaryLlmConfigUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        try:
+            llm.set_auxiliary_llm(conn, user["id"], payload.provider, payload.model)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"provider": payload.provider, "model": payload.model}

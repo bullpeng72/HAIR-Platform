@@ -4897,7 +4897,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
               const label = GATE_EXTRA_LABELS[gid] || gid;
               const cls = g.not_measured ? "gate-na" : (g.passed ? "gate-ok" : "gate-warn");
               const title = g.not_measured
-                ? "Gate " + label + " — 미평가"
+                ? "Gate " + label + " — 미평가" + (g.reason ? " (" + g.reason + ")" : "")
                 : "Gate " + label + " — " + (g.passed ? "통과" : "미통과") +
                   (typeof g.score === "number" ? " (점수 " + g.score + ")" : "");
               return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + '">' + label + "</span>";
@@ -7675,12 +7675,13 @@ async function renderAgentPool(content) {
 async function renderAgentOptimization(content) {
   content.innerHTML = '<section class="card"><h2>LLM 설정 최적화 추천</h2><p class="muted">불러오는 중…</p></section>';
   let recs, platformLlm;
-  let registry;
+  let registry, auxLlm;
   try {
-    [recs, platformLlm, registry] = await Promise.all([
+    [recs, platformLlm, registry, auxLlm] = await Promise.all([
       api("GET", "/api/agent-pool-optimization/recommendations"),
       api("GET", "/api/platform-llm-config"),
       api("GET", "/api/model-registry"),
+      api("GET", "/api/auxiliary-llm-config"),
     ]);
   } catch (e) {
     content.innerHTML = "";
@@ -7727,8 +7728,38 @@ async function renderAgentOptimization(content) {
     platformLlmFormHtml +
     "</section>";
 
+  // 보조 작업 모델(2026-11-24, P0-2 응답 속도) — 언어 교정·수치 문장 교정만 따로 보낼 작은 모델.
+  const auxConfigured = auxLlm.provider && auxLlm.model;
+  const auxLlmHtml =
+    '<section class="card"><h2>보조 작업 모델</h2>' +
+    helpBox(
+      '<ul class="muted help-list">' +
+      '<li>결과물의 한자·외국 문자 교정과 근거 없는 수치 문장 교정처럼 <b>짧고 기계적인 보조 호출</b>만 이 모델로 보냅니다. 결과물 작성 자체는 각 Agent의 모델을 그대로 씁니다.</li>' +
+      '<li>로컬 대형 모델 하나를 모든 작업이 순서대로 기다리면 짧은 교정도 앞 작업이 끝날 때까지 밀립니다. <b>대기가 실제로 줄어드는 경우는 보조 모델이 본 작업 모델과 동시에 돌 수 있을 때뿐</b>입니다 — 클라우드 모델(예: OpenAI의 소형 모델)이거나, 메모리가 두 로컬 모델을 함께 올릴 만큼 넉넉할 때.</li>' +
+      '<li>⚠️ 메모리가 부족한 PC에서 로컬 모델 두 개를 쓰면 Ollama가 모델을 번갈아 내렸다 올리며 하나씩 처리해 오히려 느려질 수 있습니다(실측: 32GB Mac에서 35B 본 모델 + 7.8B 보조 모델 → 교정 대기 시간 변화 없음).</li>' +
+      '<li>비워 두면 예전처럼 본 작업과 같은 모델을 씁니다. "모델 레지스트리"에 등록·활성화된 모델만 고를 수 있습니다.</li>' +
+      '</ul>'
+    ) +
+    '<p>' + (auxConfigured
+      ? '<b>설정됨</b> — ' + esc(auxLlm.provider) + ' / <b>' + esc(auxLlm.model) + '</b>' +
+        (auxLlm.in_use ? '' : ' <span class="msg error">레지스트리에서 비활성화돼 지금은 쓰이지 않습니다</span>')
+      : '<span class="muted">설정 안 함 — 보조 호출도 본 작업 모델을 씁니다</span>') + '</p>' +
+    (activeModels.length
+      ? '<form class="inline" id="aux-llm-config-form">' +
+        '<select id="aux-model"><option value="">(사용 안 함 — 본 작업 모델 사용)</option>' +
+        activeModels.map(m => {
+          const value = m.provider + "|" + m.name;
+          const selected = (m.provider === auxLlm.provider && m.name === auxLlm.model) ? " selected" : "";
+          return '<option value="' + escAttr(value) + '"' + selected + '>' + esc(m.provider) + " / " + esc(m.name) + '</option>';
+        }).join("") +
+        '</select>' +
+        '<button type="submit" class="small primary">저장</button>' +
+        '</form>'
+      : '') +
+    "</section>";
+
   const changedCount = recs.filter(r => r.changed).length;
-  content.innerHTML = platformLlmHtml + '<section class="card"><h2>LLM 설정 최적화 추천</h2>' +
+  content.innerHTML = platformLlmHtml + auxLlmHtml + '<section class="card"><h2>LLM 설정 최적화 추천</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
       '<li>모델 랭킹은 기본적으로 모델명 패턴 추정(실제 벤치마크 데이터 아님)이지만, "모델 레지스트리" 화면에서 모델별로 심층추론/정밀·신속/표준 tier를 직접 매핑해두면(★ 표시) 그 매핑이 패턴 추정보다 항상 우선합니다 — 새 모델 출시·provider 교체 시 여기 코드가 아니라 그 화면에서 매핑만 바꾸면 됩니다.</li>' +
@@ -7788,6 +7819,18 @@ async function renderAgentOptimization(content) {
     try {
       await api("PUT", "/api/platform-llm-config", { provider, model });
       showMsg("global-msg", "플랫폼 공통 기본 LLM을 저장했습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+
+  const auxLlmForm = document.getElementById("aux-llm-config-form");
+  if (auxLlmForm) auxLlmForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const picked = document.getElementById("aux-model").value;
+    const [provider, model] = picked ? picked.split("|") : [null, null];
+    try {
+      await api("PUT", "/api/auxiliary-llm-config", { provider, model });
+      showMsg("global-msg", picked ? "보조 작업 모델을 저장했습니다." : "보조 작업 모델을 해제했습니다.", "ok");
       refresh();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
@@ -11561,6 +11604,8 @@ const MANUAL_MARKDOWN = [
 '> ⚠️ 흔히 헷갈리는 부분: 이 설정은 **멘션 없는 기본 AI 응답에만** 적용됩니다. `@Agent이름`으로 부르면 그 Agent 자신에게 저장된 모델이, `@Team이름`으로 부르면 팀 전체가 모델 하나를 함께 씁니다 — 매니저가 있는 팀은 매니저 Agent의 모델, 없으면 "플랫폼 공통 기본 LLM"(아래 ①)입니다(이 설정과 무관). 각 메시지에 실제로 쓰인 모델은 메시지 작성자 줄에 표시됩니다.',
 '>',
 '> provider/model을 둘 다 "**기본값 사용**"으로 두면 ① 관리자가 "**LLM 설정 최적화**" 탭(admin 전용)의 "플랫폼 공통 기본 LLM" 카드에서 지정해둔 모델 → ② 없으면 서버 환경변수 → ③ 그래도 없으면 API 키 존재 여부로 자동 판별합니다. provider는 직접 고르고 model만 "기본값 사용"으로 두면 ①을 건너뛰고 그 provider의 표준 기본 모델이 쓰입니다.',
+'>',
+'> 💡 **응답이 너무 느리다면** — 결과물의 한자·외국 문자 교정과 근거 없는 수치 문장 교정은 따로 짧은 AI 호출을 한 번 더 합니다. 로컬 대형 모델 하나로 모든 작업을 처리하면 이 짧은 호출도 앞 작업이 끝날 때까지 기다립니다. 관리자가 같은 탭의 "**보조 작업 모델**" 카드에서 다른 모델을 지정하면 이런 보조 호출만 그 모델로 보냅니다(결과물 작성은 그대로 각 Agent의 모델). 본 모델과 **동시에** 돌 수 있는 모델(클라우드 소형 모델, 또는 메모리가 넉넉할 때의 로컬 소형 모델)이어야 효과가 있습니다 — 메모리가 부족하면 로컬 모델 두 개가 번갈아 올라가 오히려 느려질 수 있습니다.',
 '',
 '### 5단계 — 결과 확인',
 '',
