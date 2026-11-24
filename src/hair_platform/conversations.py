@@ -491,6 +491,8 @@ def search_mentionable(conn: sqlite3.Connection, query: str, actor_id: int) -> d
     직접 초대한 이력(`conversation_participants.invited_by`)이 있는
     대상을 그 초대 시각 최신순으로 앞세운다 — "자주/최근 부르는
     사람"이 매번 똑같이 타이핑하지 않아도 먼저 보이게."""
+    # Agent는 최대 50개(2026-11-24, P2-12) — 기본 제공 Agent가 36개로 늘어 20개 제한이면 빈 검색어(@만 입력)
+    # 목록에서 일부 기본 Agent가 아예 안 보였다.
     like = f"%{query}%"
     humans = conn.execute(
         """
@@ -517,7 +519,7 @@ def search_mentionable(conn: sqlite3.Connection, query: str, actor_id: int) -> d
         WHERE status = 'active'
           AND (role_name LIKE ? OR skill_tags LIKE ? OR name LIKE ?)
         ORDER BY last_invited IS NULL, last_invited DESC, COALESCE(name, role_name)
-        LIMIT 20
+        LIMIT 50
         """,
         (actor_id, like, like, like),
     ).fetchall()

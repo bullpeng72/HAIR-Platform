@@ -866,6 +866,12 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
 # hierarchical로 실행하려면(`crew_runtime.run_crew()`의 검증 —
 # manager_agent_id는 agent_ids 목록 안에 있어야 함) 매니저도 팀
 # 멤버여야 하므로 함께 넣는다. (role_name, is_manager)
+# 업무 영역 템플릿 Agent(2026-11-24, P2-12) — 기본 제공 Agent 목록에 합쳐 ID 코드(AGT-REF)·Agent 최적화의
+# "알려진 역할" 튜닝·시드가 다른 기본 Agent와 똑같이 다루게 한다(정의는 `domain_packs`).
+from hair_platform import domain_packs as _domain_packs  # noqa: E402
+
+AGENT_SPECS = AGENT_SPECS + _domain_packs.AGENT_SPECS
+
 DEV_CREW_TEAM_NAME = "자율 개발 크루"
 # 사용자 분석 요청(2026-10-26, "같은 업무의 에이전트가 1,2,3 등으로...
 # 각 영역에 하나의 에이전트만 있어도 되지 않는지") 후 정리 — 영역별
@@ -1010,6 +1016,10 @@ def seed(conn: sqlite3.Connection) -> None:
     # 독립 파이프라인으로 추가한다. 둘 다 "데이터 분석가"를 공유한다.
     _seed_proposal_pipeline(conn)
     _seed_performance_report_pipeline(conn)
+    # 업무 영역 템플릿(2026-11-24, P2-12) — 재무·영업/고객지원·법무 도구·Agent·파이프라인.
+    from hair_platform import domain_packs
+
+    domain_packs.seed(conn)
 
 
 # 사용자 요청(2026-10-18, "BMAD-METHOD(https://github.com/bmad-code-org/

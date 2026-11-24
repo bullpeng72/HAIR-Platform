@@ -57,10 +57,10 @@ def test_assign_code_different_segments_number_independently():
     pyexec_code = id_scheme.assign_code(
         conn, "tool_pool", tool_row, id_scheme.TOOL_KIND_SEGMENT["custom_python"]
     )
-    # 기존 레퍼런스 PYEXEC 8개(Spec EARS 린터~차트 생성기, 2026-11-18
-    # 추가) 다음 번호라 009여야 한다 — NATIVE/MCPSTDIO/MCPRMT 세그먼트
+    # 기존 레퍼런스 PYEXEC 11개(Spec EARS 린터~차트 생성기 8개 + 2026-11-24 업무 영역 도구 3개
+    # ) 다음 번호라 012여야 한다 — NATIVE/MCPSTDIO/MCPRMT 세그먼트
     # 번호와는 무관.
-    assert pyexec_code == "TUL-PYEXEC-009"
+    assert pyexec_code == "TUL-PYEXEC-012"
 
 
 def test_assign_code_unknown_tool_kind_or_skill_mode_raises():
@@ -101,18 +101,18 @@ def test_init_schema_assigns_codes_to_all_reference_rows():
     # 2026-11-18 "excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프
     # 출력 등이 가능하도록... 전담 팀을 구성해"로 Tool "차트 생성기" 1개
     # 추가(13 → 14), Skill "데이터시각화" 1개 추가(54 → 55).
-    assert len(agent_codes) == 29
+    assert len(agent_codes) == 36
     assert all(c is not None for c in agent_codes)
     assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 26종 전원 레퍼런스
-    assert len(set(agent_codes)) == 29  # 전부 유일
+    assert len(set(agent_codes)) == 36  # 전부 유일
 
-    assert len(tool_codes) == 15
+    assert len(tool_codes) == 18
     assert all(c is not None for c in tool_codes)
-    assert len(set(tool_codes)) == 15
+    assert len(set(tool_codes)) == 18
 
-    assert len(skill_codes) == 68  # +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21)
+    assert len(skill_codes) == 77  # +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21), +9: 업무 영역 템플릿(2026-11-24)
     assert all(c is not None for c in skill_codes)
-    assert len(set(skill_codes)) == 68
+    assert len(set(skill_codes)) == 77
 
 
 def test_init_schema_tool_codes_reflect_kind():
@@ -186,7 +186,7 @@ def test_reset_and_reassign_codes_wipes_then_reassigns_deterministically():
 
     counts = id_scheme.reset_and_reassign_codes(conn)
 
-    assert counts == {"agent_pool": 29, "tool_pool": 15, "skill_pool": 68}
+    assert counts == {"agent_pool": 36, "tool_pool": 18, "skill_pool": 77}  # P2-12 업무 영역 템플릿(2026-11-24): 도구 +3·Agent +7·스킬 +9
     after = {
         table: [
             r["code"]
@@ -244,7 +244,7 @@ def test_agent_pool_list_endpoint_exposes_code(client_and_conn):
     resp = client.get("/api/agent-pool")
     assert resp.status_code == 200, resp.text
     agents = resp.json()
-    assert len(agents) == 29
+    assert len(agents) == 36
     assert all(a["code"] and a["code"].startswith("AGT-REF-") for a in agents)
 
 

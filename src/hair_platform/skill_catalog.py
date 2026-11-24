@@ -764,6 +764,17 @@ NEW_SKILLS: dict[str, dict] = {
     "문서교정": {"category": "general"},
 }
 
+# 업무 영역 템플릿(2026-11-24, P2-12) — 재무·영업/고객지원·법무 스킬. 정의는 `domain_packs`.
+def _add_domain_pack_skills() -> None:
+    from hair_platform import domain_packs
+
+    for name, spec in domain_packs.SKILL_SPECS.items():
+        SKILL_GUIDES.setdefault(name, SkillGuide(*spec["guide"]))
+        NEW_SKILLS.setdefault(name, {"category": "general", **({"tool": spec["tool"]} if spec.get("tool") else {})})
+
+
+_add_domain_pack_skills()
+
 # 기존 스킬을 기존 Agent에 한 번만 연결하는 마이그레이션(이름 → {역할명: [스킬]}) —
 # `db._apply_one_time_agent_skill_additions`가 `schema_migrations`에 이름을 남겨 다시
 # 돌지 않는다(admin이 이후 연결을 빼도 재시작 때 되살리지 않는다).
