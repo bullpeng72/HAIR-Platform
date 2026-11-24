@@ -4675,8 +4675,11 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     // Word 내보내기(2026-11-23, P1-7) — 코드 결과물은 원본 다운로드가 더 맞아 버튼을 두지 않는다.
     (d.content_type !== "code" ? '<button class="small" data-export-docx="' + d.id + '">Word로 내보내기</button>' : "") +
     (d.status === "approved" && ME.role !== "viewer" ? knowledgeSubmitButton("deliverable", d.id) : "") +
+    // 저장소에 커밋(2026-11-24, P0-3 2단계) — 결재를 마친 결과물만, admin만(저장소 등록과 같은 경계).
+    (d.status === "approved" && ME.role === "admin" ? '<button class="small" data-repo-commit="' + d.id + '">저장소에 커밋</button>' : "") +
     '</div>' +
     '<div class="deliverable-history" id="history-' + d.id + '" hidden></div>' +
+    '<div class="repo-commit-panel" id="repo-commit-' + d.id + '" hidden></div>' +
     evidenceBlock +
     promptBlock +
     decideActions +
@@ -5272,6 +5275,63 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         }
         box.hidden = false;
       } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  // 저장소에 커밋(2026-11-24, P0-3 2단계) — 미리보기(아무것도 쓰지 않음)로 파일·점검을 보여 주고,
+  // 점검을 모두 통과했을 때만 "main에 커밋"을 누를 수 있다. 서버가 커밋 직전에 점검을 다시 한다.
+  detail.querySelectorAll("[data-repo-commit]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.repoCommit;
+      const box = document.getElementById("repo-commit-" + id);
+      if (!box.hidden) { box.hidden = true; return; }
+      let repos = [];
+      try { repos = (await api("GET", "/api/code-repositories")).filter(r => r.is_active); }
+      catch (e) { showMsg("global-msg", e.message, "error"); return; }
+      if (!repos.length) {
+        box.innerHTML = '<p class="muted">등록된 코드 저장소가 없습니다 — "연동 설정"에서 먼저 저장소를 등록하세요.</p>';
+        box.hidden = false;
+        return;
+      }
+      box.innerHTML =
+        '<div class="inline" style="flex-wrap:wrap">' +
+        '<select class="rc-repo">' + repos.map(r => '<option value="' + escAttr(r.name) + '">' + esc(r.name) + "</option>").join("") + "</select>" +
+        '<button class="small rc-preview">미리보기</button></div>' +
+        '<p class="muted">결과물의 코드 블록 중 <b>경로가 적힌 것만</b>(블록 첫 줄 <code># src/app.py</code> 또는 블록 바로 위 줄 <code>`src/app.py`</code>) 저장소의 <b>main 브랜치에 로컬 커밋</b>합니다. push는 하지 않습니다.</p>' +
+        '<div class="rc-result"></div>';
+      box.hidden = false;
+      const result = box.querySelector(".rc-result");
+      box.querySelector(".rc-preview").onclick = async () => {
+        const repository = box.querySelector(".rc-repo").value;
+        try {
+          const p = await api("POST", "/api/deliverables/" + id + "/repo-commit/preview", { repository });
+          const checks = p.checks.map(c =>
+            "<li>" + (c.ok ? (c.info ? "ℹ️ " : "✅ ") : "❌ ") + esc(c.name) + (c.detail ? ' <span class="muted">— ' + esc(c.detail) + "</span>" : "") + "</li>"
+          ).join("");
+          const files = p.files.map(f =>
+            "<tr><td><code>" + esc(f.path) + "</code></td><td>" + (f.action === "new" ? "새 파일" : "수정") + "</td><td>" + f.lines + "줄</td><td>" +
+            (f.problems.length ? '<span class="msg error">' + esc(f.problems.join(", ")) + "</span>" : "") + "</td></tr>"
+          ).join("");
+          result.innerHTML =
+            "<ul>" + checks + "</ul>" +
+            (files ? '<div class="table-wrap"><table><thead><tr><th>경로</th><th>구분</th><th>크기</th><th>문제</th></tr></thead><tbody>' + files + "</tbody></table></div>" : "") +
+            (p.skipped_blocks.length ? '<p class="muted">경로가 없어 커밋하지 않는 블록: ' + p.skipped_blocks.map(s => "<code>" + esc(s) + "</code>").join(", ") + "</p>" : "") +
+            (p.ok
+              ? '<div class="inline"><input class="rc-message" maxlength="200" placeholder="커밋 메시지(비우면 결과물·업무 번호로)" style="min-width:18rem">' +
+                '<button class="small primary rc-commit">' + esc(p.branch) + "에 커밋</button></div>"
+              : '<p class="msg error">통과하지 못한 점검이 있어 커밋할 수 없습니다.</p>');
+          const commitBtn = result.querySelector(".rc-commit");
+          if (commitBtn) commitBtn.onclick = async () => {
+            commitBtn.disabled = true;
+            try {
+              const r = await api("POST", "/api/deliverables/" + id + "/repo-commit", {
+                repository, message: result.querySelector(".rc-message").value.trim() || null,
+              });
+              showMsg("global-msg", r.repository + " " + r.branch + "에 커밋했습니다(" + r.short + ", 파일 " + r.files.length + "개) — push는 하지 않았습니다.", "ok");
+              box.hidden = true;
+            } catch (e) { commitBtn.disabled = false; showMsg("global-msg", e.message, "error"); }
+          };
+        } catch (e) { showMsg("global-msg", e.message, "error"); }
+      };
     };
   });
   // Word 내보내기(2026-11-23, P1-7) — api()와 같은 인증 헤더(탭별 토큰)로 받아 파일로 저장한다.
@@ -11901,6 +11961,7 @@ const MANUAL_MARKDOWN = [
 '- **외부 알림**(admin) — Slack·Teams의 수신 웹훅(Incoming Webhook) URL과 받을 일(결재 대기·파이프라인 사람 승인 대기·완료·실패·Agent 실행 실패)을 고르면, 그 일이 생길 때마다 한 번씩 메시지를 보냅니다. 처음 저장할 때 이미 있던 일은 보내지 않습니다. "테스트 전송"으로 연결을 먼저 확인하세요.',
 '- **내 API 키**(admin/manager/member) — 외부 시스템(cron·메일 규칙·지라 등)이 **내 계정·권한 그대로** HAIR API를 부를 때 씁니다. 발급한 키는 그 자리에서 한 번만 보이니 바로 복사해 두고, 요청 헤더에 `Authorization: Bearer 키`로 넣습니다(예: `POST /api/briefs`로 업무 요청 올리기, `POST /api/tasks/{id}/execute-pipeline`으로 파이프라인 시작). 키는 권한을 넓히지 않고, 폐기하거나 계정이 비활성화되면 즉시 막힙니다.',
 '- **코드 저장소**(admin) — 이 서버 PC에 클론해 둔 Git 저장소의 이름·경로를 등록하면, 개발 Agent(코드베이스 분석가·백엔드/프론트엔드/풀스택/데이터·인프라 개발자·코드 검증가·AA — **코드저장소조회** 스킬)가 사람이 코드를 붙여 주지 않아도 파일 목록·내용·코드 검색·최근 커밋을 직접 읽고 "경로:줄"을 근거로 답합니다. **읽기 전용**이고 **커밋된 파일만** 보입니다 — 미커밋 변경과 `.gitignore`로 빠진 파일, `.env`·키 같은 비밀 파일은 읽지 않습니다. 최신 코드를 보게 하려면 그 폴더에서 `git pull`을 해 두세요. 대화에서는 "@코드베이스 분석가 shop-api 저장소의 주문 취소 흐름을 설명해 줘"처럼 저장소 이름을 함께 적으면 됩니다.',
+'- **결과물을 저장소에 커밋**(admin) — 결재를 마친(승인된) 결과물 카드의 "저장소에 커밋"을 누르고 저장소를 골라 **미리보기**를 하면, 커밋할 파일(새 파일/수정)과 점검 결과가 나옵니다. 코드 블록 중 **경로가 적힌 것만** 씁니다(블록 첫 줄 `# src/app.py` 또는 블록 바로 위 줄 `` `src/app.py` ``) — 경로 없는 블록은 쓰지 않고 알려 줍니다. 점검(결재 완료·저장소가 main/master 브랜치·미커밋 변경 없음·저장소 안 경로·비밀/무시 파일 아님·Python 문법·이 결과물의 테스트 실행 기록이 실패가 아님)을 **모두 통과해야** "main에 커밋" 버튼이 생기고, 누르는 순간 서버가 점검을 한 번 더 한 뒤 **main 브랜치에 로컬 커밋**합니다(작성자 "HAIR-Platform", 메시지에 결과물·업무 번호와 실행한 admin 아이디). **push는 하지 않습니다** — 원격에 올리는 것은 사람이 그 폴더에서 직접 합니다. 커밋 중 저장소의 pre-commit 훅 등이 실패하면 쓴 파일을 되돌립니다.',
 '',
 '<h2 id="scenario">7. 실전 시나리오 4가지</h2>',
 '',
@@ -12041,7 +12102,7 @@ async function renderIntegrations(content) {
       (notify.last_error ? " · ⚠ " + esc(notify.last_error) : "") + "</span></div></div>" +
       "<h3>코드 저장소(admin)</h3>" +
       '<p class="muted">이 서버 PC에 있는 Git 저장소(클론한 폴더)를 등록하면, <b>코드저장소조회</b> 스킬이 있는 개발 Agent(코드베이스 분석가·개발자·코드 검증가·AA)가 파일 목록·내용·코드 검색·최근 커밋을 직접 읽습니다. ' +
-      '<b>읽기 전용</b>이고 <b>커밋된 파일만</b> 보입니다 — 미커밋 변경, <code>.gitignore</code>로 빠진 파일, <code>.env</code>·키 같은 비밀 파일은 읽지 않습니다. 최신 코드를 보게 하려면 그 폴더에서 <code>git pull</code>을 해 두세요.</p>' +
+      '<b>읽기 전용</b>이고 <b>커밋된 파일만</b> 보입니다 — 미커밋 변경, <code>.gitignore</code>로 빠진 파일, <code>.env</code>·키 같은 비밀 파일은 읽지 않습니다. 최신 코드를 보게 하려면 그 폴더에서 <code>git pull</code>을 해 두세요. 승인된 결과물은 결과물 카드의 "저장소에 커밋"으로 점검을 모두 통과할 때만 main에 로컬 커밋할 수 있습니다(push 없음).</p>' +
       '<form id="repo-form" class="inline" style="flex-wrap:wrap">' +
       '<input id="repo-name" placeholder="이름(예: shop-api)" required maxlength="60">' +
       '<input id="repo-path" placeholder="서버 경로(예: /Users/me/src/shop-api)" required style="min-width:18rem">' +

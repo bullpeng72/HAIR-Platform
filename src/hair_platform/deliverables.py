@@ -491,6 +491,8 @@ def delete_deliverable(
     conn.execute(
         "DELETE FROM deliverable_revisions WHERE deliverable_id = ?", (deliverable_id,)
     )
+    # 저장소 커밋 기록(2026-11-24, P0-3 2단계) — 저장소 쪽 커밋은 그대로 남는다.
+    conn.execute("DELETE FROM deliverable_repo_commits WHERE deliverable_id = ?", (deliverable_id,))
     conn.execute(
         "DELETE FROM agent_evaluations WHERE deliverable_id = ?", (deliverable_id,)
     )

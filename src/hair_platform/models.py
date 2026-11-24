@@ -1085,6 +1085,13 @@ class CodeRepositoryActive(BaseModel):
     is_active: bool
 
 
+class RepoCommitRequest(BaseModel):
+    """결과물 → 저장소 커밋(2026-11-24, P0-3 2단계). message가 비면 결과물·업무 번호로 만든다."""
+
+    repository: str = Field(min_length=1, max_length=60)
+    message: str | None = Field(default=None, max_length=200)
+
+
 class AuxiliaryLlmConfigUpdate(BaseModel):
     """보조 작업 모델(2026-11-24, P0-2) — 언어·수치 교정용. 둘 다 비우면(None/빈 문자열) 해제."""
 

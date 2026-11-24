@@ -154,6 +154,7 @@ from hair_platform.models import (
     AuxiliaryLlmConfigUpdate,
     CodeRepositoryActive,
     CodeRepositoryCreate,
+    RepoCommitRequest,
     RagSearchConfigUpdate,
     SkillMarkdownImport,
     SkillPoolCreate,
@@ -2736,6 +2737,38 @@ def create_app(db_path: str | None = None) -> FastAPI:
         ):
             raise HTTPException(status_code=403, detail="이 업무의 결과물을 볼 권한이 없습니다")
         return deliverables.deliverable_history(conn, deliverable_id)
+
+    # 결과물 → 코드 저장소 커밋(2026-11-24, P0-3 2단계 — `repo_commit.py`). 저장소 등록과 같은 admin
+    # 전용 — 미리보기(아무것도 쓰지 않음)와 커밋(점검 재실행 후 통과 시 main에 로컬 커밋, push 없음).
+    @app.post("/api/deliverables/{deliverable_id}/repo-commit/preview")
+    def preview_deliverable_repo_commit(
+        deliverable_id: int, payload: RepoCommitRequest, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        from hair_platform import repo_commit
+
+        try:
+            return repo_commit.plan(conn, deliverable_id, payload.repository)
+        except repo_commit.CommitError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/deliverables/{deliverable_id}/repo-commit")
+    def commit_deliverable_to_repository(
+        deliverable_id: int, payload: RepoCommitRequest, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        from hair_platform import repo_commit
+
+        try:
+            return repo_commit.commit(conn, deliverable_id, payload.repository, user, payload.message)
+        except repo_commit.CommitError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/deliverables/{deliverable_id}/repo-commits")
+    def list_deliverable_repo_commits(
+        deliverable_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        from hair_platform import repo_commit
+
+        return repo_commit.history(conn, deliverable_id)
 
     @app.get("/api/deliverables/{deliverable_id}/export.docx")
     def export_deliverable_docx(
