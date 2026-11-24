@@ -20,7 +20,7 @@ def _conn(path=":memory:"):
     return c
 
 
-def _plain_score(role_name, call_fn, task_type=None):
+def _plain_score(role_name, call_fn, task_type=None, **_kwargs):
     out = call_fn()
     return {"output": out, "gate_scores": {"A": {"score": 0.9, "passed": True}}, "tcr": 90.0}
 

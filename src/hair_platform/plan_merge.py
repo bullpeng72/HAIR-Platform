@@ -154,6 +154,7 @@ def run(
         lead["role_name"],
         lambda: agent_runtime.execute_agent(conn, lead["agent_id"], actor_id, merge_prompt, provider, model),
         task_type=eval_task_type,
+        long_running=True,  # 단계 전체(계획·팀원·병합)를 대표하는 채점 — 응답 시간 SLA로 못 잰다
     )
     merged = scored["output"]
     agents = [*results, {"agent_id": lead["agent_id"], "role_name": lead["role_name"], "output": merged, "stage": "final"}]
@@ -166,4 +167,6 @@ def run(
                         for r in results],
         "plan_source": plan_source,
         "parallel": parallel,
+        # 병합본 수치의 근거 — 팀원 결과(각자 도구 결과로 수치 검사를 이미 거침, `execute_agent`).
+        "tool_evidence": "\n\n".join(f"[팀원 {r['role_name']} 결과]\n{r['output']}" for r in results),
     }

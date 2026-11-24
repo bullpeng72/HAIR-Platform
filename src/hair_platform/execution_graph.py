@@ -284,7 +284,10 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
             stage_output
         )
     # 수치 근거·테스트 실제 실행(2026-11-23) — 기존 엔진과 같은 검사(`attach_quality_checks`).
-    agent_evaluation.attach_quality_checks(gate_scores, stage_output, combined_base)
+    # 근거 = 브리프·앞 단계 산출물 + 이번 단계의 도구 결과(2026-11-24 — 계산기 결과 수치 오탐 방지).
+    agent_evaluation.attach_quality_checks(
+        gate_scores, stage_output, "\n\n".join(filter(None, [combined_base, result.get("tool_evidence")]))
+    )
     # 요구사항 추적성·단계 gate_ids 반영(2026-11-21) — 기존 엔진과 같은 판정.
     traceability = pr.requirements_traceability_score(
         conn, state["run_id"], stage, stage_output

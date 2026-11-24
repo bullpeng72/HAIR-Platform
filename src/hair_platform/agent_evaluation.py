@@ -113,7 +113,45 @@ def _check_js_snippets_with_node(
 # (5s/10s, "빨라야 정상"인 반대 근거)이라 여기 그대로 쓰면 정상 호출도 전부
 # Gate D 위반으로 잡힌다 — 실제 LLM 응답 지연 특성에 맞춰 넉넉히 잡는다.
 _SLA = SLAConfig(p95_ms=30000.0, p99_ms=60000.0)
-_EXPLAINABILITY = ExplainabilityConfig(require_reasoning=True)
+# Gate G 추론 표지(2026-11-24, "Gate C·D·F·G가 늘 같은 값" 분석) — SDK 기본 표지는 영어
+# 위주에 한국어는 "왜냐하면"·"따라서" 둘뿐이라, 근거를 "근거"·"므로"·"때문"으로 쓰는 한국어
+# 보고서가 내용과 무관하게 0점이었다(실측: 같은 보고서에 "따라서" 한 단어만 넣으면 0 → 1).
+# 업무 문서에서 실제로 쓰는 근거 표현을 더한다.
+KOREAN_REASONING_MARKERS = ["근거", "때문", "므로", "이유", "판단", "그러므로", "그래서"]
+_EXPLAINABILITY = ExplainabilityConfig(
+    require_reasoning=True,
+    reasoning_markers=[*ExplainabilityConfig().reasoning_markers, *KOREAN_REASONING_MARKERS],
+)
+
+# 측정 신호가 없는 Gate(2026-11-24 같은 분석) — SDK는 표본이 1건뿐이어도(경고만 남기고)
+# 점수를 낸다. CrewAI 크루·파이프라인 단계처럼 한 번에 여러 LLM 호출이 몇 분씩 걸리는
+# 실행에서는 C(0.4×TCR + 0.6×(1−SLA 위반율))·D(1 − p95/30초)가 단일 LLM 호출 기준 30초
+# SLA에 걸려 늘 0.4·0.0이 되고, F(크루 구조 점수)는 Agent가 1명이면 늘 0.687이다 — 내용과
+# 무관한 상수라 "측정 안 됨"으로 기록한다(점수 None → `evaluate_gate_scores`가 not_measured로
+# 처리, Agent 평균·통과 비율에서 빠진다).
+_NOT_MEASURED_REASONS = {
+    "long_running": "여러 LLM 호출로 이루어진 실행이라 단일 호출 기준 응답 시간 SLA로 잴 수 없음",
+    "single_agent": "참여 Agent가 1명이라 협업 구조를 잴 수 없음",
+}
+
+
+def _mark_not_measured(harness_groups: dict, gate_ids: list[str], reason_key: str) -> None:
+    for gid in gate_ids:
+        group = dict(harness_groups.get(gid) or {})
+        group.update(score=None, status="not_measured", gate="not_measured")
+        group["not_measured_reason"] = _NOT_MEASURED_REASONS[reason_key]
+        harness_groups[gid] = group
+
+
+def _score_gates(harness_groups: dict) -> dict:
+    gate_scores = evaluate_gate_scores(
+        harness_groups, gate_ids=GATE_IDS, default_threshold=DEFAULT_GATE_THRESHOLD
+    )
+    for gid, group in harness_groups.items():
+        reason = isinstance(group, dict) and group.get("not_measured_reason")
+        if reason and gid in gate_scores:
+            gate_scores[gid] = {**gate_scores[gid], "status": "not_measured", "reason": reason}
+    return gate_scores
 _SCOPE = ScopeConfig(allowed_tools=[], fail_on_violation=False, violation_penalty=0.5)
 
 
@@ -128,7 +166,10 @@ def eval_task_type_for(content_type: str | None) -> str:
 
 
 def run_and_score(
-    role_name: str, call_fn: Callable[[], str], task_type: str = DEFAULT_EVAL_TASK_TYPE
+    role_name: str,
+    call_fn: Callable[[], str],
+    task_type: str = DEFAULT_EVAL_TASK_TYPE,
+    long_running: bool = False,
 ) -> dict:
     """실제 Agent 실행(`call_fn`)을 감싸 그 자리에서 Gate A-G를 측정한다.
     DB에 아무것도 쓰지 않는다 — `call_fn`이 예외를 던지면(LLM 호출 실패)
@@ -165,10 +206,12 @@ def run_and_score(
     output = _run(role_name)
 
     report = monitor.generate_report()
-    harness_groups = (report.extra_metrics or {}).get("harness_groups", {})
-    gate_scores = evaluate_gate_scores(
-        harness_groups, gate_ids=GATE_IDS, default_threshold=DEFAULT_GATE_THRESHOLD
-    )
+    harness_groups = dict((report.extra_metrics or {}).get("harness_groups", {}))
+    # `long_running`: 계획 분담(plan_merge) 단계처럼 이 호출이 여러 LLM 호출로 된 단계 전체를
+    # 대표할 때 — 응답 시간 SLA 기반 C·D는 잴 수 없다(위 `_NOT_MEASURED_REASONS`).
+    if long_running:
+        _mark_not_measured(harness_groups, ["C", "D"], "long_running")
+    gate_scores = _score_gates(harness_groups)
     tcr_block = (report.accuracy_metrics or {}).get("tcr") or {}
     tcr = tcr_block.get("tcr")
 
@@ -220,10 +263,16 @@ def run_and_score_crew(
     crew_output = _run(crew_label)
 
     report = monitor.generate_report()
-    harness_groups = (report.extra_metrics or {}).get("harness_groups", {})
-    gate_scores = evaluate_gate_scores(
-        harness_groups, gate_ids=GATE_IDS, default_threshold=DEFAULT_GATE_THRESHOLD
-    )
+    harness_groups = dict((report.extra_metrics or {}).get("harness_groups", {}))
+    # 크루 실행은 늘 여러 LLM 호출 — C·D는 측정 안 됨. F는 참여 Agent가 2명 이상일 때만 잰다.
+    _mark_not_measured(harness_groups, ["C", "D"], "long_running")
+    agents = {
+        str(getattr(t, "agent", "") or "")
+        for t in (getattr(crew_output, "tasks_output", None) or [])
+    } - {""}
+    if len(agents) < 2:
+        _mark_not_measured(harness_groups, ["F"], "single_agent")
+    gate_scores = _score_gates(harness_groups)
     tcr_block = (report.accuracy_metrics or {}).get("tcr") or {}
     tcr = tcr_block.get("tcr")
 

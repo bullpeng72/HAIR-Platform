@@ -1123,8 +1123,15 @@ def run_crew(
         # (`event.output`)를 여기서 직접 수집해둔다("Ask question to
         # coworker"는 질의응답이라 제외 — 실제 작업 결과가 아님).
         delegated_work_outputs: list[dict] = []
+        # 도구 결과(2026-11-24, 수치 근거 오탐) — 파이프라인 단계의 수치 근거 검사가 브리프·앞 단계
+        # 산출물만 근거로 써서, 재무 계산기가 낸 IRR 12.92%를 "근거 없음"으로 잡았다. 단일 Agent
+        # 실행처럼 이번 실행의 도구 결과도 근거에 넣도록 모은다(위임 도구는 제외 — 작업 결과는
+        # 위 `delegated_work_outputs`).
+        tool_outputs: list[tuple[str, str]] = []
 
         def _capture_delegation(source, event) -> None:
+            if not _looks_like_delegation(event.tool_name) and event.output:
+                tool_outputs.append((str(event.tool_name), str(event.output)))
             if _looks_like_delegation(event.tool_name):
                 delegations.append(
                     {
@@ -1303,6 +1310,7 @@ def run_crew(
         "final_output": result.raw,
         "process": process,
         "delegations": delegations,
+        "tool_evidence": "\n\n".join(f"[도구 {name} 결과]\n{out}" for name, out in tool_outputs),
         "agents": per_agent,
         "gate_scores": eval_result["gate_scores"],
         "tcr": eval_result["tcr"],
