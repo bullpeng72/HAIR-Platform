@@ -33,7 +33,7 @@ Agent라고 다른 대우를 받지 않는다.
   있다.
 
 **지금 상태**: 위 기능 전부 실제로 동작하는 코드로 구현돼 있고(스텁이나
-목업이 아니다), 테스트 1,300건 이상이 통과하는 상태로 유지된다. 개념·아키텍처
+목업이 아니다), 테스트 1,380건 이상이 통과하는 상태로 유지된다. 개념·아키텍처
 전체 설명은 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은
 `git log`(커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를
 참고.
@@ -57,6 +57,8 @@ Agent라고 다른 대우를 받지 않는다.
   거친다. 결과물은 일반 텍스트/마크다운/HTML/코드 중 형식을 지정할
   수 있고, 화면에서 그 형식대로 렌더링된다(마크다운 서식·코드 구문
   강조·HTML 미리보기 전부 포함, 복사/다운로드/소스 보기 지원).
+  다시 낸 결과물은 버전 이력으로 묶여 이전 버전과 줄 단위로 비교할 수
+  있고, Word(.docx)로 내보낼 수 있다.
 
 ### 2. 대화창에서 바로 일 시키기
 - 로그인하면 바로 대화창부터 시작한다. 아무것도 지정하지 않으면 기본
@@ -65,7 +67,7 @@ Agent라고 다른 대우를 받지 않는다.
 - 대화에서 쓸 스킬을 직접 고를 수 있는데, **"개발업무" 스킬은
   일반 사용자에게 불필요하므로 기본적으로 목록에서 숨겨진다** —
   "개발업무 스킬도 보기"를 켜야 보이고, 평소엔 일반 업무용 스킬
-  (68개 중 다수)·도구(15개)만 노출된다. (Agent/Task에 미리 등록해둔
+  (78개 중 다수)·도구(19개 중 일반업무용)만 노출된다. (Agent/Task에 미리 등록해둔
   스킬 태그나 CrewAI 실행 자체는 이 필터와 무관하게 전부 동작한다.)
 - 특정 업무(Task)에 종속된 대화는 그 업무로 자동 흡수된다. 독립
   대화는 결재·Gate 채점이 필요해지면 "업무 요청으로 전환"으로 대화
@@ -86,15 +88,28 @@ Agent라고 다른 대우를 받지 않는다.
 - 과거 산출물 검색(내부지식검색)·조직 관계 질의(조직배정관계조회)·실시간 웹
   검색(Tavily)이 Agent가 필요하면 스스로 판단해 호출하는 도구로
   이미 연결돼 있고, MCP로 외부 도구를 추가 연결할 수도 있다.
+- **결과물 자동 검증**: 퍼센트 수치가 요청·조회·도구 결과 숫자로 실제
+  재현되는지 계산으로 확인해 틀린 문장만 고치고(남으면 "⚠ 수치 확인
+  필요" 표시), 개발 결과물의 Python 코드+테스트는 네트워크를 막은
+  Docker에서 실제로 실행하며, 한국어 결과물에 섞인 한자·외국 문자는
+  자동 교정한다.
+- **코드 저장소 읽기**: admin이 "연동 설정"에 Git 저장소를 등록하면
+  개발 Agent가 커밋된 파일 목록·내용·코드 검색·최근 커밋을 직접 읽고
+  "경로:줄"을 근거로 답한다(읽기 전용, 비밀 파일 제외).
 
 ### 4. 복잡한 업무는 파이프라인으로
-- 기본 제공 파이프라인 **4종**: 소프트웨어 개발, 사업/기획 업무
-  처리, 제안서 작성, 실적 보고. 각 단계는 Gate 기준으로 자동
+- 기본 제공 파이프라인 **7종**: 소프트웨어 개발, 사업/기획 업무
+  처리, 제안서 작성, 실적 보고, 재무 분석 보고, 영업 제안 메일, 계약서
+  1차 검토. 각 단계는 Gate 기준으로 자동
   채점·재시도되고, 반복 실패해야만 사람에게 에스컬레이션된다
   (계획 승인은 처음 한 번만 하면 되고, 그 뒤로는 사람 개입이
   최소화된다).
 - 화면에서 직접 단계를 구성하는 빌더도 제공되므로, 개발 외 업무에도
   같은 엔진을 그대로 재사용할 수 있다.
+- 단계 방식: 단독·순차 릴레이·병행 위임에 더해 **계획 분담**(리드가
+  팀원별 하위 작업을 계획 → 팀원이 나눠 실행 → 리드가 하나로 병합).
+- **정기 실행**: 매일/평일/매주 정한 시각에 업무 요청 → 할 일 →
+  파이프라인 실행을 자동으로 만든다(연동 설정, `hair serve`에서 동작).
 - 업무를 등록할 때 LLM에게 하위 업무 분해(역할·필요 스킬·선행 업무
   의존관계)를 제안받아 한 번에 배치로 생성할 수도 있다.
 
@@ -110,9 +125,19 @@ Agent라고 다른 대우를 받지 않는다.
   관리한다.
 
 ### 6. 운영 관리
+- **홈** 탭: 처리할 일(결재 대기·실행 실패·낮은 Gate), AI에게 일을
+  맡기는 방법 4가지, admin 관리 점검을 한 화면에.
 - 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고),
   매니저 대시보드(팀 Gate 평균·대기 승인 건수·비용 추이), 검색·
   필터·활동 기록(감사로그).
+- **실제 AI 사용량**: 업무별·Agent별 호출 수·토큰·금액(모델별 단가),
+  파이프라인 평균 소요·사람 결재 수까지 비용 탭에서 본다.
+- **연동 설정**: 개인 API 키(외부 시스템이 내 권한으로 API 호출),
+  결재 대기·파이프라인 완료/실패를 Slack·Teams 웹훅으로 알림.
+- **기본 구성 점검**(admin): 운영 DB가 현재 버전의 기본 Agent·스킬·
+  도구·파이프라인 구성과 어디가 다른지 보여 주고 빠진 것을 반영한다.
+- **보조 작업 모델**(admin): 언어·수치 교정 같은 짧은 보조 호출만 다른
+  모델로 보낸다(본 모델과 동시에 돌 수 있는 모델일 때만 대기가 줄어든다).
 - `hair reset-data`로 운영 데이터(사용자·업무·대화·실행 이력·팀 등)
   만 공장 초기화할 수 있다 — Agent/Tool/Skill Pool·파이프라인
   템플릿은 그대로 둔다(배포 전 깨끗한 상태로 준비할 때 사용).
@@ -160,7 +185,7 @@ pip install -e ".[dev,all]"
 # 실행 시점에 `ModuleNotFoundError`로 깨진다. `all`(= crewai+mcp+llm+
 # documents+graph 묶음, pyproject.toml 참고)까지 같이 설치해야 아래 골든셋이
 # 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 1,300건 이상 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 1,380건 이상 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 ### 설치 옵션(extras) 한눈에 보기
@@ -205,7 +230,7 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 ```
 
 운영 중 쌓인 데이터만 초기화하고(사용자·업무·대화·실행 이력·LLM 사용량
-기록·모델 레지스트리·팀·활동 기록 등) Agent(29종)/Tool·Skill Pool/파이프라인
+기록·모델 레지스트리·팀·활동 기록 등) Agent(36종)/Tool·Skill Pool/파이프라인
 템플릿은 그대로 둘 때(예: 배포 전 깨끗한 상태로 준비). 팀 관리 화면에서
 "초기화 시 보호"를 켠 팀과 조직 정책(사번 형식·결과물 언어)은 남는다:
 
@@ -403,7 +428,7 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(200개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(221개 엔드포인트, GET / 포함)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   match_llm_judge.py # 매칭 결과 LLM judge 폴백(역할명 부분일치로도 못 찾을 때)
@@ -424,7 +449,7 @@ src/hair_platform/
   brief_decompose_llm.py # 업무 분해 LLM 제안(역할·필요 스킬·선행 업무 의존관계)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
   cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/reset-data/eval
-  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 27개 탭)
+  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 29개 탭)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
   model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용") + 모델별 LLM 설정 최적화 tier(deep_reasoning/precision_fast/standard) 직접 매핑
   model_benchmark.py # 등록된 모델 실측 성능 테스트(응답 속도) + 속도 기반 tier 추천(품질 평가 아님)
@@ -442,7 +467,7 @@ src/hair_platform/
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이) + Task 재시도 합산
   conversations.py   # 대화 중심 작업공간 — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩
   pipeline_runtime.py # 단계형 업무 파이프라인 엔진(단독/순차 릴레이/병행 위임 단계, 단계별 Gate 목록 기준 자동 재시도·에스컬레이션, 검토 실패 시 작성 단계로 되돌림, Task 재시도 예산)
-  reference_pipeline_seeds.py # 레퍼런스 Agent 29종 + Skill/Tool Pool + 파이프라인 템플릿 4종(소프트웨어 개발/사업·기획/제안서 작성/실적 보고) 기본 시드
+  reference_pipeline_seeds.py # 레퍼런스 Agent 36종 + Skill/Tool Pool + 파이프라인 템플릿 7종(소프트웨어 개발/사업·기획/제안서 작성/실적 보고 + domain_packs.py의 재무·영업·법무) 기본 시드
   agent_optimizer.py # Agent별 LLM provider/model/tuning_config 최적화 추천(규칙 기반 + 선택적 LLM 보정, admin)
   id_scheme.py       # Agent/Tool/Skill 표시용 코드 체계(`AGT-REF-001` 등, 종류 구분용) — 정수 PK는 그대로, `code`만 별도 배정
   execution_graph.py # LangGraph 기반 에이전틱 실행엔진(팀별 선택) — 체크포인트·사람 승인 중단·재개
@@ -461,11 +486,21 @@ src/hair_platform/
   model_options.py   # 모델별 생성 옵션·출력 한도·Ollama num_ctx(레지스트리 값, 특정 모델 하드코딩 없음)
   llm_usage.py       # 실제 LLM 토큰 사용량 기록(직접 호출·CrewAI 공통) + 모델별 단가로 금액 집계
   org_policy.py      # 조직 정책(사번 형식·결과물 언어)
+  numeric_check.py   # 결과물 퍼센트 수치가 요청·조회·도구 결과 숫자로 재현되는지 검증·문장 교정(numeric_grounding)
+  code_tests.py      # 개발 결과물의 Python 코드+테스트를 네트워크 차단 Docker에서 실제 실행(test_execution)
+  progress.py        # 실행 중 현재 단계·경과 시간 기록(대화·워크스페이스 진행 표시)
+  integrations.py    # 개인 API 키(Bearer) + 외부 알림 웹훅(Slack/Teams)
+  automation.py      # 파이프라인 정기 실행(매일/평일/매주) 루프(hair serve)
+  exports.py         # 결과물 Word(.docx) 내보내기
+  config_check.py    # 기본 구성 점검(운영 DB vs 현재 버전 기본 구성, 빠진 것 반영)
+  plan_merge.py      # 계획 분담 단계 모드(리드 계획 → 팀원 분담 실행 → 리드 병합)
+  domain_packs.py    # 업무 영역 템플릿(재무·영업/고객지원·법무 도구·스킬·Agent·파이프라인)
+  code_repos.py      # 코드 저장소 읽기 연동(등록 Git 저장소의 커밋된 파일 목록·내용·검색·커밋, 읽기 전용)
 docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # RBAC 권한 설정을 테스트로 감사하는 Claude Code 스킬
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 1,300건 이상 통과
+tests/unit/                            # 골든셋 1,380건 이상 통과
 ```
 
 ## 로드맵
