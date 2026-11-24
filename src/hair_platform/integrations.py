@@ -129,29 +129,45 @@ def ensure_notify_schema(conn: sqlite3.Connection) -> None:
         "event_key TEXT PRIMARY KEY, sent_at TEXT NOT NULL DEFAULT (datetime('now')), "
         "ok INTEGER NOT NULL DEFAULT 1, error TEXT)"
     )
-    for column in ("notify_webhook_url", "notify_events", "notify_last_error", "notify_last_sent_at"):
+    for column in ("notify_webhook_url", "notify_events", "notify_last_error", "notify_last_sent_at",
+                   "notify_emails", "notify_email_last_error"):
         if not any(r[1] == column for r in conn.execute("PRAGMA table_info(org_policy)")):
             conn.execute(f"ALTER TABLE org_policy ADD COLUMN {column} TEXT")
 
 
 def get_notify_config(conn: sqlite3.Connection) -> dict:
-    row = conn.execute(
-        "SELECT notify_webhook_url, notify_events, notify_last_error, notify_last_sent_at "
-        "FROM org_policy WHERE id = 1"
-    ).fetchone()
-    if row is None or not row["notify_webhook_url"]:
-        return {"webhook_url": "", "events": list(NOTIFY_EVENTS), "last_error": None, "last_sent_at": None}
     import json
 
+    row = conn.execute(
+        "SELECT notify_webhook_url, notify_events, notify_last_error, notify_last_sent_at, notify_emails, "
+        "notify_email_last_error FROM org_policy WHERE id = 1"
+    ).fetchone()
+    emails = json.loads(row["notify_emails"]) if row is not None and row["notify_emails"] else []
+    smtp = smtp_settings()
+    base = {"emails": emails, "smtp_configured": smtp is not None, "smtp_host": smtp["host"] if smtp else None,
+            "email_last_error": row["notify_email_last_error"] if row is not None else None}
+    if row is None or not (row["notify_webhook_url"] or emails):
+        return {"webhook_url": "", "events": list(NOTIFY_EVENTS), "last_error": None, "last_sent_at": None, **base}
     return {
-        "webhook_url": row["notify_webhook_url"],
+        "webhook_url": row["notify_webhook_url"] or "",
         "events": json.loads(row["notify_events"] or "[]"),
         "last_error": row["notify_last_error"],
         "last_sent_at": row["notify_last_sent_at"],
+        **base,
     }
 
 
-def set_notify_config(conn: sqlite3.Connection, actor_id: int, webhook_url: str, events: list[str]) -> dict:
+MAX_NOTIFY_EMAILS = 20
+
+
+def _valid_email(value: str) -> bool:
+    import re
+
+    return re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value) is not None
+
+
+def set_notify_config(conn: sqlite3.Connection, actor_id: int, webhook_url: str, events: list[str],
+                      emails: list[str] | None = None) -> dict:
     import json
 
     url = (webhook_url or "").strip()
@@ -161,17 +177,27 @@ def set_notify_config(conn: sqlite3.Connection, actor_id: int, webhook_url: str,
     if unknown:
         raise ValueError(f"unknown_events:{','.join(unknown)}")
     before = get_notify_config(conn)
+    clean = before["emails"] if emails is None else list(dict.fromkeys(e.strip() for e in emails if e.strip()))
+    bad = [e for e in clean if not _valid_email(e)]
+    if bad:
+        raise ValueError(f"invalid_emails:{','.join(bad)}")
+    if len(clean) > MAX_NOTIFY_EMAILS:
+        raise ValueError("too_many_emails")
     conn.execute("INSERT OR IGNORE INTO org_policy (id) VALUES (1)")
     conn.execute(
-        "UPDATE org_policy SET notify_webhook_url = ?, notify_events = ?, notify_last_error = NULL WHERE id = 1",
-        (url or None, json.dumps(events)),
+        "UPDATE org_policy SET notify_webhook_url = ?, notify_events = ?, notify_last_error = NULL, "
+        "notify_emails = ?, notify_email_last_error = NULL WHERE id = 1",
+        (url or None, json.dumps(events), json.dumps(clean) if clean else None),
     )
     if url and not before["webhook_url"]:
         seed_existing_events(conn)
-    # URL은 비밀 토큰을 담는 경우가 많아 감사로그에는 호스트까지만 남긴다.
+    if clean and not before["emails"]:
+        # 메일을 처음 켤 때도 이미 있던 이벤트는 보내지 않는다(웹훅과 같은 원칙, 채널별로 따로 기록).
+        seed_existing_events(conn, channel=MAIL_CHANNEL)
+    # URL은 비밀 토큰을 담는 경우가 많아 감사로그에는 호스트까지만, 메일 주소는 개인정보라 개수만 남긴다.
     host = url.split("/")[2] if url.count("/") >= 2 else ""
     audit.record(conn, actor_id, "notify_config_changed", "org_policy", 1,
-                 after={"webhook_host": host, "events": events})
+                 after={"webhook_host": host, "events": events, "email_count": len(clean)})
     conn.commit()
     return get_notify_config(conn)
 
@@ -212,8 +238,11 @@ def collect_events(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
     return events
 
 
-def seed_existing_events(conn: sqlite3.Connection) -> int:
-    keys = [(k,) for k, _kind, _text in collect_events(conn)]
+MAIL_CHANNEL = "|mail"  # 메일 채널의 중복 방지 키 접미사(웹훅은 접미사 없음 — 예전 기록과 호환)
+
+
+def seed_existing_events(conn: sqlite3.Connection, channel: str = "") -> int:
+    keys = [(k + channel,) for k, _kind, _text in collect_events(conn)]
     conn.executemany("INSERT OR IGNORE INTO notification_log (event_key, ok, error) VALUES (?, 1, 'seeded')", keys)
     return len(keys)
 
@@ -231,29 +260,91 @@ def send_webhook(url: str, text: str) -> tuple[bool, str | None]:
         return False, f"{type(exc).__name__}: {exc}"[:200]
 
 
+# ---------- 메일 알림(2026-11-24, P1-5 남은 항목 — "Slack·메일 알림") ----------
+# 웹훅과 같은 이벤트를 admin이 정한 수신자에게 메일로도 보낸다. SMTP 접속 정보(로그인 비밀 포함)는 DB가
+# 아니라 서버 환경변수에서만 읽는다 — HAIR_SMTP_HOST(필수)·HAIR_SMTP_PORT(기본 587, SSL이면 465)·
+# HAIR_SMTP_USER·HAIR_SMTP_PASSWORD·HAIR_SMTP_FROM(기본 USER)·HAIR_SMTP_SSL=1(SMTPS). 그 밖에는 STARTTLS
+# 를 시도하고, 지원하지 않는 사내 릴레이면 그대로 보낸다.
+
+
+def smtp_settings() -> dict | None:
+    import os
+
+    host = os.environ.get("HAIR_SMTP_HOST", "").strip()
+    if not host:
+        return None
+    use_ssl = os.environ.get("HAIR_SMTP_SSL") == "1"
+    user = os.environ.get("HAIR_SMTP_USER", "").strip()
+    return {
+        "host": host,
+        "port": int(os.environ.get("HAIR_SMTP_PORT") or (465 if use_ssl else 587)),
+        "user": user,
+        "secret": os.environ.get("HAIR_SMTP_PASSWORD", ""),
+        "sender": os.environ.get("HAIR_SMTP_FROM", "").strip() or user or f"hair@{host}",
+        "ssl": use_ssl,
+    }
+
+
+def send_email(recipients: list[str], subject: str, text: str) -> tuple[bool, str | None]:
+    import smtplib
+    from email.message import EmailMessage
+
+    cfg = smtp_settings()
+    if cfg is None:
+        return False, "SMTP 설정 없음(HAIR_SMTP_HOST)"
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = cfg["sender"]
+    msg["To"] = ", ".join(recipients)
+    msg.set_content(text)
+    try:
+        server = (smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=10) if cfg["ssl"]
+                  else smtplib.SMTP(cfg["host"], cfg["port"], timeout=10))
+        with server:
+            if not cfg["ssl"]:
+                try:
+                    server.starttls()
+                except smtplib.SMTPNotSupportedError:
+                    pass  # TLS 없는 사내 릴레이
+            if cfg["user"]:
+                server.login(cfg["user"], cfg["secret"])
+            server.send_message(msg)
+        return True, None
+    except Exception as exc:  # noqa: BLE001 — 메일 실패가 자동화 루프를 멈추지 않는다
+        return False, f"{type(exc).__name__}: {exc}"[:200]
+
+
 def run_notifications(conn: sqlite3.Connection) -> int:
-    """새 이벤트를 보내고 보낸 건수를 돌려준다. 웹훅이 없으면 아무것도 안 한다."""
+    """새 이벤트를 채널(웹훅·메일)마다 한 번씩 보내고 보낸 건수를 돌려준다. 둘 다 없으면 아무것도 안 한다."""
     cfg = get_notify_config(conn)
-    if not cfg["webhook_url"]:
+    channels: list[tuple[str, str]] = []
+    if cfg["webhook_url"]:
+        channels.append(("", "notify_last_error"))
+    if cfg["emails"] and cfg["smtp_configured"]:
+        channels.append((MAIL_CHANNEL, "notify_email_last_error"))
+    if not channels:
         return 0
     enabled = set(cfg["events"])
+    events = [e for e in collect_events(conn) if e[1] in enabled]
     sent = 0
-    for key, kind, text in collect_events(conn):
-        if sent >= _MAX_SENDS_PER_TICK:
-            break
-        if kind not in enabled:
-            continue
-        if conn.execute("SELECT 1 FROM notification_log WHERE event_key = ?", (key,)).fetchone():
-            continue
-        ok, err = send_webhook(cfg["webhook_url"], text)
-        conn.execute("INSERT OR IGNORE INTO notification_log (event_key, ok, error) VALUES (?, ?, ?)",
-                     (key, int(ok), err))
-        conn.execute(
-            "UPDATE org_policy SET notify_last_error = ?, notify_last_sent_at = datetime('now') WHERE id = 1",
-            (err,),
-        )
-        conn.commit()
-        sent += 1
-        if not ok:
-            break  # 웹훅이 실패하면 이번 차례는 멈춘다(다음 차례에 실패한 키는 다시 보내지 않는다)
+    for suffix, error_column in channels:
+        for key, _kind, text in events:
+            if sent >= _MAX_SENDS_PER_TICK:
+                break
+            if conn.execute("SELECT 1 FROM notification_log WHERE event_key = ?", (key + suffix,)).fetchone():
+                continue
+            if suffix:
+                ok, err = send_email(cfg["emails"], text.split(":")[0][:120], text)
+            else:
+                ok, err = send_webhook(cfg["webhook_url"], text)
+            conn.execute("INSERT OR IGNORE INTO notification_log (event_key, ok, error) VALUES (?, ?, ?)",
+                         (key + suffix, int(ok), err))
+            conn.execute(
+                f"UPDATE org_policy SET {error_column} = ?, notify_last_sent_at = datetime('now') WHERE id = 1",
+                (err,),
+            )
+            conn.commit()
+            sent += 1
+            if not ok:
+                break  # 이 채널이 실패하면 이번 차례는 멈춘다(실패한 키는 다시 보내지 않는다)
     return sent

@@ -240,9 +240,10 @@ def run_due_schedules(conn: sqlite3.Connection, now: dt.datetime | None = None,
 
 
 def tick(conn: sqlite3.Connection) -> None:
-    from hair_platform import integrations
+    from hair_platform import integrations, triggers
 
-    for step in (run_due_schedules, integrations.run_notifications):
+    # 이벤트 트리거(2026-11-24, P1-5)는 정기 실행 다음 — 같은 차례에 끝난 실행도 바로 이어 받는다.
+    for step in (run_due_schedules, triggers.run_triggers, integrations.run_notifications):
         try:
             step(conn)
         except Exception:  # noqa: BLE001 — 한 단계의 실패가 루프를 멈추지 않는다

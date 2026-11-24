@@ -12257,6 +12257,8 @@ const MANUAL_MARKDOWN = [
 '',
 '- **정기 실행**(admin/manager) — 이름·파이프라인·할 일 역할·업무 요청 내용과 주기(매일/평일/매주 ○요일)·시각을 정하면, 그 시각마다 업무 요청 → 할 일 → 파이프라인 실행을 자동으로 만듭니다(예: 매주 월요일 09:00 "실적 보고 파이프라인"). **만든 사람의 이름으로** 실행되므로 1단계 사람 승인 같은 결재는 직접 실행할 때와 똑같이 거칩니다. 시각은 서버 PC의 현지 시각이고, `hair serve`로 띄운 서버가 30초마다 확인합니다(서버가 꺼져 있거나 PC가 잠자기면 그동안은 돌지 않습니다). 표의 "끄기"로 잠시 멈출 수 있습니다.',
 '- **외부 알림**(admin) — Slack·Teams의 수신 웹훅(Incoming Webhook) URL과 받을 일(결재 대기·파이프라인 사람 승인 대기·완료·실패·Agent 실행 실패)을 고르면, 그 일이 생길 때마다 한 번씩 메시지를 보냅니다. 처음 저장할 때 이미 있던 일은 보내지 않습니다. "테스트 전송"으로 연결을 먼저 확인하세요.',
+'- **메일 알림**(admin) — 같은 칸의 "메일로도 받을 사람"에 주소를 적으면(최대 20명) 같은 일을 메일로도 보냅니다. 메일 서버는 서버를 띄울 때 환경변수(`HAIR_SMTP_HOST`·`HAIR_SMTP_PORT`·`HAIR_SMTP_USER`·`HAIR_SMTP_PASSWORD`, 필요하면 `HAIR_SMTP_FROM`, 465 포트면 `HAIR_SMTP_SSL=1`)로 지정합니다 — 비밀번호는 화면·DB에 저장하지 않습니다. "테스트 전송"은 웹훅과 메일 둘 다 시험합니다.',
+'- **이벤트 트리거**(admin/manager) — 시각이 아니라 **일이 생기면** 파이프라인을 시작합니다: "파이프라인이 끝나면"(어느 파이프라인인지 고름) 또는 "결과물이 승인되면" → 고른 파이프라인을 새 업무 요청·할 일로 시작하고, 앞 실행의 최종 결과물(또는 승인된 결과물)을 업무 요청 본문에 붙여 넘깁니다(예: 재무 분석 보고 → 발표자료). 만든 사람 이름으로 실행되고(결재·사람 승인은 그대로), 만들거나 다시 켜기 전에 이미 있던 일로는 실행하지 않으며, 트리거끼리 서로 부르는 연쇄는 3단계까지만 갑니다(같은 파이프라인이 끝나면 같은 파이프라인을 시작하는 트리거는 만들 수 없음).',
 '- **내 API 키**(admin/manager/member) — 외부 시스템(cron·메일 규칙·지라 등)이 **내 계정·권한 그대로** HAIR API를 부를 때 씁니다. 발급한 키는 그 자리에서 한 번만 보이니 바로 복사해 두고, 요청 헤더에 `Authorization: Bearer 키`로 넣습니다(예: `POST /api/briefs`로 업무 요청 올리기, `POST /api/tasks/{id}/execute-pipeline`으로 파이프라인 시작). 키는 권한을 넓히지 않고, 폐기하거나 계정이 비활성화되면 즉시 막힙니다.',
 '- **코드 저장소**(admin) — 이 서버 PC에 클론해 둔 Git 저장소의 이름·경로를 등록하면, 개발 Agent(코드베이스 분석가·백엔드/프론트엔드/풀스택/데이터·인프라 개발자·코드 검증가·AA — **코드저장소조회** 스킬)가 사람이 코드를 붙여 주지 않아도 파일 목록·내용·코드 검색·최근 커밋을 직접 읽고 "경로:줄"을 근거로 답합니다. **읽기 전용**이고 **커밋된 파일만** 보입니다 — 미커밋 변경과 `.gitignore`로 빠진 파일, `.env`·키 같은 비밀 파일은 읽지 않습니다. 최신 코드를 보게 하려면 그 폴더에서 `git pull`을 해 두세요. 대화에서는 "@코드베이스 분석가 shop-api 저장소의 주문 취소 흐름을 설명해 줘"처럼 저장소 이름을 함께 적으면 됩니다.',
 '- **결과물을 저장소에 커밋**(admin) — 결재를 마친(승인된) 결과물 카드의 "저장소에 커밋"을 누르고 저장소를 골라 **미리보기**를 하면, 커밋할 파일(새 파일/수정)과 점검 결과가 나옵니다. 코드 블록 중 **경로가 적힌 것만** 씁니다(블록 첫 줄 `# src/app.py` 또는 블록 바로 위 줄 `` `src/app.py` ``) — 경로 없는 블록은 쓰지 않고 알려 줍니다. 점검(결재 완료·저장소가 main/master 브랜치·미커밋 변경 없음·저장소 안 경로·비밀/무시 파일 아님·Python 문법·이 결과물의 테스트 실행 기록이 실패가 아님)을 **모두 통과해야** "main에 커밋" 버튼이 생기고, 누르는 순간 서버가 점검을 한 번 더 한 뒤 **main 브랜치에 로컬 커밋**합니다(작성자 "HAIR-Platform", 메시지에 결과물·업무 번호와 실행한 admin 아이디). **push는 하지 않습니다** — 원격에 올리는 것은 사람이 그 폴더에서 직접 합니다. 커밋 중 저장소의 pre-commit 훅 등이 실패하면 쓴 파일을 되돌립니다.',
@@ -12322,13 +12324,24 @@ async function renderIntegrations(content) {
   const isAdmin = ME.role === "admin";
   const canSchedule = ["admin", "manager"].includes(ME.role);
   const fmt = v => v ? esc(String(v).replace("T", " ")) : "-";
-  const [keys, schedules, templates, notify, repos] = await Promise.all([
+  const [keys, schedules, templates, notify, repos, trig] = await Promise.all([
     api("GET", "/api/api-keys"),
     canSchedule ? api("GET", "/api/pipeline-schedules") : Promise.resolve([]),
     canSchedule ? api("GET", "/api/pipeline-templates") : Promise.resolve([]),
     isAdmin ? api("GET", "/api/integrations/notify") : Promise.resolve(null),
     isAdmin ? api("GET", "/api/code-repositories") : Promise.resolve([]),
+    canSchedule ? api("GET", "/api/automation-triggers") : Promise.resolve({ triggers: [], events: {} }),
   ]);
+  // 이벤트 트리거(2026-11-24, P1-5).
+  const tplOptions = templates.filter(t => t.is_active !== 0).map(t => '<option value="' + t.id + '">' + esc(t.name) + "</option>").join("");
+  const trigRows = trig.triggers.map(t =>
+    "<tr><td>" + esc(t.name) + "</td><td>" + esc(t.event_label) + (t.source_template_name ? " — " + esc(t.source_template_name) : "") +
+    "</td><td>" + esc(t.action_template_name) + "</td><td>" + (t.is_active ? "켜짐" : "꺼짐") + " · " + t.fired_count + "회" +
+    (t.last_run_id ? " (마지막 실행 #" + t.last_run_id + ")" : "") +
+    (t.last_error ? '<div class="muted">⚠ ' + esc(t.last_error) + "</div>" : "") + "</td><td>" +
+    '<button class="small" data-toggle-trigger="' + t.id + '" data-active="' + (t.is_active ? "0" : "1") + '">' + (t.is_active ? "끄기" : "켜기") + "</button> " +
+    '<button class="small danger" data-delete-trigger="' + t.id + '">삭제</button></td></tr>'
+  ).join("");
   // 코드 저장소(2026-11-24, P0-3 1단계 — 읽기 전용).
   const repoRows = repos.map(r =>
     "<tr><td><code>" + esc(r.name) + "</code></td><td><code>" + esc(r.path) + "</code></td><td>" + esc(r.description || "-") +
@@ -12391,11 +12404,32 @@ async function renderIntegrations(content) {
       (schedules.length ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>파이프라인</th><th>주기</th><th>다음 실행</th><th>마지막 실행</th><th></th></tr></thead><tbody>' + schedRows + "</tbody></table></div>"
         : '<p class="muted">등록된 정기 실행이 없습니다.</p>')
       : "") +
+    (canSchedule ?
+      "<h3>이벤트 트리거(admin/manager)</h3>" +
+      '<p class="muted">시각이 아니라 <b>일이 생기면</b> 파이프라인을 시작합니다 — 예: "재무 분석 보고 파이프라인이 끝나면 → 발표자료를 만드는 파이프라인 시작". 앞 실행의 최종 결과물(또는 승인된 결과물)을 새 업무 요청에 붙여 넘기고, <b>만든 사람 이름으로</b> 실행합니다(결재·사람 승인은 그대로). 만들기 전에 이미 있던 일로는 실행하지 않고, 트리거끼리 서로 부르는 연쇄는 ' + trig.max_chain_depth + '단계까지만 갑니다.</p>' +
+      '<form id="trig-form" style="display:grid;gap:0.4rem">' +
+      '<div class="inline" style="flex-wrap:wrap"><input id="trig-name" placeholder="이름(예: 재무 보고 → 발표자료)" required maxlength="100">' +
+      '<select id="trig-event"><option value="pipeline_completed">파이프라인이 끝나면</option><option value="deliverable_approved">결과물이 승인되면</option></select>' +
+      '<label class="muted" id="trig-source-wrap">끝난 파이프라인 <select id="trig-source">' + tplOptions + "</select></label></div>" +
+      '<div class="inline" style="flex-wrap:wrap"><label class="muted">→ 시작할 파이프라인 <select id="trig-action" required>' + tplOptions + "</select></label>" +
+      '<input id="trig-role" placeholder="새 할 일 역할(예: 발표자료 작성)" required maxlength="100"></div>' +
+      '<textarea id="trig-brief" rows="2" required placeholder="새 업무 요청 내용(예: 아래 이전 결과물로 경영진 발표자료 10장을 만들어 줘)"></textarea>' +
+      '<div><button class="primary" type="submit">트리거 추가</button></div></form>' +
+      (trig.triggers.length ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>언제</th><th>시작할 파이프라인</th><th>상태</th><th></th></tr></thead><tbody>' + trigRows + "</tbody></table></div>"
+        : '<p class="muted">등록된 트리거가 없습니다.</p>')
+      : "") +
     (isAdmin ?
       "<h3>외부 알림(admin)</h3>" +
       '<p class="muted">Slack·Teams의 수신 웹훅(Incoming Webhook) URL을 넣으면 고른 일이 생길 때마다 한 번씩 메시지를 보냅니다. 처음 저장할 때 이미 있던 일은 보내지 않습니다.</p>' +
       '<div style="display:grid;gap:0.4rem"><input id="notify-url" type="url" placeholder="https://hooks.slack.com/services/..." style="width:100%" value="' + escAttr(notify.webhook_url || "") + '">' +
       "<div>" + eventBoxes + "</div>" +
+      // 메일(2026-11-24, P1-5) — 같은 이벤트를 메일로도. SMTP 접속 정보는 서버 환경변수(HAIR_SMTP_*)에서만 읽는다.
+      '<label class="muted">메일로도 받을 사람(한 줄에 하나 또는 쉼표로, 최대 20명)</label>' +
+      '<textarea id="notify-emails" rows="2" placeholder="ops@example.com, lead@example.com">' + esc((notify.emails || []).join(", ")) + "</textarea>" +
+      '<span class="muted">' + (notify.smtp_configured
+        ? "메일 서버: " + esc(notify.smtp_host)
+        : "⚠ 메일 서버가 설정되지 않았습니다 — 서버를 띄울 때 환경변수 HAIR_SMTP_HOST·HAIR_SMTP_PORT·HAIR_SMTP_USER·HAIR_SMTP_PASSWORD(·HAIR_SMTP_FROM, 465면 HAIR_SMTP_SSL=1)를 지정하세요.") +
+      (notify.email_last_error ? " · ⚠ " + esc(notify.email_last_error) : "") + "</span>" +
       '<div class="inline"><button class="primary" id="notify-save">저장</button><button id="notify-test">테스트 전송</button>' +
       '<span class="muted">' + (notify.last_sent_at ? "마지막 전송 " + fmt(notify.last_sent_at) : "") +
       (notify.last_error ? " · ⚠ " + esc(notify.last_error) : "") + "</span></div></div>" +
@@ -12464,12 +12498,41 @@ async function renderIntegrations(content) {
       catch (e) { showMsg("global-msg", e.message, "error"); }
     }));
   }
+  if (canSchedule) {
+    const evSel = document.getElementById("trig-event");
+    const srcWrap = document.getElementById("trig-source-wrap");
+    evSel.onchange = () => { srcWrap.hidden = evSel.value !== "pipeline_completed"; };
+    document.getElementById("trig-form").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      try {
+        await api("POST", "/api/automation-triggers", {
+          name: document.getElementById("trig-name").value.trim(),
+          event: evSel.value,
+          source_template_id: evSel.value === "pipeline_completed" ? Number(document.getElementById("trig-source").value) : null,
+          action_template_id: Number(document.getElementById("trig-action").value),
+          role_name: document.getElementById("trig-role").value.trim(),
+          brief_text: document.getElementById("trig-brief").value.trim(),
+        });
+        showMsg("global-msg", "트리거를 추가했습니다 — 지금부터 생기는 일에만 반응합니다.", "ok");
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+    content.querySelectorAll("[data-toggle-trigger]").forEach(btn => btn.addEventListener("click", async () => {
+      try { await api("PATCH", "/api/automation-triggers/" + btn.dataset.toggleTrigger, { active: btn.dataset.active === "1" }); renderIntegrations(content); }
+      catch (e) { showMsg("global-msg", e.message, "error"); }
+    }));
+    content.querySelectorAll("[data-delete-trigger]").forEach(btn => btn.addEventListener("click", async () => {
+      try { await api("DELETE", "/api/automation-triggers/" + btn.dataset.deleteTrigger); renderIntegrations(content); }
+      catch (e) { showMsg("global-msg", e.message, "error"); }
+    }));
+  }
   if (isAdmin) {
     document.getElementById("notify-save").addEventListener("click", async () => {
       try {
         await api("PUT", "/api/integrations/notify", {
           webhook_url: document.getElementById("notify-url").value,
           events: [...content.querySelectorAll(".notify-event:checked")].map(c => c.value),
+          emails: document.getElementById("notify-emails").value.split(/[,;\\s]+/).map(v => v.trim()).filter(Boolean),
         });
         showMsg("global-msg", "외부 알림 설정을 저장했습니다.", "ok");
         renderIntegrations(content);

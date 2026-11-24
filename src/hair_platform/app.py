@@ -156,6 +156,7 @@ from hair_platform.models import (
     CodeRepositoryCreate,
     EditProposalCreate,
     WizardRequest,
+    AutomationTriggerCreate,
     RepoCommitRequest,
     RagSearchConfigUpdate,
     SkillMarkdownImport,
@@ -644,20 +645,33 @@ def create_app(db_path: str | None = None) -> FastAPI:
         from hair_platform import integrations
 
         try:
-            return integrations.set_notify_config(conn, user["id"], payload.webhook_url, payload.events)
+            return integrations.set_notify_config(conn, user["id"], payload.webhook_url, payload.events,
+                                                  payload.emails)
         except ValueError as exc:
-            detail = "웹훅 URL은 http:// 또는 https://로 시작해야 합니다" if str(exc) == "invalid_webhook_url" else str(exc)
+            msg = str(exc)
+            detail = ("웹훅 URL은 http:// 또는 https://로 시작해야 합니다" if msg == "invalid_webhook_url"
+                      else "메일 주소 형식이 맞지 않습니다: " + msg.split(":", 1)[1] if msg.startswith("invalid_emails")
+                      else f"메일 수신자는 {integrations.MAX_NOTIFY_EMAILS}명까지입니다" if msg == "too_many_emails"
+                      else msg)
             raise HTTPException(status_code=400, detail=detail) from exc
 
     @app.post("/api/integrations/notify/test")
     def test_notify_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """웹훅과 메일(설정된 것만)에 테스트를 보낸다(2026-11-24 — 메일 채널 추가)."""
         from hair_platform import integrations
 
         cfg = integrations.get_notify_config(conn)
-        if not cfg["webhook_url"]:
-            raise HTTPException(status_code=400, detail="먼저 웹훅 URL을 저장하세요")
-        ok, err = integrations.send_webhook(cfg["webhook_url"], "[HAIR] 알림 연결 테스트입니다.")
-        return {"ok": ok, "error": err}
+        if not cfg["webhook_url"] and not cfg["emails"]:
+            raise HTTPException(status_code=400, detail="먼저 웹훅 URL이나 메일 수신자를 저장하세요")
+        results = {}
+        if cfg["webhook_url"]:
+            results["webhook"] = integrations.send_webhook(cfg["webhook_url"], "[HAIR] 알림 연결 테스트입니다.")
+        if cfg["emails"]:
+            results["email"] = integrations.send_email(cfg["emails"], "[HAIR] 알림 연결 테스트",
+                                                       "[HAIR] 메일 알림 연결 테스트입니다.")
+        errors = [f"{'웹훅' if k == 'webhook' else '메일'}: {err}" for k, (ok, err) in results.items() if not ok]
+        return {"ok": not errors, "error": " / ".join(errors) or None,
+                "channels": {k: ok for k, (ok, _err) in results.items()}}
 
     # ---------- 정기 실행(2026-11-23, P1-5 — `automation.py`, admin/manager) ----------
     _SCHEDULE_ERRORS = {
@@ -713,6 +727,49 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=_SCHEDULE_ERRORS.get(str(exc), str(exc))) from exc
         return {"id": schedule_id, "deleted": True}
+
+    # ---------- 이벤트 트리거(2026-11-24, P1-5 — `triggers.py`, admin/manager — 정기 실행과 같은 권한) ----------
+    @app.get("/api/automation-triggers")
+    def list_automation_triggers(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        from hair_platform import triggers
+
+        return {"events": triggers.EVENTS, "max_chain_depth": triggers.MAX_CHAIN_DEPTH,
+                "triggers": triggers.list_all(conn)}
+
+    @app.post("/api/automation-triggers", status_code=201)
+    def create_automation_trigger(
+        payload: AutomationTriggerCreate, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))
+    ):
+        from hair_platform import triggers
+
+        try:
+            return triggers.create(conn, user["id"], payload.model_dump())
+        except triggers.TriggerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/automation-triggers/{trigger_id}")
+    def toggle_automation_trigger(
+        trigger_id: int, payload: ActiveToggle,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        from hair_platform import triggers
+
+        try:
+            return triggers.set_active(conn, user["id"], trigger_id, payload.active)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="트리거를 찾을 수 없습니다") from exc
+
+    @app.delete("/api/automation-triggers/{trigger_id}")
+    def delete_automation_trigger(
+        trigger_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))
+    ):
+        from hair_platform import triggers
+
+        try:
+            triggers.delete(conn, user["id"], trigger_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="트리거를 찾을 수 없습니다") from exc
+        return {"id": trigger_id, "deleted": True}
 
     @app.post("/api/conversations/{conversation_id}/brief-draft")
     def conversation_brief_draft(

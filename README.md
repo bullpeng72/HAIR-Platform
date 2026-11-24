@@ -147,7 +147,9 @@ Agent라고 다른 대우를 받지 않는다.
 - **실제 AI 사용량**: 업무별·Agent별 호출 수·토큰·금액(모델별 단가),
   파이프라인 평균 소요·사람 결재 수까지 비용 탭에서 본다.
 - **연동 설정**: 개인 API 키(외부 시스템이 내 권한으로 API 호출),
-  결재 대기·파이프라인 완료/실패를 Slack·Teams 웹훅으로 알림.
+  결재 대기·파이프라인 완료/실패를 Slack·Teams 웹훅과 메일(SMTP, 환경변수 `HAIR_SMTP_*`)로 알림,
+  **이벤트 트리거**("파이프라인 A가 끝나면/결과물이 승인되면 → 파이프라인 B 시작", 앞 결과물을 넘겨
+  파이프라인을 이어 붙임).
 - **기본 구성 점검**(admin): 운영 DB가 현재 버전의 기본 Agent·스킬·
   도구·파이프라인 구성과 어디가 다른지 보여 주고 빠진 것을 반영한다.
 - **보조 작업 모델**(admin): 언어·수치 교정 같은 짧은 보조 호출만 다른
@@ -504,7 +506,7 @@ src/hair_platform/
   text_checks.py     # 인용 문장 근거 대조(quote_grounding)·한 음절 빠짐/바뀜 용어 탐지(term_consistency)
   code_tests.py      # 개발 결과물의 Python 코드+테스트를 네트워크 차단 Docker에서 실제 실행(test_execution)
   progress.py        # 실행 중 현재 단계·경과 시간 기록(대화·워크스페이스 진행 표시)
-  integrations.py    # 개인 API 키(Bearer) + 외부 알림 웹훅(Slack/Teams)
+  integrations.py    # 개인 API 키(Bearer) + 외부 알림(Slack/Teams 웹훅·메일)
   automation.py      # 파이프라인 정기 실행(매일/평일/매주) 루프(hair serve)
   exports.py         # 결과물 Word(.docx)·Excel(.xlsx, 표마다 시트)·PowerPoint(.pptx, 제목마다 슬라이드) 내보내기
   config_check.py    # 기본 구성 점검(운영 DB vs 현재 버전 기본 구성, 빠진 것 반영)
@@ -512,6 +514,7 @@ src/hair_platform/
   domain_packs.py    # 업무 영역 템플릿(재무·영업/고객지원·법무 도구·스킬·Agent·파이프라인)
   code_repos.py      # 코드 저장소 읽기 연동(등록 Git 저장소의 커밋된 파일 목록·내용·검색·커밋, 읽기 전용)
   repo_commit.py     # 승인된 결과물 → 등록 저장소 main 로컬 커밋(경로 명시 블록만, 점검 통과 시, push 없음)
+  triggers.py        # 이벤트 트리거(파이프라인 완료·결과물 승인 → 다음 파이프라인, 연쇄 3단계 제한)
   wizard.py          # AI에게 일 맡기기 마법사(한 문장 → 빠른 질문·Agent·파이프라인·정기 실행 추천, LLM 없음)
   edit_proposals.py  # 결과물 부분 재작성 제안(섹션·구간만 AI가 다시 씀) + 수락·거절(수락 시 기존 편집 경로로 반영)
 docs/

@@ -443,6 +443,9 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     # 계정의 키·일정이 된다). 알림 웹훅 설정 자체는 조직 정책(org_policy)이라 남는다.
     "api_keys",
     "pipeline_schedules",
+    # 이벤트 트리거(2026-11-24, P1-5) — 정기 실행처럼 사용자와 함께 지운다(만든 사람 명의로 실행되므로).
+    "trigger_log",
+    "automation_triggers",
     "notification_log",
     "users",
 )

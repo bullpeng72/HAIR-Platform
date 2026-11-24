@@ -114,6 +114,19 @@ class NotifyConfigUpdate(BaseModel):
 
     webhook_url: str = ""
     events: list[str] = []
+    # 메일 수신자(2026-11-24, P1-5) — None이면 기존 값 유지(예전 클라이언트 호환), []면 메일 끔.
+    emails: list[str] | None = None
+
+
+class AutomationTriggerCreate(BaseModel):
+    """이벤트 트리거(2026-11-24, P1-5) — 이벤트가 생기면 action 파이프라인을 새 할 일로 시작."""
+
+    name: str = Field(min_length=1, max_length=100)
+    event: str
+    source_template_id: int | None = None
+    action_template_id: int
+    role_name: str = Field(min_length=1, max_length=100)
+    brief_text: str = Field(min_length=1, max_length=4000)
 
 
 class PipelineScheduleCreate(BaseModel):
