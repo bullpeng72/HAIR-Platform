@@ -208,6 +208,11 @@ def _delete_deliverables_for_tasks(
             f"DELETE FROM deliverable_repo_commits WHERE deliverable_id IN ({d_placeholders})",
             deliverable_ids,
         )
+        # 부분 재작성 제안(2026-11-24, P1-6).
+        conn.execute(
+            f"DELETE FROM deliverable_edit_proposals WHERE deliverable_id IN ({d_placeholders})",
+            deliverable_ids,
+        )
         conn.execute(
             f"DELETE FROM agent_evaluations WHERE deliverable_id IN ({d_placeholders})",
             deliverable_ids,
@@ -406,6 +411,7 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     # 결과물 → 저장소 커밋 기록·저장소 등록(2026-11-24, P0-3) — 등록은 이 서버의 경로라 모델
     # 레지스트리처럼 운영 설정으로 함께 지운다(저장소 자체·그 안의 커밋은 건드리지 않는다).
     "deliverable_repo_commits",
+    "deliverable_edit_proposals",  # 부분 재작성 제안(2026-11-24, P1-6)
     "code_repositories",
     "pipeline_run_stages",
     "pipeline_runs",

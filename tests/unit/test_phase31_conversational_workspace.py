@@ -1297,7 +1297,11 @@ def test_gc_mcp_remote_skill_warns_instead_of_faking_search(client_and_conn):
     _login(client, "member1", "memberpass")
     conv_id = client.post("/api/conversations", json={"title": "방"}).json()["id"]
 
-    with patch("hair_platform.llm.call_llm", return_value="검색하겠습니다"):
+    # 2026-11-24(P1-7): 대화 작업도 MCP 도구에 실제로 접속한다(`tool_calling.mcp_session`) — 접속에
+    # 실패하면(여기서는 일부러 실패시킴) 그 도구를 실행하지 않았다는 경고가 붙는다.
+    with patch("hair_platform.llm.call_llm", return_value="검색하겠습니다"), patch(
+        "hair_platform.pool_registry.connect_mcp_tools", side_effect=ConnectionError("no server")
+    ):
         resp = client.post(
             f"/api/conversations/{conv_id}/messages",
             json={"content": "최신 동향 찾아줘", "skill": "일반웹검색"},
@@ -1305,7 +1309,7 @@ def test_gc_mcp_remote_skill_warns_instead_of_faking_search(client_and_conn):
         assert resp.status_code == 201, resp.text
 
     messages = client.get(f"/api/conversations/{conv_id}/messages").json()
-    assert "구조적 제약" in messages[-1]["content"]
+    assert "연결하지 못해" in messages[-1]["content"]
     assert "검색하겠습니다" in messages[-1]["content"]
 
 

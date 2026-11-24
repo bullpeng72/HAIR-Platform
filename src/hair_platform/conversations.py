@@ -1730,16 +1730,15 @@ def _run_agent_mention_job(
         agent_row = conn.execute(
             "SELECT skill_tags FROM agent_pool WHERE id = ?", (agent_id,)
         ).fetchone()
-        unsupported = pool_registry.unsupported_realtime_skill_names(
+        unsupported = tool_calling.unsupported_skill_names(
             conn, json.loads(agent_row["skill_tags"]) if agent_row else []
         )
         if unsupported:
             names = ", ".join(f'"{n}"' for n in unsupported)
             output = (
-                f"> ⚠ {names} 스킬에 연결된 도구는 단일 Agent 멘션 "
-                "응답에서도 직접 호출할 수 없어, 그 도구를 실행하지 않고 "
-                "답변했습니다(구조적 제약 — Team을 멘션해 CrewAI 실행으로 "
-                "돌려야 실제로 그 도구가 호출됩니다).\n\n" + output
+                f"> ⚠ {names} 스킬에 연결된 도구 서버(MCP)에 연결하지 못해 그 도구를 실행하지 않고 "
+                "답변했습니다 — admin은 '도구/스킬 Pool' 탭에서 그 도구의 서버 주소·실행 명령을 확인하세요.\n\n"
+                + output
             )
         output = language_qa.repair_output(
             conn,
@@ -2737,7 +2736,7 @@ def _run_default_ai_job(
         )
         output = eval_result["output"]
         if skills_for_augmentation:
-            unsupported = pool_registry.unsupported_realtime_skill_names(
+            unsupported = tool_calling.unsupported_skill_names(
                 conn, skills_for_augmentation
             )
             if unsupported:
@@ -2766,12 +2765,9 @@ def _run_default_ai_job(
                 # 루프)뿐이다. "Agent"를 빼고 "Team"만 안내한다.
                 names = ", ".join(f'"{n}"' for n in unsupported)
                 output = (
-                    f"> ⚠ {names} 스킬에 연결된 도구는 대화창의 기본 AI "
-                    "응답에서 직접 호출할 수 없어, 그 도구를 실행하지 않고 "
-                    "답변했습니다(구조적 제약 — Team을 멘션해 CrewAI 실행으로 "
-                    "돌려야 실제로 그 도구가 호출됩니다. 단일 Agent 멘션도 "
-                    "이 경로와 같은 제약이 있어 도구가 호출되지 않습니다).\n\n"
-                    + output
+                    f"> ⚠ {names} 스킬에 연결된 도구 서버(MCP)에 연결하지 못해 그 도구를 실행하지 않고 "
+                "답변했습니다 — admin은 '도구/스킬 Pool' 탭에서 그 도구의 서버 주소·실행 명령을 확인하세요.\n\n"
+                + output
                 )
         if last_human is not None:
             uninvited = _uninvited_mention_candidates(
@@ -2818,7 +2814,8 @@ def run_agent_mention_job(
 ) -> None:
     from hair_platform import progress
 
-    with progress.reporting(conn, "conversation_jobs", job_id):
+    # MCP 도구 세션(2026-11-24, P1-7 — `tool_calling.mcp_session`): 이 작업 동안 MCP 서버 접속을 열어 둔다.
+    with progress.reporting(conn, "conversation_jobs", job_id), tool_calling.mcp_session():
         return _run_agent_mention_job(conn, job_id, conversation_id, agent_id, actor_id)
 
 
@@ -2831,7 +2828,7 @@ def run_default_ai_job(
 ) -> None:
     from hair_platform import progress
 
-    with progress.reporting(conn, "conversation_jobs", job_id):
+    with progress.reporting(conn, "conversation_jobs", job_id), tool_calling.mcp_session():
         progress.report("응답 생성 중")
         return _run_default_ai_job(conn, job_id, conversation_id, actor_id, skill)
 

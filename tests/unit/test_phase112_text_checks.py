@@ -78,3 +78,11 @@ def test_attach_quality_checks_records_both_gates():
     clean: dict = {}
     agent_evaluation.attach_quality_checks(clean, "보고서를 정리했다. 발표 노트를 붙인다.", EVIDENCE)
     assert clean["term_consistency"]["status"] == "pass" and "quote_grounding" not in clean
+
+
+def test_garbled_terms_ignores_normal_rewrites():
+    original = "- 초기 투자가 전체 규모 대비 약 30%로 NPV를 크게 좌우하며, 현금흐름 하락 시 음수 전환 가능.\n"
+    table = "| 항목 | 내용 |\n|---|---|\n| 투자 | NPV 민감 — 현금흐름 하락 시 음수 |\n| 교육 | 집행 부진 |"
+    assert text_checks.garbled_terms(original, table, original) == []
+    compound = "- 순현금흐름이 줄면 NPV가 음수로 바뀔 수 있어 크게 좌우한다.\n"
+    assert text_checks.garbled_terms(original, compound, original + " 4년 순현금흐름") == []

@@ -64,6 +64,51 @@ _CALLABLE_KIND_SQL = (
     + ")))"
 )
 
+# MCP 도구(2026-11-24, P1-7 — "MCP 도구는 대화창과 단일 Agent 실행에서 동작하지 않는다"). 위 독스트링의
+# "범위에서 의도적으로 뺀 것" 이유는 접속 수명 관리였다 — MCP 서버 접속(MCPServerAdapter)을 여러 번의 LLM
+# 왕복 동안 열어 둬야 한다. 작업 실행기(대화 작업·워크스페이스 실행)가 `mcp_session()`으로 작업 하나 동안
+# ExitStack을 열어 두면, 그 안의 `resolve_callable_tools()`가 MCP 도구도 접속해 돌려주고 작업이 끝나면
+# 닫힌다. 세션 밖(작업이 아닌 직접 호출)은 예전처럼 MCP를 빼고, 접속에 실패한 도구는 건너뛰고 기록한다.
+_MCP_STACK: contextvars.ContextVar[contextlib.ExitStack | None] = contextvars.ContextVar("mcp_stack", default=None)
+_MCP_FAILED: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("mcp_failed", default=None)
+_MCP_KINDS = ("mcp_stdio", "mcp_remote")
+
+
+@contextlib.contextmanager
+def mcp_session():
+    with contextlib.ExitStack() as stack:
+        t_stack = _MCP_STACK.set(stack)
+        t_failed = _MCP_FAILED.set([])
+        try:
+            yield
+        finally:
+            _MCP_FAILED.reset(t_failed)
+            _MCP_STACK.reset(t_stack)
+
+
+def _callable_kind_sql() -> str:
+    if _MCP_STACK.get() is None:
+        return _CALLABLE_KIND_SQL
+    return "(" + _CALLABLE_KIND_SQL + " OR kind IN ('mcp_stdio', 'mcp_remote'))"
+
+
+def unsupported_skill_names(conn: sqlite3.Connection, skills: list[str]) -> list[str]:
+    """이 경로에서 도구를 실제로 못 부른 스킬 — MCP 세션 안이면 접속에 실패한 MCP 도구가 연결된 스킬만,
+    세션 밖이면 예전 판정(MCP 도구가 연결된 스킬 전부, `pool_registry.unsupported_realtime_skill_names`)."""
+    failed = _MCP_FAILED.get()
+    if _MCP_STACK.get() is None or failed is None:
+        return pool_registry.unsupported_realtime_skill_names(conn, skills)
+    if not failed or not skills:
+        return []
+    names = []
+    for row in conn.execute(
+        f"SELECT name, default_tool_pool_ids FROM skill_pool WHERE name IN ({','.join('?' * len(skills))})",
+        tuple(skills),
+    ).fetchall():
+        if set(json.loads(row["default_tool_pool_ids"] or "[]")) & set(failed):
+            names.append(row["name"])
+    return names
+
 
 def _supported_tool_ids(conn: sqlite3.Connection, skills: list[str]) -> set[int]:
     import json
@@ -80,7 +125,7 @@ def _supported_tool_ids(conn: sqlite3.Connection, skills: list[str]) -> set[int]
     placeholders = ",".join("?" * len(tool_pool_ids))
     rows = conn.execute(
         f"SELECT id FROM tool_pool WHERE id IN ({placeholders}) "
-        f"AND {_CALLABLE_KIND_SQL} AND is_active = 1",
+        f"AND {_callable_kind_sql()} AND is_active = 1",
         tuple(tool_pool_ids),
     ).fetchall()
     return {r["id"] for r in rows}
@@ -105,7 +150,7 @@ def resolve_callable_tools(
             placeholders = ",".join("?" * len(linked_ids))
             rows = conn.execute(
                 f"SELECT id FROM tool_pool WHERE id IN ({placeholders}) "
-                f"AND {_CALLABLE_KIND_SQL} AND is_active = 1",
+                f"AND {_callable_kind_sql()} AND is_active = 1",
                 tuple(linked_ids),
             ).fetchall()
             tool_ids.update(r["id"] for r in rows)
@@ -123,6 +168,20 @@ def resolve_callable_tools(
             factory = pool_registry.NATIVE_TOOL_FACTORIES.get(json.loads(row["config"]).get("native_id"))
             if factory is not None:
                 tools.append(factory(conn))
+            continue
+        if row["kind"] in _MCP_KINDS:
+            stack = _MCP_STACK.get()
+            if stack is None:
+                continue
+            from hair_platform import progress
+
+            progress.report(f"도구 서버 연결 중 — {row['name']}")
+            try:
+                tools.extend(pool_registry.connect_mcp_tools(stack, json.loads(row["config"])))
+            except Exception:  # noqa: BLE001 — 접속 실패(서버 없음·crewai-tools 미설치)는 그 도구만 건너뛴다
+                failed = _MCP_FAILED.get()
+                if failed is not None:
+                    failed.append(row["id"])
             continue
         tools.append(pool_registry._custom_python_crewai_tool(row))
     return tools

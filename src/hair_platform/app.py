@@ -154,6 +154,7 @@ from hair_platform.models import (
     AuxiliaryLlmConfigUpdate,
     CodeRepositoryActive,
     CodeRepositoryCreate,
+    EditProposalCreate,
     RepoCommitRequest,
     RagSearchConfigUpdate,
     SkillMarkdownImport,
@@ -2738,6 +2739,72 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="이 업무의 결과물을 볼 권한이 없습니다")
         return deliverables.deliverable_history(conn, deliverable_id)
 
+    # 결과물 부분 재작성 제안(2026-11-24, P1-6 — `edit_proposals.py`). 만들기·수락·거절은 결과물 편집과
+    # 같은 권한, 목록·섹션 조회는 결과물 조회와 같은 권한. provider/model 직접 선택은 suggest-fix처럼
+    # admin/manager만.
+    def _deliverable_viewable(deliverable_id: int, user: sqlite3.Row) -> sqlite3.Row:
+        row = conn.execute("SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="결과물을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, row["task_id"], user["id"]) is None
+        ):
+            raise HTTPException(status_code=403, detail="이 업무의 결과물을 볼 권한이 없습니다")
+        return row
+
+    @app.get("/api/deliverables/{deliverable_id}/sections")
+    def deliverable_sections(deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        from hair_platform import edit_proposals
+
+        row = _deliverable_viewable(deliverable_id, user)
+        return [{k: s[k] for k in ("index", "title", "chars")} for s in edit_proposals.sections(row["content"])]
+
+    @app.get("/api/deliverables/{deliverable_id}/edit-proposals")
+    def list_edit_proposals(deliverable_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        from hair_platform import edit_proposals
+
+        _deliverable_viewable(deliverable_id, user)
+        return edit_proposals.list_for(conn, deliverable_id)
+
+    @app.post("/api/deliverables/{deliverable_id}/edit-proposals", status_code=201)
+    def create_edit_proposal(
+        deliverable_id: int, payload: EditProposalCreate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)),
+    ):
+        from hair_platform import edit_proposals
+
+        if user["role"] not in ("admin", "manager") and (payload.provider or payload.model):
+            raise HTTPException(status_code=403, detail="팀원은 provider/model을 직접 선택할 수 없습니다")
+        try:
+            return edit_proposals.propose(
+                conn, deliverable_id, user["id"], user["role"], payload.instruction,
+                payload.section_index, payload.selected_text, payload.provider, payload.model,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="결과물을 찾을 수 없습니다") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="이 결과물을 고칠 권한이 없습니다") from exc
+        except edit_proposals.ProposalError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/edit-proposals/{proposal_id}/{decision}")
+    def decide_edit_proposal(
+        proposal_id: int, decision: str,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER)),
+    ):
+        from hair_platform import edit_proposals
+
+        if decision not in ("accept", "reject"):
+            raise HTTPException(status_code=404, detail="accept 또는 reject만 가능합니다")
+        try:
+            return edit_proposals.decide(conn, proposal_id, user["id"], user["role"], decision == "accept")
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="수정안을 찾을 수 없습니다") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="이 결과물을 고칠 권한이 없습니다") from exc
+        except edit_proposals.ProposalError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # 결과물 → 코드 저장소 커밋(2026-11-24, P0-3 2단계 — `repo_commit.py`). 저장소 등록과 같은 admin
     # 전용 — 미리보기(아무것도 쓰지 않음)와 커밋(점검 재실행 후 통과 시 main에 로컬 커밋, push 없음).
     @app.post("/api/deliverables/{deliverable_id}/repo-commit/preview")
@@ -2793,6 +2860,34 @@ def create_app(db_path: str | None = None) -> FastAPI:
             content=data,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers={"Content-Disposition": f'attachment; filename="deliverable-{deliverable_id}.docx"'},
+        )
+
+    # Excel·PowerPoint 내보내기(2026-11-24, P1-7 — `exports.to_xlsx`/`to_pptx`). 권한은 Word와 같다.
+    _EXPORTERS = {
+        "xlsx": ("to_xlsx", "xlsx_available", "XLSX_INSTALL_HINT",
+                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "pptx": ("to_pptx", "pptx_available", "PPTX_INSTALL_HINT",
+                 "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    }
+
+    @app.get("/api/deliverables/{deliverable_id}/export.{fmt}")
+    def export_deliverable_office(
+        deliverable_id: int, fmt: str, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        from fastapi.responses import Response
+
+        from hair_platform import exports
+
+        if fmt not in _EXPORTERS:
+            raise HTTPException(status_code=404, detail="지원하지 않는 형식입니다(docx·xlsx·pptx)")
+        row = _deliverable_viewable(deliverable_id, user)
+        fn, check, hint, media = _EXPORTERS[fmt]
+        if not getattr(exports, check)():
+            raise HTTPException(status_code=400, detail=getattr(exports, hint))
+        data = getattr(exports, fn)(row["content"], row["content_type"], title=f"결과물 #{deliverable_id}")
+        return Response(
+            content=data, media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="deliverable-{deliverable_id}.{fmt}"'},
         )
 
     @app.post("/api/tasks/{task_id}/deliverables", status_code=201)

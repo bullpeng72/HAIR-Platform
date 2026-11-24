@@ -493,6 +493,7 @@ def delete_deliverable(
     )
     # 저장소 커밋 기록(2026-11-24, P0-3 2단계) — 저장소 쪽 커밋은 그대로 남는다.
     conn.execute("DELETE FROM deliverable_repo_commits WHERE deliverable_id = ?", (deliverable_id,))
+    conn.execute("DELETE FROM deliverable_edit_proposals WHERE deliverable_id = ?", (deliverable_id,))
     conn.execute(
         "DELETE FROM agent_evaluations WHERE deliverable_id = ?", (deliverable_id,)
     )
@@ -2780,9 +2781,10 @@ def run_agent_execution_job(
     model: str | None,
     content_type: str = "text",
 ) -> None:
-    from hair_platform import progress
+    from hair_platform import progress, tool_calling
 
-    with progress.reporting(conn, "agent_execution_jobs", job_id):
+    # MCP 도구 세션(2026-11-24, P1-7) — 워크스페이스 단일 Agent 실행도 MCP 도구를 쓸 수 있게.
+    with progress.reporting(conn, "agent_execution_jobs", job_id), tool_calling.mcp_session():
         return _run_agent_execution_job(
             conn, job_id, task_id, agent_id, actor_id, role_name, prompt, provider, model,
             content_type,

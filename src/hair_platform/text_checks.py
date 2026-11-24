@@ -191,6 +191,57 @@ def term_suspects(text: str, evidence: str | None) -> list[dict] | None:
     return suspects
 
 
+# ----------------------------------------------- 3. 수정안의 깨진 낱말(부분 재작성 전용)
+
+# 용언 어미를 떼고 어근만 비교한다("좌우하며"→"좌우", "증가했다"→"증가").
+_VERB_TAILS = sorted(
+    ["하며", "하고", "하는", "하여", "하다", "한다", "했다", "해서", "하면", "하지", "할", "한", "해",
+     "되며", "되고", "되는", "된다", "됐다", "되어", "돼", "시켜", "시킨다", "시키는"],
+    key=len, reverse=True,
+)
+
+
+def _root(word: str) -> str:
+    w = _stem(word)
+    for tail in _VERB_TAILS:
+        if w.endswith(tail) and len(w) - len(tail) >= 2:
+            return w[: -len(tail)]
+    return w
+
+
+def garbled_terms(original: str, proposed: str, document: str) -> list[dict]:
+    """부분 재작성 수정안에서 원문 낱말을 옮기다 깨뜨린 것으로 보이는 낱말(2026-11-24, P1-6 실측: 로컬
+    모델이 "순현금흐름"→"순현나름", "좌우하며"→"우우하며"로 옮겼다). 문서 어디에도 없는 새 낱말이 원문
+    구간의 낱말과 거의 같으면 표시한다 — 다시 쓰면서 새로 들어온 정상 낱말은 원문 낱말과 닮지 않아 걸리지 않는다."""
+    import difflib
+
+    doc_words = _WORD_RE.findall(_prose(document))
+    known = {_stem(w) for w in doc_words} | {_root(w) for w in doc_words}
+    orig = {_stem(w) for w in _WORD_RE.findall(_prose(original))}
+    doc_stems = {_stem(w) for w in doc_words}
+    found: list[dict] = []
+    seen: set[str] = set()
+    for w in _WORD_RE.findall(_prose(proposed)):
+        s = _stem(w)
+        # 2음절 이하는 비슷한 정상 낱말이 너무 많다(실측 오탐: 내용/내역·부진/부서·원의/원이).
+        if len(re.sub(r"[0-9]", "", s)) < 3 or s in known or _root(s) in known or s in seen:
+            continue
+        # 한 글자만 다른 쌍은 고친 구간의 낱말과만, 4음절 이상 닮은 쌍은 문서 전체 낱말과 비교한다
+        # (실측: "순현나름"의 원래 낱말 "순현금흐름"은 고친 구간이 아니라 문서 다른 곳에 있었다).
+        for o in orig | doc_stems:
+            if len(re.sub(r"[0-9]", "", o)) < 3 or abs(len(o) - len(s)) > 1:
+                continue
+            if o in s or s in o:  # 합성어(현금흐름→순현금흐름)는 정상
+                continue
+            same_len_one_off = o in orig and len(o) == len(s) and sum(a != b for a, b in zip(o, s)) == 1
+            ratio = difflib.SequenceMatcher(None, o, s).ratio()
+            if same_len_one_off or (min(len(o), len(s)) >= 4 and ratio >= 0.66):
+                seen.add(s)
+                found.append({"found": w, "expected": o})
+                break
+    return found[:10]
+
+
 def term_consistency(text: str, evidence: str | None) -> dict:
     suspects = term_suspects(text, evidence)
     if suspects is None:

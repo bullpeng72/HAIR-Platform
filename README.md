@@ -58,7 +58,10 @@ Agent라고 다른 대우를 받지 않는다.
   수 있고, 화면에서 그 형식대로 렌더링된다(마크다운 서식·코드 구문
   강조·HTML 미리보기 전부 포함, 복사/다운로드/소스 보기 지원).
   다시 낸 결과물은 버전 이력으로 묶여 이전 버전과 줄 단위로 비교할 수
-  있고, Word(.docx)로 내보낼 수 있다.
+  있고, Word(.docx)·Excel(.xlsx, 표마다 시트)·PowerPoint(.pptx, 제목마다 슬라이드)로
+  내보낼 수 있다.
+  **부분 수정 요청**으로 고른 섹션·구간만 AI가 다시 쓴 수정안을 받아, 원문과
+  비교한 뒤 수락(반영)하거나 거절한다 — 나머지는 원문 그대로 유지된다.
 
 ### 2. 대화창에서 바로 일 시키기
 - 로그인하면 바로 대화창부터 시작한다. 아무것도 지정하지 않으면 기본
@@ -87,7 +90,8 @@ Agent라고 다른 대우를 받지 않는다.
   저장(승격)할 수 있다.
 - 과거 산출물 검색(내부지식검색)·조직 관계 질의(조직배정관계조회)·실시간 웹
   검색(Tavily)이 Agent가 필요하면 스스로 판단해 호출하는 도구로
-  이미 연결돼 있고, MCP로 외부 도구를 추가 연결할 수도 있다.
+  이미 연결돼 있고, MCP로 외부 도구를 추가 연결할 수도 있다(MCP 도구는 Crew·파이프라인뿐 아니라
+  대화창 기본 AI·@Agent 멘션·워크스페이스 실행에서도 실제로 호출된다).
 - **결과물 자동 검증**: 퍼센트 수치가 요청·조회·도구 결과 숫자로 실제
   재현되는지 계산으로 확인해 틀린 문장만 고치고(남으면 "⚠ 수치 확인
   필요" 표시), 개발 결과물의 Python 코드+테스트는 네트워크를 막은
@@ -466,7 +470,7 @@ src/hair_platform/
   crew_history.py    # Crew 실행 이력(crew_runs) — 팀/즉석 실행의 진행상태·협업다이어그램·토큰사용량 영구 저장
   vectorstore.py     # 내부지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
   graphquery.py      # 조직배정관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
-  websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(Crew 전용). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)
+  websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(대화창·Crew 양쪽, MCP 서버 접속 시). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)
   documents.py       # 외부 자료(.md/.txt/.csv/.html/.pdf/.xlsx/.docx/.pptx) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
   pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화 + 개발업무/일반업무 category 분류, CrewAI Tool 조립
   data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호) + 운영 데이터 공장 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 "초기화 시 보호" 팀만 유지, `hair reset-data`)
@@ -500,12 +504,13 @@ src/hair_platform/
   progress.py        # 실행 중 현재 단계·경과 시간 기록(대화·워크스페이스 진행 표시)
   integrations.py    # 개인 API 키(Bearer) + 외부 알림 웹훅(Slack/Teams)
   automation.py      # 파이프라인 정기 실행(매일/평일/매주) 루프(hair serve)
-  exports.py         # 결과물 Word(.docx) 내보내기
+  exports.py         # 결과물 Word(.docx)·Excel(.xlsx, 표마다 시트)·PowerPoint(.pptx, 제목마다 슬라이드) 내보내기
   config_check.py    # 기본 구성 점검(운영 DB vs 현재 버전 기본 구성, 빠진 것 반영)
   plan_merge.py      # 계획 분담 단계 모드(리드 계획 → 팀원 분담 실행 → 리드 병합)
   domain_packs.py    # 업무 영역 템플릿(재무·영업/고객지원·법무 도구·스킬·Agent·파이프라인)
   code_repos.py      # 코드 저장소 읽기 연동(등록 Git 저장소의 커밋된 파일 목록·내용·검색·커밋, 읽기 전용)
   repo_commit.py     # 승인된 결과물 → 등록 저장소 main 로컬 커밋(경로 명시 블록만, 점검 통과 시, push 없음)
+  edit_proposals.py  # 결과물 부분 재작성 제안(섹션·구간만 AI가 다시 씀) + 수락·거절(수락 시 기존 편집 경로로 반영)
 docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # RBAC 권한 설정을 테스트로 감사하는 Claude Code 스킬

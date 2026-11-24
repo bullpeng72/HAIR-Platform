@@ -140,3 +140,242 @@ def to_docx(content: str, content_type: str = "markdown", title: str | None = No
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# ---------- Excel·PowerPoint 내보내기(2026-11-24, P1-7 — "xlsx·pptx로 내보낼 수 없다") ----------
+# 실적 보고·재무 분석처럼 표가 핵심인 결과물은 엑셀로, 발표자료는 파워포인트로 바로 받는다. 둘 다
+# `documents` extra의 openpyxl·python-pptx를 쓴다(업로드 문서 읽기와 같은 묶음).
+
+XLSX_INSTALL_HINT = 'Excel 내보내기에는 openpyxl이 필요합니다 — pip install "hair-platform[documents]"'
+PPTX_INSTALL_HINT = 'PowerPoint 내보내기에는 python-pptx가 필요합니다 — pip install "hair-platform[documents]"'
+
+
+def xlsx_available() -> bool:
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def pptx_available() -> bool:
+    try:
+        import pptx  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _blocks(lines: list[str]) -> list[dict]:
+    """마크다운 줄 → 블록(heading/table/bullet/para/code). 내보내기 형식별로 다시 쓴다."""
+    out: list[dict] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip().startswith("```"):
+            lang = line.strip()[3:].strip().lower()
+            block: list[str] = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                block.append(lines[i])
+                i += 1
+            i += 1
+            out.append({"type": "code", "lang": lang, "text": "\n".join(block)})
+            continue
+        if "|" in line and i + 1 < len(lines) and _TABLE_SEP_RE.match(lines[i + 1]):
+            header = _row_cells(line)
+            rows: list[list[str]] = []
+            i += 2
+            while i < len(lines) and "|" in lines[i] and lines[i].strip():
+                rows.append(_row_cells(lines[i]))
+                i += 1
+            out.append({"type": "table", "header": header, "rows": rows})
+            continue
+        heading = _HEADING_RE.match(line)
+        bullet = _BULLET_RE.match(line) or _NUMBERED_RE.match(line)
+        if heading:
+            out.append({"type": "heading", "level": len(heading.group(1)), "text": _plain(heading.group(2))})
+        elif bullet:
+            out.append({"type": "bullet", "text": _plain(bullet.group(1))})
+        elif line.strip() and line.strip() not in ("---", "***"):
+            out.append({"type": "para", "text": _plain(line.strip().lstrip("> "))})
+        i += 1
+    return out
+
+
+def _plain(text: str) -> str:
+    return text.replace("**", "").replace("`", "").strip()
+
+
+_NUMBER_RE = re.compile(r"^[+\-−]?\d{1,3}(?:,\d{3})*(?:\.\d+)?$|^[+\-−]?\d+(?:\.\d+)?$")
+_PERCENT_RE = re.compile(r"^([+\-−]?\d+(?:\.\d+)?)\s*%$")
+
+
+def _cell_value(text: str):
+    """표 칸 글 → 숫자면 숫자(엑셀에서 바로 계산되게), 퍼센트는 비율 + 표시 형식, 나머지는 글 그대로."""
+    t = _plain(text)
+    if _NUMBER_RE.match(t):
+        return float(t.replace(",", "").replace("−", "-")), None
+    m = _PERCENT_RE.match(t)
+    if m:
+        return float(m.group(1).replace("−", "-")) / 100, "0.0#%"
+    return t, None
+
+
+def to_xlsx(content: str, content_type: str = "markdown", title: str | None = None) -> bytes:
+    """표마다 시트 하나(시트 이름은 바로 위 제목). 표가 없으면 '내용' 시트에 줄 단위로."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    lines = _html_to_lines(content) if content_type == "html" else (content or "").splitlines()
+    blocks = _blocks(lines)
+    wb = Workbook()
+    wb.remove(wb.active)
+    used: set[str] = set()
+
+    def sheet_name(base: str) -> str:
+        name = re.sub(r"[\[\]:*?/\\]", " ", base).strip()[:28] or "표"
+        candidate, n = name, 2
+        while candidate in used:
+            candidate, n = f"{name[:25]} {n}", n + 1
+        used.add(candidate)
+        return candidate
+
+    last_heading = None
+    for b in blocks:
+        if b["type"] == "heading":
+            last_heading = b["text"]
+        elif b["type"] == "table":
+            ws = wb.create_sheet(sheet_name(last_heading or f"표 {len(used) + 1}"))
+            ws.append(b["header"])
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+            for row in b["rows"]:
+                values = [_cell_value(row[c] if c < len(row) else "") for c in range(len(b["header"]))]
+                ws.append([v for v, _fmt in values])
+                for c, (_v, fmt) in enumerate(values, start=1):
+                    if fmt:
+                        ws.cell(row=ws.max_row, column=c).number_format = fmt
+            for c, head in enumerate(b["header"], start=1):
+                width = max([len(str(head))] + [len(str(r[c - 1])) if c - 1 < len(r) else 0 for r in b["rows"]])
+                ws.column_dimensions[get_column_letter(c)].width = min(60, max(10, width * 1.6))
+            ws.freeze_panes = "A2"
+    if not wb.worksheets:
+        ws = wb.create_sheet("내용")
+        for b in blocks:
+            text = b.get("text", "")
+            if b["type"] == "heading":
+                ws.append([text])
+                ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+            elif text:
+                ws.append([("• " if b["type"] == "bullet" else "") + text])
+        ws.column_dimensions["A"].width = 100
+    if title:
+        wb.properties.title = title
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _deck_slides_from_html(html: str) -> list[dict] | None:
+    """HAIR 발표자료 덱(`<section>` 슬라이드) → 슬라이드 목록. 덱이 아니면 None."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    sections = soup.find_all("section")
+    if len(sections) < 2:
+        return None
+    slides = []
+    for sec in sections:
+        for tag in sec(["script", "style"]):
+            tag.decompose()
+        head = sec.find(["h1", "h2", "h3"])
+        title = " ".join(head.get_text(" ").split()) if head else ""
+        body = []
+        for el in sec.find_all(["li", "p", "td"]):
+            text = " ".join(el.get_text(" ").split())
+            if text and text != title:
+                body.append(text)
+        slides.append({"title": title, "body": body[:12], "table": None})
+    return slides
+
+
+def _slides_from_markdown(content: str) -> list[dict]:
+    slides: list[dict] = []
+    current: dict | None = None
+    parent = ""  # 마지막 #·## 제목 — ### 소제목 슬라이드에 "상위 — 소제목"으로 붙인다
+    for b in _blocks((content or "").splitlines()):
+        if b["type"] == "heading" and b["level"] <= 3:
+            empty_prev = current is not None and not current["body"] and current["table"] is None
+            if b["level"] <= 2:
+                parent = b["text"]
+                title = b["text"]
+            else:
+                title = f"{parent} — {b['text']}" if parent else b["text"]
+            if empty_prev and b["level"] == 3:
+                current["title"] = title  # 내용 없는 상위 제목 슬라이드는 소제목 슬라이드로 합친다
+            else:
+                current = {"title": title, "body": [], "table": None, "base": title}
+                slides.append(current)
+            continue
+        if current is None:
+            current = {"title": "", "body": [], "table": None, "base": ""}
+            slides.append(current)
+        if b["type"] == "table":
+            if current["table"] is not None:  # 한 슬라이드에 표 하나 — 다음 표는 새 슬라이드
+                base = current.get("base") or current["title"]
+                current = {"title": base + " (계속)", "body": [], "table": None, "base": base}
+                slides.append(current)
+            current["table"] = b
+        elif b["type"] == "heading":
+            current["body"].append(b["text"])
+        elif b["type"] in ("bullet", "para"):
+            current["body"].append(b["text"])
+        elif b["type"] == "code" and b["lang"] in ("chart", "mermaid"):
+            current["body"].append(("(차트" if b["lang"] == "chart" else "(다이어그램") + " — HAIR 화면에서 확인)")
+    return [s for s in slides if s["title"] or s["body"] or s["table"]]
+
+
+def to_pptx(content: str, content_type: str = "markdown", title: str | None = None) -> bytes:
+    """제목(#·##)마다 슬라이드 하나 — 목록·문단은 본문, 표는 표로. HTML 덱은 `<section>`마다 한 장."""
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    slides = None
+    if content_type == "html":
+        slides = _deck_slides_from_html(content)
+        if slides is None:
+            slides = _slides_from_markdown("\n".join(_html_to_lines(content)))
+    else:
+        slides = _slides_from_markdown(content)
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    if title:
+        prs.core_properties.title = title
+    for s in slides or [{"title": title or "결과물", "body": [], "table": None}]:
+        slide = prs.slides.add_slide(prs.slide_layouts[5])  # 제목만
+        slide.shapes.title.text = s["title"][:120]
+        top = Inches(1.5)
+        if s["body"]:
+            box = slide.shapes.add_textbox(Inches(0.6), top, Inches(12.1), Inches(2.6 if s["table"] else 5.5))
+            tf = box.text_frame
+            tf.word_wrap = True
+            for n, text in enumerate(s["body"][:12]):
+                para = tf.paragraphs[0] if n == 0 else tf.add_paragraph()
+                para.text = "• " + text[:300]
+                para.font.size = Pt(18 if len(s["body"]) <= 6 else 14)
+            top = Inches(4.2) if s["table"] else top
+        if s["table"]:
+            header, rows = s["table"]["header"], s["table"]["rows"][:14]
+            shape = slide.shapes.add_table(1 + len(rows), len(header), Inches(0.6), top, Inches(12.1),
+                                           Inches(0.4) * (1 + len(rows)))
+            for r, cells in enumerate([header, *rows]):
+                for c in range(len(header)):
+                    cell = shape.table.cell(r, c)
+                    cell.text = _plain(cells[c]) if c < len(cells) else ""
+                    for para in cell.text_frame.paragraphs:
+                        para.font.size = Pt(12)
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()

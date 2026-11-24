@@ -1085,6 +1085,16 @@ class CodeRepositoryActive(BaseModel):
     is_active: bool
 
 
+class EditProposalCreate(BaseModel):
+    """부분 재작성 제안(2026-11-24, P1-6) — 섹션 번호 또는 붙여 넣은 원문 구간 중 하나 + 요청."""
+
+    instruction: str = Field(min_length=1, max_length=2000)
+    section_index: int | None = None
+    selected_text: str | None = Field(default=None, max_length=12000)
+    provider: LlmProvider | None = None
+    model: str | None = None
+
+
 class RepoCommitRequest(BaseModel):
     """결과물 → 저장소 커밋(2026-11-24, P0-3 2단계). message가 비면 결과물·업무 번호로 만든다."""
 

@@ -251,6 +251,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .home-way p { margin: 0.2rem 0 0.5rem; }
   .job-progress-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.15rem 0; }
   .pipeline-live { margin: 0.4rem 0 0.6rem; display: grid; gap: 0.3rem; }
+  .edit-proposal { border-top: 1px dashed rgba(127,127,127,0.4); padding-top: 0.4rem; margin-top: 0.4rem; }
   /* 작성 중 미리보기(2026-11-24, P0-2) */
   .job-partial-output { flex-basis: 100%; min-width: 0; margin: 0.2rem 0 0.3rem; }
   .job-partial-output pre { margin: 0.2rem 0 0; max-height: 12rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
@@ -3012,6 +3013,13 @@ function _updateConversationJobProgress(jobId, job) {
 
 // 작성 중 미리보기(2026-11-24, P0-2 응답 스트리밍) — 작업 행의 `partial_output`(지금까지 받은 글)을
 // 진행 줄 아래에 보여 준다. 마크다운 렌더링 없이 그대로(완성본은 응답 메시지로 따로 나간다), 끝부분만.
+// 결과물에 표가 있는지(Excel 내보내기 버튼 표시용, 2026-11-24 P1-7) — 마크다운 표 구분선 또는 HTML 표.
+function _hasTable(text) {
+  const t = text || "";
+  return t.indexOf("|---") !== -1 || t.indexOf("| ---") !== -1 || t.indexOf("|:--") !== -1 || t.indexOf("| :--") !== -1 ||
+    t.toLowerCase().indexOf("<table") !== -1;
+}
+
 function _showPartialOutput(container, text) {
   let box = container.querySelector(".job-partial-output");
   if (!text) { if (box) box.remove(); return; }
@@ -4746,13 +4754,20 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '<div class="actions"><button class="small" data-download-deliverable="' + d.id + '">다운로드</button>' +
     // 버전 이력(2026-11-23, P1-6) — 같은 작성자가 다시 낸 버전·직접 고친 기록을 현재본과 비교.
     '<button class="small" data-deliverable-history="' + d.id + '">버전 이력</button>' +
+    // 부분 수정 요청(2026-11-24, P1-6) — 섹션·구간만 AI가 다시 쓰고, 비교를 보고 수락·거절. 권한은 직접 편집과 같다.
+    (canEditDeliverable && d.content_type !== "html" ? '<button class="small" data-edit-proposal="' + d.id + '">부분 수정 요청</button>' : "") +
     // Word 내보내기(2026-11-23, P1-7) — 코드 결과물은 원본 다운로드가 더 맞아 버튼을 두지 않는다.
-    (d.content_type !== "code" ? '<button class="small" data-export-docx="' + d.id + '">Word로 내보내기</button>' : "") +
+    (d.content_type !== "code" ? '<button class="small" data-export-docx="' + d.id + '" data-export-fmt="docx">Word로 내보내기</button>' : "") +
+    // Excel·PowerPoint(2026-11-24, P1-7) — 표가 있으면 Excel(표마다 시트, 숫자는 숫자로), 제목마다 슬라이드인 PowerPoint.
+    (d.content_type !== "code" && _hasTable(d.content)
+      ? '<button class="small" data-export-docx="' + d.id + '" data-export-fmt="xlsx">Excel로</button>' : "") +
+    (d.content_type !== "code" ? '<button class="small" data-export-docx="' + d.id + '" data-export-fmt="pptx">PowerPoint로</button>' : "") +
     (d.status === "approved" && ME.role !== "viewer" ? knowledgeSubmitButton("deliverable", d.id) : "") +
     // 저장소에 커밋(2026-11-24, P0-3 2단계) — 결재를 마친 결과물만, admin만(저장소 등록과 같은 경계).
     (d.status === "approved" && ME.role === "admin" ? '<button class="small" data-repo-commit="' + d.id + '">저장소에 커밋</button>' : "") +
     '</div>' +
     '<div class="deliverable-history" id="history-' + d.id + '" hidden></div>' +
+    '<div class="edit-proposal-panel" id="edit-proposal-' + d.id + '" hidden></div>' +
     '<div class="repo-commit-panel" id="repo-commit-' + d.id + '" hidden></div>' +
     evidenceBlock +
     promptBlock +
@@ -5321,6 +5336,81 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     };
   });
 
+  // 부분 수정 요청(2026-11-24, P1-6) — 섹션을 고르거나 바꿀 부분을 붙여 넣고 요청을 적으면 AI가 그 부분만
+  // 다시 쓴 수정안을 만든다(결과물은 아직 그대로). 비교를 보고 수락하면 반영되고(이전 내용은 버전 이력),
+  // 거절하면 기록만 남는다.
+  detail.querySelectorAll("[data-edit-proposal]").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.editProposal;
+      const box = document.getElementById("edit-proposal-" + id);
+      if (!box.hidden) { box.hidden = true; return; }
+      let secs, props;
+      try {
+        [secs, props] = await Promise.all([
+          api("GET", "/api/deliverables/" + id + "/sections"),
+          api("GET", "/api/deliverables/" + id + "/edit-proposals"),
+        ]);
+      } catch (e) { showMsg("global-msg", e.message, "error"); return; }
+      const statusLabel = { pending: "검토 대기", accepted: "수락됨", rejected: "거절됨" };
+      const proposalHtml = p =>
+        '<div class="edit-proposal" data-proposal-id="' + p.id + '">' +
+        '<div class="muted">#' + p.id + " · " + esc(p.target_label) + " · 요청: " + esc(p.instruction) + " · " +
+        esc(statusLabel[p.status] || p.status) + (p.decided_by_name ? " (" + esc(p.decided_by_name) + ")" : "") + "</div>" +
+        renderTextDiff(p.original_text, p.proposed_text) +
+        ((p.warnings || []).length && p.status === "pending"
+          ? '<p class="msg error">⚠ 수락 전에 확인하세요: ' + p.warnings.map(esc).join(" · ") + "</p>" : "") +
+        (p.status === "pending"
+          ? '<div class="inline"><button class="small primary" data-proposal-accept="' + p.id + '">수락(반영)</button>' +
+            '<button class="small" data-proposal-reject="' + p.id + '">거절</button></div>'
+          : "") + "</div>";
+      box.innerHTML =
+        '<div class="inline" style="flex-wrap:wrap">' +
+        '<label class="muted">바꿀 섹션 <select class="ep-section">' +
+        secs.map(s => '<option value="' + s.index + '">' + esc(s.title) + " (" + s.chars.toLocaleString() + "자)</option>").join("") +
+        "</select></label></div>" +
+        '<details><summary class="muted">또는 바꿀 부분을 직접 붙여 넣기(결과물의 글을 그대로 복사)</summary>' +
+        '<textarea class="ep-selected" rows="3" style="width:100%;box-sizing:border-box" placeholder="여기에 붙여 넣으면 섹션 대신 이 부분만 고칩니다"></textarea></details>' +
+        '<div class="inline"><input class="ep-instruction" maxlength="2000" style="flex:1;min-width:16rem" placeholder="예: 3문장으로 줄이고 결론을 앞에 / 표로 바꿔 줘 / 수치 근거를 덧붙여 줘">' +
+        '<button class="small primary ep-create">수정안 만들기</button></div>' +
+        '<p class="muted">AI는 고른 부분만 다시 씁니다 — 나머지는 그대로 유지됩니다. 수정안은 수락해야 반영됩니다.</p>' +
+        '<div class="ep-list">' + props.map(proposalHtml).join("") + "</div>";
+      box.hidden = false;
+      const list = box.querySelector(".ep-list");
+      const bindDecisions = () => {
+        list.querySelectorAll("[data-proposal-accept],[data-proposal-reject]").forEach(b => {
+          b.onclick = async () => {
+            const pid = b.dataset.proposalAccept || b.dataset.proposalReject;
+            const accept = Boolean(b.dataset.proposalAccept);
+            b.disabled = true;
+            try {
+              await api("POST", "/api/edit-proposals/" + pid + "/" + (accept ? "accept" : "reject"));
+              showMsg("global-msg", accept ? "수정안을 반영했습니다 — 이전 내용은 버전 이력에 남았습니다." : "수정안을 거절했습니다.", "ok");
+              if (accept) { renderCollabWorkspace(taskId, containerId); return; }
+              box.hidden = true; btn.click();
+            } catch (e) { b.disabled = false; showMsg("global-msg", e.message, "error"); }
+          };
+        });
+      };
+      bindDecisions();
+      box.querySelector(".ep-create").onclick = async ev => {
+        const instruction = box.querySelector(".ep-instruction").value.trim();
+        const selected = box.querySelector(".ep-selected").value;
+        if (!instruction) { showMsg("global-msg", "어떻게 고칠지 요청을 입력하세요", "error"); return; }
+        const payload = { instruction };
+        if (selected.trim()) payload.selected_text = selected; else payload.section_index = Number(box.querySelector(".ep-section").value);
+        ev.target.disabled = true;
+        const old = ev.target.textContent;
+        ev.target.textContent = "만드는 중…(AI 호출)";
+        try {
+          const p = await api("POST", "/api/deliverables/" + id + "/edit-proposals", payload);
+          list.insertAdjacentHTML("afterbegin", proposalHtml(p));
+          bindDecisions();
+        } catch (e) { showMsg("global-msg", e.message, "error"); }
+        finally { ev.target.disabled = false; ev.target.textContent = old; }
+      };
+    };
+  });
+
   // 버전 이력(2026-11-23, P1-6) — 펼칠 때 불러와, 고른 이전 버전(다시 낸 버전 또는 직접 고치기 전
   // 내용)과 현재본의 줄 단위 차이를 보여 준다.
   detail.querySelectorAll("[data-deliverable-history]").forEach(btn => {
@@ -5417,11 +5507,12 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   detail.querySelectorAll("[data-export-docx]").forEach(btn => {
     btn.onclick = async () => {
       const id = btn.dataset.exportDocx;
+      const fmt = btn.dataset.exportFmt || "docx";
       const headers = {};
       const token = sessionStorage.getItem("hair_token");
       if (token) headers["Authorization"] = "Bearer " + token;
       try {
-        const resp = await fetch("/api/deliverables/" + id + "/export.docx", { headers, credentials: "same-origin" });
+        const resp = await fetch("/api/deliverables/" + id + "/export." + fmt, { headers, credentials: "same-origin" });
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
           throw new Error(err.detail || ("내보내기 실패(" + resp.status + ")"));
@@ -5429,7 +5520,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         const blob = await resp.blob();
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = "deliverable-" + id + ".docx";
+        a.download = "deliverable-" + id + "." + fmt;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -6138,7 +6229,7 @@ async function renderDecomposeForm(briefId, stubRoles) {
     helpBox(
       '<ul class="muted help-list">' +
       '<li>필요 스킬은 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(여러 개 등록 가능, 칩의 ×로 제거).</li>' +
-      '<li>자동완성 중 "실시간웹검색"(Tavily)은 대화창·Crew 실행 양쪽에서 동작하고, "일반웹검색"(Parallel Search)은 Crew 실행에서만 동작합니다.</li>' +
+      '<li>자동완성 중 "실시간웹검색"(Tavily)은 대화창·Crew 실행 양쪽에서 동작하고, "일반웹검색"(Parallel Search, MCP)도 대화창·Crew 실행 양쪽에서 동작합니다(MCP 서버에 접속할 수 있을 때).</li>' +
       '<li>목록에 없는 이름도 자유롭게 추가할 수 있습니다.</li>' +
       '</ul>'
     ) +
@@ -8125,7 +8216,7 @@ async function renderPoolRegistry(content) {
       '<li>모드 "tool"인 스킬은 기본 도구 ID가 가리키는 도구를 이 스킬(이름이 정확히 일치)을 가진 모든 Agent에게 실행할 때마다 자동으로 붙입니다(run_crew/crewai_agent_generator 실행마다 다시 계산 — 나중에 스킬 설정을 바꾸면 이미 만들어진 Agent에도 다음 실행부터 바로 반영됩니다).</li>' +
     '<li>모드 "none"은 도구 연결 없이 이름표만 붙이는 용도입니다 — 하니스 방법론/agent-evaluator 절차 스킬 17개가 여기 해당합니다(사람 판단이 필요한 절차라 자동 도구화가 안 됨).</li>' +
     '<li>하니스 절차 스킬 중에서는 "recommend-fix-workflow" 하나만 예외로 실제 MCP 도구(정적 Gate 조치 지식 조회)가 붙어 있습니다.</li>' +
-    '<li><b>대화창 표시</b>를 꺼두면 대화창의 스킬 선택 드롭다운에는 안 보이지만(선택해서 고를 수 없음), Agent의 skill_tags로는 그대로 쓸 수 있습니다 — mcp_remote/mcp_stdio 도구가 붙은 스킬은 대화창 기본 AI·단일 Agent 멘션에서는 실제로 호출되지 않아(팀·Crew 실행에서만 동작) 꺼 두는 것이 맞습니다. custom_python 도구(수치 데이터 분석기·차트 생성기 등)는 대화창에서도 함수 호출로 실제 실행되므로 이런 스킬은 기본으로 켜져 있습니다.</li>' +
+    '<li><b>대화창 표시</b>를 꺼두면 대화창의 스킬 선택 드롭다운에는 안 보이지만(선택해서 고를 수 없음), Agent의 skill_tags로는 그대로 쓸 수 있습니다 — mcp_remote/mcp_stdio 도구가 붙은 스킬도 이제 대화창 기본 AI·단일 Agent 멘션에서 실제로 호출됩니다(응답을 만드는 동안 MCP 서버에 접속 — 서버가 꺼져 있으면 경고 후 도구 없이 답변). custom_python 도구(수치 데이터 분석기·차트 생성기 등)는 대화창에서도 함수 호출로 실제 실행되므로 이런 스킬은 기본으로 켜져 있습니다.</li>' +
     '<li><b>분류</b>(사용자 요청, 2026-11-11, "SW개발업무와 일반업무로 구분, 개발업무는 Default로 대화창에 안 보이고 필요시 노출") — "개발업무"로 분류된 스킬/도구는 대화창 드롭다운에 default로 안 보이지만 완전히 숨겨진 건 아닙니다 — 대화창의 "개발업무 스킬도 보기" 체크박스를 켠 사용자에게는 보입니다("대화창 표시"가 꺼진 스킬과는 다른 축으로, 둘 다 적용됩니다 — show_in_conversation이 꺼져 있으면 체크박스를 켜도 안 보입니다). Agent/Task의 skill_tags 자동완성에는 분류와 무관하게 항상 둘 다 뜹니다(그 경로는 CrewAI 실행이라 개발업무 스킬도 실제로 동작하기 때문). 위쪽 "분류 필터"로 목록을 좁혀볼 수 있고, 수정 화면에서 바로 바꿀 수 있습니다.</li>' +
     '<li><b>삭제</b>(관리자 전용)는 이 스킬 레코드만 지웁니다 — 같은 이름의 skill_tags를 가진 Agent/사람은 그대로 남고, 다음 실행부터 자동 도구 연결만 안 됩니다.</li>' +
     // 사용자 요청(2026-11-17, "외부에서 마크다운 포멧의 Skill을
@@ -11790,7 +11881,7 @@ const MANUAL_MARKDOWN = [
 '제안된 역할 칩을 클릭하면 아래 입력란에 그대로 채워집니다(다듬어서 쓰세요). 직접 채울 항목:',
 '',
 '- **필요한 역할**(예: "백엔드 개발자") — 필수. 💡 이미 등록된 레퍼런스 Agent(29개)와 이름이 겹치면("백엔드 개발자"/"코드 검증가"/"데이터 분석가" 등), 사람/Agent를 새로 만들지 않아도 다음 3단계의 후보 매칭에서 바로 그 Agent가 뜹니다.',
-'- **필요 스킬** — 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(칩의 ×로 제거, 여러 개 등록 가능, 목록에 없는 이름도 자유 입력 가능). 자동완성 중 **"실시간웹검색"**(Tavily)은 대화창·Crew 실행 양쪽에서 동작하고, **"일반웹검색"**(Parallel Search)은 Crew 실행에서만 동작합니다 — 이 둘의 차이는 꼭 기억해두세요(9절 "자주 겪는 문제"에도 관련 내용이 있습니다).',
+'- **필요 스킬** — 하나씩 입력 후 Enter 또는 "추가"로 칩에 담습니다(칩의 ×로 제거, 여러 개 등록 가능, 목록에 없는 이름도 자유 입력 가능). 자동완성 중 **"실시간웹검색"**(Tavily)은 대화창·Crew 실행 양쪽에서 동작하고, **"일반웹검색"**(Parallel Search, MCP 도구)도 v0.3.0 이후 대화창·Crew 실행 양쪽에서 동작합니다 — 대화창에서는 응답을 만드는 동안 MCP 서버에 접속하며, 접속하지 못하면 응답 맨 위에 "도구 서버(MCP)에 연결하지 못해…" 경고가 붙습니다.',
 '- **인원 수**(기본 1).',
 '',
 '"**할 일 추가**"를 누르면 즉시 할 일 목록에 반영됩니다. 이후 모든 배정·Agent 생성·실행은 이 할 일(Task) 단위로 이뤄집니다. 목록에서 "**상세**"를 누르면 배정 현황을 같은 화면에서 바로 볼 수 있습니다(아래 4단계).',
@@ -11856,7 +11947,9 @@ const MANUAL_MARKDOWN = [
 '- **"갤러리"** 탭(사람 메뉴)에서 여러 할 일을 가로질러 결과물을 한 화면에 모아 봅니다 — admin/manager는 조직 전체, 그 외엔 본인이 참가한 할 일의 결과물만 보입니다. 유형(텍스트/마크다운/HTML/코드)별로 걸러볼 수 있습니다.',
 '- 카드의 **"새 탭에서 보기"**를 누르면 그 결과물 하나만 담긴 독립 페이지가 새 탭에 열립니다(로그인 세션은 그대로 필요합니다 — 외부에 공개로 공유되는 링크가 아닙니다). 코드는 문법 강조, HTML은 그대로 렌더링, 나머지는 마크다운으로 보여줍니다.',
 '- 협업 워크스페이스의 결과물 카드에서 **"버전 이력"**을 누르면, 같은 작성자(같은 Agent 또는 같은 사람)가 이 할 일에 다시 낸 이전 버전(반려 뒤 재실행·파이프라인 재시도)과 사람이 직접 고치기 전 내용을 골라 지금 버전과 줄 단위로 비교할 수 있습니다(추가는 녹색, 삭제는 빨간색) — 무엇이 바뀌었는지 확인한 뒤 승인·반려하세요.',
+'- **"부분 수정 요청"**(결과물을 고칠 수 있는 사람 — admin/manager, 또는 본인이 쓴 초안) — 바꿀 **섹션**(마크다운 제목 단위)을 고르거나 바꿀 **부분을 그대로 붙여 넣고**, "3문장으로 줄여 줘"·"표로 바꿔 줘"처럼 요청을 적어 "수정안 만들기"를 누르면 AI가 **그 부분만** 다시 씁니다(나머지는 원문 그대로 유지됩니다). 수정안은 원문과 줄 단위로 비교해 보여 주고, **수락**해야 결과물에 반영됩니다(이전 내용은 버전 이력에 남음) — **거절**하면 기록만 남습니다. AI가 원문 낱말을 옮기다 깨뜨린 것으로 보이면(예: "순현금흐름"→"순현나름") 수락 버튼 위에 ⚠ 확인 문구가 뜹니다. 수정안을 만든 뒤 결과물이 바뀌었어도 고친 부분이 그대로 남아 있으면 그 자리에만 반영하고, 없어졌으면 반영하지 않습니다.',
 '- **"Word로 내보내기"**는 결과물을 .docx로 내려받습니다 — 마크다운의 제목·목록·표·굵게·인용은 Word 서식으로, HTML은 화면에 보이는 글자만 문단으로 옮기고, 차트·다이어그램은 "(차트 「제목」 — HAIR 화면에서 확인)"으로 자리만 남깁니다. 발표자료 덱처럼 디자인이 중요한 결과물은 원본 "다운로드"를 쓰세요(코드 결과물에는 이 버튼이 없습니다). 서버에 `documents` 확장이 설치돼 있어야 합니다.',
+'- **"Excel로"**(결과물에 표가 있을 때) — 표마다 시트 하나(시트 이름은 표 바로 위 제목)로 내려받고, "1,200"·"−20" 같은 숫자는 숫자로, "30.0%"는 퍼센트 서식의 비율로 들어가 엑셀에서 바로 계산할 수 있습니다. **"PowerPoint로"** — 제목(#·##·###)마다 슬라이드 한 장, 목록·문단은 본문, 표는 표로 옮깁니다(HTML 발표자료 덱은 슬라이드마다 한 장). 디자인은 기본 서식이라 다듬어 쓰는 초안 용도입니다.',
 '- **"삭제"** 버튼은 admin/manager는 항상, 그 외엔 본인이 작성하고 아직 제출 전(초안, draft)인 결과물에만 보입니다 — 제출 후에는 결재 이력이라 본인도 못 지웁니다. 삭제하면 갤러리·협업 워크스페이스 양쪽에서 즉시 사라집니다(별도 새로고침 없이 바로 반영).',
 '',
 '> 배정을 잘못 걸었거나 더 이상 필요 없어졌다면, 할 일 상세 화면(admin/manager 전용)의 **"배정 취소"** 버튼으로 confirmed/requested 상태를 되돌릴 수 있습니다 — 업무 요청·할 일 삭제가 "확정된 배정이 있어 삭제할 수 없다"로 막힐 때도 이 버튼으로 먼저 정리하세요.',

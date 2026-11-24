@@ -1397,6 +1397,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import repo_commit
 
     repo_commit.ensure_schema(conn)
+    # 결과물 부분 재작성 제안(2026-11-24, P1-6 — `edit_proposals.py`).
+    from hair_platform import edit_proposals
+
+    edit_proposals.ensure_schema(conn)
     # 대화에서 전환한 업무 요청의 출처(2026-11-23, P1-4).
     _ensure_column(conn, "briefs", "source_conversation_id", "INTEGER REFERENCES conversations(id)")
     # 실행 중 단계 표시(2026-11-23, P0-2 — `progress.py`).
