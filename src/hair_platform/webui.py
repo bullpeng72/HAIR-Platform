@@ -4890,7 +4890,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 있다. 아래 렌더링은 원래 제네릭하게 모든 키를 순회하므로 자동으로
   // 배지가 뜨지만, 긴 영문 키를 그대로 배지 글자로 쓰면 어색해 짧은
   // 한글 라벨로 바꿔 보여준다(A-G는 그대로 글자 자체가 식별자).
-  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인", numeric_grounding: "수치근거", deliverable_runnable: "실행가능", test_execution: "테스트실행" };
+  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인", numeric_grounding: "수치근거", deliverable_runnable: "실행가능", test_execution: "테스트실행", quote_grounding: "인용근거", term_consistency: "용어확인" };
   const pipelineTimelineHtml = (run) => {
     if (!run) return "";
     const rows = run.stage_results.map(sr => {
@@ -4902,7 +4902,10 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
               const title = g.not_measured
                 ? "Gate " + label + " — 미평가" + (g.reason ? " (" + g.reason + ")" : "")
                 : "Gate " + label + " — " + (g.passed ? "통과" : "미통과") +
-                  (typeof g.score === "number" ? " (점수 " + g.score + ")" : "");
+                  (typeof g.score === "number" ? " (점수 " + g.score + ")" : "") +
+                  // 무엇이 걸렸는지 첫 몇 건(2026-11-24 — 수치근거·인용근거·용어확인).
+                  (!g.passed && g.unsupported && g.unsupported.length ? " — 근거 없음: " + g.unsupported.slice(0, 3).map(u => u.text).join(" / ") : "") +
+                  (!g.passed && g.suspects && g.suspects.length ? " — 확인: " + g.suspects.slice(0, 3).map(u => "'" + u.found + "'(근거: '" + u.expected + "')").join(", ") : "");
               return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + '">' + label + "</span>";
             })
             .join(" ")
@@ -11761,6 +11764,8 @@ const MANUAL_MARKDOWN = [
 '📍 **메뉴**: 결재',
 '',
 '결과물은 Gate A-G 자동 채점이 붙고, 4단계와 같은 **"결재"** 탭에서 승인/반려를 거쳐야 "확정된 결과"가 됩니다.',
+'',
+'> 💡 결과물 카드의 추가 배지는 내용 자체를 기계적으로 대조한 결과입니다(노란색이면 결재 전에 확인하세요 — 배지에 마우스를 올리면 걸린 항목이 보입니다): **수치근거**(퍼센트가 요청·조회·도구 결과의 숫자로 계산되는지), **인용근거**("…라고", "…에 따르면"처럼 인용으로 옮긴 따옴표 문장이 근거 자료에 실제로 있는지), **용어확인**(근거 자료의 낱말에서 한 글자가 빠지거나 바뀐 낱말 — 예: "1분기 착수"가 "1분 착수"로, "발표 노트"가 "발포 노트"로), **테스트실행**(코드 결과물의 테스트를 격리 환경에서 실제로 돌린 결과).',
 '',
 '### 7단계 — 결과물 모아보기 / 단독으로 열기 / 삭제',
 '',

@@ -545,12 +545,18 @@ def attach_quality_checks(gate_scores: dict, output: str, evidence: str | None =
     `test_execution`(결과물의 Python 테스트를 격리 환경에서 실제로 실행, `code_tests.py`).
     단일 Agent 실행·Crew 실행·두 파이프라인 엔진이 같은 함수를 쓴다. 파이프라인 단계는
     `gate_ids`에 이 키를 넣었을 때만 통과 판정에 참여한다(기본은 기록·배지 표시)."""
-    from hair_platform import code_tests, numeric_check
+    from hair_platform import code_tests, numeric_check, text_checks
 
     if evidence:
         numeric = numeric_check.gate_score(output or "", evidence)
         if not numeric["not_measured"]:
             gate_scores["numeric_grounding"] = numeric
+        # 인용 근거·용어 일관성(2026-11-24, P0-1 — `text_checks.py`): 인용 표지가 붙은 따옴표 문장이 근거에
+        # 있는지, 근거의 낱말에서 한 음절이 빠지거나 바뀐 낱말("1분기"→"1분", "발표"→"발포")이 있는지.
+        for key, result in (("quote_grounding", text_checks.quote_grounding(output or "", evidence)),
+                            ("term_consistency", text_checks.term_consistency(output or "", evidence))):
+            if not result["not_measured"]:
+                gate_scores[key] = result
     tests = code_tests.compute_test_execution(output or "")
     if not tests["not_measured"] or "Docker" in (tests.get("reason") or ""):
         # 테스트가 있는데 격리 환경이 없어 못 돌린 경우도 "미평가" 배지로 남겨 사람이 알게 한다.

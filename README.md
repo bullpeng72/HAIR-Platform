@@ -92,7 +92,9 @@ Agent라고 다른 대우를 받지 않는다.
   재현되는지 계산으로 확인해 틀린 문장만 고치고(남으면 "⚠ 수치 확인
   필요" 표시), 개발 결과물의 Python 코드+테스트는 네트워크를 막은
   Docker에서 실제로 실행하며, 한국어 결과물에 섞인 한자·외국 문자는
-  자동 교정한다.
+  자동 교정한다. 인용으로 옮긴 따옴표 문장이 근거 자료에 실제로 있는지,
+  근거의 낱말에서 한 글자가 빠지거나 바뀐 용어("1분기"→"1분")가 없는지도
+  대조해 배지로 표시한다.
 - **코드 저장소 읽기**: admin이 "연동 설정"에 Git 저장소를 등록하면
   개발 Agent가 커밋된 파일 목록·내용·코드 검색·최근 커밋을 직접 읽고
   "경로:줄"을 근거로 답한다(읽기 전용, 비밀 파일 제외).
@@ -490,6 +492,7 @@ src/hair_platform/
   llm_usage.py       # 실제 LLM 토큰 사용량 기록(직접 호출·CrewAI 공통) + 모델별 단가로 금액 집계
   org_policy.py      # 조직 정책(사번 형식·결과물 언어)
   numeric_check.py   # 결과물 퍼센트 수치가 요청·조회·도구 결과 숫자로 재현되는지 검증·문장 교정(numeric_grounding)
+  text_checks.py     # 인용 문장 근거 대조(quote_grounding)·한 음절 빠짐/바뀜 용어 탐지(term_consistency)
   code_tests.py      # 개발 결과물의 Python 코드+테스트를 네트워크 차단 Docker에서 실제 실행(test_execution)
   progress.py        # 실행 중 현재 단계·경과 시간 기록(대화·워크스페이스 진행 표시)
   integrations.py    # 개인 API 키(Bearer) + 외부 알림 웹훅(Slack/Teams)
