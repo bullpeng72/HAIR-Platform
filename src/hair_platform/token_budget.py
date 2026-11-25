@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import functools
 import sqlite3
+from typing import Any
 
 
 class _CharEncoding:
@@ -33,7 +34,7 @@ class _CharEncoding:
 
 
 @functools.lru_cache(maxsize=1)
-def _encoding():
+def _encoding() -> Any:
     """cl100k_base — 처음 쓸 때 불러온다(2026-11-25). 예전에는 import 시점에 불러와, 인코딩 표가 캐시에 없고
     인터넷이 막힌 서버(사내 폐쇄망)에서는 tiktoken이 표를 내려받지 못해 **서버 시작(import) 자체가 실패**했다
     (CI에서 외부 네트워크를 막자 드러남). 못 불러오면 `_CharEncoding`으로 대신한다."""

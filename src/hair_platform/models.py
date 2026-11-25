@@ -806,6 +806,7 @@ class PipelineStageUpdate(BaseModel):
     on_fail_return_stage_id: int | None = Field(default=None, ge=0)  # 0 = 해제
     output_content_type: ContentType | None = None
     expected_output: str | None = None
+    strict_review: bool | None = None  # 조건부 승인도 보완 요청으로(2026-11-25, P0-4)
 
 
 class PipelineStageReorder(BaseModel):

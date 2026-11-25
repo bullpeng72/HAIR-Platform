@@ -138,6 +138,7 @@ def _stage_to_dict(conn: sqlite3.Connection, stage_row: sqlite3.Row) -> dict:
             stage_row["checks_requirements_traceability"]
         ),
         "is_requirements_source": bool(stage_row["is_requirements_source"]),
+        "strict_review": bool(stage_row["strict_review"]) if "strict_review" in stage_row.keys() else False,
         "on_fail_return_stage_id": stage_row["on_fail_return_stage_id"],
         "output_content_type": stage_row["output_content_type"],
         "expected_output": stage_row["expected_output"],
@@ -385,6 +386,7 @@ def update_stage(
         "on_fail_return_stage_id",
         "output_content_type",
         "expected_output",
+        "strict_review",
     }
     unknown = set(fields) - allowed
     if unknown:
@@ -415,6 +417,7 @@ def update_stage(
             "is_primary_deliverable",
             "checks_requirements_traceability",
             "is_requirements_source",
+            "strict_review",
         ):
             value = 1 if value else 0
         if key == "on_fail_return_stage_id":
@@ -700,6 +703,22 @@ _REWORK_REVIEW_CHARS = 6000
 
 _VERDICT_HEADING_RE = re.compile(r"^#{1,4}\s*(?:최종\s*)?판정\s*$", re.MULTILINE)
 _VERDICT_REWORK_WORDS = ("보완 요청", "보완요청", "반려", "재작성", "수정 요청")
+# 승인하면서 앞으로 고칠 곳을 요구하는 표현(조건부 승인) — "수정하면 완성도가 높아집니다", "고쳐야", "오타가 남아 있다".
+# 이미 고친 것을 설명하는 문장("'화미팅' 오타→'화상 미팅' 수정 … 반영되었고" — 영업 실측 2차 판정)은 걸리지 않게
+# "오타" 단독은 보지 않고, 앞으로의 요구(…하면·…해야·…필요)나 "남아 있음/발견" 같은 현재형만 본다.
+_CONDITIONAL_FIX_RE = re.compile(
+    r"(?:수정|보완|정정|교정)(?:하면|해야|이 필요|가 필요| 필요|을 권|를 권|하시기|해 주)"
+    r"|고치면|고쳐야|바로잡아야|(?:통일|삭제|추가|보강|명시|정리)해야|맞춰야"
+    r"|(?:오타|오기|오탈자|오류)[^.\n]{0,30}?(?:남아|있습니다|있음|있으며|있어|발견)"
+)
+
+
+def _stage_flag(stage, name: str) -> bool:
+    """단계 행(sqlite3.Row 또는 dict)의 선택 플래그 — 예전 스키마(열 없음)면 False."""
+    try:
+        return bool(stage[name])
+    except (IndexError, KeyError):
+        return False
 
 
 def review_verdict(output: str) -> dict:
@@ -719,8 +738,20 @@ def review_verdict(output: str) -> dict:
     if rework_at < 0 and approve_at < 0:
         return {"score": None, "status": "not_measured", "not_measured": True, "passed": False, "verdict": None}
     rework = rework_at >= 0 and (approve_at < 0 or rework_at <= approve_at)
-    return {"score": 0.0 if rework else 1.0, "status": "fail" if rework else "pass", "not_measured": False,
-            "passed": not rework, "verdict": "보완 요청" if rework else "승인"}
+    if rework:
+        return {"score": 0.0, "status": "fail", "not_measured": False, "passed": False, "verdict": "보완 요청"}
+    # 조건부 승인(2026-11-25, P0-4 실측 — 계약서 검토): "승인 — … 단, 용어 오타 2곳(면약·지지재권)을 수정하면
+    # 완성도가 높아집니다"처럼 승인하면서 고칠 곳을 짚으면, 그 오타가 결과물에 그대로 남았다. 판정 절에서 수정
+    # 요구 표현을 찾아 "조건부 승인"으로 표시한다. 기본은 통과(재작성 시간이 들지 않게) — 단계의 "엄격 검토"를
+    # 켜면 보완 요청과 같이 되돌린다(`evaluate_stage_gates`).
+    conditional = _CONDITIONAL_FIX_RE.search(head[approve_at:] if approve_at >= 0 else head)
+    if conditional:
+        start = max(head.rfind(".", 0, conditional.start()), head.rfind("\n", 0, conditional.start()), -1) + 1
+        end_candidates = [i for i in (head.find(".", conditional.end()), head.find("\n", conditional.end())) if i >= 0]
+        note = head[start: (min(end_candidates) + 1) if end_candidates else len(head)].strip(" -—*\n")
+        return {"score": 0.5, "status": "conditional", "not_measured": False, "passed": True,
+                "verdict": "조건부 승인", "conditional": True, "note": note[:300]}
+    return {"score": 1.0, "status": "pass", "not_measured": False, "passed": True, "verdict": "승인"}
 
 
 def rework_feedback(conn: sqlite3.Connection, run_id: int, stage) -> str:
@@ -754,8 +785,12 @@ def _gate_failure_summary(gate_scores: dict) -> str:
     failed = [
         f"{gid}({g.get('score')})"
         for gid, g in gate_scores.items()
-        if not g.get("not_measured") and not g.get("passed")
+        if isinstance(g, dict) and not g.get("not_measured") and not g.get("passed")
     ]
+    # 엄격 검토로 되돌아온 조건부 승인(2026-11-25, P0-4) — 고칠 곳을 그대로 짚어 준다.
+    verdict = gate_scores.get("review_verdict")
+    if isinstance(verdict, dict) and verdict.get("conditional") and verdict.get("note"):
+        failed.append(f"검토자가 고치라고 한 곳: {verdict['note']}")
     return ", ".join(failed) if failed else "(세부 사유 없음)"
 
 
@@ -954,6 +989,66 @@ def run_pipeline_stage_job(
             on_stage_resolved()
 
 
+def record_stage_started_at(conn: sqlite3.Connection, run_id: int, run_stage_id: int | None) -> None:
+    """방금 만든 단계 기록에 이 단계의 시작 시각(실행 행의 `stage_started_at`)을 남긴다(2026-11-25, P0-3).
+    예상 남은 시간(`estimate_remaining`)이 과거 단계 소요 시간을 계산하는 데 쓴다. 커밋은 호출자."""
+    if run_stage_id is None:
+        return
+    try:
+        conn.execute(
+            "UPDATE pipeline_run_stages SET started_at = "
+            "(SELECT stage_started_at FROM pipeline_runs WHERE id = ?) WHERE id = ?",
+            (run_id, run_stage_id),
+        )
+    except sqlite3.OperationalError:  # 마이그레이션 전 — 추정만 못 할 뿐 실행은 계속
+        pass
+
+
+# 예상 남은 시간(2026-11-25, P0-3) — 같은 템플릿 같은 단계의 최근 기록(최대 5회)의 평균 소요 시간으로 추정한다.
+# 사람 승인을 기다린 시간은 단계 시작 전이라 들어가지 않는다. 기록이 없는 단계가 하나라도 있으면 그만큼 모른다고 표시.
+_ETA_HISTORY_RUNS = 5
+
+
+def estimate_remaining(conn: sqlite3.Connection, run) -> dict | None:
+    """{"remaining_seconds", "known_stages", "unknown_stages", "basis"} — 실행 중이 아니거나 추정할 기록이 없으면 None."""
+    if run["status"] != "running":
+        return None
+    try:
+        stages = conn.execute(
+            "SELECT id, seq_order FROM pipeline_stages WHERE pipeline_template_id = ? AND seq_order >= ? "
+            "ORDER BY seq_order",
+            (run["pipeline_template_id"], run["current_stage_seq"] or 1),
+        ).fetchall()
+        total = 0.0
+        known = unknown = 0
+        basis = 0
+        for st in stages:
+            rows = conn.execute(
+                "SELECT (julianday(created_at) - julianday(started_at)) * 86400.0 AS sec FROM pipeline_run_stages "
+                "WHERE stage_id = ? AND started_at IS NOT NULL AND pipeline_run_id != ? "
+                "AND status IN ('passed', 'approved', 'awaiting_approval') ORDER BY id DESC LIMIT ?",
+                (st["id"], run["id"], _ETA_HISTORY_RUNS),
+            ).fetchall()
+            secs = [r["sec"] for r in rows if r["sec"] is not None and r["sec"] >= 0]
+            if not secs:
+                unknown += 1
+                continue
+            avg = sum(secs) / len(secs)
+            if st["seq_order"] == run["current_stage_seq"] and run["stage_started_at"]:
+                elapsed = conn.execute(
+                    "SELECT (julianday('now') - julianday(?)) * 86400.0", (run["stage_started_at"],)
+                ).fetchone()[0] or 0.0
+                avg = max(avg - elapsed, 0.0)
+            total += avg
+            known += 1
+            basis = max(basis, len(secs))
+    except sqlite3.OperationalError:
+        return None
+    if known == 0:
+        return None
+    return {"remaining_seconds": int(total), "known_stages": known, "unknown_stages": unknown, "basis": basis}
+
+
 @contextlib.contextmanager
 def stage_progress(conn: sqlite3.Connection, run_id: int, stage) -> Iterator[None]:
     """단계 실행 중 진행 표시(2026-11-24, P0-2 "파이프라인 진행률") — 두 엔진이 단계를 돌리는 동안 감싼다.
@@ -1110,6 +1205,12 @@ def score_stage_output(
     if stage["mode"] == "parallel_delegated" and not gate_scores["delegation_check"]["passed"]:
         passed = False
     if verdict is not None and not verdict["not_measured"] and not verdict["passed"]:
+        passed = False
+    # 엄격 검토(2026-11-25, P0-4): 조건부 승인도 되돌려 지적된 곳을 고치게 한다(재시도 상한 안에서).
+    if verdict is not None and verdict.get("conditional") and _stage_flag(stage, "strict_review"):
+        verdict["passed"] = False
+        verdict["status"] = "fail"
+        verdict["strict"] = True
         passed = False
     return gate_scores, passed
 
@@ -1379,6 +1480,7 @@ def _execute_stage_attempt(
         ),
     )
     run_stage_id = cur.lastrowid
+    record_stage_started_at(conn, run_id, run_stage_id)
     assert run_stage_id is not None
 
     if not passed:
@@ -1671,6 +1773,7 @@ def _run_progress_fields(conn: sqlite3.Connection, run: sqlite3.Row) -> dict:
         "progress_at": run["progress_at"] if "progress_at" in keys else None,
         "stage_started_at": run["stage_started_at"] if "stage_started_at" in keys else None,
         "partial_output": run["partial_output"] if "partial_output" in keys else None,
+        "eta": estimate_remaining(conn, run) if "stage_started_at" in keys else None,
     }
 
 

@@ -4767,6 +4767,14 @@ function _utcElapsed(ts) {
   return sec >= 3600 ? Math.floor(sec / 3600) + "시간 " + Math.floor((sec % 3600) / 60) + "분"
     : sec >= 60 ? Math.floor(sec / 60) + "분 " + (sec % 60) + "초" : sec + "초";
 }
+// 예상 남은 시간(2026-11-25, P0-3) — 같은 파이프라인 같은 단계의 최근 실행(최대 5회) 평균. 기록이 없는 단계는 빼고 센다.
+function _pipelineEtaHtml(eta) {
+  if (!eta || !(eta.known_stages > 0)) return "";
+  const min = Math.max(1, Math.round(eta.remaining_seconds / 60));
+  const text = min >= 60 ? Math.floor(min / 60) + "시간 " + (min % 60) + "분" : min + "분";
+  return '<div class="muted" title="같은 파이프라인의 최근 실행(단계별 최대 ' + eta.basis + '회) 평균 소요 시간으로 계산했습니다. 보완 요청으로 다시 쓰면 더 걸립니다.">⏱ 예상 남은 시간 약 ' + text +
+    (eta.unknown_stages ? " + 기록 없는 단계 " + eta.unknown_stages + "개" : "") + "</div>";
+}
 function _pipelineLiveHtml(run) {
   if (!run || run.status !== "running" || !run.total_stages) return "";
   const idx = run.current_stage_index || 1;
@@ -4779,6 +4787,7 @@ function _pipelineLiveHtml(run) {
   return '<div class="pipeline-live">' +
     '<div><b>▶ ' + idx + "/" + run.total_stages + " 단계 · " + esc(run.current_stage_name || "") + "</b>" +
     ' <span class="muted">— ' + esc(run.progress || "진행 중") + (elapsed ? " · 이 단계 " + elapsed + " 경과" : "") + "</span></div>" +
+    _pipelineEtaHtml(run.eta) +
     '<div class="progress-bar" title="완료한 단계 ' + (idx - 1) + "/" + run.total_stages + '"><div class="progress-bar-fill" style="width:' + pct + '%"></div></div>' +
     preview + "</div>";
 }
@@ -5206,9 +5215,10 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         ? Object.entries(sr.gate_scores)
             .filter(([gid]) => !gid.startsWith("_"))  // 내부 항목(평가 리포트 토큰 등, 2026-11-25)은 배지로 안 보임
             .map(([gid, g]) => {
-              const label = GATE_EXTRA_LABELS[gid] || gid;
+              const label = (gid === "review_verdict" && g.conditional) ? "조건부 승인" : (GATE_EXTRA_LABELS[gid] || gid);
               // 참고용 검사(advisory — 낱말확인)는 통과 여부와 별개로 찾은 게 있으면 노란색(2026-11-25).
-              const cls = g.not_measured ? "gate-na" : (g.advisory ? (g.status === "warn" ? "gate-warn" : "gate-ok") : (g.passed ? "gate-ok" : "gate-warn"));
+              // 조건부 승인(2026-11-25, P0-4) — 검토자가 승인하면서 고칠 곳을 짚었다: 통과여도 노란색, 라벨도 바꾼다.
+              const cls = g.not_measured ? "gate-na" : (g.advisory ? (g.status === "warn" ? "gate-warn" : "gate-ok") : (g.conditional ? "gate-warn" : (g.passed ? "gate-ok" : "gate-warn")));
               const title = g.not_measured
                 ? "Gate " + label + " — 미평가" + (g.reason ? " (" + g.reason + ")" : "")
                 : "Gate " + label + " — " + (g.passed ? "통과" : "미통과") +
@@ -5219,7 +5229,9 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
                   (g.words && g.words.length ? " — 사전에 없는 낱말(참고용): " + g.words.slice(0, 5).map(w => "'" + w.word + "'").join(", ") : "") +
                   // 계획 분담 배정 확인(2026-11-25) — 리드가 일을 주지 않은 팀원.
                   (g.unassigned && g.unassigned.length ? " — 리드가 일을 주지 않은 팀원: " + g.unassigned.join(", ") + "(그 몫은 리드가 병합 때 직접 채웠을 수 있음)" : "") +
-                  (g.assigned && g.assigned.length && !(g.unassigned && g.unassigned.length) ? " — 배정: " + g.assigned.join(", ") : "");
+                  (g.assigned && g.assigned.length && !(g.unassigned && g.unassigned.length) ? " — 배정: " + g.assigned.join(", ") : "") +
+                  // 조건부 승인 — 검토자가 짚은 고칠 곳(엄격 검토가 켜진 단계면 되돌려 고치게 함).
+                  (g.conditional ? " — 검토자가 승인하면서 고칠 곳을 짚었습니다: " + (g.note || "") + (g.strict ? " (엄격 검토: 되돌려 고침)" : " — 결재 전에 이 부분을 확인하세요") : "");
               return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + '">' + label + "</span>";
             })
             .join(" ")
@@ -9296,6 +9308,9 @@ function pipelineStageCardHtml(templateId, stage, index, total, stages) {
       (stage.is_requirements_source ? "요구사항 정의 해제" : "요구사항 정의 단계로") + "</button>" +
     '<button class="small" data-toggle-stage-flag="' + stage.id + ':checks_requirements_traceability:' + (stage.checks_requirements_traceability ? "0" : "1") + '">' +
       (stage.checks_requirements_traceability ? "추적성 검사 끄기" : "추적성 검사 켜기") + "</button>" +
+    // 엄격 검토(2026-11-25, P0-4) — 되돌아갈 단계가 정해진 검토 단계에서만 의미가 있다.
+    (stage.on_fail_return_stage_id ? '<button class="small" data-toggle-stage-flag="' + stage.id + ':strict_review:' + (stage.strict_review ? "0" : "1") + '" title="켜면 검토자가 승인하면서 고칠 곳을 짚은 &quot;조건부 승인&quot;도 보완 요청처럼 작성 단계로 되돌려 고치게 합니다(재시도 상한 안에서, 시간이 더 듦). 끄면 노란 &quot;조건부 승인&quot; 배지로만 알립니다.">' +
+      (stage.strict_review ? "엄격 검토 끄기" : "엄격 검토 켜기") + "</button>" : "") +
     '<button class="small danger" data-delete-stage="' + stage.id + '">단계 삭제</button>' +
     "</div></div>";
 }
@@ -12418,12 +12433,16 @@ const MANUAL_MARKDOWN = [
 '- 기준을 통과하면 사람 승인이 필요 없는 단계는 바로 다음 단계로 넘어갑니다. 미달이면 "어떤 Gate가 왜 부족한지"를 반영해 자동으로 다시 시도합니다.',
 '- 검토 단계에 **"검토 실패 시 되돌릴 단계"**를 정해 두면 같은 검토를 반복하지 않고 그 단계(보통 작성·구현)로 돌아가 **검토 의견을 반영해 다시 씁니다**(기본 템플릿 7종 모두 이렇게 설정).',
 '- 되돌릴 단계가 있는 검토 단계는 **검토자가 쓴 판정도 따릅니다** — 검토 결과의 `## 판정` 첫머리가 **"보완 요청"**(또는 반려·재작성·수정 요청)이면 Gate 점수가 모두 통과여도 미통과로 보고 작성 단계로 돌려보내고, "승인"이면 통과합니다. 판정 문단을 찾지 못하면 막지 않습니다(Gate 목록에 "판정" 배지로 기록).',
+'- **조건부 승인**: 검토자가 "승인"이라고 쓰면서 같은 판정 문단에 고칠 곳을 요구하면(예: "단, 오타 2곳을 **수정하면** 완성도가 높아집니다", "표기를 **통일해야** 합니다", "오타가 **남아 있습니다**") **노란 "조건부 승인" 배지**가 붙습니다. 배지에 마우스를 올리면 검토자가 짚은 문장이 보입니다. 이미 고친 내용을 설명하는 문장("오타 → 수정 … 반영되었고")은 해당하지 않습니다.',
+'  - **기본(엄격 검토 끔)**: 통과로 처리합니다(다시 쓰는 시간이 들지 않음). **결재 전에 배지의 문장을 확인하세요.**',
+'  - **엄격 검토 켬**: 파이프라인 관리의 단계 카드에서 **"엄격 검토 켜기"**를 누르면, 조건부 승인도 보완 요청처럼 작성 단계로 되돌려 짚은 곳을 고치게 합니다(재시도 상한 안에서). 품질은 올라가지만 다시 쓰는 만큼 시간이 더 듭니다(로컬 모델 실측: 보완 요청 한 번에 영업 메일 15분 → 71분). 버튼은 "검토 실패 시 되돌릴 단계"가 정해진 검토 단계에만 보입니다.',
 '- Agent 출력에 섞인 내부 추론·작업 메모·같은 문장 반복·중간에 잘린 HTML은 저장 전에 걷어 내고, 걷어 낼 수 없으면 결과물만 다시 쓰게 합니다(마지막 시도는 그대로 받아 Gate·사람이 판단).',
 '- 재시도를 다 써도 통과하지 못한 단계만 결재함으로 올라옵니다.',
 '',
 '**실행 중단** — 방향이 틀렸거나 필요 없어진 실행은 협업 워크스페이스의 **"실행 중단 요청"**으로 멈춥니다. 지금 진행 중인 모델 호출이 끝나는 다음 안전한 지점에서 멈추며, 이미 "사람 승인 대기" 상태라면 바로 멈춥니다.',
 '',
 '**진행 표시** — 단계별 배지(대기·진행중·통과·재시도N·승인대기·반려)가 실시간으로 바뀌고, 실행 중인 단계는 카드 위에 **"▶ 2/5 단계 · 작성 — 기획서 작성자 작업 중 · 이 단계 3분 12초 경과"**처럼 몇 번째 단계인지, 어느 Agent가 무엇을 하는지(작업 시작·도구 실행·위임), 경과 시간과 진행 막대가 5초마다 갱신됩니다. 계획 분담 단계처럼 Agent가 직접 글을 쓰는 동안은 **작성 중인 글**도 미리 보입니다. 대화에서 시작한 실행은 같은 정보가 진행 메시지로 대화에도 올라옵니다.',
+'- **예상 남은 시간** — 같은 파이프라인을 전에 돌린 기록이 있으면 진행 막대 아래에 **"⏱ 예상 남은 시간 약 N분"**이 보입니다. 단계마다 최근 실행(최대 5회)의 평균 소요 시간으로 계산하고, 지금 단계는 이미 지난 시간을 뺍니다. 사람 승인을 기다린 시간은 넣지 않습니다. 처음 돌리는 파이프라인이나 기록이 없는 단계는 "+ 기록 없는 단계 N개"로 따로 표시합니다. 보완 요청으로 다시 쓰게 되면 예상보다 더 걸립니다.',
 '',
 '### 결과물 자동 검증 — 배지 읽는 법',
 '',
@@ -12441,6 +12460,7 @@ const MANUAL_MARKDOWN = [
 '| 구문·실행가능·테스트실행 | (개발 결과물) 코드 문법, 그대로 실행되는 완성본인지, Python 코드+테스트를 네트워크를 막은 Docker에서 실제 실행 | 구현 단계 재시도 |',
 '| 추적성 | 1단계 요구사항을 빠짐없이 반영했는지(AI 판정, 짧은 답이라 출력 상한 4,096토큰) | 작성 단계로 되돌림 |',
 '| 판정 | 검토자가 쓴 `## 판정`이 승인인지 보완 요청인지 | 작성 단계로 되돌림 |',
+'| 조건부 승인 | 검토자가 승인하면서 고칠 곳을 요구했는지(판정 문단의 "수정하면·고쳐야·통일해야·오타가 남아 있음" 등) | 기본은 통과 + 노란 배지(검토자가 짚은 문장 표시). 단계의 "엄격 검토"를 켜면 작성 단계로 되돌림 |',
 '| 배정확인(참고용) | (계획 분담 단계) 리드가 팀원별 하위 작업을 나눌 때 일을 주지 않은 팀원이 있는지 | 통과 판정과 무관. 노란 배지에 빠진 팀원 표시(그 몫은 리드가 병합 때 직접 채웠을 수 있음) |',
 '| 낱말확인(참고용) | 한국어 사전에 없는 낱말 — 모델이 지어낸 낱말(실측: 퍼널 결론의 뜻 없는 "-니즘" 낱말, "분산 처리"가 깨진 낱말 등)을 찾음. 플랫폼 화면·스킬에 쓰는 외래어와 요청·앞 단계 결과에 나온 낱말, 합성어(지식재산·미집행)는 빼고 셈 | 통과 판정·인박스 경고에는 넣지 않고 노란 배지에 낱말 목록만 표시(사전에 없는 실제 낱말 — 예: 당월·별지 — 이 섞일 수 있음). 서버에 `korean` 확장이 있어야 동작 |',
 '',
@@ -12771,6 +12791,12 @@ const MANUAL_MARKDOWN = [
 '  3. 실행 실패는 **"인박스"**에서 확인합니다. 로컬 모델 타임아웃은 Crew·파이프라인 기준 5,400초로 길게 잡혀 있지만, 35B급 모델은 한 단계에 수십 분이 걸릴 수 있습니다.',
 '  4. **서버 PC가 잠자기에 들어가면 로컬 생성도 멈춥니다.** 긴 실행 중에는 잠자기를 꺼 두세요.',
 '',
+'**검토는 "승인"인데 검토자가 지적한 오타가 결과물에 그대로 남아 있다**',
+'',
+'- **원인**: 검토자가 승인하면서 고칠 곳을 짚었습니다("조건부 승인"). 기본 설정은 다시 쓰는 시간이 들지 않게 이를 통과로 처리합니다.',
+'- **해결**:',
+'  1. 결과물을 결재하기 전에 단계 결과의 노란 **"조건부 승인"** 배지에 마우스를 올려 짚은 문장을 확인하고, 직접 고치거나 **"부분 수정 요청"**으로 그 부분만 고칩니다.',
+'  2. 이런 일이 잦은 파이프라인이면 파이프라인 관리에서 그 검토 단계의 **"엄격 검토 켜기"**를 눌러 자동으로 되돌려 고치게 합니다(시간이 더 듦).',
 '**긴 결과물(발표자료 덱·단일 파일 앱)이 중간에 잘린다**',
 '',
 '- **원인**: 모델의 컨텍스트 창이 작아 앞 내용과 생성 중인 글이 다 들어가지 못했습니다.',

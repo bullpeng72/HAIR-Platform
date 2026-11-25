@@ -1627,6 +1627,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "model_registry", "price_input_per_1m", "REAL")
     _ensure_column(conn, "pipeline_stages", "is_requirements_source", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "pipeline_stages", "on_fail_return_stage_id", "INTEGER")
+    # 엄격 검토(2026-11-25, P0-4) — 켜면 "조건부 승인"(승인하면서 고칠 곳을 지적)도 보완 요청으로 처리한다.
+    _ensure_column(conn, "pipeline_stages", "strict_review", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "model_registry", "price_output_per_1m", "REAL")
     from hair_platform import llm_usage
 
@@ -1666,6 +1668,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 사용자 요청(2026-10-28, "반려 사유를 재시도 지시문에 직접 끼워
     # 넣는 식으로 개선") — 기존 DB에도 컬럼을 추가한다.
     _ensure_column(conn, "pipeline_run_stages", "decision_reason", "TEXT")
+    # 단계 시작 시각(2026-11-25, P0-3 예상 남은 시간) — 단계 기록은 단계가 끝날 때 생겨 created_at은 끝난 시각이다.
+    _ensure_column(conn, "pipeline_run_stages", "started_at", "TEXT")
     # 사용자 요청(2026-10-28, "팀 관리의 '#3 자율 개발 크루'의 경우
     # 파이프라인을 참조해 실제 개발 품질을 보장하며 수행될 수 있도록
     # 재구성해줘") — 정적 SCHEMA의 `teams`/`pipeline_runs`는 새로

@@ -302,6 +302,7 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
         ),
     )
     stage_row_id = cur.lastrowid
+    pr.record_stage_started_at(conn, run_id, stage_row_id)
     assert stage_row_id is not None
 
     # 2단계 — Task 전체 재시도 예산(`pipeline_runtime.py`의 로드맵

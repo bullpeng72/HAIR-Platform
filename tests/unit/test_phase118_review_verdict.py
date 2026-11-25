@@ -114,3 +114,83 @@ def test_graph_engine_also_reworks_on_rework_verdict():
         "SELECT ps.name, prs.attempt, prs.status FROM pipeline_run_stages prs JOIN pipeline_stages ps "
         "ON ps.id = prs.stage_id WHERE prs.pipeline_run_id = ? ORDER BY prs.id", (run_id,))]
     assert rows == [("작성", 1, "passed"), ("검토", 1, "failed_retrying"), ("작성", 2, "passed"), ("검토", 2, "passed")]
+
+
+# 조건부 승인(2026-11-25, P0-4) — 실측 판정 문장 그대로.
+_CONTRACT_VERDICT = ("## 판정\n\n**승인** — 3개 중점 사항을 모두 다루었습니다. 단, 용어 오타 2곳(면약·지지재권)과 "
+                     "배상 상한 기산 기간 표기 혼용 1곳을 수정하면 완성도가 높아집니다.\n\n## 요구사항 충족\n표")
+_SALES_VERDICT = ('## 판정\n\n**승인** — 1차 Gate에서 지적된 3개 항목(B사 근거 없는 66.7% 수치 삭제, "화미팅" 오타→'
+                  '"화상 미팅" 수정, 내부 참고 논리 혼선 수정)이 모두 반영되었고, 요구사항을 누락 없이 충족합니다.\n')
+
+
+def test_conditional_approval_is_detected_but_already_fixed_notes_are_not():
+    v = pr.review_verdict(_CONTRACT_VERDICT)
+    assert v["verdict"] == "조건부 승인" and v["passed"] and v["conditional"]
+    assert "면약" in v["note"] and v["note"].startswith("단,")
+    # 이미 고친 내용을 설명하는 승인(영업 실측 2차)은 조건부가 아니다.
+    assert pr.review_verdict(_SALES_VERDICT)["verdict"] == "승인"
+    assert pr.review_verdict("## 판정\n승인 — 수정할 곳이 없습니다.\n")["verdict"] == "승인"
+    assert pr.review_verdict("## 판정\n승인. 다만 표 3에 오타가 2곳 남아 있습니다.\n")["verdict"] == "조건부 승인"
+    assert pr.review_verdict("## 판정\n승인. 수치 표기는 통일해야 합니다.\n")["verdict"] == "조건부 승인"
+
+
+def _run_with_reviewer_outputs(strict: bool, reviewer_outputs: list[str]):
+    from unittest.mock import patch
+
+    from hair_platform.auth import Role, create_user
+
+    conn = db.get_connection(":memory:")
+    db.init_schema(conn)
+    admin = create_user(conn, "admin_strict", "adminpass", Role.ADMIN)
+    tid = pr.create_pipeline_template(conn, admin, "strict", "", "general")
+    write = pr.add_stage(conn, admin, tid, "작성", "single", [("기획서 작성자", "")], is_primary_deliverable=True)
+    review = pr.add_stage(conn, admin, tid, "검토", "single", [("문서 검토자", "")],
+                          gate_ids=["A"], min_gate_pass_ratio=1.0, max_retry=2, on_fail_return_stage_id=write)
+    if strict:
+        pr.update_stage(conn, admin, review, strict_review=True)
+    brief = conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, '기획서', '[]')", (admin,)).lastrowid
+    task = conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)).lastrowid
+    conn.commit()
+    roles = {r[0]: r[1] for r in conn.execute("SELECT id, role_name FROM agent_pool")}
+    calls = []
+
+    def fake_run_crew(conn_, agent_ids, task_descriptions, actor_id, **kwargs):
+        role = roles[agent_ids[0]]
+        calls.append((role, task_descriptions[0]))
+        rounds = sum(1 for r, _ in calls if r == "문서 검토자")
+        output = reviewer_outputs[min(rounds, len(reviewer_outputs)) - 1] if role == "문서 검토자" else f"초안 {len(calls)}"
+        return {"final_output": output,
+                "agents": [{"agent_id": agent_ids[0], "role_name": role, "name": None, "output": output}],
+                "gate_scores": {"A": {"score": 0.9, "passed": True}}, "tcr": 90.0, "delegations": []}
+
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=fake_run_crew):
+        assert task is not None
+        run_id = pr.start_pipeline_run(conn, admin, tid, task)
+        pr.run_pipeline_stage_job(conn, run_id, admin)
+    return conn, run_id, calls
+
+
+def test_conditional_approval_passes_by_default_with_yellow_note():
+    """기본(엄격 검토 끔): 재작성 시간이 들지 않게 통과시키고, 배지·메모로만 알린다."""
+    import json
+
+    conn, run_id, calls = _run_with_reviewer_outputs(False, [_CONTRACT_VERDICT])
+    assert [r for r, _ in calls] == ["기획서 작성자", "문서 검토자"]
+    gates = json.loads(conn.execute(
+        "SELECT gate_scores FROM pipeline_run_stages WHERE pipeline_run_id = ? ORDER BY id DESC LIMIT 1",
+        (run_id,)).fetchone()[0])
+    assert gates["review_verdict"]["verdict"] == "조건부 승인" and gates["review_verdict"]["passed"]
+    assert conn.execute("SELECT status FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()[0] == "completed"
+
+
+def test_strict_review_sends_conditional_approval_back_with_the_note():
+    """엄격 검토: 조건부 승인도 작성 단계로 되돌리고, 검토자가 짚은 곳을 다시 쓰기 지시에 넣는다."""
+    conn, run_id, calls = _run_with_reviewer_outputs(True, [_CONTRACT_VERDICT, "## 판정\n승인 — 모두 충족\n"])
+    assert [r for r, _ in calls] == ["기획서 작성자", "문서 검토자", "기획서 작성자", "문서 검토자"]
+    assert "면약" in calls[2][1] and "검토자가 고치라고 한 곳" in calls[2][1]
+    assert conn.execute("SELECT status FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()[0] == "completed"
+    template = pr.get_pipeline_template(conn, conn.execute(
+        "SELECT pipeline_template_id FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()[0])
+    assert template is not None
+    stage = [s for s in template["stages"] if s["name"] == "검토"][0]
+    assert stage["strict_review"] is True
