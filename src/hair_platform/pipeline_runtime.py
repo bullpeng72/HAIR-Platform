@@ -68,7 +68,6 @@ from hair_platform import (
     agent_evaluation,
     approvals,
     audit,
-    crew_runtime,
     dashboard,
     deliverables,
     evaluation_reports,  # 리포트 토큰을 저장·응답에서 뺀다(2026-11-25)
@@ -1441,23 +1440,17 @@ def _execute_stage_attempt(
                 eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
             )
         else:
-            result = crew_runtime.run_crew(
+            # 두 엔진 공통 단계 실행기(2026-11-25, P1-7 — `stage_runner.py`): 기본은 CrewAI(지금까지와 같음, CrewAI
+            # 메모리는 끔 — 2026-11-06 실측: 숨은 OpenAI 임베딩 의존), HAIR_STAGE_RUNTIME=direct면 대화와 같은 직접 호출.
+            from hair_platform import stage_runner
+
+            result = stage_runner.run_stage_agents(
                 conn,
+                stage,
                 run_agent_ids,
                 task_descriptions,
                 actor_id,
                 process=process,
-                # 실측(2026-11-06, park_member 로드러너 게임 데모, Ollama 검증
-                # 중) — `run_crew()`의 `memory=True`(기본값)는 provider와
-                # 무관하게 항상 OpenAI 임베딩 API를 쓴다(`run_crew()` 자체
-                # docstring에 이미 경고돼 있던 제약). "구현" 단계 출력처럼 긴
-                # 산출물을 임베딩하려 하면 OpenAI 임베딩 API의 입력 길이 한도
-                # (8192 토큰)를 넘겨 `BadRequestError`가 났다 — provider를
-                # Ollama로 고쳐도 이 메모리 레이어만은 몰래 OpenAI에 의존해
-                # 깨졌다. 이 모듈은 이미 단계 간 출력을 `base_input`으로 직접
-                # 체이닝하므로(위 "요구분석" 섹션 참고) CrewAI 자체 메모리가
-                # 따로 필요 없다 — 꺼서 이 숨은 OpenAI 의존을 완전히 없앤다.
-                memory=False,
                 eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
                 provider=stage_provider,
                 model=stage_model,

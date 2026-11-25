@@ -81,7 +81,6 @@ from hair_platform import (
     agent_evaluation,
     approvals,
     audit,
-    crew_runtime,
     dashboard,
     deliverables,
     evaluation_reports,  # 리포트 토큰을 저장에서 뺀다(2026-11-25)
@@ -244,13 +243,16 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
                 eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
             )
         else:
-            result = crew_runtime.run_crew(
+            # 두 엔진 공통 단계 실행기(2026-11-25, P1-7 — `stage_runner.py`).
+            from hair_platform import stage_runner
+
+            result = stage_runner.run_stage_agents(
                 conn,
+                stage,
                 agent_ids,
                 task_descriptions,
                 state["actor_id"],
                 process="sequential",
-                memory=False,
                 provider=stage_provider,
                 model=stage_model,
                 expected_outputs=expected_outputs,

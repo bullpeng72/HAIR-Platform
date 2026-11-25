@@ -507,6 +507,9 @@ def execute_agent(
         output = repaired
     if retrieval_sink is not None and numeric_report is not None:
         retrieval_sink["numeric_check"] = numeric_report
+    if retrieval_sink is not None and tool_calls:
+        # 도구 결과(2026-11-25, P1-7) — 파이프라인 직접 실행(`stage_runner`)이 단계 채점 근거로 쓴다.
+        retrieval_sink["tool_results"] = [result for _name, result in tool_calls]
 
     conn.execute(
         "UPDATE agent_pool SET last_output = ?, llm_provider = ?, llm_model = ? WHERE id = ?",
