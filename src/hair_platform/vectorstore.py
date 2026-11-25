@@ -31,7 +31,7 @@ import os
 import re
 import sqlite3
 
-from hair_platform import audit, vector_backends
+from hair_platform import audit, knowledge_access, vector_backends
 
 DEFAULT_EMBEDDING_MODELS = {
     "openai": "text-embedding-3-small",
@@ -471,6 +471,8 @@ def search(
             f"WHERE id IN ({','.join('?' * len(batch))})",
             batch,
         ).fetchall()
+    # 문서별 공개 범위(2026-11-25, P1-5 — `knowledge_access.py`): 요청한 사람이 볼 수 없는 문서의 청크는 뺀다.
+    rows = knowledge_access.filter_rows(conn, rows)
     scored = []
     for row in rows:
         cosine_score = cosine_by_id[row["id"]]

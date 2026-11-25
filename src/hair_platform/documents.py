@@ -549,7 +549,7 @@ def list_documents(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT d.id, d.filename, d.mime_type, d.uploaded_by, u.username AS uploaded_by_username, "
         "d.conversation_id, d.char_count, d.chunk_count, d.created_at, "
-        "d.source_type, d.submission_id "
+        "d.source_type, d.submission_id, COALESCE(d.visibility, 'all') AS visibility "
         "FROM documents d JOIN users u ON u.id = d.uploaded_by "
         "ORDER BY d.id DESC"
     ).fetchall()

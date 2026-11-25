@@ -56,6 +56,7 @@ from hair_platform import (
     audit,
     evaluation_reports,
     graphquery,
+    knowledge_access,
     llm,
     model_options,
     pool_registry,
@@ -616,6 +617,7 @@ _CONTENT_TYPE_INSTRUCTIONS = {
 }
 
 
+@knowledge_access.viewer_from_actor  # 지식 검색 공개 범위를 요청자 기준으로(2026-11-25, P1-5)
 def run_crew(
     conn: sqlite3.Connection,
     agent_ids: list[int],

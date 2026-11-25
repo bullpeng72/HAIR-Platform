@@ -54,6 +54,7 @@ from hair_platform import (
     conversation_memory,
     crew_runtime,
     deliverables,
+    knowledge_access,
     knowledge_submissions,
     language_qa,
     llm,
@@ -2836,6 +2837,7 @@ def run_agent_mention_job(
         return _run_agent_mention_job(conn, job_id, conversation_id, agent_id, actor_id)
 
 
+@knowledge_access.viewer_from_actor  # 지식 검색 공개 범위를 요청자 기준으로(2026-11-25, P1-5)
 def run_default_ai_job(
     conn: sqlite3.Connection,
     job_id: int,

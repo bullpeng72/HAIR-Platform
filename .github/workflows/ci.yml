@@ -10,6 +10,8 @@ jobs:
   quality:
     name: Tests + lint (pytest, ruff)
     runs-on: ubuntu-latest
+    # 멈춘 테스트가 기본 6시간 동안 러너를 잡지 않게(2026-11-25 — 평소 약 20분)
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

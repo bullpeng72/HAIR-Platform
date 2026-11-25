@@ -100,6 +100,14 @@ def run(
         # 계획을 읽지 못하면 단계에 적힌 팀원별 지시(없으면 원 요청 전체)로 대신한다.
         plan = [{"role": w["role_name"], "task": w["instructions"] or "위 요청 중 당신의 역할에 해당하는 부분"} for w in workers]
         plan_source = "stage_instructions"
+    # 리드가 빠뜨린 팀원에게 기본 하위 작업(2026-11-25, P1-11 — P2-9 실측: PM이 "외부 자료 조사가"에게 일을 주지 않고 그 몫을
+    # 병합 때 직접 채웠다). 단계에 넣은 역할은 모두 기여하게 한다 — 그 팀원의 단계 지시(없으면 역할에 해당하는 부분)를 맡긴다.
+    lead_assigned = [item["role"] for item in plan]
+    auto_assigned = [w["role_name"] for w in workers if w["role_name"] not in set(lead_assigned)]
+    for w in workers:
+        if w["role_name"] in auto_assigned:
+            plan.append({"role": w["role_name"], "auto": True,
+                         "task": w["instructions"] or "위 요청 중 당신의 역할에 해당하는 부분"})
     by_role = {w["role_name"]: w for w in workers}
 
     def _work(item: dict, own_conn: sqlite3.Connection) -> dict:
@@ -159,18 +167,18 @@ def run(
     )
     merged = scored["output"]
     agents = [*results, {"agent_id": lead["agent_id"], "role_name": lead["role_name"], "output": merged, "stage": "final"}]
-    # 배정 확인(2026-11-25 P2-9 실측) — 리드가 팀원 한 명에게 일을 주지 않고 그 몫을 직접 채웠는데("팀 산출물에 없어
-    # 직접 보강") 화면에는 드러나지 않았다. 계획에서 빠진 팀원을 참고용 배지(advisory — 통과 판정과 무관)로 남긴다.
-    assigned = {item["role"] for item in plan}
-    unassigned = [w["role_name"] for w in workers if w["role_name"] not in assigned]
+    # 배정 확인(2026-11-25 P2-9 실측) — 리드가 일을 주지 않은 팀원은 위에서 기본 하위 작업을 받았다(P1-11). 참고용 배지
+    # (advisory — 통과 판정과 무관)에 리드가 직접 나눈 팀원과 자동 배정된 팀원을 함께 남긴다.
+    unassigned = [w["role_name"] for w in workers if w["role_name"] not in {item["role"] for item in plan}]
     gate_scores = dict(scored["gate_scores"])
     gate_scores["plan_coverage"] = {
-        "score": round(len(assigned) / len(workers), 3) if workers else None,
-        "status": "warn" if unassigned else "pass",
+        "score": round(len(set(lead_assigned)) / len(workers), 3) if workers else None,
+        "status": "warn" if (auto_assigned and plan_source == "lead_plan") or unassigned else "pass",
         "passed": True,
         "advisory": True,
         "not_measured": not workers,
-        "assigned": [item["role"] for item in plan],
+        "assigned": lead_assigned,
+        "auto_assigned": auto_assigned if plan_source == "lead_plan" else [],
         "unassigned": unassigned,
         "plan_source": plan_source,
     }

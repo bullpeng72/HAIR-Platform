@@ -571,6 +571,7 @@ src/hair_platform/
   crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임 + 다이어그램 + 자가검토)
   crew_history.py    # Crew 실행 이력(crew_runs) — 팀/즉석 실행의 진행상태·협업다이어그램·토큰사용량 영구 저장
   vectorstore.py     # 내부지식검색 Agent(VectorDB) — 임베딩(OpenAI/Ollama)·색인·검색(코사인+키워드 재순위화), 원본은 SQLite
+  knowledge_access.py # 지식 베이스 문서별 공개 범위(전체·manager 이상·admin만·팀) — 요청자 기준으로 검색 결과를 거름
   vector_backends.py # 지식 검색 벡터 백엔드 — ChromaDB 임베디드(HNSW, `<db>-vectors/`) 또는 SQLite 전체 비교, SQLite 원본과 자동 동기화
   graphquery.py      # 조직배정관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
   websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(대화창·Crew 양쪽, MCP 서버 접속 시). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)

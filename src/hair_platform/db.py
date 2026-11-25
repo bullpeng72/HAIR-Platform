@@ -1411,6 +1411,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import evaluation_config  # 평가 기준 설정(2026-11-25)
 
     evaluation_config.ensure_schema(conn)
+    from hair_platform import knowledge_access  # 지식 베이스 문서별 공개 범위(2026-11-25, P1-5)
+
+    knowledge_access.ensure_schema(conn)
     # 대화에서 전환한 업무 요청의 출처(2026-11-23, P1-4).
     _ensure_column(conn, "briefs", "source_conversation_id", "INTEGER REFERENCES conversations(id)")
     # 실행 중 단계 표시(2026-11-23, P0-2 — `progress.py`).

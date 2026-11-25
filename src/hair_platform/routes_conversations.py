@@ -9,6 +9,7 @@ import sqlite3
 
 from fastapi import (
     BackgroundTasks,
+    Body,
     Depends,
     FastAPI,
     HTTPException,
@@ -19,6 +20,7 @@ from hair_platform import (
     conversations,
     documents,
     graphquery,
+    knowledge_access,
     knowledge_submissions,
     vectorstore,
 )
@@ -637,6 +639,25 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         return documents.list_documents(conn)
+
+    @app.patch("/api/documents/{document_id}/visibility")
+    def set_document_visibility_endpoint(
+        document_id: int,
+        payload: dict = Body(...),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """문서 공개 범위(2026-11-25, P1-5) — all·manager·admin·team:<팀 id>. manager는 자기가 못 보게 되는
+        "admin만"으로 바꾸거나 이미 "admin만"인 문서를 바꾸지 못한다(admin 전용 자료 보호)."""
+        visibility = str(payload.get("visibility") or "")
+        if user["role"] != Role.ADMIN.value:
+            current = conn.execute("SELECT visibility FROM documents WHERE id = ?", (document_id,)).fetchone()
+            if visibility == "admin" or (current is not None and current[0] == "admin"):
+                raise HTTPException(status_code=403, detail="'admin만' 공개 범위는 admin만 정하거나 바꿀 수 있습니다")
+        try:
+            return knowledge_access.set_visibility(conn, user["id"], document_id, visibility)
+        except ValueError as exc:
+            status = 404 if "찾을 수 없습니다" in str(exc) else 400
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
 
     @app.delete("/api/documents/{document_id}")
     def delete_document_endpoint(

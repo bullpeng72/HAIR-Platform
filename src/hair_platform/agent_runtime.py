@@ -35,6 +35,7 @@ import sqlite3
 from hair_platform import (
     audit,
     graphquery,
+    knowledge_access,
     id_scheme,
     llm,
     llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
@@ -268,6 +269,7 @@ def _acceptable_continuation(output: str, continuation: str | None) -> bool:
 
 
 @llm_usage.with_scope(agent_id="agent_id")
+@knowledge_access.viewer_from_actor  # 지식 검색 공개 범위를 요청자 기준으로(2026-11-25, P1-5)
 def execute_agent(
     conn: sqlite3.Connection,
     agent_id: int,

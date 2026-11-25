@@ -94,7 +94,9 @@ def test_gc20_partial_failure_and_retry_of_failed_items_only(client_and_conn):
 
 def test_gc21_sandbox_command_uses_adr_isolation_flags():
     # Docker 미설치 환경에서는 실행을 건너뛰고 그 사실을 명시한다(성공으로 위장하지 않음).
-    result = run_smoke_test_in_sandbox({"agents_yaml_snippet": "role: x"})
+    # Docker가 있는 PC·CI(GitHub 러너에는 있다 — 2026-11-25 CI 실패)에서도 같은 결과가 되게 "없음"을 흉내 낸다.
+    with patch("hair_platform.sandbox.shutil.which", return_value=None):
+        result = run_smoke_test_in_sandbox({"agents_yaml_snippet": "role: x"})
     assert result.ok is True
     assert result.skipped is True
 

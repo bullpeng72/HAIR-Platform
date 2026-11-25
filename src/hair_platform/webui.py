@@ -5229,6 +5229,8 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
                   (g.words && g.words.length ? " — 사전에 없는 낱말(참고용): " + g.words.slice(0, 5).map(w => "'" + w.word + "'").join(", ") : "") +
                   // 계획 분담 배정 확인(2026-11-25) — 리드가 일을 주지 않은 팀원.
                   (g.unassigned && g.unassigned.length ? " — 리드가 일을 주지 않은 팀원: " + g.unassigned.join(", ") + "(그 몫은 리드가 병합 때 직접 채웠을 수 있음)" : "") +
+                  // 자동 배정(2026-11-25, P1-11) — 리드가 빠뜨린 팀원은 단계 지시로 기본 하위 작업을 받아 실제로 기여했다.
+                  (g.auto_assigned && g.auto_assigned.length ? " — 리드가 빠뜨려 자동 배정한 팀원: " + g.auto_assigned.join(", ") + "(단계에 적힌 그 역할의 지시로 하위 작업을 맡김)" : "") +
                   (g.assigned && g.assigned.length && !(g.unassigned && g.unassigned.length) ? " — 배정: " + g.assigned.join(", ") : "") +
                   // 조건부 승인 — 검토자가 짚은 고칠 곳(엄격 검토가 켜진 단계면 되돌려 고치게 함).
                   (g.conditional ? " — 검토자가 승인하면서 고칠 곳을 짚었습니다: " + (g.note || "") + (g.strict ? " (엄격 검토: 되돌려 고침)" : " — 결재 전에 이 부분을 확인하세요") : "");
@@ -9914,8 +9916,21 @@ function _knowledgeSubmissionsSection(submissions) {
     '</section>';
 }
 
+// 지식 문서 공개 범위 선택(2026-11-25, P1-5) — manager는 "admin만"을 고르거나 그 상태를 바꿀 수 없다(서버도 막음).
+function _kbVisibilitySelectHtml(d, teams) {
+  const v = d.visibility || "all";
+  const locked = ME.role !== "admin" && v === "admin";
+  const opts = [["all", "전체"], ["manager", "manager 이상"]];
+  if (ME.role === "admin" || v === "admin") opts.push(["admin", "admin만"]);
+  (teams || []).forEach(t => opts.push(["team:" + t.id, "팀: " + t.name]));
+  if (!opts.some(o => o[0] === v)) opts.push([v, v]);
+  return '<select data-kb-visibility="' + d.id + '"' + (locked ? " disabled" : "") + '>' +
+    opts.map(o => '<option value="' + escAttr(o[0]) + '"' + (o[0] === v ? " selected" : "") + ">" + esc(o[1]) + "</option>").join("") +
+    "</select>";
+}
+
 async function renderKnowledgeBase(content) {
-  const [embeddingConfig, ragSearchConfig, knowledgeDocs, chunkStats, chunkPage, graphStats, relationships, knowledgeSubmissions] = await Promise.all([
+  const [embeddingConfig, ragSearchConfig, knowledgeDocs, chunkStats, chunkPage, graphStats, relationships, knowledgeSubmissions, kbTeams] = await Promise.all([
     api("GET", "/api/embedding-config"),
     api("GET", "/api/rag-search-config"),
     api("GET", "/api/documents"),
@@ -9924,6 +9939,7 @@ async function renderKnowledgeBase(content) {
     api("GET", "/api/graph/stats"),
     api("GET", "/api/graph/relationships"),
     api("GET", "/api/knowledge-submissions"),
+    api("GET", "/api/teams").catch(() => []),  // 공개 범위 "팀" 선택지(2026-11-25, P1-5)
   ]);
 
   const modelBreakdown = chunkStats.by_model.length
@@ -10008,7 +10024,8 @@ async function renderKnowledgeBase(content) {
         '<button type="submit" class="small primary">업로드·색인</button>' +
         '</form>'
       : '<p class="muted">자료 직접 등록·삭제는 admin만 할 수 있습니다 — 지식을 추가하려면 대화 메시지나 승인된 산출물에서 "지식베이스로 보내기"를 쓰세요(admin 결재 후 등록).</p>') +
-    table(["파일명", "출처", "업로더", "글자수", "조각수", "업로드일", "동작"], knowledgeDocs.map(d => [
+    '<p class="muted">🔒 <b>공개 범위</b> — 그 문서를 검색 근거로 쓸 수 있는 사람(요청한 사람 기준)입니다. 기본은 전체 공개이고, admin은 늘 전부 봅니다. "admin만"은 admin만 정할 수 있습니다.</p>' +
+    table(["파일명", "출처", "업로더", "글자수", "조각수", "업로드일", "공개 범위", "동작"], knowledgeDocs.map(d => [
       esc(d.filename),
       d.source_type === "submission"
         ? "결재 등록(요청 #" + esc(d.submission_id) + ")"
@@ -10017,6 +10034,7 @@ async function renderKnowledgeBase(content) {
       String(d.char_count),
       String(d.chunk_count),
       esc(fmtTime(d.created_at)),
+      _kbVisibilitySelectHtml(d, kbTeams),
       ME.role === "admin"
         ? '<button class="small danger" data-delete-document="' + d.id + '">삭제</button>'
         : '<span class="muted">-</span>',
@@ -10150,6 +10168,14 @@ async function renderKnowledgeBase(content) {
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
 
+  content.querySelectorAll("[data-kb-visibility]").forEach(sel => {
+    sel.onchange = async () => {
+      try {
+        await api("PATCH", "/api/documents/" + sel.dataset.kbVisibility + "/visibility", { visibility: sel.value });
+        showMsg("global-msg", "공개 범위를 바꿨습니다.", "ok");
+      } catch (e) { showMsg("global-msg", e.message, "error"); refresh(); }
+    };
+  });
   content.querySelectorAll("[data-delete-document]").forEach(btn => {
     btn.addEventListener("click", async () => {
       if (!(await confirmModal("이 자료를 삭제합니다(색인된 조각도 함께 지워집니다). 계속할까요?"))) return;
@@ -12166,6 +12192,7 @@ const MANUAL_MARKDOWN = [
 '- **스킬 선택 드롭다운**(기본 "스킬 선택 안 함") — 아무도 멘션하지 않고 보낼 때 기본 AI가 어떤 지식·도구를 쓸지 고릅니다.',
 '  - **"실시간웹검색"** — Tavily로 실제 웹을 검색한 뒤 그 결과를 근거로 답합니다(서버에 `TAVILY_API_KEY`가 설정돼 있어야 함 — 없으면 관리자에게 요청).',
 '  - **"내부지식검색"** — 지식 베이스에 등록된 사내 자료를 찾아 답합니다.',
+'    - **공개 범위**: 지식 베이스의 문서마다 공개 범위가 있어, **요청한 사람이 볼 수 있는 문서만** 근거로 씁니다(전체·manager 이상·admin만·특정 팀). 기본은 전체 공개입니다. 설정은 "지식 베이스" 화면의 문서 목록 **"공개 범위"** 칸에서 admin·manager가 바꿉니다("admin만"은 admin만).',
 '  - "일반웹검색"·"최신정보필수확인"·"딥리서치"·"AI업계동향브리핑" 같은 조사형 스킬은 답에 **출처(제목·URL 또는 참고한 과거 결과물 번호)를 반드시 밝히게** 돼 있습니다. 출처 없는 답이 오면 스킬이 제대로 적용됐는지 먼저 확인하세요.',
 '  - 메시지에 **멘션을 하나라도 넣으면 이 선택은 자동으로 비워집니다** — 멘션한 대상이 우선이기 때문입니다.',
 '- **메시지 입력창** — `@`를 치면 사람·Agent·팀 자동완성이 뜹니다. 아직 이 대화에 없는 대상도 검색되며, 목록에서 고르면 **그 자리에서 대화에 초대된 뒤** 멘션이 들어갑니다.',
@@ -12461,7 +12488,7 @@ const MANUAL_MARKDOWN = [
 '| 추적성 | 1단계 요구사항을 빠짐없이 반영했는지(AI 판정, 짧은 답이라 출력 상한 4,096토큰) | 작성 단계로 되돌림 |',
 '| 판정 | 검토자가 쓴 `## 판정`이 승인인지 보완 요청인지 | 작성 단계로 되돌림 |',
 '| 조건부 승인 | 검토자가 승인하면서 고칠 곳을 요구했는지(판정 문단의 "수정하면·고쳐야·통일해야·오타가 남아 있음" 등) | 기본은 통과 + 노란 배지(검토자가 짚은 문장 표시). 단계의 "엄격 검토"를 켜면 작성 단계로 되돌림 |',
-'| 배정확인(참고용) | (계획 분담 단계) 리드가 팀원별 하위 작업을 나눌 때 일을 주지 않은 팀원이 있는지 | 통과 판정과 무관. 노란 배지에 빠진 팀원 표시(그 몫은 리드가 병합 때 직접 채웠을 수 있음) |',
+'| 배정확인(참고용) | (계획 분담 단계) 리드가 팀원별 하위 작업을 나눌 때 일을 주지 않은 팀원이 있는지 | 통과 판정과 무관. 빠진 팀원은 단계에 적힌 그 역할의 지시로 **자동으로 하위 작업을 받아** 실제로 기여하고, 노란 배지에 "자동 배정한 팀원"으로 표시 |',
 '| 낱말확인(참고용) | 한국어 사전에 없는 낱말 — 모델이 지어낸 낱말(실측: 퍼널 결론의 뜻 없는 "-니즘" 낱말, "분산 처리"가 깨진 낱말 등)을 찾음. 플랫폼 화면·스킬에 쓰는 외래어와 요청·앞 단계 결과에 나온 낱말, 합성어(지식재산·미집행)는 빼고 셈 | 통과 판정·인박스 경고에는 넣지 않고 노란 배지에 낱말 목록만 표시(사전에 없는 실제 낱말 — 예: 당월·별지 — 이 섞일 수 있음). 서버에 `korean` 확장이 있어야 동작 |',
 '',
 '**언어 교정**은 배지 없이 저장 전에 자동으로 합니다(조직 결과물 언어가 한국어일 때).',
@@ -12569,7 +12596,7 @@ const MANUAL_MARKDOWN = [
 '| 6 | 표현 검토 | 순차 릴레이 | 문서 교정자 | Gate A |',
 '| 7 | 최종 승인 판정 | 단독 | PM | Gate A(반복 실패 시에만 사람에게) |',
 '',
-'**2단계 "자료 조사·분석"은 계획 분담**입니다 — PM이 요청을 팀원별 하위 작업으로 나누고, 팀원이 각자 맡은 부분을 한 뒤, PM이 하나의 보고서로 합칩니다. 실측(로컬 35B, 같은 요청): 순차 릴레이 24.2분·세 사람 보고서를 이어 붙인 8,464자 → 계획 분담 17.1분·결론부터 정리된 한 편 3,267자(수치는 둘 다 정확). PM이 팀원에게 일을 주지 않으면 단계의 **"배정확인"** 배지가 노랗게 바뀌고 빠진 팀원이 표시됩니다. 예전 버전에서 올라온 설치본은 "기본 구성 점검"에서 반영할 수 있습니다(9절).',
+'**2단계 "자료 조사·분석"은 계획 분담**입니다 — PM이 요청을 팀원별 하위 작업으로 나누고, 팀원이 각자 맡은 부분을 한 뒤, PM이 하나의 보고서로 합칩니다. 실측(로컬 35B, 같은 요청): 순차 릴레이 24.2분·세 사람 보고서를 이어 붙인 8,464자 → 계획 분담 17.1분·결론부터 정리된 한 편 3,267자(수치는 둘 다 정확). PM이 팀원에게 일을 주지 않으면 그 팀원은 단계 지시로 **자동으로 하위 작업을 받고**, 단계의 **"배정확인"** 배지가 노랗게 바뀌어 자동 배정한 팀원이 표시됩니다(팀원 한 명분 시간이 더 듦). 예전 버전에서 올라온 설치본은 "기본 구성 점검"에서 반영할 수 있습니다(9절).',
 '',
 '**"데이터 분석가"**(이 파이프라인과 제안서 파이프라인의 자료 조사·분석 단계, 실적 보고 파이프라인의 데이터 분석 단계)는 `데이터분석` 스킬의 "수치 데이터 분석기" 도구로 합계·평균·증감률·표준편차를 **코드로 계산**합니다. 값이 부족하면(표준편차는 2개 미만, 증감률은 기준값 0) 추측하지 않고 계산할 수 없다고 알립니다.',
 '',
@@ -12857,6 +12884,15 @@ const MANUAL_MARKDOWN = [
 '',
 '### 비용·권한',
 '',
+'**지식 베이스에 등록한 자료가 어떤 사람의 요청에서는 검색되지 않는다**',
+'',
+'- **원인**: 그 문서의 **공개 범위** 밖에 있는 사람의 요청입니다. 검색은 요청한 사람 기준으로 거릅니다.',
+'  - 전체 공개 — 모든 사람',
+'  - manager 이상 — manager·admin',
+'  - admin만 — admin',
+'  - 팀 — 그 팀의 **사람 구성원** 중 **로그인 계정이 연결된 사람**("사람 인력 관리"에서 계정 연결)과 admin',
+'- **해결**: 설정 → 그라운딩 관리 → **"지식 베이스"** 문서 목록의 **"공개 범위"**를 확인하고 필요하면 바꿉니다. 팀 범위인데 안 보이면, 그 사람이 팀 구성원으로 등록돼 있는지와 사람 인력에 로그인 계정이 연결돼 있는지 확인하세요.',
+'- **참고**: 정기 실행·이벤트 트리거는 **등록한 사람**을 요청자로 봅니다. 요청자를 알 수 없는 경우(드물게 도구가 별도로 실행될 때)에는 **전체 공개 문서만** 씁니다. Agent 결과물에서 나온 지식은 늘 전체 공개입니다.',
 '**비용이 걱정된다**',
 '',
 '- **모델을 호출하는(비용이 드는) 버튼**: 이름에 "실행"이 붙은 버튼(AI 에이전트 실행·팀 Agent 실행·파이프라인 실행·Crew 실행), "AI 의견 보기", "AI로 추천 받기", "AI로 분해 제안 받기", "부분 수정 요청"의 "수정안 만들기".',

@@ -185,8 +185,9 @@ def test_migration_widens_mode_check_and_keeps_rows(tmp_path):
     db._migrate_pipeline_stage_plan_merge_mode(conn)  # 두 번 돌려도 아무 일 없음
 
 
-def test_unassigned_worker_is_recorded_as_advisory_coverage_badge():
-    """2026-11-25 P2-9 실측 — 리드가 팀원 한 명에게 일을 주지 않고 그 몫을 직접 채웠는데 화면에 드러나지 않았다."""
+def test_worker_skipped_by_lead_gets_default_subtask_and_badge():
+    """2026-11-25 P2-9 실측 — 리드가 팀원 한 명에게 일을 주지 않고 그 몫을 직접 채웠다. P1-11부터는 빠진 팀원이
+    단계 지시로 기본 하위 작업을 받아 실제로 기여하고, 배지에 "자동 배정"으로 남는다."""
     conn = _conn()
     calls = []
     plan = '[{"role": "재무 분석가", "task": "손익 분석"}]'  # 시장 조사가는 빠짐
@@ -194,7 +195,11 @@ def test_unassigned_worker_is_recorded_as_advisory_coverage_badge():
             patch.object(agent_evaluation, "run_and_score", side_effect=_plain_score):
         r = plan_merge.run(conn, LEAD, WORKERS, "요청", 9)
     cov = r["gate_scores"]["plan_coverage"]
-    assert r["plan_unassigned"] == ["시장 조사가"] and cov["unassigned"] == ["시장 조사가"]
+    worker_prompts = {aid: p for aid, p, *_ in calls if aid in (2, 3)}
+    assert set(worker_prompts) == {2, 3}  # 두 팀원 모두 실행됨
+    assert "시장 규모 조사" in worker_prompts[2]  # 빠진 팀원은 단계 지시로 기본 하위 작업
+    assert r["plan_unassigned"] == [] and cov["unassigned"] == []
+    assert cov["auto_assigned"] == ["시장 조사가"] and cov["assigned"] == ["재무 분석가"]
     assert cov["status"] == "warn" and cov["advisory"] and cov["passed"] is True and cov["score"] == 0.5
     assert pipeline_runtime._gate_pass_ratio(r["gate_scores"]) == 1.0  # 참고용 — 통과 판정은 그대로
 
@@ -204,3 +209,4 @@ def test_unassigned_worker_is_recorded_as_advisory_coverage_badge():
             patch.object(agent_evaluation, "run_and_score", side_effect=_plain_score):
         r = plan_merge.run(conn, LEAD, WORKERS, "요청", 9)
     assert r["gate_scores"]["plan_coverage"]["status"] == "pass" and r["plan_unassigned"] == []
+    assert r["gate_scores"]["plan_coverage"]["auto_assigned"] == []
