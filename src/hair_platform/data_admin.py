@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from hair_platform import audit
+from hair_platform import audit, id_scheme
 
 
 def confirmed_assignment_exists(
@@ -436,6 +436,8 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "briefs",
     "human_pool",
     "agent_tool_links",
+    # 모델 성능 테스트 기록(2026-11-25 추가) — 모델 레지스트리를 지우면서 남겨 두면 없는 모델의 기록이 된다.
+    "model_benchmarks",
     "model_registry",
     "embedding_config",
     "audit_log",
@@ -473,7 +475,15 @@ def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
         conn.execute(
             "UPDATE agent_pool SET source_job_item_id = NULL, "
             "llm_provider = NULL, llm_model = NULL, last_output = NULL, "
-            "cost_estimate = 0.0, performance_score = NULL, status = 'active'"
+            "cost_estimate = 0.0, performance_score = NULL"
+        )
+        # 상태(2026-11-25 수정) — 예전엔 모든 Agent를 'active'로 바꿔, 온보딩 승인 전("온보딩 대기")인
+        # 관리자 생성 Agent가 승인 없이 활성이 되고 관리자가 꺼 둔 Agent도 다시 켜졌다(온보딩 절차 우회).
+        # 기본 Agent(`AGT-REF-…`, 플랫폼 기본 구성)만 활성으로 되돌리고, 관리자가 만든 Agent
+        # (`AGT-CUSTOM-…`)는 지금 상태를 그대로 둔다.
+        conn.execute(
+            "UPDATE agent_pool SET status = 'active' WHERE code LIKE ?",
+            (f"AGT-{id_scheme.AGENT_REF_SEGMENT}-%",),
         )
         for table in _FACTORY_RESET_WIPE_TABLES:
             counts[table] = conn.execute(f"DELETE FROM {table}").rowcount

@@ -355,9 +355,13 @@ def _cmd_reset_data(args: argparse.Namespace) -> int:
 
     if not args.yes:
         answer = input(
-            f"'{args.db_path}'의 운영 데이터(사용자·업무·대화·실행 이력·팀 등)를 "
-            "전부 지웁니다 — 되돌릴 수 없습니다.\n"
-            "Agent/Tool/Skill/파이프라인 템플릿은 그대로 유지됩니다(팀은 초기화됩니다). "
+            f"'{args.db_path}'의 운영 데이터를 전부 지웁니다 — 되돌릴 수 없습니다.\n"
+            "  지움: 사용자·업무·결재·대화·결과물·실행 이력·지식 베이스·정기 실행·트리거·API 키·"
+            "모델 레지스트리·활동 기록·AI 사용량, 팀('초기화 시 보호' 팀 제외)\n"
+            "  남김: Agent·스킬·도구·파이프라인 템플릿, 조직 정책(사번 형식·결과물 언어·알림 설정), "
+            "플랫폼 기본·보조 모델 설정, 보호 팀\n"
+            "  Agent는 모델 지정·비용·성과점수가 비워지고, 기본 Agent는 활성으로 돌아갑니다"
+            "(관리자가 만든 Agent는 상태 유지).\n"
             "계속할까요? [y/N] "
         )
         if answer.strip().lower() != "y":
@@ -371,7 +375,8 @@ def _cmd_reset_data(args: argparse.Namespace) -> int:
 
     total = sum(counts.values())
     print(
-        f"초기화 완료 — {total}건 삭제. Agent/Tool/Skill/파이프라인 템플릿은 그대로입니다(팀은 초기화됨)."
+        f"초기화 완료 — {total}건 삭제(팀 {counts.get('teams', 0)}개 포함). "
+        "Agent·스킬·도구·파이프라인 템플릿·조직 정책·보호 팀은 그대로입니다."
     )
     print(
         f"다음 단계(필요하면): hair bootstrap-admin -u <계정명> -p <비밀번호> --db-path {args.db_path}"

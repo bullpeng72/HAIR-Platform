@@ -894,3 +894,48 @@ def test_reset_to_factory_state_then_bootstrap_admin_works(client_and_conn):
     # 신설, AGENT_SPECS 정규 목록에 포함)로 22 → 23. 2026-11-11 "데이터
     # 분석가"/"제안서 작성자"/"실적 보고서 작성자" 추가로 23 → 26.
     assert conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"] == 36  # +3: 업무 문서 파이프라인 Agent(2026-11-21), +7: 업무 영역 템플릿(2026-11-24)
+
+
+def test_reset_keeps_status_of_admin_created_agents_and_reactivates_only_defaults(client_and_conn):
+    """2026-11-25 — 예전엔 초기화가 모든 Agent를 'active'로 바꿔, 온보딩 승인 전 Agent가 승인 없이 활성이
+    되고 관리자가 꺼 둔 Agent도 다시 켜졌다. 기본 Agent(AGT-REF-…)만 활성으로, 관리자가 만든 Agent
+    (AGT-CUSTOM-…)는 상태를 그대로 둔다(휘발성 값은 둘 다 초기화)."""
+    _client, conn = client_and_conn
+    pending = conn.execute(
+        "INSERT INTO agent_pool (code, role_name, status, cost_estimate, llm_model) "
+        "VALUES ('AGT-CUSTOM-901', '신규 검토 Agent', 'pending_onboarding', 3.0, 'm')"
+    ).lastrowid
+    retired = conn.execute(
+        "INSERT INTO agent_pool (code, role_name, status) VALUES ('AGT-CUSTOM-902', '퇴역 Agent', 'deprecated')"
+    ).lastrowid
+    ref = conn.execute("SELECT id FROM agent_pool WHERE code LIKE 'AGT-REF-%' ORDER BY id LIMIT 1").fetchone()[0]
+    conn.execute("UPDATE agent_pool SET status = 'deprecated' WHERE id = ?", (ref,))
+    conn.commit()
+
+    data_admin.reset_to_factory_state(conn)
+
+    status = {r["id"]: r["status"] for r in conn.execute("SELECT id, status FROM agent_pool")}
+    assert status[pending] == "pending_onboarding"  # 온보딩 승인 없이 활성이 되면 안 된다
+    assert status[retired] == "deprecated"
+    assert status[ref] == "active"  # 기본 구성은 기본 상태로
+    row = conn.execute("SELECT cost_estimate, llm_model FROM agent_pool WHERE id = ?", (pending,)).fetchone()
+    assert row["cost_estimate"] == 0.0 and row["llm_model"] is None
+
+
+def test_reset_wipes_model_benchmarks_with_the_registry(client_and_conn):
+    """2026-11-25 — 모델 레지스트리를 지우면서 성능 테스트 기록은 남아, 없는 모델·사용자를 가리켰다."""
+    _client, conn = client_and_conn
+    user = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()[0]
+    reg = conn.execute(
+        "INSERT INTO model_registry (provider, name) VALUES ('ollama', 'bench-model')"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO model_benchmarks (model_registry_id, tested_by, status, latency_seconds) VALUES (?, ?, 'success', 1.0)",
+        (reg, user),
+    )
+    conn.commit()
+
+    counts = data_admin.reset_to_factory_state(conn)
+
+    assert counts["model_benchmarks"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM model_benchmarks").fetchone()[0] == 0

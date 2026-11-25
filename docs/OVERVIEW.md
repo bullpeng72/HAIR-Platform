@@ -228,7 +228,8 @@ SQLite 데이터베이스 하나에 전부 저장됩니다(WAL 모드 — 여러
 - `hair serve` — 서버 실행
 - `hair bootstrap-admin` — 맨 처음 관리자 계정 만들기
 - `hair reset-data` — 운영 중 쌓인 데이터만 공장 초기화(Agent/Tool/
-  Skill/파이프라인 템플릿은 그대로 둠)
+  Skill/파이프라인 템플릿·조직 정책·"초기화 시 보호" 팀은 그대로 둠, 관리자가 만든
+  Agent의 상태도 유지)
 - `hair eval` — Gate 기준을 수동으로 측정
 
 자세한 옵션은 `hair --version`, `hair <명령어> --help`로 확인할 수
