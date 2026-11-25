@@ -35,7 +35,7 @@ _CONN: sqlite3.Connection | None = None
 # "어느 업무·Agent·파이프라인에 얼마가 들었나"를 알 수 없었다. 작업 실행기가 `with_scope`(또는
 # `scope`)로 맥락을 정하면 그 안의 모든 호출 기록에 붙는다(바깥 맥락과 합쳐진다).
 SCOPE_KEYS = ("task_id", "agent_id", "pipeline_run_id", "conversation_id")
-_SCOPE: contextvars.ContextVar[dict] = contextvars.ContextVar("llm_usage_scope", default={})
+_SCOPE: contextvars.ContextVar[dict] = contextvars.ContextVar("llm_usage_scope", default={})  # noqa: B039 — 읽기 전용(항상 복사해 새 dict로 set)
 
 
 @contextlib.contextmanager

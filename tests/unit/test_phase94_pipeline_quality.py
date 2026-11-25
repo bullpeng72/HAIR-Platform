@@ -347,7 +347,7 @@ def test_traceability_stages_require_both_signals():
         "SELECT name, gate_ids, min_gate_pass_ratio, checks_requirements_traceability FROM pipeline_stages "
         "WHERE min_gate_pass_ratio > 0"
     ).fetchall()
-    for name, gate_ids, ratio, checks in rows:
+    for name, _gate_ids, ratio, checks in rows:
         if name == "구현":  # 실행 가능성 Gate 단독(1.0) — 15번 테스트
             continue
         assert ratio == (1.0 if checks else 0.5), name

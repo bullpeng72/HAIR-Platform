@@ -1508,7 +1508,7 @@ def test_gc_agent_mention_response_is_gate_scored(client_and_conn):
     ):
         resp = client.post(
             f"/api/conversations/{conv_id}/messages",
-            json={"content": f"@Gate측정 Agent 이거 봐줘"},
+            json={"content": "@Gate측정 Agent 이거 봐줘"},
         )
         assert resp.status_code == 201, resp.text
 

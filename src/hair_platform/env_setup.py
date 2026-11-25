@@ -219,3 +219,31 @@ def cross_check(values: dict[str, str]) -> list[tuple[str, str]]:
         issues.append(("warn", "HAIR_SMTP_HOST 없이 다른 SMTP 값만 있습니다 — 메일 알림이 비활성 상태입니다"))
 
     return issues
+
+
+def dependency_check() -> list[tuple[str, str]]:
+    """설치된 핵심 패키지 버전을 전체 테스트를 통과한 조합(`verified_versions.py`)과 비교한다(2026-11-25, P0-2).
+
+    실측 사례: 운영 서버(conda)가 crewai 1.6.1, 테스트 환경이 1.15.22여서 Crew 실행 경로가 다르게 동작했다.
+    메이저·마이너 버전이 다르면 경고(패치 차이는 무시), 설치 안 된 선택 패키지는 건너뛴다(그 기능을 안 쓰는 것)."""
+    import importlib.metadata as md
+
+    from hair_platform.verified_versions import VERIFIED
+
+    def _minor(version: str) -> tuple[str, ...]:
+        return tuple(version.split(".")[:2])
+
+    issues: list[tuple[str, str]] = []
+    for name, verified in VERIFIED.items():
+        try:
+            installed = md.version(name)
+        except md.PackageNotFoundError:
+            continue
+        if _minor(installed) != _minor(verified):
+            issues.append((
+                "warn",
+                f"{name} {installed} 설치됨 — 검증된 버전은 {verified}입니다. 동작이 테스트와 다를 수 있습니다 "
+                f'(같은 조합으로 맞추기: pip install "hair-platform[all]" -c constraints.txt)',
+            ))
+    return issues
+

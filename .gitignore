@@ -19,3 +19,6 @@ uv.lock
 dist/
 build/
 *.egg-info/
+
+# 지식 베이스 벡터 DB(ChromaDB) 색인 — `<db>-vectors/` (2026-11-25, vector_backends.py)
+*.db-vectors/

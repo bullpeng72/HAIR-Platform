@@ -2202,7 +2202,7 @@ def start_crew_run_retry(
             a: f"'{task['role_name']}' 업무를 수행하세요." for a in run["agent_ids"]
         }
     else:
-        description_by_agent_id = dict(zip(run["agent_ids"], original_descriptions))
+        description_by_agent_id = dict(zip(run["agent_ids"], original_descriptions, strict=False))
 
     # 완료된 동료의 실제 결과물 전문을 맥락으로 붙인다 — sequential
     # relay가 중간에 끊긴 경우 남은 Agent가 앞 단계 맥락을 잃지 않게

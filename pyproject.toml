@@ -36,7 +36,11 @@ dependencies = [
     "uvicorn>=0.29.0",
     "bcrypt>=4.0.0",
     "itsdangerous>=2.1.0",
-    "agent-evaluator[sdk]>=1.1.1",
+    # `[sdk]` extra를 쓰지 않는다(2026-11-25, P0-2) — `[sdk]`가 끌어오는 arize-phoenix(15.4~18.x 전부)는
+    # `aiosqlite>=0.22.1`을, crewai(1.7~1.15.45 전부)는 `aiosqlite~=0.21.0`을 요구해 함께 설치할 수 없다. pip는 이
+    # 충돌을 피하려고 crewai를 1.6.1까지 내려 받았다(CI 실패 원인). HAIR가 쓰는 SDK 기능(Gate 채점·HTML 리포트)은
+    # 기본 설치만으로 동작한다(phoenix·jinja2·pdfplumber를 막고 평가·리포트 테스트 240건 통과 확인).
+    "agent-evaluator>=1.1.1",
     "python-dotenv>=1.0.0",
     # `llm.py`/`vectorstore.py`/`model_registry.py`/`websearch.py` 4곳이
     # 전부 지연 import로 httpx를 쓴다(2026-10-27 패키징 점검 발견) —
@@ -72,7 +76,9 @@ llm = ["anthropic>=0.34.0", "openai>=1.40.0"]
 # not available`로 실패한다(실제로 "자율 개발 크루"가 ollama로 Crew를
 # 실행하다 재현). 단일 Agent 경로(`llm.call_llm()`)는 litellm을 안 거쳐
 # 영향 없었다 — 그래서 이 버그가 지금까지 안 드러났다.
-crewai = ["crewai>=1.0.0", "litellm>=1.0.0"]
+# 하한을 실제 검증 버전으로(2026-11-25, P0-2) — Ollama `ollama_chat/` 경로 고정·`planning_config` 등 crewai 1.15 동작에
+# 맞춰져 있다. 1.6을 받은 환경(CI·운영 conda)에서 Crew 실행이 다르게 돌았다. 정확한 조합은 constraints.txt.
+crewai = ["crewai>=1.15,<2.0", "litellm>=1.100,<2.0"]
 # `execution_graph.py`가 최상위에서 import한다(2026-11-18, "대화, 업무
 # 배정에서... 에이전틱 실행엔진 개념을 도입하려고 해" → 조사+제안 →
 # "langgraph + langgraph-checkpoint-sqlite 신규 의존성 추가 방향으로
@@ -87,6 +93,10 @@ graph = ["langgraph>=1.2,<2.0", "langgraph-checkpoint-sqlite>=3.1,<4.0"]
 # 찾는 참고용 검사. 형태소 분석기 Kiwi(순수 pip, Java 불필요)이고 사전 모델이 약 100MB라 선택 설치로 둔다 —
 # 없으면 그 검사만 "미평가"로 남고 나머지는 그대로 동작한다.
 korean = ["kiwipiepy>=0.24,<0.25"]
+# `vector_backends.py`가 지연 import한다(2026-11-25) — 지식 베이스 벡터 검색을 SQLite 전체 비교 대신 ChromaDB
+# 임베디드(서버 없음, `<db>-vectors/` 폴더)로 한다(청크 1만 개 검색 약 1.7초 → 약 40ms 실측, 결과 동일). crewai가 이미
+# 의존해 함께 설치되는 경우가 많지만, crewai 없이 설치해도 쓰도록 명시한다. 없으면 예전 방식으로 그대로 동작한다.
+vectordb = ["chromadb>=1.0,<2.0"]
 # crew_runtime.py의 _mcp_tools()가 지연 import한다 — Agent에 mcp_servers를
 # 실제로 설정했을 때만 필요하다(ADR 결정 10, 2026-09-27). MCPServerAdapter는
 # 생성 시점에 실제로 MCP 서버에 접속을 시도한다 — 접속 가능한 서버가 없으면
@@ -104,7 +114,7 @@ korean = ["kiwipiepy>=0.24,<0.25"]
 # stdin이 없어 그 자리에서 예외로 죽는다(실제로 파이프라인 "코드 검증"
 # 단계가 이렇게 실패하는 걸 확인). `mcpadapt`가 새 이름을 따라잡을
 # 때까지 `mcp`를 1.x로 묶어둔다.
-mcp = ["crewai-tools[mcp]>=1.0.0", "mcp>=1.10.1,<2.0"]
+mcp = ["crewai-tools[mcp]>=1.15,<2.0", "mcp>=1.10.1,<2.0"]
 # documents.py가 지연 import한다 — 대화창/지식 자료실에서 .pdf·.html·
 # .xlsx·.docx·.pptx 파일을 업로드했을 때만 필요하다(.md/.txt/.csv는
 # 추가 라이브러리 없이 그대로 처리한다). pypdf는 순수 Python(시스템
@@ -133,9 +143,9 @@ documents = [
 # 테스트 스위트를 깨끗하게 돌리려면 필요한 extra 전부를 한 번에 설치할
 # 수 있는 묶음을 따로 둔다(README "빠른 시작"이 이걸 쓰도록 갱신됨).
 all = [
-    "crewai>=1.0.0",
-    "litellm>=1.0.0",
-    "crewai-tools[mcp]>=1.0.0",
+    "crewai>=1.15,<2.0",
+    "litellm>=1.100,<2.0",
+    "crewai-tools[mcp]>=1.15,<2.0",
     "mcp>=1.10.1,<2.0",
     "anthropic>=0.34.0",
     "openai>=1.40.0",
@@ -147,6 +157,7 @@ all = [
     "langgraph>=1.2,<2.0",
     "langgraph-checkpoint-sqlite>=3.1,<4.0",
     "kiwipiepy>=0.24,<0.25",
+    "chromadb>=1.0,<2.0",
 ]
 
 [project.urls]
@@ -187,5 +198,8 @@ include = ["src", "tests"]
 extraPaths = ["src"]
 
 [tool.ruff.lint]
+# 검사 규칙을 명시한다(2026-11-25, P0-1) — 지정하지 않으면 ruff 버전마다 기본 규칙 묶음이 달라져(0.16에서 크게
+# 늘어남) 같은 코드가 설치 시점에 따라 CI를 통과하기도·실패하기도 했다. ruff 고전 기본(E4·E7·E9·F) + 버그 패턴(B).
+select = ["E4", "E7", "E9", "F", "B"]
 # B008: FastAPI의 Depends()는 함수 기본값 호출이 의도된 패턴이다(FastAPI 공식 권장) — 오탐 무시.
 ignore = ["B008"]

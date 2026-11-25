@@ -208,13 +208,20 @@ admin+manager 공용이 많고, 삭제·사용자 생성·Agent 온보딩 승인
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,all]"
-# `[dev]`만 설치하면 `tests/unit`의 CrewAI 연동 테스트 일부가 테스트
-# 실행 시점에 `ModuleNotFoundError`로 깨진다. `all`(= crewai+mcp+llm+
-# documents+graph 묶음, pyproject.toml 참고)까지 같이 설치해야 아래 골든셋이
-# 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 1,550건 이상 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pip install -e ".[dev,all]" -c constraints.txt
+# `-c constraints.txt` — 전체 테스트를 통과한 버전 조합 그대로 설치한다(CI도 같은 방식). 빼면 범위 안의 최신
+# 버전이 깔려 동작이 미묘하게 다를 수 있다(`hair check`가 핵심 패키지 버전 차이를 경고한다).
+# `[dev]`만 설치하면 CrewAI 연동 테스트 일부가 실행 시점에 `ModuleNotFoundError`로 깨진다 — `all`까지 설치.
+pytest tests/ -q        # 골든셋 1,550건 이상 통과(오프라인 — 실제 LLM·외부 네트워크 호출 없음, 전부 mock)
+ruff check src tests    # CI와 같은 정적 검사(규칙은 pyproject.toml `[tool.ruff.lint] select`)
 ```
+
+테스트는 실행 환경과 무관하게 같은 결과가 나오도록 격리돼 있다(`tests/conftest.py`): `.env`를 읽지 않고,
+셸의 API 키·provider·SMTP 설정을 지우고 고정 가짜 키를 넣으며, 외부 네트워크와 로컬 Ollama(11434) 접속을
+막는다. 외부 호출이 필요한 새 테스트는 mock을 써야 한다.
+
+의존성을 올릴 때는: 새 버전 설치 → 전체 테스트 통과 확인 → `python scripts/update_constraints.py`로
+`constraints.txt`와 `src/hair_platform/verified_versions.py`를 다시 만들어 함께 커밋한다.
 
 ### 설치 옵션(extras) 한눈에 보기
 
@@ -233,9 +240,10 @@ PyPI에 `hair-platform`으로 배포된다 — `pip install "hair-platform[...]"
 | `mcp` | `pip install -e ".[mcp]"` | Agent에 외부 MCP 도구 서버를 연결할 때 | crewai-tools[mcp], mcp(`<2.0` 고정 — 아래 참고) |
 | `documents` | `pip install -e ".[documents]"` | 대화창/지식 베이스에서 `.pdf`/`.html`/`.xlsx`/`.docx`/`.pptx` 파일을 업로드할 때(`.md`/`.txt`/`.csv`는 추가 설치 불필요) | pypdf, beautifulsoup4, openpyxl, python-docx, python-pptx |
 | `korean` | `pip install -e ".[korean]"` | 결과물에서 사전에 없는 한국어 낱말(모델이 지어낸 낱말)을 찾는 참고용 "낱말확인" 배지. 분석기가 메모리 약 360MB·디스크 약 100MB를 쓴다(`HAIR_LEXICON_CHECK=0`으로 끔) | kiwipiepy |
+| `vectordb` | `pip install -e ".[vectordb]"` | 지식 베이스 검색을 벡터 DB(ChromaDB, 서버 없이 `<db>-vectors/` 폴더)로 한다 — 청크 1만 개에서 검색 1회 약 1.7초 → 약 40ms(실측, 결과 동일). crewai를 설치하면 보통 함께 깔린다. 없으면 예전 방식(SQLite 전체 비교)으로 그대로 동작 | chromadb |
 | `graph` | `pip install -e ".[graph]"` | LangGraph 실행엔진(팀 관리에서 "그래프 엔진"을 켤 때 — 체크포인트·사람 승인 중단/재개). 없이 켜면 설치 안내가 뜬다 | langgraph, langgraph-checkpoint-sqlite |
-| `dev` | `pip install -e ".[dev]"` | 테스트/린트/포맷터를 돌릴 때 | pytest, black, ruff |
-| `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents`+`graph`+`korean` 전부) | 위 extras 전부(dev 제외) |
+| `dev` | `pip install -e ".[dev]"` | 테스트/린트를 돌릴 때 | pytest, ruff, black(선택 — CI에서는 쓰지 않음: 기존 코드가 black 형식이 아님) |
+| `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents`+`graph`+`korean`+`vectordb` 전부) | 위 extras 전부(dev 제외) |
 
 > `mcp`는 `mcp>=1.10.1,<2.0`으로 상한을 고정해둔다 — `crewai-tools`가
 > 쓰는 `mcpadapt==0.1.19`가 `mcp 2.x`의 API 이름 변경을 아직 못
@@ -295,6 +303,8 @@ hair check                # .env + 셸 환경변수를 합쳐 보여주고 provi
 | `HAIR_LEXICON_CHECK` | `1`(켬) | `0`이면 사전에 없는 한국어 낱말 탐지("낱말확인" 배지)를 끔(분석기가 메모리 약 360MB를 씀, `korean` extra 필요) |
 | `HAIR_NUMERIC_CHECK` | `1`(켬) | `0`이면 결과물 퍼센트 수치가 근거 숫자로 재현되는지 검사("수치근거" 배지)를 끔 |
 | `HAIR_ALLOW_LOCAL_CODE_RUN` | `0`(끔) | `1`이면 Docker 샌드박스 대신 로컬에서 코드 테스트를 실행(Docker가 없는 개발 환경용 — 격리가 없어지므로 운영에는 권장하지 않음) |
+| `HAIR_VECTOR_BACKEND` | `chroma` | 지식 베이스 검색 엔진. `sqlite`면 예전 방식(SQLite의 임베딩 전체와 비교 — 정확하지만 청크가 많으면 느림). chromadb가 없거나 메모리 DB면 자동으로 `sqlite` |
+| `HAIR_VECTOR_DIR` | `<db 파일>-vectors` | 벡터 색인(ChromaDB) 저장 폴더. 원본은 SQLite에 있어 지워도 `hair reindex-vectors`(또는 다음 검색)가 비용 없이 다시 만듦 |
 | `HAIR_PLATFORM_DB_PATH` | `:memory:` | SQLite DB 경로. 보통 `hair serve --db-path`가 기동 시 이 값을 자동으로 맞춰 주므로 직접 설정할 일은 거의 없음 |
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로,
@@ -308,7 +318,7 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 
 | 구분 | 내용 |
 |------|------|
-| 지운다 | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)·Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스, 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |
+| 지운다 | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)·Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |
 | 남긴다 | Agent(36종)·스킬·도구·파이프라인 템플릿, 조직 정책(사번 형식·결과물 언어·알림 웹훅·메일 수신자), 평가 기준, 플랫폼 공통 기본 LLM·보조 작업 모델·지식 검색 설정, "초기화 시 보호" 팀 |
 | 되돌린다 | Agent의 모델 지정·비용·성과점수·마지막 결과물은 비운다. 상태는 기본 Agent만 '활성'으로 되돌리고, 관리자가 만든 Agent는 그대로 둔다(온보딩 대기 Agent가 승인 없이 활성이 되지 않음) |
 
@@ -317,6 +327,14 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 hair reset-data                              # 확인 프롬프트 뜸(되돌릴 수 없음)
 hair reset-data --yes                        # 확인 없이 바로 실행
 # 보통 바로 이어서: hair bootstrap-admin -u admin -p '...'
+```
+
+지식 베이스 벡터 색인(`vectordb` extra)을 SQLite 원본에 맞춰 다시 만들 때(색인 폴더를 지웠거나 옮겼을 때 —
+평소에는 검색할 때 자동으로 맞춰진다. 저장된 임베딩을 그대로 써서 임베딩 API를 다시 부르지 않는다):
+
+```bash
+hair reindex-vectors                         # 빠진 것 채우고 지워진 것 정리
+hair reindex-vectors --rebuild               # 색인을 비우고 처음부터 다시 만듦
 ```
 
 실제 CrewAI 연동을 쓰려면(무거운 의존성 — opt-in):
@@ -552,7 +570,8 @@ src/hair_platform/
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
   crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임 + 다이어그램 + 자가검토)
   crew_history.py    # Crew 실행 이력(crew_runs) — 팀/즉석 실행의 진행상태·협업다이어그램·토큰사용량 영구 저장
-  vectorstore.py     # 내부지식검색 Agent(VectorDB) — OpenAI 임베딩+SQLite 코사인 유사도
+  vectorstore.py     # 내부지식검색 Agent(VectorDB) — 임베딩(OpenAI/Ollama)·색인·검색(코사인+키워드 재순위화), 원본은 SQLite
+  vector_backends.py # 지식 검색 벡터 백엔드 — ChromaDB 임베디드(HNSW, `<db>-vectors/`) 또는 SQLite 전체 비교, SQLite 원본과 자동 동기화
   graphquery.py      # 조직배정관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의
   websearch.py       # 외부 검색 — 실시간 웹 검색(Tavily native 도구, 대화창·Crew 양쪽 동작, TAVILY_API_KEY 필요) + Parallel AI MCP(대화창·Crew 양쪽, MCP 서버 접속 시). Wikipedia 검색 코드는 남아있으나 이 배포 환경 IP가 지속 차단돼 기본 시드에서 뺐다(db.py 참고)
   documents.py       # 외부 자료(.md/.txt/.csv/.html/.pdf/.xlsx/.docx/.pptx) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
@@ -603,7 +622,8 @@ src/hair_platform/
 docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # RBAC 권한 설정을 테스트로 감사하는 Claude Code 스킬
-.github/workflows/ci.yml               # pytest+ruff+black CI
+.github/workflows/ci.yml               # pytest+ruff CI(constraints.txt로 같은 버전 조합 설치)
+constraints.txt                        # 전체 테스트를 통과한 의존성 버전 조합(scripts/update_constraints.py가 생성)
 tests/unit/                            # 골든셋 1,550건 이상 통과
 ```
 

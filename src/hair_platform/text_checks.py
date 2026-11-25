@@ -233,7 +233,7 @@ def garbled_terms(original: str, proposed: str, document: str) -> list[dict]:
                 continue
             if o in s or s in o:  # 합성어(현금흐름→순현금흐름)는 정상
                 continue
-            same_len_one_off = o in orig and len(o) == len(s) and sum(a != b for a, b in zip(o, s)) == 1
+            same_len_one_off = o in orig and len(o) == len(s) and sum(a != b for a, b in zip(o, s, strict=False)) == 1
             ratio = difflib.SequenceMatcher(None, o, s).ratio()
             if same_len_one_off or (min(len(o), len(s)) >= 4 and ratio >= 0.66):
                 seen.add(s)

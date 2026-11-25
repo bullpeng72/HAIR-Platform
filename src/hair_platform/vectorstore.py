@@ -31,7 +31,7 @@ import os
 import re
 import sqlite3
 
-from hair_platform import audit
+from hair_platform import audit, vector_backends
 
 DEFAULT_EMBEDDING_MODELS = {
     "openai": "text-embedding-3-small",
@@ -381,7 +381,34 @@ def index_text(
     )
     conn.commit()
     assert cur.lastrowid is not None
+    # 벡터 백엔드(2026-11-25, `vector_backends.py`)에도 넣는다 — 실패해도 원본(SQLite)은 남고, 다음 검색의
+    # `sync()`가 SQLite의 JSON 임베딩으로 채운다(임베딩 API 재호출 없음).
+    try:
+        vector_backends.get_backend(conn).add(conn, cur.lastrowid, resolved_provider, resolved_model, embedding)
+    except Exception:  # noqa: BLE001
+        pass
     return cur.lastrowid
+
+
+# 근사 검색 후보 수(2026-11-25) — `min_score` 필터·키워드 재순위화는 이 후보 안에서 한다. 청크가 이보다 적으면
+# 예전(전체 비교)과 결과가 같다. 키워드는 0.2짜리 보조 신호라 코사인 상위 밖의 청크가 뒤집어 올라올 일은 드물다.
+_ANN_CANDIDATE_FACTOR = 20
+_ANN_MIN_CANDIDATES = 100
+
+
+def _vector_candidates(
+    conn: sqlite3.Connection, provider: str, model: str, embedding: list[float], top_k: int
+) -> tuple[list[tuple[int, float]], str]:
+    """(청크 id, 코사인) 후보와 백엔드 이름. 벡터 DB가 실패하면 예전 방식(전체 비교)으로 답한다."""
+    backend = vector_backends.get_backend(conn)
+    if backend.name != "sqlite":
+        try:
+            backend.sync(conn, provider, model)
+            pool = max(top_k * _ANN_CANDIDATE_FACTOR, _ANN_MIN_CANDIDATES)
+            return backend.query(conn, provider, model, embedding, pool), backend.name
+        except Exception:  # noqa: BLE001 — 벡터 DB 문제로 검색 자체가 막히지 않게
+            backend = vector_backends.SqliteScanBackend()
+    return backend.query(conn, provider, model, embedding, None), backend.name
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -431,16 +458,22 @@ def search(
     resolved_provider, resolved_model, query_embedding = embed_text(
         query, provider, model
     )
-    rows = conn.execute(
-        "SELECT * FROM knowledge_chunks WHERE embedding_provider = ? AND embedding_model = ?",
-        (resolved_provider, resolved_model),
-    ).fetchall()
+    candidates, _backend_name = _vector_candidates(
+        conn, resolved_provider, resolved_model, query_embedding, top_k
+    )
+    cosine_by_id = {cid: score for cid, score in candidates if score >= min_score}
+    rows = []
+    ids = list(cosine_by_id)
+    for start in range(0, len(ids), 500):  # 텍스트·출처는 늘 원본(SQLite)에서 — 지워진 청크는 여기서 빠진다
+        batch = ids[start:start + 500]
+        rows += conn.execute(
+            f"SELECT id, text, source_agent_id, source_document_id, created_at FROM knowledge_chunks "
+            f"WHERE id IN ({','.join('?' * len(batch))})",
+            batch,
+        ).fetchall()
     scored = []
     for row in rows:
-        chunk_embedding = json.loads(row["embedding"])
-        cosine_score = _cosine_similarity(query_embedding, chunk_embedding)
-        if cosine_score < min_score:
-            continue
+        cosine_score = cosine_by_id[row["id"]]
         keyword_score = _keyword_overlap_ratio(query, row["text"])
         blended_score = (
             _COSINE_WEIGHT * cosine_score + _KEYWORD_WEIGHT * keyword_score
@@ -636,4 +669,6 @@ def stats(conn: sqlite3.Connection) -> dict:
         "total_characters": totals["total_characters"],
         "by_model": [dict(row) for row in by_model],
         "by_source": dict(by_source),
+        # 검색 엔진(2026-11-25) — "chroma"(벡터 DB) 또는 "sqlite"(전체 비교)
+        "vector_backend": vector_backends.get_backend(conn).name,
     }

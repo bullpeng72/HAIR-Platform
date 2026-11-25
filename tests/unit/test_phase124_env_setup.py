@@ -241,3 +241,17 @@ def test_top_level_help_and_brief_help_list_init_and_check(capsys):
     cli.main([])
     brief = capsys.readouterr().out
     assert "init" in brief and "check" in brief
+
+
+def test_dependency_check_warns_on_minor_version_drift(monkeypatch):
+    """2026-11-25(P0-2) — 운영 conda가 crewai 1.6.1, 테스트가 1.15.22였던 drift를 `hair check`가 알려야 한다."""
+    import importlib.metadata as md
+
+    from hair_platform import env_setup, verified_versions
+
+    monkeypatch.setattr(verified_versions, "VERIFIED", {"crewai": "1.15.22", "not-installed-pkg": "1.0.0"})
+    monkeypatch.setattr(md, "version", lambda name: {"crewai": "1.6.1"}.get(name) or (_ for _ in ()).throw(md.PackageNotFoundError(name)))
+    issues = env_setup.dependency_check()
+    assert len(issues) == 1 and issues[0][0] == "warn" and "crewai 1.6.1" in issues[0][1] and "1.15.22" in issues[0][1]
+    monkeypatch.setattr(md, "version", lambda name: {"crewai": "1.15.9"}.get(name) or (_ for _ in ()).throw(md.PackageNotFoundError(name)))
+    assert env_setup.dependency_check() == []  # 패치 차이는 경고하지 않는다

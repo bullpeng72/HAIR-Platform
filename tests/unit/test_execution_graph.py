@@ -100,7 +100,7 @@ def setup(client_and_conn):
 
 def test_validate_template_rejects_parallel_delegated(setup):
     conn, admin_id, agent_id, task_id, template_id, run_id = setup
-    lead_id = _make_agent(conn, "리드")
+    _make_agent(conn, "리드")
     pr.add_stage(
         conn, admin_id, template_id, "병렬단계", "parallel_delegated",
         [("리드", ""), ("역할1", "")], lead_role_name="리드",
@@ -200,7 +200,7 @@ def test_run_pipeline_graph_escalates_to_human_approval_on_retry_exhaustion(setu
 
         # 승인 후 재개 — 같은 checkpointer 세션 안에서
         with patch("hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()):
-            resumed = execution_graph.resume_pipeline_graph(
+            execution_graph.resume_pipeline_graph(
                 conn, run_id, saver, decision={"decision": "approve"}
             )
         run = conn.execute(
@@ -234,7 +234,7 @@ def test_resume_after_simulated_crash_restart(setup, tmp_path):
     with SqliteSaver.from_conn_string(checkpoint_path) as saver2, patch(
         "hair_platform.crew_runtime.run_crew", side_effect=_good_run_crew()
     ):
-        resumed = execution_graph.resume_pipeline_graph(
+        execution_graph.resume_pipeline_graph(
             conn, run_id, saver2, decision={"decision": "approve"}
         )
 

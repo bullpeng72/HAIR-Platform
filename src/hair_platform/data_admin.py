@@ -612,4 +612,12 @@ def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
         )
         conn.execute("PRAGMA foreign_keys=ON")
         conn.commit()
+    # 지식 베이스 벡터 DB(2026-11-25, `vector_backends.py`)도 비운다 — 실패해도 다음 검색의 `sync()`가 원본(빈
+    # `knowledge_chunks`)에 맞춰 지우므로 초기화 자체는 막지 않는다.
+    try:
+        from hair_platform import vector_backends
+
+        vector_backends.get_backend(conn).reset(conn)
+    except Exception:  # noqa: BLE001
+        pass
     return counts

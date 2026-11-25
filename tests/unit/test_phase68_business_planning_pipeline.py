@@ -226,8 +226,16 @@ def test_business_planning_pipeline_runs_end_to_end_with_requirement_coverage():
         "missing": [],
     }
 
+    def _plan_merge(conn, lead, workers, base_description, actor_id, **kwargs):
+        # 2026-11-25 — "자료 조사·분석"이 계획 분담 단계가 되면서 `plan_merge.run()`(→ 실제 `llm.call_llm`)을
+        # 타게 됐는데 이 테스트는 `run_crew`만 가짜로 바꿔, `.env`의 실제 키로 OpenAI를 호출하고 있었다
+        # (tests/conftest.py가 외부 네트워크를 막자 드러남). 같은 가짜 결과로 바꾼다.
+        ids = [lead["agent_id"]] + [w["agent_id"] for w in workers]
+        return _dispatch(conn, ids, [base_description] * len(ids), actor_id)
+
     with (
         patch("hair_platform.crew_runtime.run_crew", side_effect=_dispatch),
+        patch("hair_platform.plan_merge.run", side_effect=_plan_merge),
         patch(
             "hair_platform.requirements_traceability_llm.assess_traceability",
             return_value=dict(traceability_result),

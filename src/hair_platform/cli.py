@@ -248,6 +248,26 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_boot.set_defaults(func=_cmd_bootstrap_admin)
 
+    p_reindex = sub.add_parser(
+        "reindex-vectors",
+        help="지식 베이스 벡터 DB를 SQLite 원본에 맞춰 다시 만든다(비용 없음)",
+        description=(
+            "지식 베이스(knowledge_chunks)의 벡터 검색 색인(ChromaDB, <db>-vectors 폴더)을 SQLite 원본에\n"
+            "맞춘다. SQLite에 저장된 임베딩을 그대로 쓰므로 임베딩 API를 다시 부르지 않는다(비용 없음).\n"
+            "평소에는 검색할 때 자동으로 맞춰지므로 필요 없다 — 색인 폴더를 지웠거나 옮겼을 때,\n"
+            "또는 --rebuild로 처음부터 다시 만들 때 쓴다."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="예시:\n  hair reindex-vectors\n  hair reindex-vectors --rebuild\n",
+    )
+    p_reindex.add_argument(
+        "-d", "--db-path", default="hair.db", help="SQLite DB 파일 경로(기본: hair.db)"
+    )
+    p_reindex.add_argument(
+        "--rebuild", action="store_true", help="기존 벡터 색인을 비우고 처음부터 다시 만든다"
+    )
+    p_reindex.set_defaults(func=_cmd_reindex_vectors)
+
     p_reset = sub.add_parser(
         "reset-data",
         help="운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인 템플릿은 유지, '초기화 시 보호' 팀만 유지)",
@@ -421,6 +441,29 @@ def _cmd_bootstrap_admin(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_reindex_vectors(args: argparse.Namespace) -> int:
+    from hair_platform import db, vector_backends
+
+    conn = db.get_connection(args.db_path)
+    db.init_schema(conn)
+    backend = vector_backends.get_backend(conn)
+    if not isinstance(backend, vector_backends.ChromaBackend):
+        print(
+            "벡터 DB(ChromaDB)를 쓰지 않는 설정입니다 — chromadb가 설치돼 있지 않거나 "
+            "HAIR_VECTOR_BACKEND=sqlite입니다. 지금은 SQLite 전체 비교로 검색하므로 다시 만들 색인이 없습니다."
+        )
+        return 0
+    if args.rebuild:
+        backend.reset(conn)
+    result = backend.sync(conn)
+    total = conn.execute("SELECT COUNT(*) FROM knowledge_chunks").fetchone()[0]
+    print(
+        f"완료 — 청크 {total}개 기준으로 맞췄습니다(추가 {result['added']} · 삭제 {result['removed']}). "
+        f"색인 위치: {backend.path}"
+    )
+    return 0
+
+
 def _cmd_reset_data(args: argparse.Namespace) -> int:
     from hair_platform import data_admin, db
 
@@ -559,7 +602,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
                 print(f"  · {var.key} (설정 안 됨)")
         print()
 
-    problems = env_setup.cross_check(values)
+    problems = env_setup.cross_check(values) + env_setup.dependency_check()
     if problems:
         print("[점검 결과]")
         for level, message in problems:

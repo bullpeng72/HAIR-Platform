@@ -314,7 +314,7 @@ def test_parse_skill_markdown_rejects_unknown_tool_native_id():
     )
     try:
         skill_markdown.parse_skill_markdown(conn, md)
-        assert False, "should have raised"
+        raise AssertionError("should have raised")
     except ValueError as exc:
         assert "no_such_tool" in str(exc)
 
@@ -324,7 +324,7 @@ def test_parse_skill_markdown_rejects_missing_frontmatter():
     db.init_schema(conn)
     try:
         skill_markdown.parse_skill_markdown(conn, "## 지침\n\n본문\n")
-        assert False, "should have raised"
+        raise AssertionError("should have raised")
     except ValueError as exc:
         assert str(exc) == "missing_frontmatter"
 
@@ -334,7 +334,7 @@ def test_parse_skill_markdown_rejects_missing_name():
     db.init_schema(conn)
     try:
         skill_markdown.parse_skill_markdown(conn, "---\ncategory: general\n---\n\n본문\n")
-        assert False, "should have raised"
+        raise AssertionError("should have raised")
     except ValueError as exc:
         assert str(exc) == "missing_name"
 

@@ -143,7 +143,7 @@ def test_request_cancel_on_already_finished_run_rejected():
 
     try:
         pr.request_pipeline_run_cancel(conn, admin_id, run_id)
-        assert False, "should have raised"
+        raise AssertionError("should have raised")
     except ValueError as exc:
         assert str(exc) == "pipeline_run_already_finished"
 

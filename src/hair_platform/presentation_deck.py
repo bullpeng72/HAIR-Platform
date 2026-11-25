@@ -386,7 +386,7 @@ def _with_chart_runtime(doc: str) -> str:
     if _CHART_MARKER in doc or not _HAS_CHART_RE.search(doc):
         return doc
     close = None
-    for close in _BODY_CLOSE_RE.finditer(doc):
+    for close in _BODY_CLOSE_RE.finditer(doc):  # noqa: B007 — 마지막 </body>를 찾으려고 끝까지 돈다
         pass
     if close is None:
         return doc + "\n" + _CHART_RUNTIME

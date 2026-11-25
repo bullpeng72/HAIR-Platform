@@ -235,7 +235,7 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
                 conn,
                 {"agent_id": pr._resolve_role_agent_id(conn, lead_name), "role_name": lead_name, "instructions": ""},
                 [{"agent_id": aid, "role_name": a["role_name"], "instructions": a["instructions"]}
-                 for a, aid in zip(stage_agents, agent_ids) if a["role_name"] != lead_name],
+                 for a, aid in zip(stage_agents, agent_ids, strict=False) if a["role_name"] != lead_name],
                 combined_base,
                 state["actor_id"],
                 expected_output=stage["expected_output"],

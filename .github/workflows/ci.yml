@@ -8,24 +8,28 @@ on:
 
 jobs:
   quality:
-    name: Tests + lint (pytest, ruff, black)
+    name: Tests + lint (pytest, ruff)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      # 2026-10-27 패키징 점검 발견 — `tests/unit`의 CrewAI 연동 테스트
-      # 9개가 테스트 함수 안에서(수집 시점이 아니라 실행 시점에)
-      # `from crewai... import ...`를 하는데, `[dev]`만 설치하면
-      # crewai가 없어 그 테스트들이 `ModuleNotFoundError`로 깨진다
-      # (README "빠른 시작"의 같은 문제와 원인 동일). `all`(=
-      # crewai+mcp+llm+documents 묶음, pyproject.toml 참고)까지 같이
-      # 설치해야 전체 골든셋이 통과한다.
-      - run: pip install -e ".[dev,all]"
-      - run: pytest tests/ -v
+          cache: pip
+          cache-dependency-path: constraints.txt
+      # `all`(crewai+mcp+llm+documents+graph+korean+vectordb)까지 설치해야 전체 테스트가 돈다
+      # (CrewAI 연동 테스트는 실행 시점에 `from crewai ... import`를 한다 — 2026-10-27 패키징 점검).
+      # `-c constraints.txt`(2026-11-25, P0-2) — 하한만 둔 의존성을 그대로 설치하면 설치 시점마다 다른 버전이
+      # 깔린다(실측: CI가 crewai 1.6.1·pydantic 2.14를 받아 1.15 기준 코드와 어긋남). 개발 PC에서 전체 테스트를
+      # 통과한 조합(`scripts/update_constraints.py`가 생성)으로 똑같이 설치한다.
+      - run: pip install -e ".[dev,all]" -c constraints.txt
+      # 의존성 충돌 표시(참고용) — crewai가 고정한 일부 패키지와의 알려진 경고가 있어 실패로 치지 않는다.
+      - name: Show dependency conflicts (informational)
+        run: pip check || true
+      # 테스트는 `.env`·셸 API 키에 기대지 않는다(tests/conftest.py가 격리) — 키 없는 CI에서도 개발 PC와 같은 결과.
+      - run: pytest tests/ -q -p no:cacheprovider
+      # 검사 규칙은 pyproject.toml `[tool.ruff.lint] select`에 명시(ruff 버전마다 기본값이 달라지지 않게).
       - run: ruff check src tests
-      - run: black --check --target-version py311 src tests
-      # Gate A-G CI 잡은 아직 없다 — agent-evaluator SDK가 vendor/import되지 않아
-      # Gate 평가 자체가 불가능하다. Harness Autopilot도 이
-      # 저장소에는 설치되지 않아(.aoo/ 없음) claims audit 잡도 해당 없다.
+      # black은 쓰지 않는다(2026-11-25 결정) — 기존 코드 전체(171개 파일·약 11,700줄)가 black 형식이 아니고, 일괄
+      # 재포맷은 이력 비교를 끊는다. 형식 대신 ruff로 실제 오류·버그 패턴만 검사한다.
+      # Gate A-G CI 잡은 아직 없다 — Harness Autopilot이 이 저장소에 설치되지 않아(.aoo/ 없음) claims audit 잡도 해당 없다.
