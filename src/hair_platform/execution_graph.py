@@ -297,9 +297,15 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
     )
     if traceability is not None:
         gate_scores["requirements_traceability"] = traceability
+    # 검토 판정 반영(2026-11-25) — 기존 엔진과 같은 판정(`pr.review_verdict`).
+    verdict = pr.review_verdict(stage_output) if stage["on_fail_return_stage_id"] else None
+    if verdict is not None:
+        gate_scores["review_verdict"] = verdict
     stage_gate_ids = json.loads(stage["gate_ids"]) if stage["gate_ids"] else None
     ratio = pr._gate_pass_ratio(gate_scores, stage_gate_ids)
     passed = ratio >= stage["min_gate_pass_ratio"]
+    if verdict is not None and not verdict["not_measured"] and not verdict["passed"]:
+        passed = False
 
     task_row = conn.execute(
         "SELECT max_retry_budget, requires_human_judgment FROM tasks WHERE id = ?",

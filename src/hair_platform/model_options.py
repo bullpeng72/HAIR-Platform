@@ -224,12 +224,18 @@ def for_model(provider: str, model: str) -> dict:
 _TEMPERATURE_MAX = {"anthropic": 1.0, "openai": 2.0, "ollama": 2.0}
 
 
-def request_options(provider: str, model: str, temperature: float | None = None) -> dict:
+def request_options(provider: str, model: str, temperature: float | None = None,
+                    max_output_tokens: int | None = None) -> dict:
     """실제 호출에 실을 생성 옵션 — 모델 레지스트리 값(모델 공통) 위에 에이전트
     튜닝 값(에이전트별, 현재 temperature)을 덮는다. 우선순위: 에이전트 > 모델 >
     provider 기본값(아무것도 안 보냄)."""
     options = {k: v for k, v in _registered(provider, model).items() if k != "max_output_tokens"}
-    cap = max_output_tokens(provider, model)
+    cap = _model_output_cap(provider, model)
+    # 호출별 상한(2026-11-25) — JSON 한 줄짜리 채점 호출(요구사항 추적성 등)은 모델 한도(Ollama 32,768)까지
+    # 생성할 이유가 없다. 실측: 계약서 파이프라인에서 이 채점 1회가 32,768토큰 반복 생성으로 19분 걸리고
+    # JSON 파싱도 실패(not_measured). 모델 한도보다 작을 때만 줄인다.
+    if max_output_tokens is not None and max_output_tokens > 0:
+        cap = min(cap, max_output_tokens) if cap is not None else max_output_tokens
     if cap is not None and provider in _OUTPUT_CAP_ARG:
         options[_OUTPUT_CAP_ARG[provider]] = cap
     num_ctx = ollama_context_length(provider, model)
@@ -238,3 +244,7 @@ def request_options(provider: str, model: str, temperature: float | None = None)
     if temperature is not None:
         options["temperature"] = max(0.0, min(float(temperature), _TEMPERATURE_MAX.get(provider, 2.0)))
     return options
+
+
+# request_options()의 `max_output_tokens` 인자가 같은 이름의 모듈 함수를 가리므로 별칭으로 부른다.
+_model_output_cap = max_output_tokens

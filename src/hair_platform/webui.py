@@ -120,6 +120,11 @@ INDEX_HTML = """<!DOCTYPE html>
      말고 나머지 자식을 안 그리는 건 브라우저가 알아서 한다. 여기선
      `<summary>`만 클릭 가능해 보이게 손본다. */
   .nav-more-toggle { opacity: 0.75; }
+  /* 홈 "AI에게 일 맡기기" 입력(2026-11-25) */
+  .wizard-box { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
+  .wizard-box textarea { width: 100%; box-sizing: border-box; min-height: 4.5rem; resize: vertical; font: inherit; line-height: 1.5; }
+  .wizard-actions { display: flex; justify-content: flex-end; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+  .wizard-actions .muted { font-size: 0.85em; }
   /* 설정 메뉴 한 줄 + 그룹 드롭다운(2026-11-25) */
   .nav-dropdown { position: relative; display: inline-block; }
   .nav-dropdown-trigger.active { background: var(--color-admin); color: #fff; border-color: var(--color-admin); }
@@ -4205,8 +4210,11 @@ async function renderHome(content) {
     (role !== "viewer"
       ? '<section class="card"><h3>AI에게 일 맡기기</h3>' +
         '<p class="muted">어떤 일인지 한두 문장으로 적으면, 빠른 질문·특정 Agent·여러 단계 파이프라인·정기 실행 중 맞는 방법을 이유와 함께 추천하고 바로 시작합니다.</p>' +
-        '<div class="inline"><textarea id="wizard-text" rows="2" style="flex:1;min-width:16rem" placeholder="예: 3분기 부서 예산 집행 실적을 분석해 경영진 보고서를 써 줘 / 매주 월요일 지난주 실적 보고서 / 유지보수 계약서 손해배상 조항 검토"></textarea>' +
-        '<button class="primary" id="wizard-go">추천 받기</button></div><div id="wizard-result"></div></section>'
+        // 2026-11-25(사용자 보고 — 입력창이 한쪽에 치우치고 버튼이 입력창에 붙어 어긋남): `.inline`이 flex가 아니라
+        // `flex:1`이 안 먹었다. 입력창은 카드 너비 전체, 버튼은 그 아래 오른쪽에 따로 둔다(Ctrl/⌘+Enter로도 추천).
+        '<div class="wizard-box"><textarea id="wizard-text" rows="3" placeholder="예: 3분기 부서 예산 집행 실적을 분석해 경영진 보고서를 써 줘 / 매주 월요일 지난주 실적 보고서 / 유지보수 계약서 손해배상 조항 검토"></textarea>' +
+        '<div class="wizard-actions"><span class="muted">Ctrl(⌘)+Enter로도 추천받을 수 있습니다</span><button class="primary" id="wizard-go">추천 받기</button></div></div>' +
+        '<div id="wizard-result"></div></section>'
       : "") +
     '<section class="card"><h3>처리할 일</h3><div class="home-stats">' + todo + "</div></section>" +
     '<section class="card"><h3>AI에게 일을 맡기는 방법</h3><div class="home-ways">' + ways + "</div>" +
@@ -4217,6 +4225,10 @@ async function renderHome(content) {
   content.querySelectorAll("[data-go]").forEach(btn => btn.addEventListener("click", () => selectTab(btn.dataset.go)));
   const wizardBtn = document.getElementById("wizard-go");
   if (wizardBtn) wizardBtn.onclick = () => _runWizard(content);
+  const wizardText = document.getElementById("wizard-text");
+  if (wizardText && wizardBtn) wizardText.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); wizardBtn.click(); }
+  });
 }
 
 // AI에게 일 맡기기(2026-11-24, P2-8) — 추천은 서버(`wizard.py`, LLM 없음), 실행은 기존 API를 이어 부른다

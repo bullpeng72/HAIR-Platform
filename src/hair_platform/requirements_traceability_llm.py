@@ -31,6 +31,11 @@ from hair_platform import llm
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# 출력 상한(2026-11-25 실측 — 계약서 1차 검토 파이프라인): 답은 JSON 한 줄인데 모델 한도(Ollama 32,768)까지
+# 반복 생성해 19분이 걸리고 파싱도 실패했다. 사고(thinking) 모델의 사고 토큰도 이 한도에 들어가므로 넉넉히 둔다
+# — 넘으면 지금처럼 not_measured로 끝나지만 길어야 몇 분이다.
+JUDGE_MAX_OUTPUT_TOKENS = 4096
+
 _SYSTEM_PROMPT = (
     "당신은 요구사항 추적성 검토자입니다. 요구사항 문서와 구현 결과물을 "
     "비교해, 요구사항 문서에 나열된 개별 요구사항 각각이 구현 결과물에 "
@@ -58,7 +63,7 @@ def assess_traceability(
             f"요구사항 문서:\n{requirements_text}\n\n"
             f"구현 결과물:\n{implementation_text}"
         )
-        raw = llm.call_llm(provider, model, _SYSTEM_PROMPT, prompt)
+        raw = llm.call_llm(provider, model, _SYSTEM_PROMPT, prompt, max_output_tokens=JUDGE_MAX_OUTPUT_TOKENS)
         match = _JSON_BLOCK_RE.search(raw)
         if not match:
             raise ValueError("no_json_block")

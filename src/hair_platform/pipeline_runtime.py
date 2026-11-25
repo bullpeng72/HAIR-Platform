@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
 
@@ -695,6 +696,31 @@ def return_target_stage(conn: sqlite3.Connection, stage) -> sqlite3.Row | None:
 _REWORK_REVIEW_CHARS = 6000
 
 
+_VERDICT_HEADING_RE = re.compile(r"^#{1,4}\s*(?:최종\s*)?판정\s*$", re.MULTILINE)
+_VERDICT_REWORK_WORDS = ("보완 요청", "보완요청", "반려", "재작성", "수정 요청")
+
+
+def review_verdict(output: str) -> dict:
+    """검토 산출물의 '## 판정' 절에서 승인/보완 요청을 읽는다(2026-11-25). 절 첫 머리(400자)만 본다 —
+    본문 다른 곳의 "보완 요청" 언급(예: 과거 이력 설명)으로 잘못 막지 않으려고. 절이 없거나 둘 다
+    없으면 `not_measured`."""
+    text = output or ""
+    m = _VERDICT_HEADING_RE.search(text)
+    if not m:
+        return {"score": None, "status": "not_measured", "not_measured": True, "passed": False, "verdict": None}
+    head = text[m.end(): m.end() + 400]
+    nxt = re.search(r"^#{1,4}\s", head, re.MULTILINE)
+    if nxt:
+        head = head[: nxt.start()]
+    rework_at = min((head.find(w) for w in _VERDICT_REWORK_WORDS if w in head), default=-1)
+    approve_at = head.find("승인")
+    if rework_at < 0 and approve_at < 0:
+        return {"score": None, "status": "not_measured", "not_measured": True, "passed": False, "verdict": None}
+    rework = rework_at >= 0 and (approve_at < 0 or rework_at <= approve_at)
+    return {"score": 0.0 if rework else 1.0, "status": "fail" if rework else "pass", "not_measured": False,
+            "passed": not rework, "verdict": "보완 요청" if rework else "승인"}
+
+
 def rework_feedback(conn: sqlite3.Connection, run_id: int, stage) -> str:
     """이 단계로 되돌아온 검토 의견(2026-11-22, 하드코딩·스텁 점검 4순위) — 이 단계를 되돌아갈
     곳으로 지정한 검토 단계가 이 단계의 마지막 시도 뒤에 Gate 미달로 끝났으면, 그 검토 산출물과
@@ -1283,9 +1309,20 @@ def _execute_stage_attempt(
     if traceability is not None:
         gate_scores["requirements_traceability"] = traceability
 
+    # 검토 판정 반영(2026-11-25 실측 — 계약서·영업 파이프라인): 검토 단계가 '## 판정'에 "보완 요청"을 써도
+    # 통과/미통과는 Gate 점수로만 정해져, 고칠 곳을 짚은 검토가 그대로 최종 결과가 됐다. 되돌아갈 단계가
+    # 지정된 검토 단계에서는 판정을 읽어 "보완 요청"이면 미통과로 보고 작성 단계로 돌려보낸다(재시도 상한을
+    # 넘으면 지금처럼 사람 검토). 판정을 찾지 못하면 측정 안 함 — 막지 않는다.
+    verdict = None
+    if stage["on_fail_return_stage_id"]:
+        verdict = review_verdict(stage_output)
+        gate_scores["review_verdict"] = verdict
+
     ratio = _gate_pass_ratio(gate_scores, stage_gate_ids)
     passed = ratio >= stage["min_gate_pass_ratio"]
     if stage["mode"] == "parallel_delegated" and not gate_scores["delegation_check"]["passed"]:
+        passed = False
+    if verdict is not None and not verdict["not_measured"] and not verdict["passed"]:
         passed = False
 
     # 사용자 요청(2026-11-17, "Human Agency Scale... 사람 고유 능력을

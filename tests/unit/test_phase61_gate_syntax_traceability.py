@@ -542,3 +542,35 @@ def test_run_adhoc_crew_job_adds_per_agent_code_syntax(client_and_conn):
     by_agent = {r["author_id"]: json.loads(r["gate_scores"]) for r in rows}
     assert by_agent[agent1]["code_syntax"]["status"] == "pass"
     assert by_agent[agent2]["code_syntax"]["status"] == "fail"
+
+
+def test_traceability_judge_caps_output_tokens(monkeypatch):
+    """2026-11-25 실측 회귀: JSON 한 줄짜리 채점이 모델 한도(Ollama 32,768토큰)까지 반복 생성해 19분 걸렸다.
+    채점 호출은 짧은 출력 상한을 넘기고, Ollama 요청의 num_predict가 그 값으로 줄어야 한다."""
+    import httpx
+
+    from hair_platform import model_options, requirements_traceability_llm as rt
+
+    seen = {}
+    with patch("hair_platform.llm.resolve_provider_and_model", return_value=("ollama", "m-test")), \
+            patch("hair_platform.llm.call_llm", side_effect=lambda *a, **k: seen.update(k) or '{"total_requirements": 1, "covered": 1, "missing": []}'):
+        rt.assess_traceability(db.get_connection(":memory:"), "R1", "impl")
+    assert seen.get("max_output_tokens") == rt.JUDGE_MAX_OUTPUT_TOKENS
+
+    assert model_options.request_options("ollama", "m-test", None, 4096)["num_predict"] == 4096
+    assert model_options.request_options("ollama", "m-test", None)["num_predict"] == model_options.DEFAULT_OLLAMA_MAX_OUTPUT_TOKENS
+    assert model_options.request_options("ollama", "m-test", None, 10**9)["num_predict"] == model_options.DEFAULT_OLLAMA_MAX_OUTPUT_TOKENS
+
+    sent = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "{}"}, "prompt_eval_count": 1, "eval_count": 1}
+
+    monkeypatch.setattr(httpx, "post", lambda url, json, timeout: sent.update(json) or _Resp())
+    from hair_platform import llm
+    llm.call_llm("ollama", "m-test", "s", "p", max_output_tokens=4096)
+    assert sent["options"]["num_predict"] == 4096

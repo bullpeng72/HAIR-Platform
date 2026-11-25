@@ -217,6 +217,7 @@ def call_llm(
     timeout_seconds: float | None = None,
     temperature: float | None = None,
     on_partial=None,
+    max_output_tokens: int | None = None,
 ) -> str:
     """실제 API 호출 지점 — 여기서만 비용/로컬 연산이 발생한다.
 
@@ -232,6 +233,10 @@ def call_llm(
     # `temperature`(2026-11-21) — 에이전트 파인튜닝 값. 지정됐을 때만 넘겨
     # 기존 호출 모양(테스트 대역 포함)을 그대로 둔다.
     extra = {"temperature": temperature} if temperature is not None else {}
+    # `max_output_tokens`(2026-11-25) — 짧은 JSON 채점 호출용 출력 상한(모델 한도보다 작을 때만 적용).
+    # 지정됐을 때만 넘겨 기존 호출 모양(테스트 대역 포함)을 그대로 둔다. 스트리밍 경로는 쓰지 않는다.
+    if max_output_tokens is not None:
+        extra["max_output_tokens"] = max_output_tokens
     if on_partial is not None and provider in ("anthropic", "openai", "ollama"):
         return _STREAMERS[provider](model, system, prompt, timeout_seconds, on_partial, temperature)
     if provider == "anthropic":
@@ -557,6 +562,7 @@ def _call_anthropic(
     prompt: str,
     timeout_seconds: float | None = None,
     temperature: float | None = None,
+    max_output_tokens: int | None = None,
 ) -> str:
     import anthropic  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
@@ -573,7 +579,7 @@ def _call_anthropic(
     # 8192토큰으로 올린다.
     resp = client.messages.create(
         model=model,
-        max_tokens=_ANTHROPIC_MAX_OUTPUT_TOKENS,
+        max_tokens=min(_ANTHROPIC_MAX_OUTPUT_TOKENS, max_output_tokens or _ANTHROPIC_MAX_OUTPUT_TOKENS),
         system=system,
         messages=[{"role": "user", "content": prompt}],
         **model_options.request_options("anthropic", model, temperature),
@@ -588,6 +594,7 @@ def _call_openai(
     prompt: str,
     timeout_seconds: float | None = None,
     temperature: float | None = None,
+    max_output_tokens: int | None = None,
 ) -> str:
     import openai  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
@@ -600,7 +607,7 @@ def _call_openai(
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        **model_options.request_options("openai", model, temperature),
+        **model_options.request_options("openai", model, temperature, max_output_tokens),
     )
     llm_usage.record_openai(model, resp)
     return resp.choices[0].message.content or ""
@@ -612,6 +619,7 @@ def _call_ollama(
     prompt: str,
     timeout_seconds: float | None = None,
     temperature: float | None = None,
+    max_output_tokens: int | None = None,
 ) -> str:
     import httpx  # 지연 import — 이 경로를 안 쓰면 의존성 설치가 필요 없다.
 
@@ -625,7 +633,7 @@ def _call_ollama(
                 {"role": "user", "content": prompt},
             ],
             "stream": False,
-            "options": model_options.request_options("ollama", model, temperature),
+            "options": model_options.request_options("ollama", model, temperature, max_output_tokens),
         },
         # 사용자 보고(2026-10-14, "@개발자... -> 일부 응답이 실패했습니다:
         # timed out") — 실측으로 원인 확인: `conversation_jobs`에 정확히

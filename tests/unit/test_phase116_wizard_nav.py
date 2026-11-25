@@ -107,3 +107,12 @@ def test_settings_menu_is_one_row_of_group_dropdowns():
     assert 'ev.key === "Escape"' in html and '.closest(".nav-dropdown")' in html  # 바깥 클릭·Esc로 닫힘
     assert "_syncNavDropdowns();  // 설정 그룹 버튼에 지금 화면 표시" in html
     assert 'badge.textContent = "관리자 전용"' not in html and 'btn.title = "관리자 전용"' in html
+
+
+def test_wizard_input_is_full_width_with_button_below():
+    """2026-11-25(사용자 보고 — 입력창이 한쪽에 치우치고 추천 받기 버튼이 붙어 어긋남)."""
+    html = webui.INDEX_HTML
+    assert '<div class="wizard-box"><textarea id="wizard-text"' in html
+    assert '<div class="wizard-actions">' in html and ".wizard-box textarea { width: 100%;" in html
+    assert '<textarea id="wizard-text" rows="2" style="flex:1' not in html
+    assert '(ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); wizardBtn.click(); }' in html

@@ -156,13 +156,27 @@ def repair(text: str | None, call: Callable[[str, str], str]) -> tuple[str | Non
             and 0.5 <= len(candidate) / max(len(original), 1) <= 2.0
         )
 
-    out = text
+    chosen: dict[str, str] = {}
+    leftover: list[str] = []
     for original in segments:
-        # 후보 순서: 모델 교정(+사전 보정) → 원문에 사전 보정만. 둘 다 안 되면 원문 유지.
-        candidates = [_apply_known_fixes(corrections[original])] if original in corrections else []
+        # 후보 순서: 모델이 스스로 고친 교정(+사전 보정) → 원문에 사전 보정만 → 아래 조각 교정.
+        # 모델 교정에 문제 글자가 그대로 남았으면(= 모델이 못 고침) 그 판본은 쓰지 않는다 — 2026-11-25
+        # 실측: 한자는 그대로 두고 다른 곳("가장" → "가 가장")만 망가뜨린 판본이 사전 보정으로 통과했다.
+        model_fix = corrections.get(original)
+        candidates = [_apply_known_fixes(model_fix)] if model_fix and not _ISSUE_RE.search(model_fix) else []
         candidates.append(_apply_known_fixes(original))
         corrected = next((c for c in candidates if acceptable(original, c)), None)
         if corrected is None:
+            leftover.append(original)
+        else:
+            chosen[original] = corrected
+    if leftover:
+        chosen.update(_repair_fragments(leftover, call, errors))
+
+    out = text
+    for original in segments:
+        corrected = chosen.get(original)
+        if corrected is None or not acceptable(original, corrected):
             report["remaining"] += 1
             continue
         if original != corrected:
@@ -174,6 +188,53 @@ def repair(text: str | None, call: Callable[[str, str], str]) -> tuple[str | Non
 
 
 _BATCH_SIZE = 3
+
+# 조각 교정(2026-11-25 실측 — 계약서·영업 파이프라인 최종 검토): 긴 문장 속에 "全覆盖"·"出具"처럼 짧은
+# 한자가 한두 개 섞이면 로컬 모델이 문장 전체를 그대로 복사해 돌려줬다(교정 0건). 문장 교정 뒤에도 남은
+# 줄은 문제 글자 덩어리만 앞뒤 문맥과 함께 보내 "그 자리에 넣을 한국어"만 받는다(실측 0.9초, 3/3 교정).
+_ISSUE_RUN_RE = re.compile("[\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\u3040-\\u30ff" + _VIET + "]+")  # 이스케이프로 — 호환 한자(U+F900)가 편집 중 U+8C48로 정규화되면 한글까지 잡는다
+_FRAGMENT_BATCH = 12
+FRAGMENT_SYSTEM = (
+    "당신은 한국어 교정자입니다. 한국어 문장 속에 잘못 섞인 중국어·일본어·한자 표현 목록을 받습니다. "
+    '각 항목의 "표현"만 한국어로 바꿀 말을 냅니다 — "앞" + 바꾼 말 + "뒤"를 이어 읽었을 때 자연스러운 '
+    '한국어 문장이 되어야 하고, "앞"·"뒤"에 이미 있는 조사·어미를 다시 넣지 않습니다(예: 앞 "요청을 ", '
+    '표현 "处理", 뒤 "했다" → "처리"). 설명 없이 JSON 문자열 배열 하나만, 입력과 같은 개수·같은 순서로 '
+    "출력합니다."
+)
+
+
+def _repair_fragments(lines: list[str], call: Callable[[str, str], str], errors: list[str]) -> dict[str, str]:
+    """문장 교정이 실패한 줄의 문제 글자 덩어리만 바꾼다. `{원래 줄: 바꾼 줄}`(바꾼 것만)."""
+    items: list[tuple[str, int, int]] = []  # (줄, 시작, 끝)
+    for line in lines:
+        items.extend((line, m.start(), m.end()) for m in _ISSUE_RUN_RE.finditer(line))
+    replacement: dict[tuple[str, int, int], str] = {}
+    for start in range(0, len(items), _FRAGMENT_BATCH):
+        batch = items[start : start + _FRAGMENT_BATCH]
+        payload = [{"표현": line[a:b], "앞": line[max(0, a - 20):a], "뒤": line[b:b + 12]} for line, a, b in batch]
+        try:
+            fixed = _parse_json_list(call(FRAGMENT_SYSTEM, "바꿀 표현:\n" + json.dumps(payload, ensure_ascii=False)), len(batch))
+        except Exception as exc:  # noqa: BLE001 — 교정 실패가 응답을 막으면 안 된다
+            errors.append(f"fragment_call_failed: {exc}"[:200])
+            continue
+        if fixed is None:
+            errors.append("fragment_unparseable_response")
+            continue
+        for key, new in zip(batch, fixed, strict=True):
+            new = new.strip()
+            run_len = key[2] - key[1]
+            if new and not _ISSUE_RE.search(new) and len(new) <= 3 * run_len + 6:
+                replacement[key] = new
+    out: dict[str, str] = {}
+    for line in lines:
+        keys = sorted((k for k in replacement if k[0] == line), key=lambda k: k[1], reverse=True)
+        fixed_line = line
+        for _, a, b in keys:  # 뒤에서부터 바꿔 앞 위치가 밀리지 않게
+            fixed_line = fixed_line[:a] + replacement[(line, a, b)] + fixed_line[b:]
+        fixed_line = _apply_known_fixes(fixed_line)
+        if fixed_line != line:
+            out[line] = fixed_line
+    return out
 
 # 모델이 교정하지 못하고 남긴 흔한 중국어 누출어의 결정적 대체(실측 기반, 긴 것부터).
 # 모델 교정이 우선이고, 이 사전은 그래도 남은 조각에만 적용된다.
@@ -218,6 +279,10 @@ _KNOWN_FIXES: tuple[tuple[str, str], ...] = (
     ("變動", "변동"),
     ("回収", "회수"),
     ("回수", "회수"),
+    # 2026-11-25 — 계약서·영업 파이프라인 최종 검토 실측.
+    ("全覆盖", "모두 반영"),
+    ("出具", "산출"),
+    ("表述", "표현"),
     ("表", "표"),
     ("库", "저장소"),
     # 베트남어 누출(2026-11-21 발표자료 실측) — "tiết kiệm"(절약)의 앞 음절이 한글과 섞였다.

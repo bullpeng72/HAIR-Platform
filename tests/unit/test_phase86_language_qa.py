@@ -56,9 +56,9 @@ def test_bad_corrections_fall_back_to_known_fixes_or_keep_original():
     out, report = language_qa.repair(
         text, lambda s, p: json.dumps(["3个月 파일럿", "경쟁사 대비 우리 회사의 압도적인 우위를 보여주는 새로운 문장"])
     )
-    # 모델 후보 "3个月 파일럿"에 사전 보정이 적용된 "3개월 파일럿"이 먼저 채택되고,
-    # 모델 후보가 거절된 두 번째는 원문에 사전 보정만 적용된다.
-    assert "3개월 파일럿" in out and "경쟁사 대비" in out
+    # 모델 후보 "3个月 파일럿"은 한자를 못 고친(그리고 "内"를 빠뜨린) 판본이라 쓰지 않고(2026-11-25),
+    # 두 줄 모두 원문에 사전 보정만 적용된다 — 원문의 뜻("3개월 내")이 그대로 남는다.
+    assert "3개월 내 파일럿" in out and "경쟁사 대비" in out
     assert report["fixed"] == 2 and report["remaining"] == 0
 
     # 사전에 없는 한자는 모델 교정이 거절되면 원문을 그대로 둔다.
@@ -246,3 +246,39 @@ def test_known_fixes_cover_words_seen_in_proposal_runs():
     }
     for src, expected in cases.items():
         assert language_qa._apply_known_fixes(src) == expected
+
+
+_LONG_KO = "이 문서는 3분기 실적 보고서의 요구사항 충족 여부와 수치 정확성을 점검한 결과를 정리한 것이다. " * 2
+
+
+def test_fragment_pass_fixes_han_left_in_long_sentence_when_model_copies_it_back():
+    """2026-11-25 실측: 긴 문장 속 짧은 한자를 모델이 문장째 그대로 복사해 돌려줬다(교정 0건). 남은 줄은
+    한자 덩어리만 앞뒤 문맥과 함께 다시 보내 그 자리에 넣을 한국어만 받는다."""
+    from hair_platform import language_qa
+
+    line = "담당 부서는 고객 요청을 매주 월요일에 일괄处理했으며, 응답 속도를优化해 평균 처리 시간을 줄였다고 보고했다."
+    text = _LONG_KO + "\n\n" + line + "\n"
+    calls = []
+
+    def fake(system, prompt):
+        calls.append(system)
+        if system == language_qa.FRAGMENT_SYSTEM:
+            payload = json.loads(prompt.split("\n", 1)[1])
+            assert [p["표현"] for p in payload] == ["处理", "优化"] and payload[0]["뒤"].startswith("했으며")
+            return '["처리", "최적화"]'
+        return json.dumps([line])  # 문장 교정은 그대로 복사(실측 실패 재현)
+
+    out, report = language_qa.repair(text, fake)
+    assert "일괄처리했으며" in out and "속도를최적화해" in out
+    assert report == {"found": 1, "fixed": 1, "remaining": 0, "error": None}
+    assert calls == [language_qa.REPAIR_SYSTEM, language_qa.FRAGMENT_SYSTEM]
+
+
+def test_model_version_that_kept_han_is_not_used_even_if_dictionary_cleans_it():
+    """모델이 한자는 못 고치고 다른 곳만 바꾼 판본("가장" → "가 가장")은 버리고 원문에 사전 보정만 적용."""
+    from hair_platform import language_qa
+
+    line = '| 4 | 퍼널 결론 | "가장 약한 구간"으로 재表述 |'
+    broken = '| 4 | 퍼널 결론 | "가 가장 약한 구간"으로 재表述 |'
+    out, report = language_qa.repair(_LONG_KO + "\n\n" + line + "\n", lambda s, p: json.dumps([broken]))
+    assert '"가장 약한 구간"으로 재표현' in out and "가 가장" not in out and report["fixed"] == 1
