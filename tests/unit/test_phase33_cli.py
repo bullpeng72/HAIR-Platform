@@ -192,34 +192,79 @@ def test_gc_serve_db_path_defaults_to_hair_db():
 
 
 # ---------- `hair serve` 브라우저 자동 열기(사용자 요청, 2026-10-10) ----------
-# uvicorn.run()은 블로킹이므로 실제로 서버를 띄우지 않고 uvicorn.run과
-# threading.Timer를 모킹해 "무엇을 예약했는지"만 검증한다.
+# uvicorn.run()은 블로킹이므로 실제로 서버를 띄우지 않고 uvicorn.run과 threading.Thread를 모킹해
+# "무엇을 시작했는지"만 검증한다. 2026-11-25(사용자 보고 — 브라우저가 서버보다 먼저 열려 "연결할 수
+# 없음", 매번 새로고침): 1.5초 고정 지연(threading.Timer) 대신 서버가 응답할 때까지 기다렸다 연다.
 
 
-def test_gc_serve_schedules_browser_open_by_default():
-    with patch("uvicorn.run") as mock_run, patch("threading.Timer") as mock_timer:
+def test_gc_serve_starts_browser_waiter_by_default():
+    with patch("uvicorn.run") as mock_run, patch("threading.Thread") as mock_thread:
         code = cli.main(["serve"])
     assert code == 0
     mock_run.assert_called_once()
-    mock_timer.assert_called_once()
-    _delay, func = mock_timer.call_args.args
-    assert func.__name__ == "open"  # webbrowser.open
-    assert mock_timer.call_args.kwargs["args"] == ["http://127.0.0.1:8000/"]
-    mock_timer.return_value.start.assert_called_once()
+    mock_thread.assert_called_once()
+    assert mock_thread.call_args.kwargs["target"] is cli._open_browser_when_ready
+    assert mock_thread.call_args.kwargs["args"] == ("http://127.0.0.1:8000/",)
+    mock_thread.return_value.start.assert_called_once()
 
 
 def test_gc_serve_no_browser_flag_skips_scheduling():
-    with patch("uvicorn.run") as mock_run, patch("threading.Timer") as mock_timer:
+    with patch("uvicorn.run") as mock_run, patch("threading.Thread") as mock_thread:
         code = cli.main(["serve", "--no-browser"])
     assert code == 0
     mock_run.assert_called_once()
-    mock_timer.assert_not_called()
+    mock_thread.assert_not_called()
 
 
 def test_gc_serve_wildcard_host_opens_localhost_in_browser():
-    with patch("uvicorn.run"), patch("threading.Timer") as mock_timer:
+    with patch("uvicorn.run"), patch("threading.Thread") as mock_thread:
         cli.main(["serve", "--host", "0.0.0.0", "--port", "9000"])
-    assert mock_timer.call_args.kwargs["args"] == ["http://127.0.0.1:9000/"]
+    assert mock_thread.call_args.kwargs["args"] == ("http://127.0.0.1:9000/",)
+
+
+def test_browser_opens_only_after_server_answers():
+    """서버가 늦게 떠도(여기선 0.6초 뒤) 응답한 뒤에야 브라우저를 연다 — 먼저 열리면 "연결할 수 없음"."""
+    import http.server
+    import socket
+    import threading
+    import time
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    url = f"http://127.0.0.1:{port}/"
+    started = {}
+
+    class _Quiet(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    def late_server():
+        time.sleep(0.6)
+        srv = http.server.HTTPServer(("127.0.0.1", port), _Quiet)
+        started["at"] = time.monotonic()
+        threading.Thread(target=srv.handle_request, daemon=True).start()
+
+    threading.Thread(target=late_server, daemon=True).start()
+    opened = {}
+    with patch("webbrowser.open", side_effect=lambda u: opened.update(url=u, at=time.monotonic())):
+        assert cli._open_browser_when_ready(url, timeout=10, interval=0.05) is True
+    assert opened["url"] == url and opened["at"] >= started["at"]
+
+
+def test_browser_still_opens_after_timeout_when_server_never_answers():
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]  # 아무도 듣지 않는 포트
+    with patch("webbrowser.open") as mock_open:
+        assert cli._open_browser_when_ready(f"http://127.0.0.1:{port}/", timeout=0.3, interval=0.05) is False
+    mock_open.assert_called_once()
 
 
 # ---------- `hair serve --host <비-루프백>` 세션 키 경고(사용자 요청,

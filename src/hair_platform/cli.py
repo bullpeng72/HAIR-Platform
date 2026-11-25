@@ -245,6 +245,34 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+BROWSER_WAIT_SECONDS = 120.0
+
+
+def _open_browser_when_ready(url: str, timeout: float = BROWSER_WAIT_SECONDS, interval: float = 0.25) -> bool:
+    """서버가 `url`에 HTTP로 응답하면 브라우저를 연다(응답 코드는 따지지 않음 — 서버가 떠 있으면 됨).
+    `timeout` 안에 응답이 없어도 마지막에 한 번은 연다(브라우저 쪽에서 새로고침하면 되도록).
+    반환값: 시간 안에 서버가 응답했는지."""
+    import time
+    import urllib.error
+    import urllib.request
+    import webbrowser
+
+    deadline = time.monotonic() + timeout
+    ready = False
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(url, timeout=2).close()
+            ready = True
+            break
+        except urllib.error.HTTPError:  # 4xx/5xx라도 서버는 떠 있다
+            ready = True
+            break
+        except OSError:  # 아직 포트가 안 열림(연결 거부) — 잠시 뒤 다시
+            time.sleep(interval)
+    webbrowser.open(url)
+    return ready
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     # uvicorn의 `--reload`는 재시작마다 팩토리 함수를 인자 없이 다시
     # 호출한다 — 그 경로로 `db_path`를 전달할 수단이 환경변수 말고는
@@ -288,16 +316,16 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     if not args.no_browser:
         import threading
-        import webbrowser
 
         # 0.0.0.0/:: 은 "모든 인터페이스에 바인딩"이라는 뜻이라 브라우저
         # 주소로는 못 쓴다 — 로컬 접속 주소인 127.0.0.1로 대신 연다.
         browser_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
         url = f"http://{browser_host}:{args.port}/"
-        # uvicorn.run()은 블로킹이라 "서버가 뜬 시점" 콜백을 못 받는다 —
-        # 기동 시간을 감안한 고정 지연 후에 연다(--reload는 부모 프로세스
-        # 기준 1회만 실행되므로 재시작마다 다시 열리지 않는다).
-        threading.Timer(1.5, webbrowser.open, args=[url]).start()
+        # uvicorn.run()은 블로킹이라 "서버가 뜬 시점" 콜백을 못 받는다. 예전엔 1.5초 고정 지연 후
+        # 열었는데, 기동이 길어지면서(실측 2026-11-25: 스키마 점검·기본 구성 시드·crewai import로
+        # 약 4초) 브라우저가 먼저 열려 "연결할 수 없음"이 뜨고 매번 새로고침해야 했다(사용자 보고).
+        # 서버가 실제로 응답할 때까지 기다렸다가 연다(--reload는 부모 프로세스 기준 1회만 실행).
+        threading.Thread(target=_open_browser_when_ready, args=(url,), daemon=True).start()
 
     uvicorn.run(
         "hair_platform.app:create_app",
