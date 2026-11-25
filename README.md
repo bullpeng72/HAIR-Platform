@@ -286,6 +286,7 @@ hair check                # .env + 셸 환경변수를 합쳐 보여주고 provi
 | | `OPENAI_API_KEY` | OpenAI API 키 |
 | 로컬 LLM(Ollama) | `OLLAMA_BASE_URL` | 로컬 Ollama 서버 주소(비우면 기본값 `http://localhost:11434`) |
 | 외부 웹 검색(Tavily) | `TAVILY_API_KEY` | "실시간웹검색" 등 Tavily 기반 Skill/Tool용 키 |
+| 코드 저장소 PR(GitHub) | `HAIR_GITHUB_TOKEN` | 결과물을 브랜치로 push한 뒤 PR을 자동으로 열 때 쓰는 토큰(Contents·Pull requests 쓰기). 없으면 PR 만들기 링크만 |
 | 플랫폼 공통 기본 LLM(선택적 폴백) | `HAIR_PLATFORM_LLM_PROVIDER` | 웹 UI "LLM 설정"으로 아직 안 지정했을 때 쓰는 기본 provider(anthropic/openai/ollama) |
 | | `HAIR_PLATFORM_LLM_MODEL` | 위 provider와 함께 지정하는 기본 모델명(provider 없이 지정하면 무시됨) |
 | 서버/보안 | `HAIR_PLATFORM_SECRET_KEY` | 세션 서명 키 — 127.0.0.1/localhost 바깥으로 띄우면 필수(위 "사내망에서 여러 명이 함께 쓰기" 참고) |

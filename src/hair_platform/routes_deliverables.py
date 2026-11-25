@@ -273,7 +273,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         from hair_platform import repo_commit
 
         try:
-            return repo_commit.commit(conn, deliverable_id, payload.repository, user, payload.message)
+            return repo_commit.commit(conn, deliverable_id, payload.repository, user, payload.message, payload.mode)
         except repo_commit.CommitError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -5725,19 +5725,36 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
             (p.skipped_blocks.length ? '<p class="muted">경로가 없어 커밋하지 않는 블록: ' + p.skipped_blocks.map(s => "<code>" + esc(s) + "</code>").join(", ") + "</p>" : "") +
             (p.ok
               ? '<div class="inline"><input class="rc-message" maxlength="200" placeholder="커밋 메시지(비우면 결과물·업무 번호로)" style="min-width:18rem">' +
-                '<button class="small primary rc-commit">' + esc(p.branch) + "에 커밋</button></div>"
+                '<button class="small primary rc-commit" data-mode="pr" title="main에서 새 브랜치(hair/deliverable-번호)를 만들어 커밋하고 origin에 push합니다. GitHub이고 서버에 HAIR_GITHUB_TOKEN이 있으면 PR을 열고, 없으면 PR 만들기 링크를 드립니다. main은 그대로입니다.">브랜치에 올려 PR 만들기</button>' +
+                '<button class="small rc-commit" data-mode="main" title="main 브랜치에 바로 로컬 커밋합니다(push 없음).">' + esc(p.branch) + "에 바로 커밋</button></div>"
               : '<p class="msg error">통과하지 못한 점검이 있어 커밋할 수 없습니다.</p>');
-          const commitBtn = result.querySelector(".rc-commit");
-          if (commitBtn) commitBtn.onclick = async () => {
-            commitBtn.disabled = true;
-            try {
-              const r = await api("POST", "/api/deliverables/" + id + "/repo-commit", {
-                repository, message: result.querySelector(".rc-message").value.trim() || null,
-              });
-              showMsg("global-msg", r.repository + " " + r.branch + "에 커밋했습니다(" + r.short + ", 파일 " + r.files.length + "개) — push는 하지 않았습니다.", "ok");
-              box.hidden = true;
-            } catch (e) { commitBtn.disabled = false; showMsg("global-msg", e.message, "error"); }
-          };
+          result.querySelectorAll(".rc-commit").forEach(commitBtn => {
+            commitBtn.onclick = async () => {
+              const mode = commitBtn.dataset.mode || "main";
+              result.querySelectorAll(".rc-commit").forEach(b => { b.disabled = true; });
+              try {
+                const r = await api("POST", "/api/deliverables/" + id + "/repo-commit", {
+                  repository, mode, message: result.querySelector(".rc-message").value.trim() || null,
+                });
+                if (mode === "pr") {
+                  // PR 모드(2026-11-25, P1-8) — push·PR 결과를 패널에 남긴다(링크를 눌러 확인·병합).
+                  const prLine = r.pr
+                    ? (r.pr.created ? 'PR을 열었습니다: <a href="' + escAttr(r.pr.url) + '" target="_blank" rel="noopener">' + esc(r.pr.url) + "</a>"
+                      : 'PR은 만들지 않았습니다(' + esc(r.pr.reason || "") + ') — <a href="' + escAttr(r.pr.url) + '" target="_blank" rel="noopener">여기서 PR 만들기</a>')
+                    : (r.pushed ? "push했습니다(GitHub 저장소가 아니라 PR은 만들지 않음)." : esc(r.push_error || "push하지 못했습니다."));
+                  result.innerHTML = '<p class="msg ' + (r.pushed ? "ok" : "error") + '">' + esc(r.repository) + " 브랜치 <code>" + esc(r.branch) +
+                    "</code>에 커밋했습니다(" + esc(r.short) + ", 파일 " + r.files.length + "개). " + prLine + "</p>";
+                  showMsg("global-msg", "브랜치 " + r.branch + "에 커밋했습니다.", r.pushed ? "ok" : "error");
+                } else {
+                  showMsg("global-msg", r.repository + " " + r.branch + "에 커밋했습니다(" + r.short + ", 파일 " + r.files.length + "개) — push는 하지 않았습니다.", "ok");
+                  box.hidden = true;
+                }
+              } catch (e) {
+                result.querySelectorAll(".rc-commit").forEach(b => { b.disabled = false; });
+                showMsg("global-msg", e.message, "error");
+              }
+            };
+          });
         } catch (e) { showMsg("global-msg", e.message, "error"); }
       };
     };
@@ -12716,8 +12733,10 @@ const MANUAL_MARKDOWN = [
 '  - 대화에서는 "@코드베이스 분석가 shop-api 저장소의 주문 취소 흐름을 설명해 줘"처럼 저장소 이름을 함께 적습니다.',
 '- **결과물을 저장소에 커밋**(admin) — 결재를 마친 결과물 카드의 **"저장소에 커밋"** → 저장소 선택 → **미리보기**를 누르면 쓸 파일(새 파일·수정)과 점검 결과가 나옵니다.',
 '  - 코드 블록 중 **경로가 적힌 것만** 씁니다(블록 첫 줄 `# src/app.py` 또는 블록 바로 위 줄 `` `src/app.py` ``). 경로 없는 블록은 쓰지 않고 알려 줍니다.',
-'  - 점검(결재 완료·저장소가 main/master 브랜치·미커밋 변경 없음·저장소 안 경로·비밀/무시 파일 아님·Python 문법·이 결과물의 테스트 실행 기록이 실패가 아님)을 **모두 통과해야** "main에 커밋" 버튼이 생깁니다. 누르면 서버가 한 번 더 점검한 뒤 **main 브랜치에 로컬 커밋**합니다(작성자 "HAIR-Platform", 메시지에 결과물·업무 번호와 실행한 admin 아이디).',
-'  - **push는 하지 않습니다** — 원격 저장소에 올리는 것은 사람이 그 폴더에서 직접 합니다. 커밋 중 pre-commit 훅 등이 실패하면 쓴 파일을 되돌립니다.',
+'  - 점검(결재 완료·저장소가 main/master 브랜치·미커밋 변경 없음·저장소 안 경로·비밀/무시 파일 아님·Python 문법·이 결과물의 테스트 실행 기록이 실패가 아님)을 **모두 통과해야** 커밋 버튼 두 개가 생깁니다. 누르면 서버가 한 번 더 점검합니다(작성자 "HAIR-Platform", 메시지에 결과물·업무 번호와 실행한 admin 아이디).',
+'  - **"브랜치에 올려 PR 만들기"**(권장): main에서 새 브랜치 `hair/deliverable-<번호>`를 만들어 커밋하고 `origin`에 **push**합니다. 원격이 GitHub이고 서버에 `HAIR_GITHUB_TOKEN`(저장소 Contents·Pull requests 쓰기 권한)이 있으면 **PR을 자동으로 열고** 링크를 보여 줍니다. 토큰이 없으면 "여기서 PR 만들기" 링크를 드립니다. main은 그대로 두고, 저장소는 다시 main 브랜치로 돌아갑니다. push가 실패하면(원격 없음·권한 없음) 브랜치는 로컬에 남기고 이유를 알려 줍니다.',
+'  - **"main에 바로 커밋"**: main 브랜치에 로컬 커밋만 합니다(push 없음).',
+'  - 커밋 중 pre-commit 훅 등이 실패하면 쓴 파일을 되돌립니다(PR 방식이면 만든 브랜치도 지우고 main으로 돌아감). push에는 서버 PC의 git 인증(SSH 키·자격 증명)을 그대로 씁니다.',
 '',
 '<h2 id="scenario">7. 실전 시나리오 5가지</h2>',
 '',

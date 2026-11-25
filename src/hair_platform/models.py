@@ -1120,6 +1120,8 @@ class RepoCommitRequest(BaseModel):
 
     repository: str = Field(min_length=1, max_length=60)
     message: str | None = Field(default=None, max_length=200)
+    # "main"(main에 로컬 커밋) | "pr"(브랜치 커밋 → push → PR, 2026-11-25 P1-8)
+    mode: Literal["main", "pr"] = "main"
 
 
 class AuxiliaryLlmConfigUpdate(BaseModel):

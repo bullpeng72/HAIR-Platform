@@ -182,3 +182,82 @@ def test_api_admin_only_and_round_trip(client_and_conn, repo):
     again = client.post(f"/api/deliverables/{did}/repo-commit", json={"repository": "shop-api"})
     assert again.status_code == 400 and "변경이 없습니다" in again.json()["detail"]
     assert client.get(f"/api/deliverables/{did}/repo-commits").json()[0]["repository"] == "shop-api"
+
+
+# PR 모드(2026-11-25, P1-8) — 브랜치 커밋 → push → PR.
+def _with_origin(repo, tmp_path, url="https://github.com/acme/shop-api.git"):
+    """원격 주소는 GitHub로 두고 실제 push는 로컬 bare 저장소로 가게 한다(pushInsteadOf — 네트워크 없이)."""
+    bare = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(bare))
+    _git(repo, "remote", "add", "origin", url)
+    _git(repo, "config", f"url.{bare}.pushInsteadOf", url)
+    return bare
+
+
+def test_pr_mode_commits_on_branch_pushes_and_opens_pr(env, repo, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    conn, admin = env
+    bare = _with_origin(repo, tmp_path)
+    did = _deliverable(conn, admin, GOOD)
+    main_head = _git(repo, "rev-parse", "main").strip()
+    monkeypatch.setenv("HAIR_GITHUB_TOKEN", "ghp_test_not_real")
+    resp = MagicMock(status_code=201)
+    resp.json.return_value = {"html_url": "https://github.com/acme/shop-api/pull/7", "number": 7}
+    with patch("httpx.post", return_value=resp) as post:
+        out = repo_commit.commit(conn, did, "shop-api", admin, mode="pr")
+    assert out["branch"] == f"hair/deliverable-{did}" and out["base_branch"] == "main" and out["pushed"] is True
+    assert out["pr"] == {"url": "https://github.com/acme/shop-api/pull/7", "created": True, "number": 7}
+    sent = post.call_args.kwargs["json"]
+    assert sent["head"] == out["branch"] and sent["base"] == "main" and f"HAIR-Deliverable: #{did}" in sent["body"]
+    assert post.call_args.args[0] == "https://api.github.com/repos/acme/shop-api/pulls"
+    # main은 그대로, 작업 트리는 main으로 돌아와 깨끗하다
+    assert _git(repo, "rev-parse", "main").strip() == main_head
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
+    assert _git(repo, "status", "--porcelain").strip() == ""
+    # 원격(bare)에 브랜치가 올라갔고 그 브랜치에 커밋이 있다
+    assert out["commit"] == _git(bare, "rev-parse", out["branch"]).strip()
+    assert repo_commit.history(conn, did)[0]["pr_url"] == "https://github.com/acme/shop-api/pull/7"
+    # 같은 결과물을 다시 올리면 브랜치 이름이 겹치지 않는다
+    with patch("httpx.post", return_value=resp):
+        again = repo_commit.commit(conn, _deliverable(conn, admin, GOOD.replace("cancel_order", "cancel_order_v2")),
+                                   "shop-api", admin, mode="pr")
+    assert again["branch"].startswith("hair/deliverable-")
+
+
+def test_pr_mode_without_token_pushes_and_returns_compare_link(env, repo, tmp_path, monkeypatch):
+    conn, admin = env
+    _with_origin(repo, tmp_path)
+    monkeypatch.delenv("HAIR_GITHUB_TOKEN", raising=False)
+    did = _deliverable(conn, admin, GOOD)
+    out = repo_commit.commit(conn, did, "shop-api", admin, mode="pr")
+    assert out["pushed"] is True and out["pr"]["created"] is False
+    assert out["pr"]["url"] == f"https://github.com/acme/shop-api/compare/main...hair/deliverable-{did}?expand=1"
+
+
+def test_pr_mode_without_origin_keeps_local_branch_and_says_so(env, repo):
+    conn, admin = env
+    did = _deliverable(conn, admin, GOOD)
+    out = repo_commit.commit(conn, did, "shop-api", admin, mode="pr")
+    assert out["pushed"] is False and "origin" in out["push_error"] and out["pr"] is None
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
+    assert out["commit"] == _git(repo, "rev-parse", out["branch"]).strip()  # 로컬 브랜치에 커밋은 남아 있다
+
+
+def test_pr_mode_failure_returns_to_main_and_deletes_branch(env, repo):
+    conn, admin = env
+    did = _deliverable(conn, admin, GOOD)
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+    with pytest.raises(repo_commit.CommitError):
+        repo_commit.commit(conn, did, "shop-api", admin, mode="pr")
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
+    assert f"hair/deliverable-{did}" not in _git(repo, "branch", "--list")
+    assert _git(repo, "status", "--porcelain").strip() == ""
+
+
+def test_github_remote_parsing():
+    assert repo_commit.github_repo("git@github.com:acme/shop-api.git") == ("acme", "shop-api")
+    assert repo_commit.github_repo("https://github.com/acme/shop-api") == ("acme", "shop-api")
+    assert repo_commit.github_repo("https://gitlab.com/acme/shop-api.git") is None

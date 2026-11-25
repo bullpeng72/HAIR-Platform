@@ -33,6 +33,10 @@ from hair_platform import audit, code_repos
 MAX_FILES = 40
 MAX_FILE_BYTES = 400_000
 MAIN_BRANCHES = ("main", "master")
+# PR 모드(2026-11-25, P1-8) — main에 바로 쓰지 않고 브랜치에 커밋해 push하고 PR을 연다.
+PR_BRANCH_PREFIX = "hair/deliverable-"
+GITHUB_API = "https://api.github.com"
+_GITHUB_REMOTE_RE = re.compile(r"github\.com[:/]([\w.\-]+)/([\w.\-]+?)(?:\.git)?/?$")
 COMMIT_AUTHOR = ("HAIR-Platform", "hair-platform@localhost")
 
 _FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)^```[ \t]*$", re.DOTALL | re.MULTILINE)
@@ -64,6 +68,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         " committed_by INTEGER REFERENCES users(id),"
         " created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
     )
+    # PR 링크(2026-11-25, P1-8)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(deliverable_repo_commits)")}
+    if "pr_url" not in cols:
+        conn.execute("ALTER TABLE deliverable_repo_commits ADD COLUMN pr_url TEXT")
 
 
 # ------------------------------------------------------------------ extraction
@@ -224,9 +232,68 @@ def _is_ignored(root: str, rel: str) -> bool:
 # ---------------------------------------------------------------------- commit
 
 
+def _unique_branch(root: str, base: str) -> str:
+    existing = set(code_repos._git(root, "branch", "--list", "--format=%(refname:short)", f"{base}*").split())
+    if base not in existing:
+        return base
+    n = 2
+    while f"{base}-{n}" in existing:
+        n += 1
+    return f"{base}-{n}"
+
+
+def _origin_url(root: str) -> str | None:
+    try:
+        return code_repos._git(root, "remote", "get-url", "origin").strip() or None
+    except code_repos.RepoError:
+        return None
+
+
+def github_repo(remote_url: str | None) -> tuple[str, str] | None:
+    """origin이 GitHub이면 (owner, repo)."""
+    m = _GITHUB_REMOTE_RE.search(remote_url or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def _open_pull_request(owner: str, name: str, head: str, base: str, title: str, body: str) -> dict:
+    """GitHub REST API로 PR을 연다 — `HAIR_GITHUB_TOKEN`(저장소 contents·pull requests 쓰기 권한)이 있을 때만.
+    없거나 실패하면 {"url": 비교 화면 링크, "created": False, "reason": …}(사람이 눌러 PR을 만들 수 있게)."""
+    import httpx
+
+    compare = f"https://github.com/{owner}/{name}/compare/{base}...{head}?expand=1"
+    token = os.environ.get("HAIR_GITHUB_TOKEN", "").strip()
+    if not token:
+        return {"url": compare, "created": False, "reason": "HAIR_GITHUB_TOKEN이 없어 PR은 만들지 않았습니다"}
+    try:
+        resp = httpx.post(
+            f"{GITHUB_API}/repos/{owner}/{name}/pulls",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                     "X-GitHub-Api-Version": "2022-11-28"},
+            json={"title": title, "head": head, "base": base, "body": body, "draft": False},
+            timeout=30,
+        )
+    except httpx.HTTPError as exc:
+        return {"url": compare, "created": False, "reason": f"GitHub 연결 실패: {exc}"[:200]}
+    if resp.status_code >= 300:
+        detail = ""
+        try:
+            detail = resp.json().get("message", "")
+        except ValueError:
+            pass
+        return {"url": compare, "created": False, "reason": f"GitHub가 PR 생성을 거부했습니다({resp.status_code} {detail})"[:200]}
+    data = resp.json()
+    return {"url": data.get("html_url") or compare, "created": True, "number": data.get("number")}
+
+
 def commit(conn: sqlite3.Connection, deliverable_id: int, repo_name: str, actor: sqlite3.Row,
-           message: str | None = None) -> dict:
-    """점검을 다시 한 뒤(미리보기와 실제 사이의 변화 대비) 통과하면 main에 커밋한다. push는 하지 않는다."""
+           message: str | None = None, mode: str = "main") -> dict:
+    """점검을 다시 한 뒤(미리보기와 실제 사이의 변화 대비) 통과하면 커밋한다.
+
+    `mode="main"`(기본): main에 로컬 커밋, push 없음. `mode="pr"`(2026-11-25, P1-8): main에서 새 브랜치
+    `hair/deliverable-<id>`를 만들어 거기에 커밋 → `origin`에 push → GitHub이면 PR(토큰이 없으면 PR 만들기 링크).
+    끝나면 원래 브랜치(main)로 돌아간다. push가 실패하면 브랜치는 로컬에 남기고 그 사실을 알린다."""
+    if mode not in ("main", "pr"):
+        raise CommitError("알 수 없는 커밋 방식입니다")
     p = plan(conn, deliverable_id, repo_name)
     if not p["ok"]:
         failed = [f"{c['name']}({c['detail']})" if c["detail"] else c["name"] for c in p["checks"] if not c["ok"]]
@@ -236,6 +303,14 @@ def commit(conn: sqlite3.Connection, deliverable_id: int, repo_name: str, actor:
     d = _deliverable(conn, deliverable_id)
     contents = {f["path"]: f["content"] for f in extract_files(d["content"])[0]}
     written: list[dict] = []
+    base_branch = p["branch"]
+    work_branch = base_branch
+    if mode == "pr":
+        work_branch = _unique_branch(root, f"{PR_BRANCH_PREFIX}{deliverable_id}")
+        try:
+            code_repos._git(root, "checkout", "-q", "-b", work_branch)
+        except code_repos.RepoError as exc:
+            raise CommitError(f"브랜치를 만들지 못했습니다: {exc}") from exc
     try:
         for f in p["files"]:
             target = Path(root, f["path"])
@@ -268,22 +343,53 @@ def commit(conn: sqlite3.Connection, deliverable_id: int, repo_name: str, actor:
         sha = code_repos._git(root, "rev-parse", "HEAD").strip()
     except Exception as exc:
         _rollback(root, written)
+        if mode == "pr":  # 원래 브랜치로 돌아가고 빈 작업 브랜치는 지운다
+            try:
+                code_repos._git(root, "checkout", "-q", base_branch)
+                code_repos._git(root, "branch", "-q", "-D", work_branch)
+            except code_repos.RepoError:
+                pass
         if isinstance(exc, CommitError):
             raise
         raise CommitError(f"커밋 중 실패해 되돌렸습니다: {exc}") from exc
+
+    pushed = False
+    push_error = None
+    pr: dict | None = None
+    if mode == "pr":
+        origin = _origin_url(root)
+        try:
+            if origin is None:
+                raise code_repos.RepoError("origin 원격 저장소가 없습니다")
+            code_repos._git(root, "push", "-q", "-u", "origin", work_branch)
+            pushed = True
+        except code_repos.RepoError as exc:
+            push_error = f"push하지 못했습니다 — 브랜치 {work_branch}는 로컬에 남아 있습니다: {exc}"[:300]
+        finally:
+            try:
+                code_repos._git(root, "checkout", "-q", base_branch)
+            except code_repos.RepoError:
+                pass
+        gh = github_repo(origin)
+        if pushed and gh:
+            pr = _open_pull_request(gh[0], gh[1], work_branch, base_branch, summary, body)
 
     files_json = json.dumps([{"path": f["path"], "action": f["action"]} for f in p["files"]], ensure_ascii=False)
     conn.execute(
         "INSERT INTO deliverable_repo_commits (deliverable_id, repository_id, commit_sha, branch, files, committed_by) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (deliverable_id, repo["id"], sha, p["branch"], files_json, actor["id"]),
+        (deliverable_id, repo["id"], sha, work_branch, files_json, actor["id"]),
     )
+    row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    if pr is not None:
+        conn.execute("UPDATE deliverable_repo_commits SET pr_url = ? WHERE id = ?", (pr["url"], row_id))
     audit.record(conn, actor["id"], "deliverable_committed_to_repository", "deliverables", deliverable_id,
-                 after={"repository": repo["name"], "branch": p["branch"], "commit": sha,
-                        "files": [f["path"] for f in p["files"]]})
+                 after={"repository": repo["name"], "branch": work_branch, "commit": sha, "mode": mode,
+                        "pushed": pushed, "pr": pr, "files": [f["path"] for f in p["files"]]})
     conn.commit()
-    return {"commit": sha, "short": sha[:7], "branch": p["branch"], "repository": repo["name"],
-            "files": [{"path": f["path"], "action": f["action"]} for f in p["files"]], "pushed": False}
+    return {"commit": sha, "short": sha[:7], "branch": work_branch, "base_branch": base_branch, "mode": mode,
+            "repository": repo["name"], "files": [{"path": f["path"], "action": f["action"]} for f in p["files"]],
+            "pushed": pushed, "push_error": push_error, "pr": pr}
 
 
 def _rollback(root: str, written: list[dict]) -> None:
@@ -309,7 +415,7 @@ def _rollback(root: str, written: list[dict]) -> None:
 
 def history(conn: sqlite3.Connection, deliverable_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT c.commit_sha, c.branch, c.files, c.created_at, r.name AS repository, u.username "
+        "SELECT c.commit_sha, c.branch, c.files, c.created_at, c.pr_url, r.name AS repository, u.username "
         "FROM deliverable_repo_commits c JOIN code_repositories r ON r.id = c.repository_id "
         "LEFT JOIN users u ON u.id = c.committed_by WHERE c.deliverable_id = ? ORDER BY c.id DESC",
         (deliverable_id,),

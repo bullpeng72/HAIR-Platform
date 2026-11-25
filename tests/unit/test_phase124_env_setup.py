@@ -144,6 +144,7 @@ def test_init_interactive_fills_values_and_preserves_unknown_keys(tmp_path):
         "",             # HAIR_PLATFORM_LLM_PROVIDER
         "",             # HAIR_PLATFORM_LLM_MODEL
         "y",            # 세션 서명 키 자동 생성?
+        "",             # HAIR_GITHUB_TOKEN(2026-11-25, P1-8)
         "n",            # 메일 알림 설정하시겠습니까?
     ])
     with patch("builtins.input", lambda _prompt="": next(answers)):

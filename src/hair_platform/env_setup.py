@@ -70,6 +70,12 @@ ENV_VARS: tuple[EnvVar, ...] = (
         "세션 서명 키 — 127.0.0.1/localhost 바깥으로 띄우면(`hair serve --host 0.0.0.0` 등) 필수",
         secret=True, generator=generate_secret_key,
     ),
+    EnvVar(
+        "HAIR_GITHUB_TOKEN", "코드 저장소 PR(GitHub)",
+        "결과물을 브랜치로 push한 뒤 PR을 자동으로 열 때 쓰는 토큰(저장소 Contents·Pull requests 쓰기 권한). "
+        "비우면 PR 만들기 링크만 드린다",
+        secret=True,
+    ),
     EnvVar("HAIR_SMTP_HOST", "메일(SMTP) 알림", "SMTP 서버 호스트(비우면 메일 알림이 비활성)"),
     EnvVar("HAIR_SMTP_PORT", "메일(SMTP) 알림", "SMTP 포트(기본 587, HAIR_SMTP_SSL=1이면 465)"),
     EnvVar("HAIR_SMTP_USER", "메일(SMTP) 알림", "SMTP 로그인 계정"),
