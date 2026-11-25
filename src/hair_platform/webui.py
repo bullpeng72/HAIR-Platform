@@ -129,7 +129,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .nav-dropdown { position: relative; display: inline-block; }
   .nav-dropdown-trigger.active { background: var(--color-admin); color: #fff; border-color: var(--color-admin); }
   .nav-dropdown-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 60; display: flex; flex-wrap: wrap;
-    align-items: center; gap: 0.25rem; width: max-content; max-width: min(92vw, 640px); padding: 0.5rem;
+    align-items: center; gap: 0.25rem; width: max-content; max-width: calc(100vw - 1.5rem); padding: 0.5rem;
     background: var(--color-surface); border: 1px solid var(--color-admin-border, var(--color-border));
     border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
   .nav-dropdown-menu[hidden] { display: none; }
@@ -2892,6 +2892,13 @@ function buildNav() {
       _closeNavDropdowns();
       menu.hidden = !willOpen;
       trigger.setAttribute("aria-expanded", String(willOpen));
+      // 2026-11-25(사용자 요청 — 하위 메뉴를 가능하면 한 줄로): 폭 상한을 화면 너비로 넓혀 한 줄로 두고,
+      // 오른쪽 끝을 넘으면 그만큼 왼쪽으로 당긴다(좁은 화면에서만 줄바꿈).
+      if (willOpen) {
+        menu.style.left = "0px";
+        const overflow = menu.getBoundingClientRect().right - (window.innerWidth - 12);
+        if (overflow > 0) menu.style.left = -Math.min(overflow, wrap.getBoundingClientRect().left - 12) + "px";
+      }
     };
     wrap.appendChild(trigger);
     wrap.appendChild(menu);

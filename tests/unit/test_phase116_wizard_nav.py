@@ -116,3 +116,11 @@ def test_wizard_input_is_full_width_with_button_below():
     assert '<div class="wizard-actions">' in html and ".wizard-box textarea { width: 100%;" in html
     assert '<textarea id="wizard-text" rows="2" style="flex:1' not in html
     assert '(ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); wizardBtn.click(); }' in html
+
+
+def test_settings_dropdown_menu_stays_on_one_line_when_it_fits():
+    """2026-11-25(사용자 요청 — 리소스 관리 하위 메뉴 7개가 640px 상한 때문에 두 줄로 접힘)."""
+    html = webui.INDEX_HTML
+    assert "max-width: min(92vw, 640px)" not in html
+    assert "max-width: calc(100vw - 1.5rem)" in html
+    assert "menu.getBoundingClientRect().right - (window.innerWidth - 12)" in html  # 오른쪽 넘침은 왼쪽으로 당김
