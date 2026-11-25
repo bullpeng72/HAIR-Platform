@@ -219,7 +219,11 @@ def repair_output(conn, text: str | None, evidence: str, provider: str | None, m
     bad = unsupported_claims(text, evidence)
     if not bad:
         return text, None
-    from hair_platform import audit, language_qa, progress  # 지연 import — 순수 검사 함수는 의존성 없이 테스트
+    from hair_platform import (  # 지연 import — 순수 검사 함수는 의존성 없이 테스트
+        audit,
+        language_qa,
+        progress,
+    )
 
     provider, model = language_qa.helper_target(provider, model)  # 보조 작업 모델(있으면)
     if not provider or not model:

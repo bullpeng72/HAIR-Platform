@@ -36,16 +36,10 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+from hair_platform import agent_evaluation, deliverables
 from hair_platform import approvals as approvals_mod
-from hair_platform import deliverables
 
 _COMPLETED_WINDOW_HOURS = 24
-
-
-def _has_failing_gate(evaluation: dict) -> bool:
-    return any(
-        gate.get("passed") is False for gate in evaluation["gate_scores"].values()
-    )
 
 
 def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
@@ -97,7 +91,7 @@ def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
             if (
                 d["status"] == "pending_review"
                 and d["evaluation"] is not None
-                and _has_failing_gate(d["evaluation"])
+                and agent_evaluation.has_failing_gate(d["evaluation"]["gate_scores"])
             ):
                 low_gate_score.append(
                     {

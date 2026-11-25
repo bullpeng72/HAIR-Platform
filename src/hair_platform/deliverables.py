@@ -78,10 +78,10 @@ from hair_platform import (
     crew_runtime,
     language_qa,
     llm,
+    llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
     presentation_deck,
     teams,
 )
-from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 
 
 def _confirmed_assignments_for_task(

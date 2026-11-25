@@ -24,7 +24,6 @@ Tool, skill 활용, 메시지 길이 관리에 제약사항이 많아... 메모�
 from __future__ import annotations
 
 import json
-import math
 import sqlite3
 
 from hair_platform import audit, documents, token_budget, vectorstore
@@ -35,15 +34,6 @@ from hair_platform import audit, documents, token_budget, vectorstore
 # 11분 넘게 실제 네트워크 호출을 반복). 100,000자(약 2,000자짜리 청크
 # 50개 안팎 — 몇십 초 안에 끝나는 수준)로 색인 대상 자체를 미리 자른다.
 _MAX_INDEXED_CHARS = 100_000
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
 
 
 def index_attachment(
@@ -178,7 +168,7 @@ def search(
     scored = []
     for row in rows:
         chunk_embedding = json.loads(row["embedding"])
-        score = _cosine_similarity(query_embedding, chunk_embedding)
+        score = vectorstore._cosine_similarity(query_embedding, chunk_embedding)  # 같은 계산 한 곳(2026-11-25)
         if score < min_score:
             continue
         scored.append(

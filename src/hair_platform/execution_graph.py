@@ -84,9 +84,9 @@ from hair_platform import (
     crew_runtime,
     dashboard,
     deliverables,
+    llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
     presentation_deck,
 )
-from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 from hair_platform import pipeline_runtime as pr
 
 

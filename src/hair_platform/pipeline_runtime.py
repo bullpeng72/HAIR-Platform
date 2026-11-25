@@ -71,10 +71,10 @@ from hair_platform import (
     crew_runtime,
     dashboard,
     deliverables,
+    llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
     presentation_deck,
     requirements_traceability_llm,
 )
-from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 
 # `plan_merge`(2026-11-23, P2-9 — `plan_merge.py`): 리드 계획 → 팀원 분담 실행 → 리드 병합을 플랫폼이
 # 직접 진행한다(위임형처럼 모델의 즉흥 위임에 맡기지 않는다).

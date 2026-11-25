@@ -57,14 +57,13 @@ from hair_platform import (
     knowledge_submissions,
     language_qa,
     llm,
+    llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
     pipeline_runtime,
-    pool_registry,
     presentation_deck,
     teams,
     token_budget,
     tool_calling,
 )
-from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 from hair_platform import progress as _progress  # 작성 중 미리보기(2026-11-24, P0-2)
 
 _DEFAULT_SYSTEM_PROMPT = (

@@ -380,7 +380,10 @@ def repair_output(
     provider, model = helper_target(provider, model)  # 보조 작업 모델(있으면)
     if not provider or not model:
         return text
-    from hair_platform import audit, progress  # 지연 import — 순수 검사 함수는 의존성 없이 테스트
+    from hair_platform import (  # 지연 import — 순수 검사 함수는 의존성 없이 테스트
+        audit,
+        progress,
+    )
 
     progress.report("언어 품질 교정 중")
 

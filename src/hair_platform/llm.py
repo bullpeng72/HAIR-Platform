@@ -724,10 +724,9 @@ def _stream_openai(model, system, prompt, timeout_seconds, on_partial, temperatu
 
 def _stream_ollama(model, system, prompt, timeout_seconds, on_partial, temperature=None) -> str:
     import json as _json
+    import time as _time
 
     import httpx  # 지연 import
-
-    import time as _time
 
     from hair_platform import progress as _progress
 

@@ -37,6 +37,7 @@ from hair_platform import (
     graphquery,
     id_scheme,
     llm,
+    llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
     model_output,
     pool_catalog,
     pool_registry,
@@ -44,7 +45,6 @@ from hair_platform import (
     vectorstore,
     websearch,
 )
-from hair_platform import llm_usage  # 업무 맥락별 사용량(2026-11-23, P2-11)
 
 VECTORDB_SKILL_TAGS = {"내부지식검색"}
 GRAPHDB_SKILL_TAGS = {"조직배정관계조회"}

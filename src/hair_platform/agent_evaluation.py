@@ -68,6 +68,19 @@ _INLINE_SCRIPT_RE = re.compile(
 )
 
 
+
+def has_failing_gate(gate_scores: dict) -> bool:
+    """Gate 점수 중 실제로 측정해 실패한 것이 하나라도 있는가(2026-11-25 기술 부채 점검 — 공용화).
+
+    측정하지 않은 Gate(`not_measured`, 예: 코드가 없는 문서의 `code_syntax`·요구사항을 못 뽑은
+    `requirements_traceability`)는 `passed: False`로 저장되지만 실패가 아니다. 예전엔 대시보드·인박스가
+    각자 `passed is False`만 봐서, 실측(계약서·영업 파이프라인) 평가 7건 중 3건이 측정 안 한 항목
+    때문에 "Gate 실패"로 잡혔다."""
+    return any(
+        isinstance(gate, dict) and gate.get("passed") is False and not gate.get("not_measured")
+        for gate in (gate_scores or {}).values()
+    )
+
 def _extract_inline_scripts(html: str) -> list[str]:
     """raw HTML 문서(또는 ` ```html ` 펜스 블록 내용)에서 인라인
     `<script>` 본문만 뽑는다 — `<script src="...">`처럼 본문이 없는

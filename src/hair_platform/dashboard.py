@@ -205,10 +205,6 @@ def task_retry_summary(conn: sqlite3.Connection, task_id: int) -> dict:
 _REPEATED_GATE_FAILURE_THRESHOLD = 3
 
 
-def _has_failing_gate(gate_scores: dict) -> bool:
-    return any(gate.get("passed") is False for gate in gate_scores.values())
-
-
 def agents_with_repeated_gate_failures(
     conn: sqlite3.Connection, threshold: int = _REPEATED_GATE_FAILURE_THRESHOLD
 ) -> list[dict]:
@@ -236,7 +232,7 @@ def agents_with_repeated_gate_failures(
         ).fetchall()
         if len(rows) < threshold:
             continue
-        if all(_has_failing_gate(json.loads(row["gate_scores"])) for row in rows):
+        if all(agent_evaluation.has_failing_gate(json.loads(row["gate_scores"])) for row in rows):
             result.append(
                 {
                     "agent_id": agent["id"],

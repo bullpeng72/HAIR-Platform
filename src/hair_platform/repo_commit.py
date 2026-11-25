@@ -90,7 +90,7 @@ def extract_files(content: str) -> tuple[list[dict], list[str]]:
             if bm:
                 path = bm.group(1)
         if path:
-            files.append({"path": path[2:] if path.startswith("./") else path, "content": body})
+            files.append({"path": path.removeprefix("./"), "content": body})
         else:
             skipped.append((first.strip() or "(빈 블록)")[:80])
     return files, skipped

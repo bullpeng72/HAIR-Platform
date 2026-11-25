@@ -328,9 +328,7 @@ def _slides_from_markdown(content: str) -> list[dict]:
                 current = {"title": base + " (계속)", "body": [], "table": None, "base": base}
                 slides.append(current)
             current["table"] = b
-        elif b["type"] == "heading":
-            current["body"].append(b["text"])
-        elif b["type"] in ("bullet", "para"):
+        elif b["type"] == "heading" or b["type"] in ("bullet", "para"):
             current["body"].append(b["text"])
         elif b["type"] == "code" and b["lang"] in ("chart", "mermaid"):
             current["body"].append(("(차트" if b["lang"] == "chart" else "(다이어그램") + " — HAIR 화면에서 확인)")
