@@ -33,7 +33,7 @@ Agent라고 다른 대우를 받지 않는다.
   있다.
 
 **지금 상태**: 위 기능 전부 실제로 동작하는 코드로 구현돼 있고(스텁이나
-목업이 아니다), 테스트 1,490건 이상이 통과하는 상태로 유지된다. 개념·아키텍처
+목업이 아니다), 테스트 1,550건 이상이 통과하는 상태로 유지된다. 개념·아키텍처
 전체 설명은 `docs/OVERVIEW.md`, 설계 결정의 배경·과거 버그 수정 이력은
 `git log`(커밋 메시지에 날짜·사용자 요청 원문이 그대로 남아 있다)를
 참고.
@@ -81,7 +81,9 @@ Agent라고 다른 대우를 받지 않는다.
 - Anthropic/OpenAI/Ollama 중 하나로 실제 LLM Agent를 돌릴 수 있다
   (설정하지 않으면 비용 없는 무료 스텁으로 동작). provider/model은
   "모델 레지스트리"에 등록해두면 전 화면에서 드롭다운으로 공유된다.
-- 실행마다 위 **Gate A-G** 7개 기준이 자동으로 채점돼 기록에 남는다.
+- 실행마다 위 **Gate A-G** 7개 기준이 자동으로 채점돼 기록에 남는다. 통과 기준(Gate별)·응답 시간 SLA·추론 표지는
+  admin이 "평가 기준" 화면에서 바꾼다(다음 평가부터, `.aoo/targets.json` 내보내기·가져오기). 결과물 카드의 **"평가 리포트"**로 평가 도구
+  (Agent-Evaluator)가 만든 Gate A-G 종합 HTML 리포트(지표·원인 진단·개선 제안)를 새 탭에서 본다(`HAIR_EVAL_HTML_REPORT=0`으로 끔).
 - **Crew 빌더**: 여러 Agent를 즉석으로 묶어 실제 CrewAI로 같이
   실행한다(sequential/hierarchical), 위임 관계를 다이어그램으로
   보여주고, 실행 이력에서 이전 결과와 차이(diff)를 바로 비교할 수
@@ -118,7 +120,10 @@ Agent라고 다른 대우를 받지 않는다.
 - 화면에서 직접 단계를 구성하는 빌더도 제공되므로, 개발 외 업무에도
   같은 엔진을 그대로 재사용할 수 있다.
 - 단계 방식: 단독·순차 릴레이·병행 위임에 더해 **계획 분담**(리드가
-  팀원별 하위 작업을 계획 → 팀원이 나눠 실행 → 리드가 하나로 병합).
+  팀원별 하위 작업을 계획 → 팀원이 나눠 실행 → 리드가 하나로 병합). 사업/기획 파이프라인의
+  "자료 조사·분석" 단계가 이 방식이고, 리드가 일을 주지 않은 팀원은 "배정확인" 배지로 보인다.
+- 로컬(Ollama) 모델에서는 Agent의 작업 전 계획을 끄고 도구 반복 상한을 8회로 둔다(실측: 조사 단계가 1시간 50분 →
+  24분). `HAIR_OLLAMA_AGENT_PLANNING=1`이면 계획을 켠다.
 - 검토 단계는 Gate 점수뿐 아니라 **검토자의 판정**도 따른다 — `## 판정`이
   "보완 요청"이면 작성 단계로 되돌려 검토 의견대로 다시 쓰게 하고, 재시도를
   다 써도 안 되면 사람에게 올린다.
@@ -208,7 +213,7 @@ pip install -e ".[dev,all]"
 # 실행 시점에 `ModuleNotFoundError`로 깨진다. `all`(= crewai+mcp+llm+
 # documents+graph 묶음, pyproject.toml 참고)까지 같이 설치해야 아래 골든셋이
 # 전부 오프라인으로 깨끗하게 통과한다.
-pytest tests/ -q        # 골든셋 1,490건 이상 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
+pytest tests/ -q        # 골든셋 1,550건 이상 통과(오프라인, 실제 LLM 호출 없음 — 전부 mock)
 ```
 
 ### 설치 옵션(extras) 한눈에 보기
@@ -246,6 +251,52 @@ PyPI에 `hair-platform`으로 배포된다 — `pip install "hair-platform[...]"
 hair --help
 ```
 
+### 환경변수(.env) 설정/점검 — `hair init` / `hair check`
+
+처음 설치했을 때 가장 먼저 하면 되는 단계다. 둘 다 전부 선택(optional) 항목만
+다룬다 — 아무것도 입력하지 않아도 서버는 뜨고, 필요한 기능을 쓸 때만 해당 값이
+있어야 한다(정의는 `src/hair_platform/env_setup.py`, `hair init`/`hair check`가
+공유하는 단일 목록).
+
+```bash
+hair init                 # LLM API 키·세션 서명 키·메일(SMTP) 알림 등을 대화형으로 물어 .env에 저장
+hair init --yes           # 묻지 않고 바로 저장(세션 서명 키만 없으면 자동 생성, 나머지는 기존 값 그대로)
+hair init --path .env.prod   # 다른 경로에 저장(기본: ./.env)
+hair check                # .env + 셸 환경변수를 합쳐 보여주고 provider/키 불일치·SMTP 설정 누락을 찾음
+```
+
+`hair init`은 이미 있는 `.env`를 읽어 현재 값을 보여주고 Enter로 그대로 둘 수
+있다(덮어쓰지 않음, 이 모듈이 모르는 줄은 그대로 보존). `hair check`는 셸에
+이미 export된 값이 `.env`보다 우선한다는 것까지 반영해서 보여준다
+(python-dotenv 기본 동작과 동일, `override=False`).
+
+`hair init`/`hair check`가 다루는 변수 전체:
+
+| 그룹 | 변수 | 설명 |
+|------|------|------|
+| LLM Provider API 키 | `ANTHROPIC_API_KEY` | Anthropic(Claude) API 키 |
+| | `OPENAI_API_KEY` | OpenAI API 키 |
+| 로컬 LLM(Ollama) | `OLLAMA_BASE_URL` | 로컬 Ollama 서버 주소(비우면 기본값 `http://localhost:11434`) |
+| 외부 웹 검색(Tavily) | `TAVILY_API_KEY` | "실시간웹검색" 등 Tavily 기반 Skill/Tool용 키 |
+| 플랫폼 공통 기본 LLM(선택적 폴백) | `HAIR_PLATFORM_LLM_PROVIDER` | 웹 UI "LLM 설정"으로 아직 안 지정했을 때 쓰는 기본 provider(anthropic/openai/ollama) |
+| | `HAIR_PLATFORM_LLM_MODEL` | 위 provider와 함께 지정하는 기본 모델명(provider 없이 지정하면 무시됨) |
+| 서버/보안 | `HAIR_PLATFORM_SECRET_KEY` | 세션 서명 키 — 127.0.0.1/localhost 바깥으로 띄우면 필수(위 "사내망에서 여러 명이 함께 쓰기" 참고) |
+| 메일(SMTP) 알림 | `HAIR_SMTP_HOST`·`HAIR_SMTP_PORT`·`HAIR_SMTP_USER`·`HAIR_SMTP_PASSWORD`·`HAIR_SMTP_FROM`·`HAIR_SMTP_SSL` | 결재 대기·파이프라인 완료/실패 메일 알림(연동 설정 화면). `HOST`가 있어야 나머지가 의미가 있고, 465 포트면 `SSL=1` |
+
+위 목록 밖에 있는, 기본값을 그대로 둬도 되는 고급 옵션(이쪽은 `hair init`/
+`hair check`가 다루지 않는다 — 각 기능 코드에 직접 적힌 토글):
+
+| 변수 | 기본값 | 효과 |
+|------|--------|------|
+| `HAIR_EVAL_HTML_REPORT` | `1`(켬) | `0`이면 평가마다 만드는 Gate A-G HTML 리포트(결과물 카드 "평가 리포트")를 만들지 않음 |
+| `HAIR_OLLAMA_AGENT_PLANNING` | `0`(끔) | `1`이면 로컬(Ollama) 모델에서도 Agent 작업 전 계획(추론 모드)을 켬(기본은 속도를 위해 꺼짐) |
+| `HAIR_OLLAMA_MAX_OUTPUT_TOKENS` | 모델 레지스트리 설정값 | Ollama 모델의 최대 출력 토큰을 재정의 |
+| `HAIR_LANGUAGE_QA` | `1`(켬) | `0`이면 한국어 결과물 자동 언어 교정(한자·외국 문자 교정)을 끔 |
+| `HAIR_LEXICON_CHECK` | `1`(켬) | `0`이면 사전에 없는 한국어 낱말 탐지("낱말확인" 배지)를 끔(분석기가 메모리 약 360MB를 씀, `korean` extra 필요) |
+| `HAIR_NUMERIC_CHECK` | `1`(켬) | `0`이면 결과물 퍼센트 수치가 근거 숫자로 재현되는지 검사("수치근거" 배지)를 끔 |
+| `HAIR_ALLOW_LOCAL_CODE_RUN` | `0`(끔) | `1`이면 Docker 샌드박스 대신 로컬에서 코드 테스트를 실행(Docker가 없는 개발 환경용 — 격리가 없어지므로 운영에는 권장하지 않음) |
+| `HAIR_PLATFORM_DB_PATH` | `:memory:` | SQLite DB 경로. 보통 `hair serve --db-path`가 기동 시 이 값을 자동으로 맞춰 주므로 직접 설정할 일은 거의 없음 |
+
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로,
 `users` 테이블이 완전히 비어 있을 때만 동작):
 
@@ -257,8 +308,8 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 
 | 구분 | 내용 |
 |------|------|
-| 지운다 | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)·Gate 평가, 파이프라인·Crew·Agent 실행 이력, 지식 베이스, 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |
-| 남긴다 | Agent(36종)·스킬·도구·파이프라인 템플릿, 조직 정책(사번 형식·결과물 언어·알림 웹훅·메일 수신자), 플랫폼 공통 기본 LLM·보조 작업 모델·지식 검색 설정, "초기화 시 보호" 팀 |
+| 지운다 | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)·Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스, 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |
+| 남긴다 | Agent(36종)·스킬·도구·파이프라인 템플릿, 조직 정책(사번 형식·결과물 언어·알림 웹훅·메일 수신자), 평가 기준, 플랫폼 공통 기본 LLM·보조 작업 모델·지식 검색 설정, "초기화 시 보호" 팀 |
 | 되돌린다 | Agent의 모델 지정·비용·성과점수·마지막 결과물은 비운다. 상태는 기본 Agent만 '활성'으로 되돌리고, 관리자가 만든 Agent는 그대로 둔다(온보딩 대기 Agent가 승인 없이 활성이 되지 않음) |
 
 
@@ -291,13 +342,17 @@ pip install -e ".[mcp]"
 ```bash
 pip install -e ".[llm]"                    # anthropic·openai SDK 설치(httpx는 기본 의존성에 포함)
 
-# 방법 A — 프로젝트 루트에 .env 파일(git에 커밋되지 않음, .gitignore 처리됨):
+# 방법 A — hair init으로 대화형 설정(.env에 저장, git에 커밋되지 않음, .gitignore 처리됨):
+hair init
+hair check   # 뭐가 설정됐는지/빠졌는지 확인
+
+# 방법 B — 프로젝트 루트에 .env 파일을 직접 작성:
 #   ANTHROPIC_API_KEY=...
 #   OPENAI_API_KEY=...
 # create_app()이 기동 시 자동으로 읽는다(python-dotenv, 이미 설정된 환경변수는
 # 덮어쓰지 않음).
 
-# 방법 B — 환경변수로 직접:
+# 방법 C — 환경변수로 직접:
 export ANTHROPIC_API_KEY=...               # 또는 OPENAI_API_KEY
 
 # Ollama는 API 키가 없다 — 로컬 서버(기본 http://localhost:11434, OLLAMA_BASE_URL로
@@ -396,14 +451,16 @@ hair serve --no-browser   # 브라우저 자동 열기 끄기(서버만 실행)
    기동 시점에 이걸 감지하면 경고를 띄운다):
 
    ```bash
-   export HAIR_PLATFORM_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+   hair init   # "세션 서명 키 — 지금 자동으로 생성할까요?"에 Enter(Y) → .env에 저장
    hair serve --host 0.0.0.0 --no-browser
    ```
 
-   `.env` 파일에 넣어두면(`HAIR_PLATFORM_SECRET_KEY=...`) 재기동할 때마다
-   새로 export할 필요가 없다. **`--reload`는 여기서 절대 쓰지 않는다** —
-   개발 전용 옵션이라 파일이 바뀔 때마다 서버가 재시작되며 접속 중인
-   팀원 전체가 끊긴다.
+   (`hair init` 없이 직접 하려면: `export HAIR_PLATFORM_SECRET_KEY="$(python3 -c
+   'import secrets; print(secrets.token_hex(32))')"` 또는 같은 값을 `.env`에
+   `HAIR_PLATFORM_SECRET_KEY=...`로 저장 — `hair check`로 제대로 들어갔는지
+   확인할 수 있다.) **`--reload`는 여기서 절대 쓰지 않는다** — 개발 전용
+   옵션이라 파일이 바뀔 때마다 서버가 재시작되며 접속 중인 팀원 전체가
+   끊긴다.
 
 2. **방화벽에서 포트를 연다** — 기본 포트는 `8000`(`--port`로 변경
    가능). macOS는 "시스템 설정 → 네트워크 → 방화벽"에서, Windows는
@@ -445,8 +502,8 @@ Gate A–G 수동 실측(선택, 서비스 경로는 이미 상시 연결돼 있
 
 ```bash
 agent-eval check          # API 키 등 설정 먼저 확인
-hair eval                 # Gate A/B/D/E/G 측정 실행(results/에 저장)
-agent-eval gate results/*.json       # 채점
+hair eval                 # Gate A/B/D/E/G 측정 → results/agent_generation_eval.json + .html(종합 리포트)
+agent-eval gate results/agent_generation_eval.json --tcr 85   # 채점(결과 파일은 하나씩)
 ```
 
 ## 구조
@@ -456,8 +513,17 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(234개 엔드포인트, GET / 포함) — 묶음별로 routes_*.py로 나누는 중
+  app.py             # FastAPI 앱 조립(create_app — 기동 준비·로그인·GET /) + 아래 routes_*.register() 호출(245개 엔드포인트)
+  routes_users.py    # 사용자 관리 API
+  routes_work.py     # 업무 요청·할 일·내 업무·인박스·배정·실행 작업·AI에게 일 맡기기·후보 매칭 API
+  routes_approvals.py # 결재 API
+  routes_conversations.py # 대화·지식 등록 결재·지식 조각·문서 색인·조직 관계 그래프 API
+  routes_deliverables.py # 결과물·댓글·버전·내보내기·부분 수정 제안 API
+  routes_resources.py # AI 에이전트·사람 인력·도구/스킬 Pool·팀·Crew·파이프라인 템플릿 API
+  routes_models.py   # 모델 레지스트리·임베딩·검색 설정·기본/보조 모델·사용량·조직 정책 API
+  routes_reports.py  # 대시보드·비용·공정성·성과 리뷰·활동 기록·조직도 API
   routes_integrations.py # 연동 설정 API(API 키·코드 저장소·기본 구성 점검·외부 알림·정기 실행·이벤트 트리거)
+  routes_common.py   # 여러 routes_* 모듈이 함께 쓰는 헬퍼(업로드 크기 제한·지식 등록 오류)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   match_llm_judge.py # 매칭 결과 LLM judge 폴백(역할명 부분일치로도 못 찾을 때)
@@ -477,8 +543,9 @@ src/hair_platform/
   requirements_traceability_llm.py # 요구사항 추적성 LLM judge 채점(요구사항 정의 단계 산출물 대비 — 단계 Gate 목록에 넣으면 통과 판정에 참여)
   brief_decompose_llm.py # 업무 분해 LLM 제안(역할·필요 스킬·선행 업무 의존관계)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
-  cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — serve/bootstrap-admin/reset-data/eval
-  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 29개 탭)
+  cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — init/check/serve/bootstrap-admin/reset-data/eval
+  env_setup.py       # `.env` 환경변수 정의·파싱·점검(`hair init`/`hair check`가 공유)
+  webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 30개 탭)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
   model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용") + 모델별 LLM 설정 최적화 tier(deep_reasoning/precision_fast/standard) 직접 매핑
   model_benchmark.py # 등록된 모델 실측 성능 테스트(응답 속도) + 속도 기반 tier 추천(품질 평가 아님)
@@ -518,6 +585,8 @@ src/hair_platform/
   numeric_check.py   # 결과물 퍼센트 수치가 요청·조회·도구 결과 숫자로 재현되는지 검증·문장 교정(numeric_grounding)
   text_checks.py     # 인용 문장 근거 대조(quote_grounding)·한 음절 빠짐/바뀜 용어 탐지(term_consistency)
   korean_lexicon.py  # 사전에 없는 한국어 낱말 탐지(lexicon_check, 참고용 — Kiwi 형태소 분석기, korean extra)
+  evaluation_reports.py # 평가마다 Agent-Evaluator HTML 리포트 생성·압축 저장·결과물에서 열기(격리 출처)
+  evaluation_config.py # 평가 기준 설정(Gate별 통과 기준·SLA·추론 표지·도구 범위 감점, .aoo/targets.json 호환)
   code_tests.py      # 개발 결과물의 Python 코드+테스트를 네트워크 차단 Docker에서 실제 실행(test_execution)
   progress.py        # 실행 중 현재 단계·경과 시간 기록(대화·워크스페이스 진행 표시)
   integrations.py    # 개인 API 키(Bearer) + 외부 알림(Slack/Teams 웹훅·메일)
@@ -535,7 +604,7 @@ docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # RBAC 권한 설정을 테스트로 감사하는 Claude Code 스킬
 .github/workflows/ci.yml               # pytest+ruff+black CI
-tests/unit/                            # 골든셋 1,490건 이상 통과
+tests/unit/                            # 골든셋 1,550건 이상 통과
 ```
 
 ## 로드맵
@@ -552,6 +621,7 @@ tests/unit/                            # 골든셋 1,490건 이상 통과
 
 | 버전 | 날짜 | 핵심 변경 |
 |------|------|-----------|
+| v0.3.1 | 2026-11-25 | 코드 저장소 읽기·승인 결과물 main 커밋 · 인용 근거·용어 확인 검사 · 작성 중 미리보기·파이프라인 진행률 · 부분 수정 요청·Excel/PowerPoint 내보내기·대화 MCP 도구 · 홈 "AI에게 일 맡기기"·설정 메뉴 드롭다운 · 메일 알림·이벤트 트리거 · 검토 판정(보완 요청) 반영·한자 조각 교정·채점 출력 상한 · 측정 안 한 Gate 오탐 수정 · `hair serve` 브라우저 대기 · 초기화 시 관리자 생성 Agent 상태 유지 · Agent-Evaluator HTML 평가 리포트(결과물·대화) · "평가 기준" 설정 화면(Gate 기준·SLA, `.aoo/targets.json` 연동) · 삭제 원자화·막힌 이유 표시(업무 요청 삭제 500 수정) · 계획 분담 "배정확인"·기본 구성 단계 모드 업그레이드 · 로컬 모델 사전 계획 끔·반복 8회 · 낱말확인(사전 기반) · `create_app` 라우트 모듈 분리 · 기동 후 DB 쓰기 잠금 수정 · 이용 가이드 전면 현행화·자주 겪는 문제 재구성 |
 | v0.3.0 | 2026-11-24 | 결과물 자동 검증(수치·테스트 실행·언어) · 대화→업무 전환 · 정기 실행·API 키·알림 · 결과물 버전 비교·Word · 계획 분담 단계 · 업무별 AI 사용량 · 재무·영업·법무 템플릿 · Ollama 호출 회귀 수정 |
 | v0.2.0 | 2026-11-23 | LangGraph 실행엔진(선택) · 지식 등록 결재·스킬 구조화·발표자료 덱/차트 · 파이프라인·스킬·도구 실측 점검 후 품질 개선 · 실제 토큰 사용량·모델별 단가·결과물 언어 정책 · 이용 가이드·도움말 현행화 |
 | v0.1.6 | 2026-11-12 | 모델 레지스트리 성능 테스트(실측 속도 기반 tier 추천) 추가 · LLM 호출 타임아웃 기준 통일(Ollama가 클라우드보다 항상 길게, 대화·업무 공통) · 대화 HTML 첨부 미리보기 깨짐·즉시 전송 버그 수정 · 샘플 체험 기능 제거 |

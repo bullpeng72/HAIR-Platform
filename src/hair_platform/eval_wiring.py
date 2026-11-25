@@ -136,3 +136,18 @@ if __name__ == "__main__":
     # results/에 아무 파일도 안 생긴다(실측으로 발견, 위 모듈 docstring 정정 참고).
     saved_path = monitor.save_to_file("agent_generation_eval.json")
     print(f"완료 — {saved_path}에 저장됨. `agent-eval gate {saved_path}`로 채점하세요.")
+    # Gate A-G 종합 HTML 리포트(2026-11-25) — 서버의 결과물 "평가 리포트"(evaluation_reports.py)와 같은 SDK
+    # 함수로 만든다. `HAIR_EVAL_HTML_REPORT=0`이면 서버와 똑같이 만들지 않는다. 실패해도 측정 결과는 그대로다.
+    from hair_platform import evaluation_reports
+
+    if evaluation_reports.enabled():
+        from pathlib import Path
+
+        try:
+            from agent_evaluator.reporting import generate_comprehensive_html_report
+
+            html_path = Path(saved_path).with_suffix(".html")
+            html_path.write_text(generate_comprehensive_html_report(monitor), encoding="utf-8")
+            print(f"HTML 리포트 — {html_path} (브라우저로 열기)")
+        except Exception as exc:  # noqa: BLE001 — 리포트는 부가 기능
+            print(f"HTML 리포트를 만들지 못했습니다({exc}) — 측정 결과 JSON은 정상 저장됐습니다.")

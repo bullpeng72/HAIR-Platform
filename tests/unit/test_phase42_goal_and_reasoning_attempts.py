@@ -139,9 +139,25 @@ def _reasoning_agent(conn):
     return agent_id
 
 
-def test_ollama_reasoning_agent_uses_low_effort_planning(client_and_conn):
-    """crewai의 단계별 PlannerObserver 호출은 instructor 경로라 `num_ctx`·timeout을
-    litellm에 넘기지 않는다 — Ollama에서는 그 호출이 생기지 않게 `reasoning_effort="low"`."""
+def test_ollama_turns_off_planning_and_caps_iterations_by_default(client_and_conn, monkeypatch):
+    """2026-11-25 P2-9 실측 — 기본 Agent 설정(계획 2회 + 반복 16)으로 로컬 35B 모델의 순차 릴레이 첫 단계가
+    1시간 50분·호출 92회에도 안 끝났다. Ollama에서는 작업 전 계획을 끄고 반복 상한 기본값을 8로."""
+    monkeypatch.delenv("HAIR_OLLAMA_AGENT_PLANNING", raising=False)
+    _client, conn = client_and_conn
+    agent_id = _reasoning_agent(conn)
+    captured: list = []
+    with _kickoff_capturing(captured):
+        crew_runtime.run_crew(conn, [agent_id], ["업무"], _admin_id(conn),
+                              process="sequential", provider="ollama", model="llama3.1")
+    agent = captured[0].agents[0]
+    assert agent.planning_config is None and not agent.reasoning
+    assert agent.max_iter == crew_runtime.OLLAMA_DEFAULT_MAX_ITER == 8
+
+
+def test_ollama_reasoning_agent_uses_low_effort_planning(client_and_conn, monkeypatch):
+    """`HAIR_OLLAMA_AGENT_PLANNING=1`로 켜면 — crewai의 단계별 PlannerObserver 호출은 instructor 경로라
+    `num_ctx`·timeout을 litellm에 넘기지 않으므로 Ollama에서는 `reasoning_effort="low"`."""
+    monkeypatch.setenv("HAIR_OLLAMA_AGENT_PLANNING", "1")
     _client, conn = client_and_conn
     agent_id = _reasoning_agent(conn)
     captured: list = []

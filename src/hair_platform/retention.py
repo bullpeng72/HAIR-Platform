@@ -72,7 +72,11 @@ def purge_expired(
                     "audit_log_deleted": audit_deleted,
                 },
             )
-        conn.commit()
+    # 항상 커밋한다(2026-11-25 버그 수정) — 예전엔 지운 게 있을 때만 커밋해, 지울 게 없는 평소(가장 흔한 경우)에도 위
+    # DELETE/트리거 문장이 연 쓰기 트랜잭션이 열린 채 남았다. `hair serve`가 기동 때 이 함수를 부르고 한동안 아무것도
+    # 쓰지 않으면 DB에 쓰기 잠금이 계속 걸려, 다른 프로세스(관리 스크립트·`hair reset-data` 등)가 "database is
+    # locked"로 실패했다(실측: 기동 뒤 10분 넘게 잠금).
+    conn.commit()
 
     return {
         "assignment_history_deleted": history_deleted,

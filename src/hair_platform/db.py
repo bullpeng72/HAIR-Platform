@@ -1405,6 +1405,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import triggers
 
     triggers.ensure_schema(conn)
+    from hair_platform import evaluation_reports  # 평가 HTML 리포트(2026-11-25)
+
+    evaluation_reports.ensure_schema(conn)
+    from hair_platform import evaluation_config  # 평가 기준 설정(2026-11-25)
+
+    evaluation_config.ensure_schema(conn)
     # 대화에서 전환한 업무 요청의 출처(2026-11-23, P1-4).
     _ensure_column(conn, "briefs", "source_conversation_id", "INTEGER REFERENCES conversations(id)")
     # 실행 중 단계 표시(2026-11-23, P0-2 — `progress.py`).

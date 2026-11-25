@@ -84,6 +84,7 @@ from hair_platform import (
     crew_runtime,
     dashboard,
     deliverables,
+    evaluation_reports,  # 리포트 토큰을 저장에서 뺀다(2026-11-25)
     llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
     presentation_deck,
 )
@@ -296,7 +297,7 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
             attempt,
             row_status,
             stage_output,
-            json.dumps(gate_scores, ensure_ascii=False),
+            json.dumps(evaluation_reports.public(gate_scores), ensure_ascii=False),  # 내부 항목(리포트 토큰) 제외
             result["tcr"],
         ),
     )
@@ -378,7 +379,7 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
             stage_row_id,
             after={
                 "attempt": attempt,
-                "gate_scores": gate_scores,
+                "gate_scores": evaluation_reports.public(gate_scores),
                 "retry_budget_exceeded": budget_exceeded,
             },
         )

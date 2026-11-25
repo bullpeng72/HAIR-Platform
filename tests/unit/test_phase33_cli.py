@@ -370,3 +370,42 @@ def test_gc_create_app_explicit_db_path_overrides_env_var(monkeypatch, tmp_path)
     app_env = create_app(str(tmp_path / "env.db"))
     count = app_env.state.db.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
     assert count == 0
+
+
+# ---------- 도움말 현행화(2026-11-25, "agent-evaluator 리포트 생성 등 추가된 기능에 맞춰 --help 오류 수정") ----------
+
+
+def _sub_help(capsys, subcommand: str) -> str:
+    with pytest.raises(SystemExit):
+        cli.main([subcommand, "--help"])
+    return capsys.readouterr().out
+
+
+def test_gc_eval_help_names_real_outputs_and_single_file_gate(capsys):
+    out = _sub_help(capsys, "eval")
+    assert "results/agent_generation_eval.json" in out
+    assert "results/agent_generation_eval.html" in out
+    assert "HAIR_EVAL_HTML_REPORT=0" in out
+    # `agent-eval gate`는 결과 파일을 하나만 받는다 — 글롭(*.json)은 파일이 둘 이상이면 인자 오류.
+    assert "results/*.json" not in out
+
+
+def test_gc_reset_data_help_matches_wipe_tables_and_agent_count(capsys):
+    from hair_platform import data_admin
+    from hair_platform import db as db_module
+
+    out = _sub_help(capsys, "reset-data")
+    conn = db_module.get_connection(":memory:")
+    db_module.init_schema(conn)
+    agents = conn.execute("SELECT COUNT(*) AS c FROM agent_pool").fetchone()["c"]
+    assert f"Agent(기본 {agents}종)" in out
+    # 이번에 새로 지우게 된/남기게 된 항목이 설명에 빠지지 않게.
+    assert "evaluation_reports" in data_admin._FACTORY_RESET_WIPE_TABLES
+    for phrase in ("평가 HTML 리포트", "정기 실행", "이벤트 트리거", "API 키", "모델 성능 테스트", "평가 기준 설정"):
+        assert phrase in out
+
+
+def test_gc_serve_help_lists_env_vars(capsys):
+    out = _sub_help(capsys, "serve")
+    for var in ("HAIR_PLATFORM_SECRET_KEY", "HAIR_EVAL_HTML_REPORT", "HAIR_OLLAMA_AGENT_PLANNING"):
+        assert var in out

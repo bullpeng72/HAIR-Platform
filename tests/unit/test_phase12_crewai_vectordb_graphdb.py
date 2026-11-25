@@ -254,7 +254,8 @@ def test_gc198_run_crew_scores_gate_a_g_via_framework_crewai_adapter(client_and_
     # 섹션에서 확인한 계약).
     assert result["final_output"] == "최종 산출물"
     gate_scores = result["gate_scores"]
-    assert set(gate_scores.keys()) == {"A", "B", "C", "D", "E", "F", "G"}
+    # `_`로 시작하는 내부 항목(평가 리포트 토큰, 2026-11-25)은 저장·API 응답에서 빠진다 — 공개 Gate만 본다.
+    assert {k for k in gate_scores if not k.startswith("_")} == {"A", "B", "C", "D", "E", "F", "G"}
     for gate in gate_scores.values():
         assert set(gate.keys()) >= {"score", "status", "passed"}
     # tcr은 not_measured일 수 있어 None도 허용하되, 키 자체는 항상 있어야 함

@@ -54,6 +54,7 @@ from typing import Any
 from hair_platform import (
     agent_evaluation,
     audit,
+    evaluation_reports,
     graphquery,
     llm,
     model_options,
@@ -132,6 +133,15 @@ def _resolve_delegation_target(tool_args, known_roles: list[str]) -> str | None:
 # 10 → 16으로 올린다(위임 왕복이 그만큼 더 길어질 수 있다는 뜻이라
 # 비용은 늘지만, 중간에 끊겨 핵심 요구사항을 누락하는 쪽이 더 나쁘다).
 DELEGATION_MAX_ITER = 16
+# 로컬(Ollama) 모델 기본 상한(2026-11-25 P2-9 실측) — 기본 Agent 설정(작업 전 계획 2회 + 도구 반복 16)으로는 로컬 35B
+# 모델에서 순차 릴레이 첫 단계가 1시간 50분·호출 92회에도 끝나지 않았다. 계획을 끄고 반복 6으로 줄이자 24분·4회.
+# `tuning_config.max_iter`를 직접 정한 Agent와 위임형(hierarchical) Crew는 그대로 둔다.
+OLLAMA_DEFAULT_MAX_ITER = 8
+
+
+def _ollama_planning_enabled() -> bool:
+    """로컬 모델에서도 작업 전 계획(reasoning)을 쓸지 — 기본은 끔, `HAIR_OLLAMA_AGENT_PLANNING=1`이면 켬."""
+    return os.environ.get("HAIR_OLLAMA_AGENT_PLANNING") == "1"
 
 
 def _mcp_tools(stack: ExitStack, mcp_servers: list[dict]) -> list:
@@ -753,7 +763,15 @@ def run_crew(
         temperature = tuning.pop("temperature", None)
         # 품질 검토(자체 개선)는 직접 호출 경로 전용 — CrewAI Agent 인자가 아니다.
         tuning.pop("self_review", None)
-        tuning.setdefault("max_iter", DELEGATION_MAX_ITER)
+        local = resolved_provider == "ollama"
+        tuning.setdefault(
+            "max_iter", OLLAMA_DEFAULT_MAX_ITER if local and process != "hierarchical" else DELEGATION_MAX_ITER
+        )
+        if local and not _ollama_planning_enabled():
+            # 로컬 모델에서는 작업 전 계획을 끈다(2026-11-25 P2-9 실측, 위 OLLAMA_DEFAULT_MAX_ITER 주석).
+            # 클라우드 모델은 그대로 — 같은 기본 Agent가 provider에 따라 알맞게 돈다.
+            tuning.pop("reasoning", None)
+            tuning.pop("max_reasoning_attempts", None)
         # Ollama + reasoning(2026-11-24, P2-12 실측) — `reasoning=True`를 그대로 넘기면 crewai가
         # `PlanningConfig(reasoning_effort="medium")`을 만들어 단계마다 PlannerObserver LLM 호출을
         # 하는데, 그 호출은 `response_model`(instructor) 경로라 litellm에 model·messages만 넘기고
@@ -1315,7 +1333,7 @@ def run_crew(
             # `run_crew()`엔 대응하는 deliverable이 없어 재사용하지 않았다 —
             # 새 테이블을 만드는 대신 이미 있는 "감사로그 참고 기록" 패턴을
             # 그대로 재사용한다(원칙4).
-            "gate_scores": eval_result["gate_scores"],
+            "gate_scores": evaluation_reports.public(eval_result["gate_scores"]),  # 내부 항목(리포트 토큰) 제외
             "tcr": eval_result["tcr"],
         },
     )

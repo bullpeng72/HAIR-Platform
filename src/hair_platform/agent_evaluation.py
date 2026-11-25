@@ -157,9 +157,11 @@ def _mark_not_measured(harness_groups: dict, gate_ids: list[str], reason_key: st
         harness_groups[gid] = group
 
 
-def _score_gates(harness_groups: dict) -> dict:
+def _score_gates(harness_groups: dict, settings: dict | None = None) -> dict:
+    thresholds = (settings or {}).get("thresholds")
     gate_scores = evaluate_gate_scores(
-        harness_groups, gate_ids=GATE_IDS, default_threshold=DEFAULT_GATE_THRESHOLD
+        harness_groups, gate_ids=GATE_IDS, thresholds=thresholds,
+        default_threshold=(settings or {}).get("gate_default", DEFAULT_GATE_THRESHOLD),
     )
     for gid, group in harness_groups.items():
         reason = isinstance(group, dict) and group.get("not_measured_reason")
@@ -167,6 +169,25 @@ def _score_gates(harness_groups: dict) -> dict:
             gate_scores[gid] = {**gate_scores[gid], "status": "not_measured", "reason": reason}
     return gate_scores
 _SCOPE = ScopeConfig(allowed_tools=[], fail_on_violation=False, violation_penalty=0.5)
+
+
+def _current_settings() -> dict:
+    """평가 기준 설정(2026-11-25 — `evaluation_config.py`, admin "평가 기준" 화면)을 SDK Config로. 위 상수들은 기본값이며
+    저장된 설정이 없으면 같은 값이 된다. 평가마다 읽어 설정을 바꾸면 다음 평가부터 적용된다."""
+    from hair_platform import evaluation_config
+
+    cfg = evaluation_config.get()
+    return {
+        "sla": SLAConfig(p95_ms=float(cfg["sla_p95_ms"]), p99_ms=float(cfg["sla_p99_ms"])),
+        "explainability": ExplainabilityConfig(
+            require_reasoning=True,
+            reasoning_markers=list(dict.fromkeys([*ExplainabilityConfig().reasoning_markers, *cfg["reasoning_markers"]])),
+        ),
+        "scope": ScopeConfig(allowed_tools=[], fail_on_violation=False,
+                             violation_penalty=float(cfg["scope_violation_penalty"])),
+        "thresholds": evaluation_config.thresholds(cfg),
+        "gate_default": float(cfg["gate_default"]),
+    }
 
 
 # 평가 유형(2026-11-22, 하드코딩·스텁 점검 4순위) — 예전엔 모든 실행을 "document_creation"으로
@@ -192,6 +213,7 @@ def run_and_score(
     `record_evaluation()`을 따로 불러야 한다(deliverable 생성 실패 시 평가
     행만 붕 뜨는 것을 막는다 — `deliverables.execute_agent_for_task()`의
     "실패 시 아무 것도 안 남는다" 불변식을 그대로 유지)."""
+    settings = _current_settings()  # 평가 기준 설정(2026-11-25)
     monitor = PerformanceMonitor(
         output_dir="results/deliverables/", agent_version="auto"
     )
@@ -204,9 +226,9 @@ def run_and_score(
         # 'document_creation'이 정확히 맞는다.
         task_type=task_type,
         question_arg="role_name",
-        sla=_SLA,
-        explainability=_EXPLAINABILITY,
-        scope=_SCOPE,
+        sla=settings["sla"],
+        explainability=settings["explainability"],
+        scope=settings["scope"],
     )
     def _run(role_name: str) -> tuple[str, EvalMetadata]:
         response = call_fn()
@@ -225,11 +247,22 @@ def run_and_score(
     # 대표할 때 — 응답 시간 SLA 기반 C·D는 잴 수 없다(위 `_NOT_MEASURED_REASONS`).
     if long_running:
         _mark_not_measured(harness_groups, ["C", "D"], "long_running")
-    gate_scores = _score_gates(harness_groups)
+    gate_scores = _score_gates(harness_groups, settings)
+    _attach_html_report(gate_scores, monitor)
     tcr_block = (report.accuracy_metrics or {}).get("tcr") or {}
     tcr = tcr_block.get("tcr")
 
     return {"output": output, "gate_scores": gate_scores, "tcr": tcr}
+
+
+def _attach_html_report(gate_scores: dict, monitor) -> None:
+    """Agent-Evaluator SDK의 HTML 리포트를 만들어 토큰을 `gate_scores`에 싣는다(2026-11-25, `evaluation_reports.py`).
+    `record_evaluation()`이 토큰을 빼고 리포트를 평가와 함께 저장한다."""
+    from hair_platform import evaluation_reports
+
+    entry = evaluation_reports.capture(monitor)
+    if entry is not None:
+        gate_scores[evaluation_reports.REPORT_KEY] = entry
 
 
 def run_and_score_crew(
@@ -258,6 +291,7 @@ def run_and_score_crew(
 
     `call_fn`이 예외를 던지면(LLM 호출 실패 등) 그대로 전파한다 —
     `run_and_score()`와 같은 원칙."""
+    settings = _current_settings()  # 평가 기준 설정(2026-11-25)
     monitor = PerformanceMonitor(
         output_dir="results/deliverables/", agent_version="auto"
     )
@@ -267,9 +301,9 @@ def run_and_score_crew(
         task_type=task_type,
         question_arg="crew_label",
         framework="crewai",
-        sla=_SLA,
-        explainability=_EXPLAINABILITY,
-        scope=_SCOPE,
+        sla=settings["sla"],
+        explainability=settings["explainability"],
+        scope=settings["scope"],
     )
     def _run(crew_label: str):
         return call_fn()
@@ -286,7 +320,8 @@ def run_and_score_crew(
     } - {""}
     if len(agents) < 2:
         _mark_not_measured(harness_groups, ["F"], "single_agent")
-    gate_scores = _score_gates(harness_groups)
+    gate_scores = _score_gates(harness_groups, settings)
+    _attach_html_report(gate_scores, monitor)
     tcr_block = (report.accuracy_metrics or {}).get("tcr") or {}
     tcr = tcr_block.get("tcr")
 
@@ -299,10 +334,15 @@ def record_evaluation(
     """`run_and_score()`의 결과를 `agent_evaluations`에 append한다(커밋은
     호출자 책임 — `deliverables.execute_agent_for_task()`가 deliverable
     INSERT와 한 트랜잭션으로 커밋한다)."""
-    conn.execute(
+    from hair_platform import evaluation_reports
+
+    # HTML 리포트 토큰(2026-11-25)은 Gate 점수에 남기지 않고 리포트만 평가 id로 저장한다.
+    clean, report_token = evaluation_reports.split(gate_scores)
+    cur = conn.execute(
         "INSERT INTO agent_evaluations (deliverable_id, gate_scores, tcr) VALUES (?, ?, ?)",
-        (deliverable_id, json.dumps(gate_scores, ensure_ascii=False), tcr),
+        (deliverable_id, json.dumps(clean, ensure_ascii=False), tcr),
     )
+    evaluation_reports.store(conn, cur.lastrowid, report_token)
 
 
 def latest_evaluation(conn: sqlite3.Connection, deliverable_id: int) -> dict | None:
@@ -315,12 +355,15 @@ def latest_evaluation(conn: sqlite3.Connection, deliverable_id: int) -> dict | N
     ).fetchone()
     if row is None:
         return None
+    from hair_platform import evaluation_reports
+
     return {
         "id": row["id"],
         "deliverable_id": row["deliverable_id"],
         "gate_scores": json.loads(row["gate_scores"]),
         "tcr": row["tcr"],
         "evaluated_at": row["evaluated_at"],
+        "has_report": evaluation_reports.has_report(conn, row["id"]),  # Agent-Evaluator HTML 리포트(2026-11-25)
     }
 
 

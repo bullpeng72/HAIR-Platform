@@ -1,4 +1,4 @@
-"""통합 CLI — `hair` 하나로 서버 실행·최초 ADMIN 계정 생성·Gate 측정을 다 한다.
+"""통합 CLI — `hair` 하나로 환경변수(.env) 설정/점검·서버 실행·최초 ADMIN 계정 생성·Gate 측정을 다 한다.
 
 사용자 요청(2026-10-10, "실행 명령어가 너무 길고 어려워. 명령어를
 짧고 명료하게 정리하고, 현행화 해줘. 명령어에 대한 도움말(--help
@@ -24,6 +24,7 @@ import copy
 import logging
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -65,12 +66,14 @@ def _build_log_config() -> dict:
 
 _EPILOG_TOP = """\
 예시:
+  hair init                               .env 환경변수 설정(대화형, 최초 1회)
+  hair check                              .env/환경변수 점검
   hair serve                              서버 실행 + 브라우저 자동 열기(http://127.0.0.1:8000, hair.db)
   hair serve --port 9000 --reload         개발 중 코드 변경 자동 반영
   hair serve --no-browser                 브라우저 자동 열기 끄기(서버만 실행)
   hair bootstrap-admin -u admin -p ***    최초 관리자 계정 생성(최초 1회만)
   hair reset-data                         운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 '초기화 시 보호' 팀만 유지)
-  hair eval                               Gate A/B/D/E/G 측정 1회 실행
+  hair eval                               Gate A/B/D/E/G 측정 1회 + HTML 리포트(results/)
 
 서브커맨드별 자세한 옵션: hair <subcommand> --help
 """
@@ -84,10 +87,12 @@ _BRIEF_HELP = """\
 HAIR-Platform 통합 CLI — 사람과 AI Agent를 하나의 조직도에서 관리한다.
 
 명령어:
+  init              .env 환경변수 설정(최초 1회, 대화형)
+  check             .env/환경변수 점검
   serve             Web UI + API 서버 실행
   bootstrap-admin   최초 ADMIN 계정 생성(콜드스타트 전용)
   reset-data        운영 데이터 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 '초기화 시 보호' 팀만 유지)
-  eval              Gate A/B/D/E/G 측정 1회 실행
+  eval              Gate A/B/D/E/G 측정 1회 + HTML 리포트 생성(results/)
 
 자세한 도움말:       hair --help
 명령어별 도움말:     hair <command> --help
@@ -115,6 +120,51 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
+    p_init = sub.add_parser(
+        "init",
+        help=".env 환경변수 설정(최초 1회, 대화형)",
+        description=(
+            "LLM API 키·세션 서명 키·메일(SMTP) 알림 등 주요 환경변수를 하나씩 물어보고\n"
+            ".env 파일로 저장한다. 전부 선택(optional)이다 — 아무것도 입력하지 않아도 서버는\n"
+            "뜬다. 이미 .env가 있으면 기존 값을 보여주고 Enter로 그대로 둘 수 있다(덮어쓰지 않음)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "예시:\n"
+            "  hair init                      대화형으로 하나씩 묻고 .env에 저장\n"
+            "  hair init --yes                묻지 않고 저장(세션 서명 키가 없으면 자동 생성)\n"
+            "  hair init --path config/.env   다른 경로에 저장\n"
+            "\n"
+            "저장한 값 확인: hair check\n"
+        ),
+    )
+    p_init.add_argument("--path", default=".env", help=".env 파일 경로(기본: ./.env)")
+    p_init.add_argument(
+        "--yes", action="store_true",
+        help="대화형 질문 없이 바로 저장(세션 서명 키가 없으면 자동 생성, 나머지는 기존 값 그대로)",
+    )
+    p_init.set_defaults(func=_cmd_init)
+
+    p_check = sub.add_parser(
+        "check",
+        help=".env/환경변수 점검",
+        description=(
+            "현재 .env 파일과 셸 환경변수를 합쳐(셸 쪽이 우선 — python-dotenv 기본 동작과 동일) 주요\n"
+            "환경변수가 어떻게 설정돼 있는지 보여주고, provider/API 키 불일치·SMTP 설정 누락 같은\n"
+            "흔한 실수를 찾아낸다. 값을 바꾸지는 않는다(점검만)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "예시:\n"
+            "  hair check                점검(기본: ./.env)\n"
+            "  hair check --path config/.env\n"
+            "\n"
+            "문제가 있거나 값을 바꾸려면: hair init\n"
+        ),
+    )
+    p_check.add_argument("--path", default=".env", help=".env 파일 경로(기본: ./.env)")
+    p_check.set_defaults(func=_cmd_check)
+
     p_serve = sub.add_parser(
         "serve",
         help="Web UI + API 서버 실행",
@@ -129,8 +179,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  hair serve --db-path :memory: --reload   휘발성 DB로 임시 실행 + 자동 재시작\n"
             "\n"
             "사내망 접속(같은 네트워크의 다른 PC에서도 접속):\n"
-            "  export HAIR_PLATFORM_SECRET_KEY=\"$(python3 -c "
-            "'import secrets; print(secrets.token_hex(32))')\"\n"
+            "  hair init   # HAIR_PLATFORM_SECRET_KEY를 물어보면 자동 생성해 .env에 저장\n"
             "  hair serve --host 0.0.0.0 --no-browser   다른 PC에서 "
             "http://<이 PC의 사내망 IP>:8000/\n"
             "  (키를 안 주면 기동 시 경고가 뜬다 — 첫 기동 때 만든 무작위 "
@@ -138,6 +187,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "   DB 파일 접근 권한이 곧 세션 위조 권한이 된다. --reload는 "
             "공용 인스턴스에 쓰지 않는다 —\n"
             "   파일 변경마다 재시작되며 접속이 전부 끊긴다.)\n"
+            "\n"
+            "관련 환경변수(.env에 넣어도 된다 — 설정은 hair init, 점검은 hair check):\n"
+            "  HAIR_PLATFORM_SECRET_KEY      세션 서명 키(사내망 공개 시 필수)\n"
+            "  HAIR_EVAL_HTML_REPORT=0       평가마다 만드는 Gate A-G HTML 리포트(결과물 카드 "
+            "\"평가 리포트\") 끄기\n"
+            "  HAIR_OLLAMA_AGENT_PLANNING=1  로컬(Ollama) 모델에서도 Agent 작업 전 계획 켜기"
+            "(기본 꺼짐)\n"
+            "  Gate별 통과 기준·응답 시간 SLA는 서버 화면 \"평가 기준\"(admin)에서 바꾼다.\n"
         ),
     )
     p_serve.add_argument(
@@ -194,20 +251,27 @@ def _build_parser() -> argparse.ArgumentParser:
     p_reset = sub.add_parser(
         "reset-data",
         help="운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인 템플릿은 유지, '초기화 시 보호' 팀만 유지)",
+        # 지우는 범위는 data_admin._FACTORY_RESET_WIPE_TABLES와 맞춘다(테이블을 추가하면 여기도 갱신).
         description=(
-            "사용자 계정·사람 인력(human_pool)·업무 요청/할 일/배정/결재/\n"
-            "결과물(+댓글)·대화·업로드 문서·VectorDB 지식 조각·AI 에이전트\n"
-            "생성 Job·Crew/파이프라인 실행 이력·Gate 평가 기록·LLM 사용량\n"
-            "기록·지식 등록 요청·모델 레지스트리(단가·생성 옵션 포함)·임베딩\n"
-            "설정·Tool-Agent 연결·팀/팀원·활동 기록(audit_log)을 전부\n"
-            "지운다. Agent(29종)/Tool·Skill Pool/파이프라인 템플릿 자체는\n"
-            "삭제하지 않는다 — hair.db 재기동 시 항상 자동으로 다시 채워지는\n"
-            "레퍼런스 데이터이기 때문이다(단, Agent가 실행되며 쌓인 비용·\n"
-            "성과점수·LLM provider/model 설정·마지막 산출물은 초기값으로\n"
-            "되돌아간다). 팀은 그렇게 재시드되지 않아(사용자가 직접 만든\n"
-            "데이터) 함께 지운다 — 단, 팀 관리 화면에서 '초기화 시 보호'를\n"
-            "켠 팀(과 그 팀원)은 남긴다. 조직 정책(사번 형식·결과물 언어)과\n"
-            "세션 서명 키는 유지한다. 되돌릴 수 없다."
+            "운영 중 쌓인 데이터를 지운다. 되돌릴 수 없다.\n"
+            "\n"
+            "지움:\n"
+            "  - 사용자 계정·개인 API 키, 사람 인력(human_pool)\n"
+            "  - 업무 요청·할 일·배정(이력)·결재·결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록)\n"
+            "  - 대화·업로드 문서·지식 조각(VectorDB)·지식 등록 요청\n"
+            "  - AI 에이전트 생성 Job·Crew/파이프라인 실행 이력·실행 작업\n"
+            "  - Gate 평가 기록·평가 HTML 리포트·LLM 사용량 기록\n"
+            "  - 모델 레지스트리(단가·생성 옵션)·모델 성능 테스트 기록·임베딩 설정\n"
+            "  - 코드 저장소 등록·Tool-Agent 연결·정기 실행·이벤트 트리거·알림 기록\n"
+            "  - 활동 기록(audit_log), 팀/팀원('초기화 시 보호'를 켠 팀은 남김)\n"
+            "\n"
+            "남김:\n"
+            "  - Agent(기본 36종)·Tool/Skill Pool·파이프라인 템플릿 — 재기동 시 다시\n"
+            "    채워지는 레퍼런스 데이터. 단 Agent의 비용·성과점수·LLM provider/model\n"
+            "    지정·마지막 산출물은 비우고, 기본 Agent는 활성으로 되돌린다(관리자가\n"
+            "    만든 Agent는 상태 유지).\n"
+            "  - 조직 정책(사번 형식·결과물 언어·알림 설정)·플랫폼 기본/보조 모델 설정\n"
+            "  - 평가 기준 설정(Gate별 통과 기준·SLA)·세션 서명 키·보호 팀"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -228,16 +292,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_eval = sub.add_parser(
         "eval",
-        help="Gate A/B/D/E/G 측정 1회 실행(results/에 저장, 비용 없음)",
+        help="Gate A/B/D/E/G 측정 1회 + HTML 리포트 생성(results/에 저장, 비용 없음)",
         description=(
-            "agent-evaluator SDK로 결정론적 스텁 생성 경로를 측정한다.\n"
-            "results/agent_generation_eval.json에 저장(LLM 미호출, 비용 없음)."
+            "Agent-Evaluator SDK로 AI 에이전트 생성 경로(결정론적 스텁)를 측정한다.\n"
+            "LLM을 호출하지 않아 비용이 없다. 현재 폴더의 results/에 저장한다:\n"
+            "  results/agent_generation_eval.json   측정 결과(agent-eval gate 입력)\n"
+            "  results/agent_generation_eval.html   Gate A-G 종합 리포트(지표·원인 진단·개선 제안)\n"
+            "HTML 리포트는 HAIR_EVAL_HTML_REPORT=0이면 만들지 않는다.\n"
+            "서버에서 실제 결과물을 평가한 리포트는 결과물 카드의 \"평가 리포트\"로 본다."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "예시:\n"
             "  hair eval\n"
-            "  agent-eval gate results/*.json --tcr 85   측정 결과를 채점(agent-evaluator SDK)\n"
+            "  agent-eval gate results/agent_generation_eval.json --tcr 85\n"
+            "      TCR 85% 이상인지 채점(결과 파일은 한 번에 하나만 받는다)\n"
+            "  agent-eval gate results/agent_generation_eval.json --html-out results/gate.html\n"
+            "      채점 결과도 HTML로 저장\n"
         ),
     )
     p_eval.set_defaults(func=_cmd_eval)
@@ -356,10 +427,10 @@ def _cmd_reset_data(args: argparse.Namespace) -> int:
     if not args.yes:
         answer = input(
             f"'{args.db_path}'의 운영 데이터를 전부 지웁니다 — 되돌릴 수 없습니다.\n"
-            "  지움: 사용자·업무·결재·대화·결과물·실행 이력·지식 베이스·정기 실행·트리거·API 키·"
+            "  지움: 사용자·업무·결재·대화·결과물·실행 이력·평가 기록/리포트·지식 베이스·정기 실행·트리거·API 키·"
             "모델 레지스트리·활동 기록·AI 사용량, 팀('초기화 시 보호' 팀 제외)\n"
             "  남김: Agent·스킬·도구·파이프라인 템플릿, 조직 정책(사번 형식·결과물 언어·알림 설정), "
-            "플랫폼 기본·보조 모델 설정, 보호 팀\n"
+            "플랫폼 기본·보조 모델 설정, 평가 기준 설정, 보호 팀\n"
             "  Agent는 모델 지정·비용·성과점수가 비워지고, 기본 Agent는 활성으로 돌아갑니다"
             "(관리자가 만든 Agent는 상태 유지).\n"
             "계속할까요? [y/N] "
@@ -392,6 +463,113 @@ def _cmd_eval(_args: argparse.Namespace) -> int:
     # 그쪽이 바뀔 때 둘이 어긋날 수 있다).
     runpy.run_module("hair_platform.eval_wiring", run_name="__main__")
     return 0
+
+
+def _prompt_env_value(var, current: str) -> str:
+    """`hair init` 대화형 입력 한 줄. `var.generator`가 있으면(세션 서명 키) 자동 생성을 먼저 권한다."""
+    if var.generator is not None:
+        return _prompt_generated_value(var, current)
+    from hair_platform import env_setup
+
+    shown = env_setup.mask(current) if var.secret and current else (current or var.default)
+    suffix = f" [{shown}]" if shown else " [비어있음, Enter=건너뜀]"
+    answer = input(f"  {var.desc}{suffix}: ").strip()
+    if not answer:
+        return current
+    if var.secret and answer in ("-", "지움"):
+        return ""
+    return answer
+
+
+def _prompt_generated_value(var, current: str) -> str:
+    if current:
+        answer = input(f"  {var.desc} — 이미 설정되어 있습니다. 새로 만들까요? [y/N]: ").strip().lower()
+        return var.generator() if answer == "y" else current
+    answer = input(f"  {var.desc} — 지금 자동으로 생성할까요? [Y/n]: ").strip().lower()
+    if answer in ("", "y", "yes"):
+        return var.generator()
+    return input("  직접 입력(비우면 설정 안 함): ").strip()
+
+
+def _run_init_wizard(values: dict) -> None:
+    from hair_platform import env_setup
+
+    print("HAIR-Platform .env 설정을 시작합니다. Enter만 누르면 지금 값을 그대로 둡니다.\n")
+    for group, vars_ in env_setup.by_group().items():
+        if group == "메일(SMTP) 알림":
+            configured = any((values.get(v.key) or "").strip() for v in vars_)
+            verb = "바꾸시겠습니까" if configured else "하시겠습니까"
+            choices = "Y/n" if configured else "y/N"
+            answer = input(
+                f"[{group}] 결재·완료 등 알림을 메일로도 받으려면 설정하세요.\n"
+                f"  설정을 {verb}? [{choices}]: "
+            ).strip().lower()
+            want = answer != "n" if configured else answer == "y"
+            if not want:
+                continue
+        else:
+            print(f"[{group}]")
+        for var in vars_:
+            values[var.key] = _prompt_env_value(var, values.get(var.key, ""))
+        print()
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    from hair_platform import env_setup
+
+    path = Path(args.path)
+    values = env_setup.parse_env_file(path)
+    extra = env_setup.leftover_assignments(path)
+
+    if args.yes:
+        if not values.get("HAIR_PLATFORM_SECRET_KEY"):
+            values["HAIR_PLATFORM_SECRET_KEY"] = env_setup.generate_secret_key()
+    else:
+        _run_init_wizard(values)
+
+    path.write_text(env_setup.render_env_file(values, extra), encoding="utf-8")
+
+    set_keys = [v.key for v in env_setup.ENV_VARS if (values.get(v.key) or "").strip()]
+    print(f"{path}에 저장했습니다.")
+    if set_keys:
+        print(f"  설정됨({len(set_keys)}개): {', '.join(set_keys)}")
+    else:
+        print("  설정된 값 없음 — 전부 선택(optional)이니 비워 둬도 서버는 뜹니다.")
+    print("다음: hair check   (설정 점검)")
+    print("      hair serve   (서버 실행)")
+    return 0
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    from hair_platform import env_setup
+
+    path = Path(args.path)
+    values = env_setup.effective_values(path)
+
+    exists_note = "" if path.exists() else " (파일 없음 — 프로세스 환경변수만 확인)"
+    print(f"환경변수 점검 대상: {path}{exists_note}\n")
+    for group, vars_ in env_setup.by_group().items():
+        print(f"[{group}]")
+        for var in vars_:
+            value = (values.get(var.key) or "").strip()
+            if value:
+                shown = env_setup.mask(value) if var.secret else value
+                print(f"  ✓ {var.key} = {shown}")
+            else:
+                print(f"  · {var.key} (설정 안 됨)")
+        print()
+
+    problems = env_setup.cross_check(values)
+    if problems:
+        print("[점검 결과]")
+        for level, message in problems:
+            icon = "✗" if level == "error" else "⚠"
+            print(f"  {icon} {message}")
+    else:
+        print("[점검 결과] 특별한 문제가 없습니다.")
+    print()
+    print("설정 안 된 값은 전부 선택(optional)입니다 — `hair init`으로 채울 수 있습니다.")
+    return 1 if any(level == "error" for level, _ in problems) else 0
 
 
 def main(argv: list[str] | None = None) -> int:

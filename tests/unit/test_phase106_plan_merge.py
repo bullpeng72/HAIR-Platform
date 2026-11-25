@@ -158,6 +158,9 @@ def test_graph_engine_accepts_plan_merge_template():
 def test_migration_widens_mode_check_and_keeps_rows(tmp_path):
     path = str(tmp_path / "old.db")
     conn = _conn(path)
+    # 옛 DB에는 계획 분담 단계가 없었다 — 2026-11-25부터 기본 구성에 생긴 계획 분담 단계를 옛 모드로 돌려 둔다.
+    conn.execute("UPDATE pipeline_stages SET mode = 'sequential_relay', lead_role_name = NULL WHERE mode = 'plan_merge'")
+    conn.commit()
     before = conn.execute("SELECT COUNT(*), SUM(id) FROM pipeline_stages").fetchone()
     agents_before = conn.execute("SELECT COUNT(*) FROM pipeline_stage_agents").fetchone()[0]
     # 옛 CHECK로 되돌린 DB를 만든다
@@ -178,3 +181,24 @@ def test_migration_widens_mode_check_and_keeps_rows(tmp_path):
     tpl = conn.execute("SELECT id FROM pipeline_templates LIMIT 1").fetchone()[0]
     conn.execute("INSERT INTO pipeline_stages (pipeline_template_id, seq_order, name, mode) VALUES (?, 999, 'x', 'plan_merge')", (tpl,))
     db._migrate_pipeline_stage_plan_merge_mode(conn)  # 두 번 돌려도 아무 일 없음
+
+
+def test_unassigned_worker_is_recorded_as_advisory_coverage_badge():
+    """2026-11-25 P2-9 실측 — 리드가 팀원 한 명에게 일을 주지 않고 그 몫을 직접 채웠는데 화면에 드러나지 않았다."""
+    conn = _conn()
+    calls = []
+    plan = '[{"role": "재무 분석가", "task": "손익 분석"}]'  # 시장 조사가는 빠짐
+    with patch("hair_platform.agent_runtime.execute_agent", side_effect=_fake_agents(calls, plan)), \
+            patch.object(agent_evaluation, "run_and_score", side_effect=_plain_score):
+        r = plan_merge.run(conn, LEAD, WORKERS, "요청", 9)
+    cov = r["gate_scores"]["plan_coverage"]
+    assert r["plan_unassigned"] == ["시장 조사가"] and cov["unassigned"] == ["시장 조사가"]
+    assert cov["status"] == "warn" and cov["advisory"] and cov["passed"] is True and cov["score"] == 0.5
+    assert pipeline_runtime._gate_pass_ratio(r["gate_scores"]) == 1.0  # 참고용 — 통과 판정은 그대로
+
+    calls.clear()
+    full = '[{"role": "재무 분석가", "task": "a"}, {"role": "시장 조사가", "task": "b"}]'
+    with patch("hair_platform.agent_runtime.execute_agent", side_effect=_fake_agents(calls, full)), \
+            patch.object(agent_evaluation, "run_and_score", side_effect=_plain_score):
+        r = plan_merge.run(conn, LEAD, WORKERS, "요청", 9)
+    assert r["gate_scores"]["plan_coverage"]["status"] == "pass" and r["plan_unassigned"] == []

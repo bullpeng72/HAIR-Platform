@@ -56,7 +56,15 @@ def enabled() -> bool:
     """`HAIR_LEXICON_CHECK=0`이면 끈다 — 분석기가 메모리를 약 360MB 쓰므로(실측) 로컬 대형 모델과 메모리를 다툴 때."""
     import os
 
-    return os.environ.get("HAIR_LEXICON_CHECK", "1") != "0"
+    if os.environ.get("HAIR_LEXICON_CHECK", "1") == "0":
+        return False
+    # 한국어 결과물 전용(2026-11-25) — 조직 결과물 언어가 한국어가 아니면 끈다(외국어 결과물을 "사전에 없는 낱말"로 오탐).
+    try:
+        from hair_platform import org_policy
+
+        return org_policy.output_language() == org_policy.DEFAULT_OUTPUT_LANGUAGE
+    except Exception:  # noqa: BLE001 — 정책을 못 읽으면 기본(한국어)으로 본다
+        return True
 
 
 def available() -> bool:

@@ -45,7 +45,8 @@ def test_missing_stage_role_is_found_and_restored_in_reference_order():
     assert len(items) == 1 and items[0]["kind"] == "stage_role_missing" and items[0]["fixable"]
     result = config_check.apply(conn, _admin(conn), [items[0]["id"]])
     assert result["applied"] == [items[0]["id"]]
-    assert _stage_roles(conn, BIZ, 2) == ["외부 자료 조사가", "데이터 분석가", "3C4P SWOT 분석가"]
+    # 2026-11-25부터 이 단계는 계획 분담(리드 PM이 맨 앞).
+    assert _stage_roles(conn, BIZ, 2) == ["PM", "외부 자료 조사가", "데이터 분석가", "3C4P SWOT 분석가"]
     assert config_check.check(conn) == []
 
 
@@ -101,3 +102,31 @@ def test_admin_screen_fills_config_check_after_content_is_drawn():
     body = body[: body.index("\n}\n")]
     assert "setTimeout(renderConfigCheckSection" not in body
     assert body.index('id="config-check-section"') < body.index("renderConfigCheckSection();")
+
+
+
+def test_old_default_relay_stage_is_offered_as_plan_merge_upgrade():
+    """2026-11-25 — 사업/기획 "자료 조사·분석"이 계획 분담으로 바뀌었다. 예전 기본(순차 릴레이, 추가 역할 없음)인 설치본은
+    반영 가능 항목으로 올리고, 반영하면 모드·리드(PM)가 바뀐다. admin이 역할을 더한 단계는 차이만 보여 준다."""
+    conn = _conn()
+    sid = conn.execute(
+        "SELECT s.id FROM pipeline_stages s JOIN pipeline_templates t ON t.id = s.pipeline_template_id "
+        "WHERE t.name = ? AND s.seq_order = 2", (BIZ,)).fetchone()[0]
+    conn.execute("UPDATE pipeline_stages SET mode = 'sequential_relay', lead_role_name = NULL WHERE id = ?", (sid,))
+    conn.execute("DELETE FROM pipeline_stage_agents WHERE stage_id = ? AND role_name = 'PM'", (sid,))
+    conn.commit()
+    items = config_check.check(conn)
+    assert [i["kind"] for i in items] == ["stage_mode_upgrade"] and items[0]["fixable"]
+    config_check.apply(conn, _admin(conn), [items[0]["id"]])
+    row = conn.execute("SELECT mode, lead_role_name FROM pipeline_stages WHERE id = ?", (sid,)).fetchone()
+    assert tuple(row) == ("plan_merge", "PM")
+    assert _stage_roles(conn, BIZ, 2) == ["PM", "외부 자료 조사가", "데이터 분석가", "3C4P SWOT 분석가"]
+    assert config_check.check(conn) == []
+
+    # admin이 역할을 더한 순차 릴레이는 반영 가능으로 올리지 않는다
+    conn.execute("UPDATE pipeline_stages SET mode = 'sequential_relay', lead_role_name = NULL WHERE id = ?", (sid,))
+    conn.execute("INSERT INTO pipeline_stage_agents (stage_id, role_name, seq_order, instructions) "
+                 "VALUES (?, '문서 교정자', 9, '')", (sid,))
+    conn.commit()
+    kinds = {i["kind"]: i["fixable"] for i in config_check.check(conn)}
+    assert "stage_mode_upgrade" not in kinds and kinds.get("stage_setting_differs") is False

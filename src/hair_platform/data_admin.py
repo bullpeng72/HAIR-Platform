@@ -34,9 +34,106 @@ append-only 원칙에 따라 `db.py`의 DB 트리거가 UPDATE/DELETE 자체를 
 
 from __future__ import annotations
 
+import functools
 import sqlite3
 
 from hair_platform import audit, id_scheme
+
+
+class DeleteBlocked(Exception):
+    """연결된 데이터가 남아 삭제할 수 없음 — `reason`은 화면에 그대로 보여 줄 한국어 설명."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+class ConfirmedAssignmentError(PermissionError):
+    """확정 배정이 있어 막음 — `str()`은 예전과 같은 코드("confirmed_assignment_exists"), `detail`은 무엇이 막는지."""
+
+    def __init__(self, detail: str):
+        super().__init__("confirmed_assignment_exists")
+        self.detail = detail
+
+
+# 삭제를 막은 연결 데이터의 화면 이름(2026-11-25) — 모르는 테이블은 테이블 이름 그대로 보여 준다.
+_TABLE_LABELS = {
+    "tasks": "할 일", "briefs": "업무 요청", "deliverables": "결과물", "assignments": "배정", "approvals": "결재",
+    "task_participants": "업무 참여자", "task_dependencies": "할 일 선행 관계", "conversations": "연결된 대화",
+    "crew_runs": "Crew 실행 기록", "pipeline_runs": "파이프라인 실행", "pipeline_run_stages": "파이프라인 단계 기록",
+    "agent_evaluations": "결과물 평가", "evaluation_reports": "평가 리포트", "agent_execution_jobs": "AI 실행 작업",
+    "job_items": "Agent 생성 작업", "jobs": "Agent 생성 작업", "deliverable_comments": "결과물 댓글",
+    "deliverable_revisions": "결과물 버전", "deliverable_edit_proposals": "부분 수정 제안",
+    "deliverable_repo_commits": "저장소 커밋 기록", "assignment_history": "배정 이력", "agent_pool": "AI 에이전트",
+    "team_members": "팀 멤버", "knowledge_chunks": "지식 색인", "agent_tool_links": "Agent 도구 연결",
+}
+
+
+def _fk_violations(conn: sqlite3.Connection) -> set[tuple[str, int, str]]:
+    return {(r[0], r[1], r[2]) for r in conn.execute("PRAGMA foreign_key_check").fetchall()}
+
+
+def _atomic_delete(fn):
+    """삭제를 한 덩어리로(2026-11-25 — 업무 요청 삭제 500 수정). 예전엔 연쇄 삭제 도중 FK 위반이 나면 이미 지운 행이
+    공유 연결에 커밋 안 된 채 남았다가 **다음 요청의 커밋에 함께 반영**돼, "삭제 실패"인데 일부만 지워진 상태가 될 수
+    있었다. 이제 FK 검사를 커밋 직전으로 미루고(`defer_foreign_keys`), 삭제 전에 없던 위반이 생기면 전부 되돌리고
+    무엇이 남아 막았는지 알려 준다(이 모듈이 아직 모르는 새 테이블이 생겨도 500 대신 이유가 보인다)."""
+
+    @functools.wraps(fn)
+    def wrapper(conn: sqlite3.Connection, *args, **kwargs):
+        conn.commit()  # 앞선 미완료 작업과 섞이지 않게
+        before = _fk_violations(conn)
+        # 트랜잭션을 먼저 연다 — 트랜잭션 밖에서 켠 defer_foreign_keys는 다음 SELECT(자동 커밋 문장)가 끝나면 꺼진다(실측).
+        conn.execute("BEGIN")
+        conn.execute("PRAGMA defer_foreign_keys = ON")
+        try:
+            result = fn(conn, *args, **kwargs)
+            new = _fk_violations(conn) - before
+            if new:
+                tables = sorted({_TABLE_LABELS.get(t, t) for t, _rowid, _parent in new})
+                raise DeleteBlocked(
+                    "연결된 데이터가 남아 있어 삭제할 수 없습니다: " + ", ".join(tables)
+                    + " — 그 데이터를 먼저 정리하거나 관리자에게 알려 주세요(삭제 기능이 이 연결을 아직 모릅니다)."
+                )
+            conn.commit()
+            return result
+        except BaseException:
+            conn.rollback()
+            raise
+
+    return wrapper
+
+
+def _confirmed_detail(conn: sqlite3.Connection, *, task_ids: list[int] | None = None,
+                      resource_type: str | None = None, resource_id: int | None = None) -> str:
+    """확정 배정이 무엇인지(할 일·리소스) 화면에 보일 설명."""
+    if task_ids is not None:
+        placeholders = ",".join("?" * len(task_ids)) or "NULL"
+        rows = conn.execute(
+            "SELECT t.role_name, a.resource_type, a.resource_id FROM assignments a JOIN tasks t ON t.id = a.task_id "
+            f"WHERE a.task_id IN ({placeholders}) AND a.status = 'confirmed' ORDER BY a.id LIMIT 5", task_ids).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT t.role_name, a.resource_type, a.resource_id FROM assignments a JOIN tasks t ON t.id = a.task_id "
+            "WHERE a.resource_type = ? AND a.resource_id = ? AND a.status = 'confirmed' ORDER BY a.id LIMIT 5",
+            (resource_type, resource_id)).fetchall()
+    kinds = {"human": "사람", "agent": "AI 에이전트", "team": "팀", "pipeline": "파이프라인"}
+    items = [f"할 일 「{r[0]}」 ← {kinds.get(r[1], r[1])} #{r[2]}" for r in rows]
+    return ("확정된 배정이 있어 삭제할 수 없습니다(" + "; ".join(items) + ") — 할 일 상세의 \"배정 취소\"로 먼저 정리하세요."
+            if items else "확정된 배정이 있어 삭제할 수 없습니다 — 할 일 상세의 \"배정 취소\"로 먼저 정리하세요.")
+
+
+def _delete_task_links(conn: sqlite3.Connection, task_ids: list[int]) -> None:
+    """할 일을 가리키는 나머지 연결(2026-11-25 — 업무 요청 삭제 500의 원인: 할 일에 연결된 대화·참여자·선행 관계·Crew
+    실행 기록을 몰라 FK 위반). 대화는 지우지 않고 연결만 끊어 독립 대화로 남긴다(대화 내용은 보존)."""
+    if not task_ids:
+        return
+    ph = ",".join("?" * len(task_ids))
+    conn.execute(f"UPDATE conversations SET linked_task_id = NULL WHERE linked_task_id IN ({ph})", task_ids)
+    conn.execute(f"DELETE FROM task_participants WHERE task_id IN ({ph})", task_ids)
+    conn.execute(f"DELETE FROM task_dependencies WHERE task_id IN ({ph}) OR depends_on_task_id IN ({ph})",
+                 [*task_ids, *task_ids])
+    conn.execute(f"DELETE FROM crew_runs WHERE task_id IN ({ph})", task_ids)
 
 
 def confirmed_assignment_exists(
@@ -213,6 +310,12 @@ def _delete_deliverables_for_tasks(
             f"DELETE FROM deliverable_edit_proposals WHERE deliverable_id IN ({d_placeholders})",
             deliverable_ids,
         )
+        # 평가 HTML 리포트(2026-11-25) — 평가보다 먼저(FK).
+        conn.execute(
+            "DELETE FROM evaluation_reports WHERE evaluation_id IN "
+            f"(SELECT id FROM agent_evaluations WHERE deliverable_id IN ({d_placeholders}))",
+            deliverable_ids,
+        )
         conn.execute(
             f"DELETE FROM agent_evaluations WHERE deliverable_id IN ({d_placeholders})",
             deliverable_ids,
@@ -228,6 +331,7 @@ def _delete_deliverables_for_tasks(
     return len(deliverable_ids)
 
 
+@_atomic_delete
 def delete_task(conn: sqlite3.Connection, actor_id: int, task_id: int) -> None:
     """할 일(task) 하나를 그 아래 assignments·job_items·deliverables까지
     전부 지운다. `confirmed` 상태 배정이 있으면 막는다(먼저 정리하도록
@@ -237,11 +341,12 @@ def delete_task(conn: sqlite3.Connection, actor_id: int, task_id: int) -> None:
     if task is None:
         raise ValueError("task_not_found")
     if confirmed_assignment_exists(conn, task_ids=[task_id]):
-        raise PermissionError("confirmed_assignment_exists")
+        raise ConfirmedAssignmentError(_confirmed_detail(conn, task_ids=[task_id]))
 
     deleted_assignments = _delete_assignments_for_tasks(conn, [task_id])
     _delete_pipeline_runs_for_tasks(conn, [task_id])
     _delete_deliverables_for_tasks(conn, [task_id])
+    _delete_task_links(conn, [task_id])
     conn.execute(
         "UPDATE agent_pool SET source_job_item_id = NULL WHERE source_job_item_id IN "
         "(SELECT id FROM job_items WHERE task_id = ?)",
@@ -258,9 +363,9 @@ def delete_task(conn: sqlite3.Connection, actor_id: int, task_id: int) -> None:
         before={"role_name": task["role_name"], "brief_id": task["brief_id"]},
         after={"deleted_assignments": deleted_assignments},
     )
-    conn.commit()
 
 
+@_atomic_delete
 def delete_brief(conn: sqlite3.Connection, actor_id: int, brief_id: int) -> None:
     """업무 요청(brief) 하나를 그 아래 tasks·jobs·assignments·deliverables까지
     전부 지운다. 아래 어떤 task에든 `confirmed` 배정이 있으면 막는다."""
@@ -275,11 +380,12 @@ def delete_brief(conn: sqlite3.Connection, actor_id: int, brief_id: int) -> None
         ).fetchall()
     ]
     if confirmed_assignment_exists(conn, task_ids=task_ids):
-        raise PermissionError("confirmed_assignment_exists")
+        raise ConfirmedAssignmentError(_confirmed_detail(conn, task_ids=task_ids))
 
     deleted_assignments = _delete_assignments_for_tasks(conn, task_ids)
     _delete_pipeline_runs_for_tasks(conn, task_ids)
     _delete_deliverables_for_tasks(conn, task_ids)
+    _delete_task_links(conn, task_ids)
     if task_ids:
         placeholders = ",".join("?" * len(task_ids))
         conn.execute(
@@ -309,9 +415,9 @@ def delete_brief(conn: sqlite3.Connection, actor_id: int, brief_id: int) -> None
             "deleted_assignments": deleted_assignments,
         },
     )
-    conn.commit()
 
 
+@_atomic_delete
 def delete_human(conn: sqlite3.Connection, actor_id: int, human_id: int) -> None:
     """사람 인력(human_pool) 레코드를 지운다. `confirmed` 배정이 있으면
     막는다."""
@@ -319,7 +425,7 @@ def delete_human(conn: sqlite3.Connection, actor_id: int, human_id: int) -> None
     if row is None:
         raise ValueError("human_not_found")
     if confirmed_assignment_exists(conn, resource_type="human", resource_id=human_id):
-        raise PermissionError("confirmed_assignment_exists")
+        raise ConfirmedAssignmentError(_confirmed_detail(conn, resource_type="human", resource_id=human_id))
 
     conn.execute("DELETE FROM human_pool WHERE id = ?", (human_id,))
     audit.record(
@@ -331,9 +437,9 @@ def delete_human(conn: sqlite3.Connection, actor_id: int, human_id: int) -> None
         before={"name": row["name"], "role": row["role"]},
         after=None,
     )
-    conn.commit()
 
 
+@_atomic_delete
 def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None:
     """AI 에이전트(agent_pool) 레코드를 그 아래 지식 색인(knowledge_chunks)·
     도구 연결(agent_tool_links)까지 전부 지운다. `confirmed` 배정이 있으면
@@ -342,7 +448,7 @@ def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None
     if row is None:
         raise ValueError("agent_not_found")
     if confirmed_assignment_exists(conn, resource_type="agent", resource_id=agent_id):
-        raise PermissionError("confirmed_assignment_exists")
+        raise ConfirmedAssignmentError(_confirmed_detail(conn, resource_type="agent", resource_id=agent_id))
 
     conn.execute("DELETE FROM knowledge_chunks WHERE source_agent_id = ?", (agent_id,))
     conn.execute("DELETE FROM agent_tool_links WHERE agent_id = ?", (agent_id,))
@@ -356,7 +462,6 @@ def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None
         before={"role_name": row["role_name"], "status": row["status"]},
         after=None,
     )
-    conn.commit()
 
 
 # 사용자 요청(2026-10-27, "pip 설치나 패키지 배포시 에이전트와 도구/스킬
@@ -405,6 +510,7 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     # 실제 LLM 토큰 사용량 기록(2026-11-22 `llm_usage.py`) — 실행 이력과 같은 운영 데이터.
     "llm_usage",
     "knowledge_chunks",
+    "evaluation_reports",  # 평가 HTML 리포트(2026-11-25) — 평가와 함께 지운다
     "agent_evaluations",
     "deliverable_comments",
     "deliverable_revisions",
@@ -422,6 +528,7 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "deliverables",
     "conversation_jobs",
     "conversation_knowledge_chunks",
+    "message_evaluation_reports",  # 대화 메시지 평가 리포트(2026-11-25) — 메시지보다 먼저
     "conversation_messages",
     "conversation_participants",
     "conversations",
@@ -485,6 +592,8 @@ def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
             "UPDATE agent_pool SET status = 'active' WHERE code LIKE ?",
             (f"AGT-{id_scheme.AGENT_REF_SEGMENT}-%",),
         )
+        # 평가 기준 설정(2026-11-25)은 조직 설정이라 남긴다 — 지우는 사용자를 가리키지 않게 수정자만 비운다.
+        conn.execute("UPDATE evaluation_config SET updated_by = NULL")
         for table in _FACTORY_RESET_WIPE_TABLES:
             counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
         counts["team_members"] = conn.execute(

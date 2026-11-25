@@ -76,6 +76,7 @@ from hair_platform import (
     content_validators,
     crew_history,
     crew_runtime,
+    evaluation_reports,
     language_qa,
     llm,
     llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
@@ -1515,7 +1516,7 @@ def _run_agent_execution_job(
                 "task_id": task_id,
                 "author_type": "agent",
                 "agent_id": agent_id,
-                "gate_scores": eval_result["gate_scores"],
+                "gate_scores": evaluation_reports.public(eval_result["gate_scores"]),
                 "tcr": eval_result["tcr"],
             },
         )
@@ -1796,7 +1797,7 @@ def _persist_partial_crew_outputs(
                 "task_id": task_id,
                 "author_type": "agent",
                 "agent_id": agent_id,
-                "gate_scores": agent_gate_scores,
+                "gate_scores": evaluation_reports.public(agent_gate_scores),
                 "tcr": None,
                 "partial_recovery": True,
             },
@@ -1954,7 +1955,7 @@ def run_adhoc_crew_job(
                     "task_id": task_id,
                     "author_type": "agent",
                     "agent_id": agent["agent_id"],
-                    "gate_scores": agent_gate_scores,
+                    "gate_scores": evaluation_reports.public(agent_gate_scores),
                     "tcr": result["tcr"],
                 },
             )
@@ -2120,7 +2121,7 @@ def run_team_crew_job(
                     "author_type": "agent",
                     "agent_id": agent["agent_id"],
                     "team_id": team_id,
-                    "gate_scores": agent_gate_scores,
+                    "gate_scores": evaluation_reports.public(agent_gate_scores),
                     "tcr": result["tcr"],
                 },
             )

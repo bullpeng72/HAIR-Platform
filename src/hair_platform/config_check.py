@@ -38,7 +38,7 @@ def _stages(conn: sqlite3.Connection) -> dict[tuple[str, str], dict]:
             (s["id"],),
         ).fetchall()
         out[(s["tpl"], s["name"])] = {
-            "id": s["id"], "seq": s["seq_order"], "mode": s["mode"],
+            "id": s["id"], "seq": s["seq_order"], "mode": s["mode"], "lead": s["lead_role_name"],
             "gate_ids": json.loads(s["gate_ids"] or "[]"), "ratio": s["min_gate_pass_ratio"],
             "human": bool(s["requires_human_approval"]),
             "roles": [r["role_name"] for r in roles],
@@ -62,14 +62,28 @@ def check(conn: sqlite3.Connection) -> list[dict]:
             items.append({"id": f"stage_missing:{tpl}:{stage}", "kind": "stage_missing", "target": target,
                           "detail": "기본 구성에 있는 단계가 없습니다", "fixable": False})
             continue
+        # 모드 업그레이드(2026-11-25 — 사업/기획 "자료 조사·분석"이 순차 릴레이 → 계획 분담). 설치된 단계가 아직
+        # 예전 기본(순차 릴레이, 기본에 없는 역할을 admin이 더하지 않음)이면 반영 가능으로 낸다 — 모드·리드를 바꾸고
+        # 리드 역할을 넣는다. admin이 바꾼 단계(다른 모드·추가 역할)는 예전처럼 차이만 보여 준다.
+        upgrade = (
+            live["mode"] == "sequential_relay" and r["mode"] == "plan_merge" and r["lead"]
+            and set(live["roles"]) <= set(r["roles"])
+        )
+        if upgrade:
+            items.append({"id": f"stage_mode:{tpl}:{stage}", "kind": "stage_mode_upgrade", "target": target,
+                          "detail": f"모드를 계획 분담(리드({r['lead']})가 팀원별 하위 작업을 나누고 결과를 합침)으로 바꿉니다 "
+                          f"(현재: 순차 릴레이 {' → '.join(live['roles'])}) — 실측 29% 빠르고 결과물이 한 편으로 정리됨",
+                          "fixable": True})
         for role in r["roles"]:
+            if upgrade and role == r["lead"]:
+                continue  # 리드는 모드 업그레이드 항목이 함께 넣는다
             if role not in live["roles"]:
                 items.append({"id": f"stage_role:{tpl}:{stage}:{role}", "kind": "stage_role_missing",
                               "target": target, "detail": f"참여 역할 「{role}」이 빠져 있습니다 "
                               f"(기본: {' → '.join(r['roles'])} / 현재: {' → '.join(live['roles']) or '없음'})",
                               "fixable": True})
         diffs = []
-        if live["mode"] != r["mode"]:
+        if live["mode"] != r["mode"] and not upgrade:
             diffs.append(f"모드 {live['mode']}(기본 {r['mode']})")
         if sorted(live["gate_ids"]) != sorted(r["gate_ids"]) or abs((live["ratio"] or 0) - (r["ratio"] or 0)) > 1e-9:
             diffs.append(f"판정 {live['gate_ids']}·{live['ratio']}(기본 {r['gate_ids']}·{r['ratio']})")
@@ -134,6 +148,14 @@ def apply(conn: sqlite3.Connection, actor_id: int, item_ids: list[str]) -> dict:
         if kind == "stage_role_missing":
             _, tpl, stage, role = item_id.split(":", 3)
             _apply_stage_role(conn, ref, tpl, stage, role)
+        elif kind == "stage_mode_upgrade":
+            _, tpl, stage = item_id.split(":", 2)
+            r = _stages(ref)[(tpl, stage)]
+            live = _stages(conn)[(tpl, stage)]
+            if r["lead"] not in live["roles"]:
+                _apply_stage_role(conn, ref, tpl, stage, r["lead"])
+            conn.execute("UPDATE pipeline_stages SET mode = ?, lead_role_name = ? WHERE id = ?",
+                         (r["mode"], r["lead"], live["id"]))
         elif kind == "agent_skills_missing":
             role = item_id.split(":", 1)[1]
             row = conn.execute("SELECT id, skill_tags FROM agent_pool WHERE role_name = ?", (role,)).fetchone()

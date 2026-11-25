@@ -93,11 +93,15 @@ def test_business_planning_pipeline_research_stage_includes_data_analyst():
         "SELECT role_name FROM pipeline_stage_agents WHERE stage_id = ? ORDER BY seq_order",
         (stage["id"],),
     ).fetchall()
+    # 2026-11-25(P2-9 실측 → 사용자 결정): 계획 분담으로 — 리드 PM이 나누고 합친다(PM이 맨 앞).
     assert [a["role_name"] for a in agents] == [
+        "PM",
         "외부 자료 조사가",
         "데이터 분석가",
         "3C4P SWOT 분석가",
     ]
+    mode = conn.execute("SELECT mode, lead_role_name FROM pipeline_stages WHERE id = ?", (stage["id"],)).fetchone()
+    assert tuple(mode) == ("plan_merge", "PM")
 
 
 def test_business_planning_pipeline_uses_sequential_relay_for_writing_stage():

@@ -695,6 +695,12 @@ def list_messages(conn: sqlite3.Connection, conversation_id: int) -> list[dict]:
     for m in messages:
         if m.get("gate_scores"):
             m["gate_scores"] = json.loads(m["gate_scores"])
+    # 평가 HTML 리포트가 있는 메시지(2026-11-25) — 화면에 "평가 리포트" 링크를 단다.
+    from hair_platform import evaluation_reports
+
+    with_report = evaluation_reports.messages_with_report(conn, [m["id"] for m in messages if m.get("author_type") == "agent"])
+    for m in messages:
+        m["has_report"] = m["id"] in with_report
     return messages
 
 
@@ -1448,6 +1454,10 @@ def _finish_job_with_message(
     # 헬퍼를 공유)만 Gate A-G 측정이 전혀 없었다(원 조사에서 확인된
     # 공백) — `gate_scores`는 선택 인자라 안 넘기면(기존 호출부 전부)
     # `NULL`로 기존과 100% 동일.
+    # 평가 HTML 리포트(2026-11-25) — 토큰은 메시지의 Gate 점수에 남기지 않고 리포트만 메시지 id로 저장한다.
+    from hair_platform import evaluation_reports
+
+    gate_scores, report_token = evaluation_reports.split(gate_scores) if gate_scores else (gate_scores, None)
     cur = conn.execute(
         "INSERT INTO conversation_messages (conversation_id, author_type, author_id, "
         "content, used_skill, llm_provider, llm_model, gate_scores, context_policy) "
@@ -1472,6 +1482,7 @@ def _finish_job_with_message(
         ),
     )
     message_id = cur.lastrowid
+    evaluation_reports.store_for_message(conn, message_id, report_token)
     conn.execute(
         "UPDATE conversation_jobs SET status = 'succeeded', finished_at = datetime('now') "
         "WHERE id = ?",
@@ -1976,13 +1987,16 @@ def run_team_mention_job(
                 provider=budget_provider,
                 model=budget_model,
             )
-        gate_scores_json = json.dumps(result.get("gate_scores"), ensure_ascii=False)
+        from hair_platform import evaluation_reports  # 평가 HTML 리포트(2026-11-25) — 토큰은 빼고 메시지마다 리포트 저장
+
+        crew_gate_scores, crew_report_token = evaluation_reports.split(result.get("gate_scores") or {})
+        gate_scores_json = json.dumps(crew_gate_scores if result.get("gate_scores") else None, ensure_ascii=False)
         delegation_count = len(result.get("delegations") or [])
         posted = 0
         for agent in result["agents"]:
             if agent["output"] is None:
                 continue  # 매니저 역할 — 산출물 없음(run_crew()의 기존 관례)
-            conn.execute(
+            msg_cur = conn.execute(
                 "INSERT INTO conversation_messages (conversation_id, author_type, "
                 "author_id, content, llm_provider, llm_model, gate_scores, "
                 "delegation_count) VALUES (?, 'agent', ?, ?, ?, ?, ?, ?)",
@@ -1996,6 +2010,7 @@ def run_team_mention_job(
                     delegation_count,
                 ),
             )
+            evaluation_reports.store_for_message(conn, msg_cur.lastrowid, crew_report_token)
             posted += 1
         conn.execute(
             "UPDATE conversation_jobs SET status = 'succeeded', "

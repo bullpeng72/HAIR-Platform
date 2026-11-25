@@ -159,14 +159,30 @@ def run(
     )
     merged = scored["output"]
     agents = [*results, {"agent_id": lead["agent_id"], "role_name": lead["role_name"], "output": merged, "stage": "final"}]
+    # 배정 확인(2026-11-25 P2-9 실측) — 리드가 팀원 한 명에게 일을 주지 않고 그 몫을 직접 채웠는데("팀 산출물에 없어
+    # 직접 보강") 화면에는 드러나지 않았다. 계획에서 빠진 팀원을 참고용 배지(advisory — 통과 판정과 무관)로 남긴다.
+    assigned = {item["role"] for item in plan}
+    unassigned = [w["role_name"] for w in workers if w["role_name"] not in assigned]
+    gate_scores = dict(scored["gate_scores"])
+    gate_scores["plan_coverage"] = {
+        "score": round(len(assigned) / len(workers), 3) if workers else None,
+        "status": "warn" if unassigned else "pass",
+        "passed": True,
+        "advisory": True,
+        "not_measured": not workers,
+        "assigned": [item["role"] for item in plan],
+        "unassigned": unassigned,
+        "plan_source": plan_source,
+    }
     return {
         "agents": agents,
         "final_output": merged,
-        "gate_scores": scored["gate_scores"],
+        "gate_scores": gate_scores,
         "tcr": scored["tcr"],
         "delegations": [{"tool": "plan_merge", "from": lead["role_name"], "to": r["role_name"], "task": r["task"]}
                         for r in results],
         "plan_source": plan_source,
+        "plan_unassigned": unassigned,
         "parallel": parallel,
         # 병합본 수치의 근거 — 팀원 결과(각자 도구 결과로 수치 검사를 이미 거침, `execute_agent`).
         "tool_evidence": "\n\n".join(f"[팀원 {r['role_name']} 결과]\n{r['output']}" for r in results),

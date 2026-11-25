@@ -72,3 +72,18 @@ def test_platform_corpus_does_not_teach_known_invented_words():
     corpus = korean_lexicon._platform_corpus()
     for invented in ("이모니즘", "분인", "순현나름"):
         assert invented not in corpus, invented
+
+
+def test_lexicon_check_is_off_when_output_language_is_not_korean(client_and_conn):
+    """외국어 결과물을 "사전에 없는 낱말"로 오탐하지 않게 — 조직 결과물 언어가 한국어일 때만(2026-11-25)."""
+    from hair_platform import org_policy
+
+    _client, conn = client_and_conn
+    admin = conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()[0]
+    try:
+        org_policy.set_output_language(conn, admin, "ja")
+        assert korean_lexicon.enabled() is False
+        assert korean_lexicon.gate_score(_FILLER + "이모니즘")["not_measured"]
+    finally:
+        org_policy.set_output_language(conn, admin, "ko")
+    assert korean_lexicon.enabled() is True

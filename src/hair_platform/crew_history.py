@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from hair_platform import evaluation_reports
+
 
 def create_run(
     conn: sqlite3.Connection,
@@ -103,7 +105,7 @@ def complete_run(conn: sqlite3.Connection, run_id: int, result: dict) -> None:
         "token_usage = ?, delegations = ?, agent_outputs = ?, final_output = ?, "
         "finished_at = datetime('now') WHERE id = ?",
         (
-            json.dumps(result.get("gate_scores"), ensure_ascii=False),
+            json.dumps(evaluation_reports.public(result.get("gate_scores")), ensure_ascii=False),
             result.get("tcr"),
             json.dumps(result.get("token_usage"), ensure_ascii=False),
             json.dumps(result.get("delegations"), ensure_ascii=False),
