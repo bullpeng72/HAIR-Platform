@@ -17,11 +17,32 @@ B(세 축 중 최우선으로 합의된 것).
 
 from __future__ import annotations
 
+import functools
 import sqlite3
 
-import tiktoken
 
-_ENCODING = tiktoken.get_encoding("cl100k_base")
+class _CharEncoding:
+    """tiktoken 인코딩 표를 못 받을 때의 대체 — 글자 1개 = 토큰 1개로 센다. 한글 위주 실측 비율(cl100k 0.63
+    토큰/글자)보다 크게 세므로 "넘칠 것 같으면 미리 자르는" 이 모듈의 목적상 안전한 쪽(더 일찍 자름)이다."""
+
+    def encode(self, text: str) -> list[str]:
+        return list(text)
+
+    def decode(self, tokens: list[str]) -> str:
+        return "".join(tokens)
+
+
+@functools.lru_cache(maxsize=1)
+def _encoding():
+    """cl100k_base — 처음 쓸 때 불러온다(2026-11-25). 예전에는 import 시점에 불러와, 인코딩 표가 캐시에 없고
+    인터넷이 막힌 서버(사내 폐쇄망)에서는 tiktoken이 표를 내려받지 못해 **서버 시작(import) 자체가 실패**했다
+    (CI에서 외부 네트워크를 막자 드러남). 못 불러오면 `_CharEncoding`으로 대신한다."""
+    try:
+        import tiktoken
+
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:  # noqa: BLE001 — 네트워크·캐시 문제로 토큰 예산 기능이 서버를 막지 않게
+        return _CharEncoding()
 
 # 실측 보정(2026-11-18) — 대화 #14 전체(101,409자, 한글 위주 혼합 콘텐츠)
 # 기준 cl100k_base 추정치는 63,899토큰(비율 0.630)이었다. 반면 같은
@@ -60,7 +81,7 @@ def count_tokens(text: str, provider: str) -> int:
     보수적으로(실제보다 크게) 세는 쪽을 택한다."""
     if not text:
         return 0
-    base = len(_ENCODING.encode(text))
+    base = len(_encoding().encode(text))
     if provider == "ollama":
         return int(base * _OLLAMA_SAFETY_MULTIPLIER)
     return base
@@ -105,15 +126,15 @@ def fit_text_to_budget(text: str, provider: str, budget_tokens: int) -> str:
         return ""
     multiplier = _OLLAMA_SAFETY_MULTIPLIER if provider == "ollama" else 1.0
     cl100k_budget = max(0, int(budget_tokens / multiplier))
-    encoded = _ENCODING.encode(text)
+    encoded = _encoding().encode(text)
     if len(encoded) <= cl100k_budget:
         return text
     # 버그 수정 — 생략 표시 문구 자체도 토큰을 쓰므로, 본문 절삭 길이에서
     # 그만큼을 미리 빼야 "본문+표시 문구" 합계가 예산을 넘지 않는다
     # (실측: 안 빼면 꾸준히 몇 % 초과했다).
-    marker_tokens = len(_ENCODING.encode(_OMISSION_MARKER))
+    marker_tokens = len(_encoding().encode(_OMISSION_MARKER))
     body_budget = max(0, cl100k_budget - marker_tokens)
-    truncated = _ENCODING.decode(encoded[:body_budget])
+    truncated = _encoding().decode(encoded[:body_budget])
     return truncated + _OMISSION_MARKER
 
 

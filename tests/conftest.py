@@ -47,6 +47,8 @@ for _name in list(os.environ):
 # 가짜 키로 실패하는 테스트가 있다면 그 테스트가 외부 서비스를 실제로 호출하고 있다는 뜻이다.
 os.environ["OPENAI_API_KEY"] = "sk-test-hermetic-not-a-real-key"
 os.environ["TAVILY_API_KEY"] = "tvly-test-hermetic-not-a-real-key"
+# litellm은 import 때 모델 가격표를 인터넷(GitHub)에서 받으려 한다 — 내장 사본을 쓰게 한다.
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 # 외부 네트워크 차단 — 테스트가 실제 외부 서비스(OpenAI·Tavily·PyPI 등)에 접속하면 PC·CI 네트워크 상태에 따라 결과가
 # 달라지고 비용이 들 수 있다. 같은 PC 안(localhost — 테스트용 HTTP 서버·로컬 Ollama 흉내)만 허용한다.

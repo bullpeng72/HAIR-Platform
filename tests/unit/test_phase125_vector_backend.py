@@ -155,3 +155,20 @@ def test_cli_reindex_vectors(tmp_path, monkeypatch, capsys):
 def test_telemetry_is_disabled(file_db):
     client = _chroma(file_db)._client()
     assert client.get_settings().anonymized_telemetry is False
+
+
+def test_token_budget_works_without_tiktoken_encoding(monkeypatch):
+    """2026-11-25 — 인코딩 표를 못 받는 폐쇄망에서도 서버가 뜨고(지연 로드), 글자 수로 보수적으로 센다."""
+    import sys
+
+    from hair_platform import token_budget
+
+    token_budget._encoding.cache_clear()
+    monkeypatch.setitem(sys.modules, "tiktoken", None)  # import tiktoken → ImportError
+    try:
+        text = "가" * 100
+        assert token_budget.count_tokens(text, "openai") == 100  # 글자 1개 = 1토큰(실제보다 크게)
+        cut = token_budget.fit_text_to_budget(text * 10, "openai", 200)
+        assert len(cut) < 1000 and cut.endswith(token_budget._OMISSION_MARKER)
+    finally:
+        token_budget._encoding.cache_clear()
