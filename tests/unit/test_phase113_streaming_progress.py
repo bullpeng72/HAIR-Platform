@@ -43,6 +43,7 @@ def test_partial_sink_only_inside_job_and_cleared_after(conn, monkeypatch):
     assert progress.partial_sink() is None
     with progress.reporting(conn, "conversation_jobs", job):
         sink = progress.partial_sink()
+        assert sink is not None
         sink("1. 분기별 목표")
         row = conn.execute("SELECT partial_output FROM conversation_jobs WHERE id = ?", (job,)).fetchone()
         assert row["partial_output"] == "1. 분기별 목표"
@@ -56,6 +57,7 @@ def test_partial_writes_are_throttled(conn):
     with progress.reporting(conn, "conversation_jobs", job):
         sink = progress.partial_sink()
         for i in range(50):
+            assert sink is not None
             sink("x" * i)
         writes.append(conn.execute("SELECT partial_output FROM conversation_jobs WHERE id = ?", (job,)).fetchone()[0])
     assert writes[0] in ("", None) or len(writes[0]) < 50  # 간격 안의 연속 호출은 대부분 건너뛴다

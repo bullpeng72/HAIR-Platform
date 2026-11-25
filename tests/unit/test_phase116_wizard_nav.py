@@ -71,7 +71,7 @@ def test_wizard_api(client_and_conn):
 def test_essential_tabs_exist_and_rest_are_behind_more_toggle():
     html = webui.INDEX_HTML
     tab_ids = set(re.findall(r'\{ id: "([a-z_]+)", label:', html))
-    essential = set(re.findall(r'"([a-z_]+)"', re.search(r"const ESSENTIAL_TABS = new Set\(\[([^\]]*)\]\)", html).group(1)))
+    essential = set(re.findall(r'"([a-z_]+)"', re.search(r"const ESSENTIAL_TABS = new Set\(\[([^\]]*)\]\)", html).group(1)))  # pyright: ignore[reportOptionalMemberAccess]
     assert essential <= tab_ids  # 오타로 탭이 사라지지 않게
     assert {"home", "conversations", "inbox", "mywork", "approvals"} <= essential
     assert "board" not in essential and "orgchart" not in essential

@@ -172,6 +172,7 @@ def test_proposal_pipeline_all_stages_have_at_least_one_resolvable_agent():
         "SELECT id FROM pipeline_templates WHERE name = '제안서 작성 파이프라인'"
     ).fetchone()
     full = pr.get_pipeline_template(conn, template["id"])
+    assert full is not None
     assert len(full["stages"]) == 6
     for stage in full["stages"]:
         assert len(stage["agents"]) >= 1, f"{stage['name']} 단계에 Agent가 없음"
@@ -243,6 +244,7 @@ def test_proposal_pipeline_runs_end_to_end():
             return_value=dict(traceability_result),
         ),
     ):
+        assert task_id is not None
         run_id = pr.start_pipeline_run(conn, admin_id, template["id"], task_id)
         pr.run_pipeline_stage_job(conn, run_id, admin_id)  # 1단계 실행 → 승인 대기
         pending_approval = conn.execute(
@@ -291,6 +293,7 @@ def test_performance_report_pipeline_all_stages_have_at_least_one_resolvable_age
         "SELECT id FROM pipeline_templates WHERE name = '실적 보고 파이프라인'"
     ).fetchone()
     full = pr.get_pipeline_template(conn, template["id"])
+    assert full is not None
     assert len(full["stages"]) == 4
     for stage in full["stages"]:
         assert len(stage["agents"]) >= 1, f"{stage['name']} 단계에 Agent가 없음"
@@ -363,6 +366,7 @@ def test_performance_report_pipeline_runs_end_to_end():
             return_value=dict(traceability_result),
         ),
     ):
+        assert task_id is not None
         run_id = pr.start_pipeline_run(conn, admin_id, template["id"], task_id)
         pr.run_pipeline_stage_job(conn, run_id, admin_id)
         pending_approval = conn.execute(

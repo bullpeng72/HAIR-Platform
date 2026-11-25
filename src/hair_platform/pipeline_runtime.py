@@ -1240,6 +1240,9 @@ def _execute_stage_attempt(
         f"{base_input}\n\n{stage_instructions}" if stage_instructions else base_input
     )
 
+    # 계획 분담 단계에서만 채운다(아래 실행부도 같은 조건에서만 쓴다 — 타입 검사기용 초기값).
+    plan_lead: dict | None = None
+    plan_workers: list[dict] = []
     if stage["mode"] == "parallel_delegated":
         lead_agent_id = _resolve_role_agent_id(conn, stage["lead_role_name"])
         coworker_rows = [
@@ -1301,7 +1304,7 @@ def _execute_stage_attempt(
     # 진행 표시(2026-11-24, P0-2 파이프라인 진행률) — 단계 시작 시각·지금 하는 일·작성 중 미리보기를
     # 실행 행에 남긴다(`stage_progress`).
     with stage_progress(conn, run_id, stage):
-        if stage["mode"] == "plan_merge":
+        if stage["mode"] == "plan_merge" and plan_lead is not None:
             from hair_platform import plan_merge
 
             result = plan_merge.run(

@@ -107,9 +107,10 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             (user["id"], payload.raw_text, json.dumps(stub_roles, ensure_ascii=False), source),
         )
         conn.commit()
-        if source is not None:
-            conversations.record_brief_transfer(conn, source, user["id"], cur.lastrowid)
-        return {"id": cur.lastrowid, "stub_roles": stub_roles, "status": "submitted",
+        brief_id = cur.lastrowid  # INSERT 직후라 늘 있다(타입상 int | None)
+        if source is not None and brief_id is not None:
+            conversations.record_brief_transfer(conn, source, user["id"], brief_id)
+        return {"id": brief_id, "stub_roles": stub_roles, "status": "submitted",
                 "source_conversation_id": source}
 
     # ---------- AI에게 일 맡기기 마법사(2026-11-24, P2-8 — `wizard.py`) ----------

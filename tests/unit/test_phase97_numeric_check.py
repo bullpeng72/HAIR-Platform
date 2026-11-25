@@ -18,13 +18,16 @@ def test_correct_percentages_are_supported():
 def test_real_errors_are_flagged():
     # 실측: 0.8÷7 = 11.4%인데 13.8%라고 썼다.
     bad = nc.unsupported_claims("영업이익은 목표 대비 **88.6%에 그쳐 13.8%(0.8억 원) 미달**이다.", REQUEST)
+    assert bad is not None
     assert [c["text"] for c in bad] == ["13.8%"]
     # 실측: 비율(11.3%·13.5%)을 %p로 썼다 — %p는 두 비율의 차이만 허용한다.
     bad = nc.unsupported_claims("이익률 11.3%p→13.5%p 개선이 과제다.", REQUEST)
+    assert bad is not None
     assert {c["text"] for c in bad} == {"11.3%p", "13.5%p"}
     # 실측: 하반기 합계를 113억(실제 116억)으로 잘못 더한 뒤 증감률을 냈다.
     series = '{"periods": ["1분기", "2분기", "3분기", "4분기"], "values": [42, 48, 55, 61]}'
     bad = nc.unsupported_claims("하반기(113억)가 상반기(90억)보다 25.6% 크다.", series)
+    assert bad is not None
     assert [c["text"] for c in bad] == ["25.6%"]
 
 
@@ -56,6 +59,7 @@ def test_unmeasurable_returns_none_and_gate_is_informational():
 def test_repair_replaces_only_flagged_sentences_and_guards_results():
     text = "## 요약\n매출 105.8% 달성.\n영업이익은 13.8% 미달이다.\n끝."
     bad = nc.unsupported_claims(text, REQUEST)
+    assert bad is not None
     fixed, report = nc.repair(text, bad, REQUEST, lambda s, p: json.dumps(["영업이익은 11.4%(0.8÷7) 미달이다."], ensure_ascii=False))
     assert "11.4%" in fixed and "105.8%" in fixed and report["fixed"] == 1
     # 응답을 못 읽으면 원문 유지

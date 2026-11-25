@@ -240,7 +240,7 @@ def test_browser_opens_only_after_server_answers():
             self.send_response(200)
             self.end_headers()
 
-        def log_message(self, *a):
+        def log_message(self, *a):  # pyright: ignore[reportIncompatibleMethodOverride]
             pass
 
     def late_server():

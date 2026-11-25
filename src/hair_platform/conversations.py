@@ -2738,14 +2738,17 @@ def _run_default_ai_job(
         # A-G 측정이 전혀 없었다. 경고 배너를 덧붙이기 전의 순수 LLM
         # 출력만 측정 대상으로 삼는다(배너는 실제 생성 내용이 아니라
         # 휴리스틱을 왜곡할 수 있음).
+        # 작성 중 미리보기(2026-11-24, P0-2) — 작업 안에서만 스트리밍. 미리보기가 없으면 `on_partial`을 넘기지
+        # 않는다. `dict` 타입으로 묶어야 타입 검사기가 함수 값을 다른 키워드 인자 자리로 오해하지 않는다.
+        stream_kwargs: dict = {}
+        if (_partial := _progress.partial_sink()):
+            stream_kwargs["on_partial"] = _partial
         eval_result = agent_evaluation.run_and_score(
             skill or "대화 기본 AI",
             lambda: (
                 llm.call_llm_with_tools(provider, model, system, transcript, callable_tools)
                 if callable_tools
-                # 작성 중 미리보기(2026-11-24, P0-2) — 작업 안에서만 스트리밍.
-                else llm.call_llm(provider, model, system, transcript,
-                                  **({"on_partial": _partial} if (_partial := _progress.partial_sink()) else {}))
+                else llm.call_llm(provider, model, system, transcript, **stream_kwargs)
             ),
         )
         output = eval_result["output"]

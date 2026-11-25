@@ -28,6 +28,7 @@ def test_reporting_updates_the_job_row():
     job = conn.execute(
         "INSERT INTO conversation_jobs (conversation_id, trigger_type) VALUES (?, 'auto_reply')", (conv,)
     ).lastrowid
+    assert job is not None
     with progress.reporting(conn, "conversation_jobs", job):
         progress.report("자료 조회 중")
     row = conn.execute("SELECT progress, progress_at FROM conversation_jobs WHERE id = ?", (job,)).fetchone()

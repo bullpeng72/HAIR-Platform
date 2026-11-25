@@ -133,11 +133,13 @@ def test_pipeline_engines_run_plan_merge_stage(engine):
             patch.object(agent_evaluation, "run_and_score", side_effect=_plain_score), \
             patch("hair_platform.crew_runtime.run_crew", side_effect=AssertionError("CrewAI 경로를 타면 안 된다")):
         if engine == "classic":
+            assert task is not None
             run_id = pipeline_runtime.start_pipeline_run(conn, admin, tid, task)
             pipeline_runtime.run_pipeline_stage_job(conn, run_id, admin)
         else:
             execution_graph = _graph()
             execution_graph.validate_template_supported(conn, tid)
+            assert task is not None
             run_id = pipeline_runtime.start_pipeline_run(conn, admin, tid, task)
             execution_graph.run_pipeline_graph_job(conn, run_id, admin)
     assert len(calls) == 3

@@ -21,6 +21,7 @@ def test_flags_invented_words_from_live_runs(small_vocab):
                            ("수기·메신저 등으로 분인 처리하시다", "분인"),
                            ("순현나름 기준으로 계산했다", "순현")]:
         found = korean_lexicon.odd_words(_FILLER + sentence)
+        assert found is not None
         assert [w["word"] for w in found] == [word], sentence
         assert sentence[:4] in found[0]["context"] or word in found[0]["context"]
 

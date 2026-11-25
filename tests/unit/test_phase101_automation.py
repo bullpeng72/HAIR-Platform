@@ -139,6 +139,7 @@ def test_schedule_fires_brief_task_and_pipeline_run(client_and_conn):
     brief = conn.execute("SELECT b.raw_text FROM tasks t JOIN briefs b ON b.id = t.brief_id WHERE t.id = ?", (run["task_id"],)).fetchone()[0]
     assert "정기 실행 「주간 실적」" in brief
     after = automation.get_schedule(conn, sched["id"])
+    assert after is not None
     assert after["next_run_at"] == (due + dt.timedelta(days=7)).isoformat(timespec="minutes")
     assert automation.run_due_schedules(conn, due, lambda r, a: None) == []  # 같은 시각에 두 번 돌지 않는다
 
@@ -164,4 +165,4 @@ def test_schedule_validation_and_permissions(client_and_conn):
 
 def test_loop_only_starts_under_hair_serve(monkeypatch):
     monkeypatch.delenv("HAIR_AUTOMATION", raising=False)
-    assert automation.start_loop(None) is False
+    assert automation.start_loop(None) is False  # pyright: ignore[reportArgumentType]

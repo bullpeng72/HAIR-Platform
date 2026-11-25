@@ -319,12 +319,14 @@ def _crewai_llm(provider: str, model: str, temperature: float | None = None):
         # (/api/generate)와 달리 `ollama_chat/`(/api/chat)은 모델의 사고 과정을 본문과 분리해 준다
         # (실측: `ollama/`는 영어 추론 문장이 답에 섞였다).
         base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        # `_skip_mcp_handler`는 crewai `LLM`의 선언된 인자가 아니라 litellm으로 그대로 넘어가는 추가 인자 —
+        # dict로 묶어 넘겨 타입 검사기가 "없는 인자"로 막지 않게 한다(동작 동일).
         return LLM(model=f"ollama_chat/{model}", base_url=base_url, is_litellm=True,
-                   _skip_mcp_handler=True, **kwargs)
+                   **{**kwargs, "_skip_mcp_handler": True})
     llm_model = f"{provider}/{model}"
     instance = LLM(model=llm_model, **kwargs)
     if getattr(instance, "is_litellm", False):
-        instance = LLM(model=llm_model, _skip_mcp_handler=True, **kwargs)
+        instance = LLM(model=llm_model, **{**kwargs, "_skip_mcp_handler": True})
     return instance
 
 
@@ -781,13 +783,19 @@ def run_crew(
         # 단계별 LLM 관찰만 끈다(`reasoning_effort="low"` — 휴리스틱 관찰). 클라우드 provider는
         # 네이티브 클라이언트가 구조화 출력을 직접 처리하므로 기존 동작 그대로다.
         if resolved_provider == "ollama" and tuning.pop("reasoning", False):
-            from crewai.agent.planning_config import PlanningConfig
-
-            planning_kwargs: dict[str, Any] = {"reasoning_effort": "low"}
             attempts = tuning.pop("max_reasoning_attempts", None)
-            if attempts is not None:
-                planning_kwargs["max_attempts"] = attempts
-            tuning["planning_config"] = PlanningConfig(**planning_kwargs)
+            try:
+                # crewai 1.15+에만 있다(1.6에는 `planning_config` 모듈이 없음 — 2026-11-25 conda `HAIR` 환경에서 발견).
+                from crewai.agent.planning_config import PlanningConfig  # type: ignore[import-not-found]
+            except ImportError:
+                # 옛 crewai: 단계별 관찰을 끌 방법이 없으므로 사전 계획(reasoning)도 넘기지 않는다
+                # (위 문제의 느린 LLM 관찰 호출을 피하는 쪽 — 로컬 모델 기본 정책과 같은 결과).
+                PlanningConfig = None
+            if PlanningConfig is not None:
+                planning_kwargs: dict[str, Any] = {"reasoning_effort": "low"}
+                if attempts is not None:
+                    planning_kwargs["max_attempts"] = attempts
+                tuning["planning_config"] = PlanningConfig(**planning_kwargs)
         tuning["llm"] = (
             crew_llm
             if temperature is None

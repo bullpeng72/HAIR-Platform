@@ -67,7 +67,9 @@ def test_session_closes_connections():
             return False
 
     with tool_calling.mcp_session():
-        tool_calling._MCP_STACK.get().enter_context(_Adapter())
+        stack = tool_calling._MCP_STACK.get()
+        assert stack is not None
+        stack.enter_context(_Adapter())
         assert closed == []
     assert closed == [True] and tool_calling._MCP_STACK.get() is None
 
@@ -104,10 +106,10 @@ def test_pptx_slides_per_heading_with_tables():
     from pptx import Presentation
 
     prs = Presentation(io.BytesIO(exports.to_pptx(REPORT, "markdown", "실적")))
-    titles = [s.shapes.title.text for s in prs.slides]
+    titles = [s.shapes.title.text for s in prs.slides]  # pyright: ignore[reportOptionalMemberAccess]
     assert titles == ["3분기 실적", "예산 대비 실적", "권고", "권고 — 일정"]  # 맨 앞 # 제목은 표지 슬라이드
     tables = [sh for sh in prs.slides[1].shapes if sh.has_table]
-    assert len(tables) == 1 and tables[0].table.cell(2, 0).text == "마케팅"
+    assert len(tables) == 1 and tables[0].table.cell(2, 0).text == "마케팅"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_pptx_from_html_deck_sections():
@@ -118,7 +120,7 @@ def test_pptx_from_html_deck_sections():
     html = ('<main class="hair-deck"><section><h1>표지</h1><p>3분기 보고</p></section>'
             '<section><h2>요약</h2><ul><li>마케팅 초과</li><li>교육 미집행</li></ul></section></main>')
     prs = Presentation(io.BytesIO(exports.to_pptx(html, "html")))
-    assert [s.shapes.title.text for s in prs.slides] == ["표지", "요약"]
+    assert [s.shapes.title.text for s in prs.slides] == ["표지", "요약"]  # pyright: ignore[reportOptionalMemberAccess]
 
 
 def test_export_endpoints(client_and_conn):

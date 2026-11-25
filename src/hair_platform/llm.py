@@ -22,6 +22,7 @@ OpenAI는 과금, Ollama는 로컬 실행이라 API 비용은 없지만 로컬 �
 
 from __future__ import annotations
 
+from typing import Any
 import json
 import os
 import sqlite3
@@ -232,7 +233,8 @@ def call_llm(
     값을 넘겨 쓴다(아래 `_call_anthropic`/`_call_openai` 참고)."""
     # `temperature`(2026-11-21) — 에이전트 파인튜닝 값. 지정됐을 때만 넘겨
     # 기존 호출 모양(테스트 대역 포함)을 그대로 둔다.
-    extra = {"temperature": temperature} if temperature is not None else {}
+    # `dict[str, Any]` — 값 타입을 float로 좁혀 추론하면 `max_output_tokens`(int) 자리와 충돌한다(타입 검사).
+    extra: dict[str, Any] = {"temperature": temperature} if temperature is not None else {}
     # `max_output_tokens`(2026-11-25) — 짧은 JSON 채점 호출용 출력 상한(모델 한도보다 작을 때만 적용).
     # 지정됐을 때만 넘겨 기존 호출 모양(테스트 대역 포함)을 그대로 둔다. 스트리밍 경로는 쓰지 않는다.
     if max_output_tokens is not None:
@@ -271,7 +273,8 @@ def call_llm_with_tools(
     `call_llm()`과 동일하게 1턴만 호출한다(불필요한 복잡도 없음,
     호출부가 매번 "도구가 있는지" 분기할 필요가 없도록 이 함수 안에서
     처리)."""
-    extra = {"temperature": temperature} if temperature is not None else {}
+    # `dict[str, Any]` — 값 타입을 float로 좁혀 추론하면 `max_output_tokens`(int) 자리와 충돌한다(타입 검사).
+    extra: dict[str, Any] = {"temperature": temperature} if temperature is not None else {}
     if not tools:
         return call_llm(provider, model, system, prompt, timeout_seconds=timeout_seconds, **extra)
     if provider == "anthropic":

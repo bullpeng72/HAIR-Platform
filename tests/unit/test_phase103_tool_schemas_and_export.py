@@ -96,7 +96,7 @@ def test_markdown_to_docx_keeps_structure():
 
     doc = Document(io.BytesIO(exports.to_docx(MD, "markdown")))
     texts = [p.text for p in doc.paragraphs]
-    styles = {p.text: p.style.name for p in doc.paragraphs}
+    styles = {p.text: (p.style.name or "") if p.style else "" for p in doc.paragraphs}
     assert styles["3분기 실적 보고"].startswith("Heading 1") and styles["핵심 실적"].startswith("Heading 2")
     assert styles["매출 55억 달성"] == "List Bullet"
     bold = [r.text for p in doc.paragraphs for r in p.runs if r.bold]

@@ -48,6 +48,7 @@ def test_stage_with_return_target_fails_on_rework_verdict_and_goes_back():
                 "gate_scores": {"A": {"score": 0.9, "passed": True}}, "tcr": 90.0, "delegations": []}
 
     with patch("hair_platform.crew_runtime.run_crew", side_effect=fake_run_crew):
+        assert task is not None
         run_id = pr.start_pipeline_run(conn, admin, tid, task)
         pr.run_pipeline_stage_job(conn, run_id, admin)
 
@@ -62,6 +63,7 @@ def test_stage_with_return_target_fails_on_rework_verdict_and_goes_back():
 
 def test_reviewer_guide_says_verdict_is_reviewers_job_and_old_text_is_upgraded():
     guide = skill_catalog.SKILL_GUIDES["문서품질검토"]
+    assert guide.constraints is not None
     assert "판정은 검토자인 당신이 쓰는" in guide.constraints
     old = guide.constraints[: guide.constraints.index(" ⑤")]
     assert skill_catalog.is_replaceable("문서품질검토", "constraints", old)  # 고치지 않은 기존 DB 문구는 새 문구로 교체
@@ -101,6 +103,7 @@ def test_graph_engine_also_reworks_on_rework_verdict():
                 "agents": [{"agent_id": agent_ids[0], "role_name": role, "name": None, "output": output}],
                 "gate_scores": {"A": {"score": 0.9, "passed": True}}, "tcr": 90.0, "delegations": []}
 
+    assert task is not None
     run_id = pr.start_pipeline_run(conn, admin, tid, task)
     with SqliteSaver.from_conn_string(":memory:") as saver, \
             patch("hair_platform.crew_runtime.run_crew", side_effect=fake_run_crew):

@@ -422,14 +422,18 @@ def execute_agent(
     else:
         # 작성 중 미리보기(2026-11-24, P0-2) — 작업(대화·워크스페이스) 안에서만 스트리밍으로 받는다.
         sink = progress.partial_sink()
+        # 미리보기가 없으면 `on_partial`을 아예 넘기지 않는다(기존 호출과 같은 모양). `dict` 타입으로 묶어
+        # 넘겨야 타입 검사기가 함수 값을 `temperature`·`max_output_tokens` 자리로 오해하지 않는다.
+        call_extra: dict = dict(llm_extra)
+        if sink:
+            call_extra["on_partial"] = sink
         output = llm.call_llm(
             resolved_provider,
             resolved_model,
             system,
             augmented_prompt,
             timeout_seconds=timeout_seconds,
-            **llm_extra,
-            **({"on_partial": sink} if sink else {}),
+            **call_extra,
         )
     # 중간에 끊긴 것으로 보이면 이어서 완성시킨다(`_looks_truncated()`
     # 모듈 docstring 참고) — 최대 `_MAX_CONTINUATION_ATTEMPTS`번까지만
@@ -492,10 +496,13 @@ def execute_agent(
     numeric_evidence = "\n\n".join(
         [augmented_prompt] + [result for _name, result in tool_calls]
     )
-    output, numeric_report = numeric_check.repair_output(
+    repaired, numeric_report = numeric_check.repair_output(
         conn, output, numeric_evidence, resolved_provider, resolved_model, actor_id,
         "agent_execute",
     )
+    # `repair_output()`은 입력이 None일 때만 None을 돌려준다 — 여기 `output`은 늘 문자열이라 그대로 유지된다.
+    if repaired is not None:
+        output = repaired
     if retrieval_sink is not None and numeric_report is not None:
         retrieval_sink["numeric_check"] = numeric_report
 

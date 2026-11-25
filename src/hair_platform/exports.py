@@ -231,7 +231,9 @@ def to_xlsx(content: str, content_type: str = "markdown", title: str | None = No
     lines = _html_to_lines(content) if content_type == "html" else (content or "").splitlines()
     blocks = _blocks(lines)
     wb = Workbook()
-    wb.remove(wb.active)
+    default_sheet = wb.active  # 새 통합 문서의 빈 기본 시트(타입상 None일 수 있어 확인 후 지움)
+    if default_sheet is not None:
+        wb.remove(default_sheet)
     used: set[str] = set()
 
     def sheet_name(base: str) -> str:
@@ -313,7 +315,7 @@ def _slides_from_markdown(content: str) -> list[dict]:
                 title = b["text"]
             else:
                 title = f"{parent} — {b['text']}" if parent else b["text"]
-            if empty_prev and b["level"] == 3:
+            if empty_prev and current is not None and b["level"] == 3:
                 current["title"] = title  # 내용 없는 상위 제목 슬라이드는 소제목 슬라이드로 합친다
             else:
                 current = {"title": title, "body": [], "table": None, "base": title}
@@ -353,7 +355,9 @@ def to_pptx(content: str, content_type: str = "markdown", title: str | None = No
         prs.core_properties.title = title
     for s in slides or [{"title": title or "결과물", "body": [], "table": None}]:
         slide = prs.slides.add_slide(prs.slide_layouts[5])  # 제목만
-        slide.shapes.title.text = s["title"][:120]
+        title_shape = slide.shapes.title  # "제목만" 레이아웃이라 늘 있지만 타입상 None일 수 있다
+        if title_shape is not None:
+            title_shape.text = s["title"][:120]
         top = Inches(1.5)
         if s["body"]:
             box = slide.shapes.add_textbox(Inches(0.6), top, Inches(12.1), Inches(2.6 if s["table"] else 5.5))
@@ -367,7 +371,7 @@ def to_pptx(content: str, content_type: str = "markdown", title: str | None = No
         if s["table"]:
             header, rows = s["table"]["header"], s["table"]["rows"][:14]
             shape = slide.shapes.add_table(1 + len(rows), len(header), Inches(0.6), top, Inches(12.1),
-                                           Inches(0.4) * (1 + len(rows)))
+                                           Inches(0.4 * (1 + len(rows))))  # 행당 0.4인치(Length 타입 유지)
             for r, cells in enumerate([header, *rows]):
                 for c in range(len(header)):
                     cell = shape.table.cell(r, c)

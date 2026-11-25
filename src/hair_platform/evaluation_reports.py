@@ -83,10 +83,11 @@ def split(gate_scores: dict) -> tuple[dict, str | None]:
     return clean, (entry.get("token") if isinstance(entry, dict) else None)
 
 
-def store(conn: sqlite3.Connection, evaluation_id: int, token: str | None) -> bool:
+def store(conn: sqlite3.Connection, evaluation_id: int | None, token: str | None) -> bool:
     """캐시의 리포트를 평가 id로 저장한다(커밋은 호출자 — `record_evaluation()`과 같은 트랜잭션). 여러 결과물이
     같은 리포트를 쓰면(Crew 실행의 Agent별 결과물) 캐시에서 빼지 않고 각각 저장한다."""
-    if not token:
+    # id는 `cursor.lastrowid`(타입상 int | None) — INSERT 직후라 실제로는 늘 있지만 없으면 저장하지 않는다.
+    if not token or evaluation_id is None:
         return False
     with _LOCK:
         blob = _CACHE.get(token)
@@ -112,9 +113,9 @@ def has_report(conn: sqlite3.Connection, evaluation_id: int) -> bool:
     return conn.execute("SELECT 1 FROM evaluation_reports WHERE evaluation_id = ?", (evaluation_id,)).fetchone() is not None
 
 
-def store_for_message(conn: sqlite3.Connection, message_id: int, token: str | None) -> bool:
+def store_for_message(conn: sqlite3.Connection, message_id: int | None, token: str | None) -> bool:
     """대화 메시지의 리포트 저장(커밋은 호출자). Crew 멘션처럼 메시지 여러 개가 한 평가를 공유하면 각각 저장한다."""
-    if not token:
+    if not token or message_id is None:
         return False
     with _LOCK:
         blob = _CACHE.get(token)

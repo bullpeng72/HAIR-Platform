@@ -27,6 +27,7 @@ def test_report_is_generated_stored_and_served_sandboxed(client_and_conn):
     agent_evaluation.record_evaluation(conn, did, scored["gate_scores"], scored["tcr"])
     conn.commit()
     latest = agent_evaluation.latest_evaluation(conn, did)
+    assert latest is not None
     assert latest["has_report"] is True
     assert evaluation_reports.REPORT_KEY not in latest["gate_scores"]  # 저장된 Gate 점수에는 토큰이 없다
     assert evaluation_reports.REPORT_KEY in scored["gate_scores"]  # 호출자 dict는 건드리지 않는다
@@ -46,7 +47,7 @@ def test_no_report_when_disabled_and_404_without_report(client_and_conn, monkeyp
     did = _deliverable(conn)
     agent_evaluation.record_evaluation(conn, did, scored["gate_scores"], scored["tcr"])
     conn.commit()
-    assert agent_evaluation.latest_evaluation(conn, did)["has_report"] is False
+    assert agent_evaluation.latest_evaluation(conn, did)["has_report"] is False  # pyright: ignore[reportOptionalSubscript]
     assert client.post("/login", json={"username": "admin1", "password": "adminpass"}).status_code == 200
     assert client.get(f"/api/deliverables/{did}/evaluation-report").status_code == 404
 

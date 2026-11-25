@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -16,7 +17,7 @@ def conn():
     return c
 
 
-def _run(tool_name, payload):
+def _run(tool_name, payload) -> Any:  # JSON이면 dict, 아니면 원문 str
     source = {n: s for n, _d, s, _t in domain_packs.TOOL_SPECS}[tool_name]
     raw = pool_registry._run_custom_python_tool(source, payload if isinstance(payload, str) else json.dumps(payload), 10)
     try:

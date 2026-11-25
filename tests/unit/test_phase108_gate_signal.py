@@ -103,6 +103,7 @@ def test_run_crew_collects_tool_outputs_as_evidence():
         return _crew_output(["재무 분석가"], "IRR 12.92%")
 
     with patch("crewai.Crew.kickoff", new=_kickoff):
+        assert agent_id is not None
         result = crew_runtime.run_crew(conn, [agent_id], ["분석"], 1, provider="openai")
     assert "[도구 재무 지표 계산기 결과]" in result["tool_evidence"]
     assert "12.92" in result["tool_evidence"]
