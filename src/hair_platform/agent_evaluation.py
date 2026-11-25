@@ -171,6 +171,23 @@ def _score_gates(harness_groups: dict, settings: dict | None = None) -> dict:
 _SCOPE = ScopeConfig(allowed_tools=[], fail_on_violation=False, violation_penalty=0.5)
 
 
+def _with_overrides(settings: dict, calls: list) -> dict:
+    """이번 실행이 실제로 쓴 provider와 진행 중인 파이프라인에 맞는 평가 기준으로 바꾼다(2026-11-25, P1-10 — 실측:
+    로컬 모델은 호출 한 번이 수십 초~몇 분이라 응답 시간 Gate D가 늘 미달이었다)."""
+    from hair_platform import evaluation_config, llm_usage
+
+    cfg = evaluation_config.get()
+    if not cfg.get("overrides"):
+        return settings
+    eff = evaluation_config.effective(
+        cfg, {p for p, _m in calls}, evaluation_config.template_for_run(llm_usage.current_pipeline_run_id())
+    )
+    if not eff["applied"]:
+        return settings
+    return {**settings, "thresholds": eff["thresholds"], "gate_default": eff["gate_default"],
+            "applied_overrides": eff["applied"]}
+
+
 def _current_settings() -> dict:
     """평가 기준 설정(2026-11-25 — `evaluation_config.py`, admin "평가 기준" 화면)을 SDK Config로. 위 상수들은 기본값이며
     저장된 설정이 없으면 같은 값이 된다. 평가마다 읽어 설정을 바꾸면 다음 평가부터 적용된다."""
@@ -239,7 +256,11 @@ def run_and_score(
         )
         return response, metadata
 
-    output = _run(role_name)
+    from hair_platform import llm_usage
+
+    with llm_usage.track_calls() as calls:
+        output = _run(role_name)
+    settings = _with_overrides(settings, calls)  # 모델·파이프라인별 기준(2026-11-25, P1-10)
 
     report = monitor.generate_report()
     harness_groups = dict((report.extra_metrics or {}).get("harness_groups", {}))
@@ -308,7 +329,11 @@ def run_and_score_crew(
     def _run(crew_label: str):
         return call_fn()
 
-    crew_output = _run(crew_label)
+    from hair_platform import llm_usage
+
+    with llm_usage.track_calls() as calls:
+        crew_output = _run(crew_label)
+    settings = _with_overrides(settings, calls)  # 모델·파이프라인별 기준(2026-11-25, P1-10)
 
     report = monitor.generate_report()
     harness_groups = dict((report.extra_metrics or {}).get("harness_groups", {}))

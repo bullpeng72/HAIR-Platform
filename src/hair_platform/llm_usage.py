@@ -98,7 +98,29 @@ def configure(conn: sqlite3.Connection | None) -> None:
         _CONN = conn
 
 
+# 평가 중 실제 호출 기록(2026-11-25, P1-10) — `track_calls()` 블록 안의 모든 LLM 호출(provider, model)을 모은다.
+# 평가 기준을 "이번 실행이 실제로 쓴 모델" 기준으로 고르는 데 쓴다(`agent_evaluation.run_and_score*`).
+_CALLS: contextvars.ContextVar[list | None] = contextvars.ContextVar("llm_usage_calls", default=None)
+
+
+@contextlib.contextmanager
+def track_calls():
+    calls: list[tuple[str, str]] = []
+    token = _CALLS.set(calls)
+    try:
+        yield calls
+    finally:
+        _CALLS.reset(token)
+
+
+def current_pipeline_run_id() -> int | None:
+    return _SCOPE.get().get("pipeline_run_id")
+
+
 def record(provider: str, model: str, prompt_tokens: Any, completion_tokens: Any, source: str = "direct") -> None:
+    tracked = _CALLS.get()
+    if tracked is not None and provider:
+        tracked.append((provider, model))
     conn = _CONN
     if conn is None or not provider or not model:
         return

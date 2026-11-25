@@ -11855,9 +11855,27 @@ async function renderConfigCheckSection() {
 // 평가 기준 설정(2026-11-25 — `evaluation_config.py`, admin). Agent-Evaluator로 결과물을 채점할 때 쓰는 기준을 바꾼다.
 // 바꾸면 다음 평가부터 적용된다(이미 기록된 평가는 다시 채점하지 않음).
 const _GATE_NAMES = { A: "목표 달성", B: "행동 무결성", C: "신뢰성", D: "성능 계약", E: "보안 경계", F: "다중 Agent 협업", G: "관측성" };
+// 모델·파이프라인별 덮어쓰기 행(2026-11-25, P1-10)
+function _ecOverrideRowHtml(ov, gateIds, templates) {
+  const target = ov.provider ? "provider:" + ov.provider : (ov.pipeline_template_id ? "pipeline:" + ov.pipeline_template_id : "");
+  const opts = [["", "대상 선택"], ["provider:ollama", "모델: 로컬(Ollama)"], ["provider:openai", "모델: OpenAI"], ["provider:anthropic", "모델: Anthropic"]]
+    .concat((templates || []).map(t => ["pipeline:" + t.id, "파이프라인: " + t.name]));
+  return '<tr class="ec-ov-row"><td><select class="ec-ov-target">' +
+    opts.map(o => '<option value="' + escAttr(o[0]) + '"' + (o[0] === target ? " selected" : "") + ">" + esc(o[1]) + "</option>").join("") +
+    "</select></td>" +
+    '<td><input type="number" step="0.05" min="0" max="1" class="ec-ov-default" value="' + (ov.gate_default !== undefined ? ov.gate_default : "") + '" placeholder="그대로" style="width:5rem"></td>' +
+    gateIds.map(g => '<td><input type="number" step="0.05" min="0" max="1" class="ec-ov-gate" data-gate="' + g + '" value="' +
+      ((ov.gates || {})[g] !== undefined ? ov.gates[g] : "") + '" placeholder="-" style="width:4.2rem"></td>').join("") +
+    '<td><button type="button" class="small danger ec-ov-del">삭제</button></td></tr>';
+}
+
 async function renderEvaluationConfig(content) {
-  const data = await api("GET", "/api/admin/evaluation-config");
+  const [data, ecTemplates] = await Promise.all([
+    api("GET", "/api/admin/evaluation-config"),
+    api("GET", "/api/pipeline-templates").catch(() => []),
+  ]);
   const cfg = data.config, def = data.defaults;
+  const ovRows = (cfg.overrides || []).map(ov => _ecOverrideRowHtml(ov, data.gate_ids, ecTemplates)).join("");
   const gateRows = data.gate_ids.map(g =>
     "<tr><td><b>" + g + "</b> " + esc(_GATE_NAMES[g] || "") + "</td>" +
     '<td><input type="number" step="0.05" min="0" max="1" class="ec-gate" data-gate="' + g + '" value="' +
@@ -11872,6 +11890,12 @@ async function renderEvaluationConfig(content) {
     '<p class="muted">비운 Gate는 기본 기준을 씁니다. 점수가 기준 이상이면 통과입니다.</p>' +
     '<label>기본 기준 <input type="number" step="0.05" min="0" max="1" id="ec-default" value="' + cfg.gate_default + '" style="width:7rem"></label>' +
     '<div class="table-wrap"><table><thead><tr><th>Gate</th><th>통과 기준</th></tr></thead><tbody>' + gateRows + "</tbody></table></div>" +
+    '<h3>모델·파이프라인별 덮어쓰기</h3>' +
+    '<p class="muted">특정 모델 종류나 파이프라인에서만 다른 통과 기준을 씁니다. 비운 칸은 위 기준 그대로입니다. 우선순위: 위 기준 &lt; 모델 &lt; 파이프라인. ' +
+    '모델 덮어쓰기는 그 실행의 AI 호출이 <b>모두</b> 그 종류였을 때만 적용됩니다. 예: 로컬 모델은 호출 한 번이 수십 초~몇 분이라 응답 시간 Gate D가 늘 미달 → "모델: 로컬(Ollama)"의 D를 0으로.</p>' +
+    '<div class="table-wrap"><table id="ec-ov-table"><thead><tr><th>대상</th><th>기본 기준</th>' +
+    data.gate_ids.map(g => "<th>" + g + "</th>").join("") + "<th></th></tr></thead><tbody>" + ovRows + "</tbody></table></div>" +
+    '<p><button type="button" class="small" id="ec-ov-add">덮어쓰기 추가</button></p>' +
     '<h3>응답 시간 SLA(Gate C·D)</h3>' +
     '<p class="muted">한 번의 AI 호출 기준입니다. 여러 호출로 이루어진 실행(파이프라인 단계·Crew)은 C·D를 재지 않습니다. 로컬 대형 모델이면 넉넉하게 잡으세요.</p>' +
     '<label>p95 <input type="number" min="1" step="1" id="ec-p95" value="' + (cfg.sla_p95_ms / 1000) + '" style="width:7rem"> 초</label> ' +
@@ -11885,7 +11909,7 @@ async function renderEvaluationConfig(content) {
     '<p><button class="primary" type="submit">저장</button> <button type="button" id="ec-reset">기본값으로 되돌리기</button></p>' +
     "</form>" +
     '<h3>평가 도구 CLI와 맞추기(.aoo/targets.json)</h3>' +
-    '<p class="muted">평가 도구의 <code>agent-eval gate</code>가 읽는 목표 파일 형식으로 Gate 기준을 내보내거나 가져옵니다(SLA·추론 표지는 포함되지 않음).</p>' +
+    '<p class="muted">평가 도구의 <code>agent-eval gate</code>가 읽는 목표 파일 형식으로 Gate 기준을 내보내거나 가져옵니다(SLA·추론 표지·모델·파이프라인별 덮어쓰기는 포함되지 않음).</p>' +
     '<p><a class="small" href="/api/admin/evaluation-config/targets.json">targets.json 내려받기</a></p>' +
     '<textarea id="ec-targets" rows="4" style="width:100%;max-width:28rem" placeholder="targets.json 내용을 붙여 넣기"></textarea>' +
     '<p><button type="button" id="ec-import">Gate 기준 가져오기</button></p>' +
@@ -11904,10 +11928,18 @@ async function renderEvaluationConfig(content) {
         sla_p99_ms: Number(document.getElementById("ec-p99").value) * 1000,
         reasoning_markers: document.getElementById("ec-markers").value,
         scope_violation_penalty: Number(document.getElementById("ec-penalty").value),
+        overrides: _ecCollectOverrides(form),
       });
       showMsg("global-msg", "평가 기준을 저장했습니다 — 다음 평가부터 적용됩니다.", "ok");
       renderEvaluationConfig(content);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+  const ovBody = document.querySelector("#ec-ov-table tbody");
+  const bindOvDelete = () => ovBody.querySelectorAll(".ec-ov-del").forEach(btn => { btn.onclick = () => btn.closest("tr").remove(); });
+  bindOvDelete();
+  document.getElementById("ec-ov-add").addEventListener("click", () => {
+    ovBody.insertAdjacentHTML("beforeend", _ecOverrideRowHtml({}, data.gate_ids, ecTemplates));
+    bindOvDelete();
   });
   document.getElementById("ec-reset").addEventListener("click", async () => {
     try {
@@ -11926,6 +11958,23 @@ async function renderEvaluationConfig(content) {
       renderEvaluationConfig(content);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
+}
+
+function _ecCollectOverrides(form) {
+  const rows = [];
+  form.querySelectorAll(".ec-ov-row").forEach(tr => {
+    const target = tr.querySelector(".ec-ov-target").value;
+    const gates = {};
+    tr.querySelectorAll(".ec-ov-gate").forEach(inp => { if (inp.value !== "") gates[inp.dataset.gate] = Number(inp.value); });
+    const dv = tr.querySelector(".ec-ov-default").value;
+    if (!target && !Object.keys(gates).length && dv === "") return;  // 빈 행은 무시
+    const item = { gates };
+    if (target.startsWith("provider:")) item.provider = target.slice(9);
+    else if (target.startsWith("pipeline:")) item.pipeline_template_id = Number(target.slice(9));
+    if (dv !== "") item.gate_default = Number(dv);
+    rows.push(item);
+  });
+  return rows;
 }
 
 async function renderAdmin(content) {
@@ -12549,10 +12598,13 @@ const MANUAL_MARKDOWN = [
 '| 응답 시간 SLA p95·p99(초) | 30초·60초 | Gate C(신뢰성)·D(성능 계약)의 기준 — AI 호출 한 번 기준(여러 호출로 이루어진 실행은 재지 않음) |',
 '| 추론 표지(한 줄에 하나, 최대 30개) | 근거·때문·므로·이유·판단·그러므로·그래서 | Gate G(관측성) — 결과물에 이런 낱말이 있으면 근거를 밝혔다고 봄. 평가 도구 기본 표지(영어 중심, "따라서"·"왜냐하면")에 더해짐 |',
 '| 도구 범위 위반 감점(0~1) | 0.5 | 허용 범위 밖 도구를 썼을 때 해당 점수에서 빼는 값 |',
+'| 모델·파이프라인별 덮어쓰기 | 없음 | 특정 모델 종류(로컬 Ollama·OpenAI·Anthropic)나 파이프라인에서만 다른 Gate 통과 기준. 우선순위: 위 기준 < 모델 < 파이프라인. 모델 덮어쓰기는 그 실행의 AI 호출이 **모두** 그 종류일 때만 적용(섞였으면 위 기준). 응답 시간 SLA는 나눌 수 없음(전역 하나) |',
 '',
 '**이렇게 정하세요**',
 '',
-'- **로컬(Ollama) 대형 모델을 쓰면** 한 번 호출에 수십 초~몇 분이 걸려 Gate D가 늘 미달입니다 → SLA를 실제 응답 시간에 맞게(예: p95 180초·p99 300초) 늘립니다. 실제 응답 시간은 "모델 레지스트리"의 성능 테스트나 "비용" 탭의 평균 소요로 확인합니다.',
+'- **로컬(Ollama) 대형 모델을 쓰면** 한 번 호출에 수십 초~몇 분이 걸려 Gate D가 늘 미달입니다. 두 가지 방법이 있습니다.',
+'  - **로컬 모델만 다르게(권장 — 클라우드와 함께 쓸 때)**: "모델·파이프라인별 덮어쓰기"에 **"모델: 로컬(Ollama)"** 행을 추가하고 D를 0(또는 낮은 값)으로 둡니다. 클라우드 모델 실행은 원래 기준으로 계속 잽니다.',
+'  - **로컬 모델만 쓸 때**: SLA를 실제 응답 시간에 맞게(예: p95 180초·p99 300초) 늘립니다. 실제 응답 시간은 "모델 레지스트리"의 성능 테스트나 "비용" 탭의 평균 소요로 확인합니다.',
 '- **목표 달성(A)을 더 엄격하게** 보려면 Gate A만 0.8로 올립니다. 기본 템플릿의 검토 단계가 Gate A로 판정하므로, 올리면 미달 → 작성 단계로 되돌림·재시도가 늘어 시간과 호출이 늘어납니다 — 리포트의 Threshold Sensitivity로 통과율 변화를 먼저 보세요.',
 '- **업무 문서에서 쓰는 근거 표현**이 Gate G에 안 잡히면(예: "결론적으로", "~에 따르면") 추론 표지에 더합니다.',
 '- 기준을 낮추는 것은 문제를 가리는 것일 수 있습니다 — 낮추기 전에 리포트의 원인 진단을 먼저 보세요.',
@@ -12871,7 +12923,9 @@ const MANUAL_MARKDOWN = [
 '**Gate D가 늘 미달이다(로컬 모델)**',
 '',
 '- **원인**: 로컬 대형 모델은 호출 한 번에 수십 초~몇 분이 걸려 기본 응답 시간 SLA(p95 30초)를 넘습니다.',
-'- **해결**: 설정 → 운영 관리 → **"평가 기준"**(admin)에서 응답 시간 SLA를 실제 응답 시간에 맞게 늘리세요(6절 "평가 기준 설정").',
+'- **해결**: 설정 → 운영 관리 → **"평가 기준"**(admin)에서 둘 중 하나를 합니다(6절 "평가 기준 설정").',
+'  1. **"모델·파이프라인별 덮어쓰기"**에 "모델: 로컬(Ollama)" 행을 추가하고 D를 0으로 — 로컬 모델 실행만 기준을 낮춥니다(클라우드와 함께 쓸 때 권장).',
+'  2. 응답 시간 SLA를 실제 응답 시간에 맞게 늘립니다(모든 모델에 적용).',
 '',
 '**지식 검색(내부지식검색)이 느리다 · 등록한 자료가 검색되지 않는다**',
 '',

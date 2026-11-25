@@ -27,7 +27,12 @@ DEFAULTS: dict = {
     "sla_p99_ms": 60000.0,
     "reasoning_markers": ["근거", "때문", "므로", "이유", "판단", "그러므로", "그래서"],
     "scope_violation_penalty": 0.5,
+    # 덮어쓰기(2026-11-25, P1-10) — [{"provider": "ollama"} 또는 {"pipeline_template_id": 3}, "gates": {"D": 0.0},
+    # "gate_default": 0.6(선택)}]. 우선순위: 전역 < provider < 파이프라인. 예: 로컬 모델은 응답 시간 Gate D 기준을 낮춘다.
+    "overrides": [],
 }
+PROVIDERS = ("ollama", "openai", "anthropic")
+MAX_OVERRIDES = 50
 MAX_MARKERS = 30
 MAX_MARKER_CHARS = 20
 
@@ -87,6 +92,40 @@ def thresholds(cfg: dict) -> dict[str, float]:
     return {g: float(cfg["gates"].get(g, cfg["gate_default"])) for g in GATE_IDS}
 
 
+def template_for_run(run_id: int | None) -> int | None:
+    if run_id is None or _CONN is None:
+        return None
+    try:
+        row = _CONN.execute("SELECT pipeline_template_id FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+    except sqlite3.Error:
+        return None
+    return row[0] if row else None
+
+
+def effective(cfg: dict, providers: set[str] | None = None, pipeline_template_id: int | None = None) -> dict:
+    """덮어쓰기를 반영한 {"thresholds", "gate_default", "applied"}. provider 덮어쓰기는 이번 실행의 호출이 **모두** 그
+    provider였을 때만 적용한다(섞였으면 전역 기준). 파이프라인 덮어쓰기가 가장 나중(가장 강함)."""
+    gate_default = float(cfg["gate_default"])
+    gates = {g: float(v) for g, v in cfg["gates"].items()}
+    applied: list[str] = []
+    overrides = cfg.get("overrides") or []
+    only = next(iter(providers)) if providers and len(providers) == 1 else None
+    for kind in ("provider", "pipeline_template_id"):
+        for ov in overrides:
+            if kind == "provider" and (only is None or ov.get("provider") != only):
+                continue
+            if kind == "pipeline_template_id" and (
+                pipeline_template_id is None or ov.get("pipeline_template_id") != pipeline_template_id
+            ):
+                continue
+            if "gate_default" in ov:
+                gate_default = float(ov["gate_default"])
+            gates.update({g: float(v) for g, v in (ov.get("gates") or {}).items()})
+            applied.append(f"provider:{only}" if kind == "provider" else f"pipeline:{pipeline_template_id}")
+    return {"thresholds": {g: gates.get(g, gate_default) for g in GATE_IDS}, "gate_default": gate_default,
+            "applied": applied}
+
+
 def validate(payload: dict) -> dict:
     """입력 검증 — 잘못되면 ValueError("…" 한국어 사유)."""
     cfg = _merged(None)
@@ -132,6 +171,46 @@ def validate(payload: dict) -> dict:
     cfg["reasoning_markers"] = markers
     cfg["scope_violation_penalty"] = _ratio(payload.get("scope_violation_penalty", cfg["scope_violation_penalty"]),
                                             "도구 범위 위반 감점")
+    raw = payload.get("overrides", [])
+    if not isinstance(raw, list) or len(raw) > MAX_OVERRIDES:
+        raise ValueError(f"덮어쓰기는 {MAX_OVERRIDES}개까지의 목록이어야 합니다")
+    overrides = []
+    seen: set[tuple] = set()
+    for ov in raw:
+        if not isinstance(ov, dict):
+            raise ValueError("덮어쓰기 항목 형식이 올바르지 않습니다")
+        item: dict = {}
+        if ov.get("provider"):
+            if ov["provider"] not in PROVIDERS or ov.get("pipeline_template_id"):
+                raise ValueError("덮어쓰기 대상은 provider(ollama·openai·anthropic) 또는 파이프라인 하나여야 합니다")
+            item["provider"] = ov["provider"]
+        elif ov.get("pipeline_template_id"):
+            try:
+                item["pipeline_template_id"] = int(ov["pipeline_template_id"])
+            except (TypeError, ValueError):
+                raise ValueError("파이프라인 id가 올바르지 않습니다") from None
+        else:
+            raise ValueError("덮어쓰기 대상(provider 또는 파이프라인)을 고르세요")
+        key = tuple(sorted(item.items()))
+        if key in seen:
+            raise ValueError("같은 대상의 덮어쓰기가 두 번 있습니다")
+        seen.add(key)
+        if ov.get("gate_default") not in (None, ""):
+            item["gate_default"] = _ratio(ov["gate_default"], "덮어쓰기 기본 기준")
+        gates_ov = ov.get("gates") or {}
+        if not isinstance(gates_ov, dict):
+            raise ValueError("덮어쓰기 Gate 기준 형식이 올바르지 않습니다")
+        item["gates"] = {}
+        for gid, value in gates_ov.items():
+            if gid not in GATE_IDS:
+                raise ValueError(f"알 수 없는 Gate입니다: {gid}")
+            if value in (None, ""):
+                continue
+            item["gates"][gid] = _ratio(value, f"덮어쓰기 Gate {gid} 기준")
+        if not item["gates"] and "gate_default" not in item:
+            raise ValueError("덮어쓰기에 바꿀 기준이 하나도 없습니다")
+        overrides.append(item)
+    cfg["overrides"] = overrides
     return cfg
 
 
