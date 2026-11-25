@@ -257,55 +257,15 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
                 eval_task_type=agent_evaluation.eval_task_type_for(stage["output_content_type"]),
             )
 
-    final_entries = [
-        a for a in result["agents"] if a.get("stage", "final") == "final"
-    ] or result["agents"]
-    if stage["mode"] == "sequential_relay" and len(final_entries) > 1:
-        stage_output = "\n\n---\n\n".join(
-            f"### {a['role_name']}\n\n{a['output']}" for a in final_entries
-        )
-    elif final_entries:
-        stage_output = final_entries[-1]["output"]
-    else:
-        stage_output = result["final_output"]
-    # 언어 품질 교정 — classic 엔진과 같은 함수(`pr.repair_stage_language`).
+    # 산출물 조립·언어 교정·채점·통과 판정 — classic 엔진과 같은 함수(2026-11-25 공통화).
+    stage_output, author_agent_id = pr.assemble_stage_output(stage, result, agent_ids[-1])
     stage_output = pr.repair_stage_language(
         conn, stage_output, stage_provider, stage_model, state["actor_id"]
     )
-    author_agent_id = (
-        final_entries[-1]["agent_id"] if final_entries else agent_ids[-1]
+    gate_scores, passed = pr.score_stage_output(
+        conn, state["run_id"], stage, result, stage_output,
+        "\n\n".join(filter(None, [combined_base, result.get("tool_evidence")])),
     )
-
-    gate_scores = dict(result["gate_scores"])
-    if stage["is_primary_deliverable"]:
-        gate_scores["code_syntax"] = agent_evaluation.compute_code_syntax_check(
-            stage_output
-        )
-    # 실행 가능성 Gate(2026-11-22 C안) — 단계 gate_ids에 있을 때만 잰다(SW 개발 "구현").
-    if "deliverable_runnable" in json.loads(stage["gate_ids"] or "[]"):
-        gate_scores["deliverable_runnable"] = agent_evaluation.compute_deliverable_runnable(
-            stage_output
-        )
-    # 수치 근거·테스트 실제 실행(2026-11-23) — 기존 엔진과 같은 검사(`attach_quality_checks`).
-    # 근거 = 브리프·앞 단계 산출물 + 이번 단계의 도구 결과(2026-11-24 — 계산기 결과 수치 오탐 방지).
-    agent_evaluation.attach_quality_checks(
-        gate_scores, stage_output, "\n\n".join(filter(None, [combined_base, result.get("tool_evidence")]))
-    )
-    # 요구사항 추적성·단계 gate_ids 반영(2026-11-21) — 기존 엔진과 같은 판정.
-    traceability = pr.requirements_traceability_score(
-        conn, state["run_id"], stage, stage_output
-    )
-    if traceability is not None:
-        gate_scores["requirements_traceability"] = traceability
-    # 검토 판정 반영(2026-11-25) — 기존 엔진과 같은 판정(`pr.review_verdict`).
-    verdict = pr.review_verdict(stage_output) if stage["on_fail_return_stage_id"] else None
-    if verdict is not None:
-        gate_scores["review_verdict"] = verdict
-    stage_gate_ids = json.loads(stage["gate_ids"]) if stage["gate_ids"] else None
-    ratio = pr._gate_pass_ratio(gate_scores, stage_gate_ids)
-    passed = ratio >= stage["min_gate_pass_ratio"]
-    if verdict is not None and not verdict["not_measured"] and not verdict["passed"]:
-        passed = False
 
     task_row = conn.execute(
         "SELECT max_retry_budget, requires_human_judgment FROM tasks WHERE id = ?",

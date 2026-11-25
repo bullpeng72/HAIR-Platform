@@ -456,7 +456,8 @@ src/hair_platform/
   auth.py            # 세션 인증 + RBAC(4종 역할: admin/manager/member/viewer)
   models.py          # Pydantic v2 요청 모델
   db.py              # SQLite 스키마(WAL, audit_log append-only 트리거)
-  app.py             # FastAPI 라우트(234개 엔드포인트, GET / 포함)
+  app.py             # FastAPI 라우트(234개 엔드포인트, GET / 포함) — 묶음별로 routes_*.py로 나누는 중
+  routes_integrations.py # 연동 설정 API(API 키·코드 저장소·기본 구성 점검·외부 알림·정기 실행·이벤트 트리거)
   pool.py            # Human/Agent Pool → ResourceCandidate 어댑터
   assignment.py      # 매칭 알고리즘(결정론적)
   match_llm_judge.py # 매칭 결과 LLM judge 폴백(역할명 부분일치로도 못 찾을 때)

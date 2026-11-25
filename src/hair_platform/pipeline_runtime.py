@@ -973,6 +973,145 @@ def stage_progress(conn: sqlite3.Connection, run_id: int, stage) -> Iterator[Non
         yield
 
 
+def assemble_stage_output(stage, result: dict, fallback_agent_id: int) -> tuple[str, int]:
+    """단계 산출물과 그 작성 Agent — 두 실행 엔진 공통(2026-11-25 기술 부채 정리: classic `_execute_stage_attempt`와
+    graph `execution_graph._node_run_stage`에 같은 코드가 따로 있었다)."""
+    # 실측 발견(2026-11-07, "구현" 단계를 sequential_relay로 전환하며
+    # 드러남) — 기존엔 `sequential_relay`든 뭐든 항상 **마지막 참여자의
+    # 답변만** stage_output으로 캡처했다(`result["agents"][-1]`). "설계"
+    # (AA→DA)/"QA 기능테스트"(테스트계획→QA테스터)도 이미 이 버그를
+    # 안고 있었다 — 앞 참여자의 실제 산출물이 조용히 버려지고 있었는데,
+    # 그 단계들이 `is_primary_deliverable`이 아니라 아무도 눈치 못
+    # 챘을 뿐이다. "구현"이 sequential_relay가 되면서(5명이 각자 다른
+    # 모듈을 작성) 즉시 치명적으로 드러난다 — 4명분 코드가 사라지는
+    # 셈이라, 로드맵 3번(위임 결과 합성)과 같은 원칙으로 **참여자 전원의
+    # 최종 산출물을 순서대로 이어붙인다**. self_review로 draft/final이
+    # 섞여 있으면(`"stage"` 키) final만 남긴다 — draft는 중간 산물이라
+    # 최종 결과물에 포함하지 않는다(기존 adhoc/team crew 경로와 동일
+    # 원칙). 참여자가 1명뿐이면(single, 또는 hierarchical의 매니저 1건)
+    # 이어붙일 게 없으니 그 1건 그대로 — 기존 동작과 100% 동일하다.
+    final_stage_entries = [
+        a for a in result["agents"] if a.get("stage", "final") == "final"
+    ] or result["agents"]
+    if stage["mode"] == "sequential_relay" and len(final_stage_entries) > 1:
+        stage_output = "\n\n---\n\n".join(
+            f"### {a['role_name']}\n\n{a['output']}" for a in final_stage_entries
+        )
+    elif final_stage_entries:
+        stage_output = final_stage_entries[-1]["output"]
+    else:
+        stage_output = result["final_output"]
+    author_agent_id = (
+        final_stage_entries[-1]["agent_id"]
+        if final_stage_entries
+        else fallback_agent_id
+    )
+    return stage_output, author_agent_id
+
+
+def score_stage_output(
+    conn: sqlite3.Connection, run_id: int, stage, result: dict, stage_output: str, evidence: str
+) -> tuple[dict, bool]:
+    """단계 산출물 채점과 통과 판정 — 두 실행 엔진 공통(2026-11-25 기술 부채 정리). 예전엔 두 엔진에 같은 코드가 따로
+    있어 새 검사(검토 판정 등)를 양쪽에 손으로 넣어야 했다. `evidence`는 근거(업무 요청·앞 단계 산출물·이번 단계
+    도구 결과). 반환: (gate_scores, passed)."""
+    # 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사 + 요구사항
+    # 추적성 자동 채점") — Gate A-G는 순수 휴리스틱이라 "구현" 단계
+    # 산출물이 실제로 파싱 가능한 코드인지 기계적으로 확인하지 않았다.
+    # `_gate_pass_ratio()`(아래)는 제네릭하게 모든 키를 순회하므로,
+    # 실제 차단 임계값(min_gate_pass_ratio=0.5)이 걸린 "코드 검증"/
+    # "QA 기능테스트"/"품질 관리 최종 판정" 단계에까지 이 점수를
+    # 무심코 끼워 넣으면(그 단계들의 리포트성 산출물이 코드를 인용하는
+    # 경우) 기존 통과/차단 동작이 조용히 바뀔 위험이 있다 — 그래서
+    # "이 단계의 산출물이 Task의 진짜 최종 결과물인 단계"에만 한정해
+    # 실제 점수로 참여시킨다. 다른 단계는 아예 이 키를 추가하지 않는다.
+    #
+    # 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
+    # 원래는 `stage["name"] == "구현"` 문자열 매칭이었다. 다른 도메인
+    # 파이프라인(사업기획서 등)의 "작성" 단계가 이름을 다르게 지어도
+    # 똑같이 검사받도록, 이미 있던 `is_primary_deliverable` 플래그로
+    # 바꾼다 — "이 단계 산출물이 Task의 진짜 최종 결과물"이라는 뜻이
+    # 정확히 "실제로 뭔가를 만들어내는 단계"와 일치해 의미상으로도
+    # 더 맞다. 펜스 코드 블록이 없는 산출물(기획서 프로즈 등)은
+    # 기존처럼 `not_measured`로 떨어질 뿐이라 안전하다.
+    gate_scores = dict(result["gate_scores"])
+    if stage["is_primary_deliverable"]:
+        gate_scores["code_syntax"] = agent_evaluation.compute_code_syntax_check(
+            stage_output
+        )
+    # 수치 근거·테스트 실제 실행(2026-11-23, P0-1·P0-3 — `agent_evaluation.attach_quality_checks`).
+    # 근거는 이 단계 입력(앞 단계 산출물 + 원 업무 요청). 단계 gate_ids에 넣지 않으면
+    # `_gate_pass_ratio()`가 세지 않으므로 통과 판정은 바꾸지 않는다(정보 제공·배지 표시).
+    # 근거 = 브리프·앞 단계 산출물 + 이번 단계의 도구 결과(2026-11-24 — 계산기 결과 수치 오탐 방지).
+    agent_evaluation.attach_quality_checks(
+        gate_scores, stage_output, evidence
+    )
+    # 실행 가능성 Gate(2026-11-22 C안) — 단계 gate_ids에 있을 때만 잰다(SW 개발 "구현").
+    if "deliverable_runnable" in json.loads(stage["gate_ids"] or "[]"):
+        gate_scores["deliverable_runnable"] = agent_evaluation.compute_deliverable_runnable(
+            stage_output
+        )
+
+    # 실측(2026-11-06, park_member 로드러너 게임 데모) — "구현" 단계
+    # 매니저가 'Delegate work to coworker'를 한 번도 호출하지 않고
+    # 자기 전문 분야(모듈 분해)대로 계획 문서만 다시 쓴 채 그대로
+    # 통과한 사례가 재현됨(crew_runtime.py의 hierarchical_description
+    # 안내문이 이미 위임을 강하게 유도하지만, LLM이 안 따를 수 있다는
+    # 건 2026-10-18에 이미 받아들인 리스크 — crew_runtime.py 주석
+    # 참고). 그 결과 빈 계획 문서가 "코드 검증" 단계로 넘어가서야
+    # `requirements_traceability`에 뒤늦게 걸려 재시도를 낭비했다.
+    # code_syntax와 달리 이건 "내용 품질"이 아니라 "이 단계의 핵심
+    # 메커니즘(위임) 자체가 작동했는지"를 보는 구조적 확인이라 —
+    # min_gate_pass_ratio=0.0(절대 차단 안 함, 위 code_syntax 주석과
+    # 같은 이유)을 그대로 두는 대신 `passed`를 직접 덮어써 "구현"
+    # 단계 안에서 바로 재시도시킨다.
+    if stage["mode"] == "parallel_delegated":
+        delegated_real_work = any(
+            d.get("tool") == "Delegate work to coworker"
+            for d in result.get("delegations", [])
+        )
+        gate_scores["delegation_check"] = {
+            "score": 1.0 if delegated_real_work else 0.0,
+            "status": "pass" if delegated_real_work else "fail",
+            "passed": delegated_real_work,
+            "not_measured": False,
+        }
+
+    # 이 단계는 바로 위 `prior` 조회처럼 이전 단계 출력만 보고 1단계
+    # (요구분석/계획 확정)의 요구사항 문서를 자동으로 보지 못한다 —
+    # 별도로 직접 조회해 LLM judge로 요구사항 추적성을 채점한다.
+    # 실제 차단 임계값이 걸려 있을 수 있는 단계라, 아직 임계값을
+    # 신뢰할 데이터가 없는 이 새 점수가 그 판정을 조용히 바꾸지 않도록
+    # `not_measured`를 강제한다 — 정보 제공 전용(v1), 실제 점수/세부
+    # 내역은 그대로 저장돼 화면에는 보인다.
+    #
+    # 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
+    # 원래는 `stage["name"] == "코드 검증"` 문자열 매칭이었다. 다른
+    # 도메인 파이프라인의 검증 단계가 이름을 다르게 지어도 똑같이
+    # 요구사항 추적성을 검사받도록, 단계명과 무관한 명시적 플래그
+    # (`checks_requirements_traceability`)로 바꾼다.
+    stage_gate_ids = json.loads(stage["gate_ids"]) if stage["gate_ids"] else None
+    traceability = requirements_traceability_score(conn, run_id, stage, stage_output)
+    if traceability is not None:
+        gate_scores["requirements_traceability"] = traceability
+
+    # 검토 판정 반영(2026-11-25 실측 — 계약서·영업 파이프라인): 검토 단계가 '## 판정'에 "보완 요청"을 써도
+    # 통과/미통과는 Gate 점수로만 정해져, 고칠 곳을 짚은 검토가 그대로 최종 결과가 됐다. 되돌아갈 단계가
+    # 지정된 검토 단계에서는 판정을 읽어 "보완 요청"이면 미통과로 보고 작성 단계로 돌려보낸다(재시도 상한을
+    # 넘으면 지금처럼 사람 검토). 판정을 찾지 못하면 측정 안 함 — 막지 않는다.
+    verdict = None
+    if stage["on_fail_return_stage_id"]:
+        verdict = review_verdict(stage_output)
+        gate_scores["review_verdict"] = verdict
+
+    ratio = _gate_pass_ratio(gate_scores, stage_gate_ids)
+    passed = ratio >= stage["min_gate_pass_ratio"]
+    if stage["mode"] == "parallel_delegated" and not gate_scores["delegation_check"]["passed"]:
+        passed = False
+    if verdict is not None and not verdict["not_measured"] and not verdict["passed"]:
+        passed = False
+    return gate_scores, passed
+
 def _execute_stage_attempt(
     conn: sqlite3.Connection,
     run: sqlite3.Row,
@@ -1197,134 +1336,13 @@ def _execute_stage_attempt(
 
     tcr = result["tcr"]
 
-    # 실측 발견(2026-11-07, "구현" 단계를 sequential_relay로 전환하며
-    # 드러남) — 기존엔 `sequential_relay`든 뭐든 항상 **마지막 참여자의
-    # 답변만** stage_output으로 캡처했다(`result["agents"][-1]`). "설계"
-    # (AA→DA)/"QA 기능테스트"(테스트계획→QA테스터)도 이미 이 버그를
-    # 안고 있었다 — 앞 참여자의 실제 산출물이 조용히 버려지고 있었는데,
-    # 그 단계들이 `is_primary_deliverable`이 아니라 아무도 눈치 못
-    # 챘을 뿐이다. "구현"이 sequential_relay가 되면서(5명이 각자 다른
-    # 모듈을 작성) 즉시 치명적으로 드러난다 — 4명분 코드가 사라지는
-    # 셈이라, 로드맵 3번(위임 결과 합성)과 같은 원칙으로 **참여자 전원의
-    # 최종 산출물을 순서대로 이어붙인다**. self_review로 draft/final이
-    # 섞여 있으면(`"stage"` 키) final만 남긴다 — draft는 중간 산물이라
-    # 최종 결과물에 포함하지 않는다(기존 adhoc/team crew 경로와 동일
-    # 원칙). 참여자가 1명뿐이면(single, 또는 hierarchical의 매니저 1건)
-    # 이어붙일 게 없으니 그 1건 그대로 — 기존 동작과 100% 동일하다.
-    final_stage_entries = [
-        a for a in result["agents"] if a.get("stage", "final") == "final"
-    ] or result["agents"]
-    if stage["mode"] == "sequential_relay" and len(final_stage_entries) > 1:
-        stage_output = "\n\n---\n\n".join(
-            f"### {a['role_name']}\n\n{a['output']}" for a in final_stage_entries
-        )
-    elif final_stage_entries:
-        stage_output = final_stage_entries[-1]["output"]
-    else:
-        stage_output = result["final_output"]
-    author_agent_id = (
-        final_stage_entries[-1]["agent_id"]
-        if final_stage_entries
-        else run_agent_ids[-1]
-    )
-
+    stage_output, author_agent_id = assemble_stage_output(stage, result, run_agent_ids[-1])
     stage_output = repair_stage_language(conn, stage_output, stage_provider, stage_model, actor_id)
-
-    # 사용자 요청(2026-11-05, 로드맵 4번 "Gate 구문검사 + 요구사항
-    # 추적성 자동 채점") — Gate A-G는 순수 휴리스틱이라 "구현" 단계
-    # 산출물이 실제로 파싱 가능한 코드인지 기계적으로 확인하지 않았다.
-    # `_gate_pass_ratio()`(아래)는 제네릭하게 모든 키를 순회하므로,
-    # 실제 차단 임계값(min_gate_pass_ratio=0.5)이 걸린 "코드 검증"/
-    # "QA 기능테스트"/"품질 관리 최종 판정" 단계에까지 이 점수를
-    # 무심코 끼워 넣으면(그 단계들의 리포트성 산출물이 코드를 인용하는
-    # 경우) 기존 통과/차단 동작이 조용히 바뀔 위험이 있다 — 그래서
-    # "이 단계의 산출물이 Task의 진짜 최종 결과물인 단계"에만 한정해
-    # 실제 점수로 참여시킨다. 다른 단계는 아예 이 키를 추가하지 않는다.
-    #
-    # 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
-    # 원래는 `stage["name"] == "구현"` 문자열 매칭이었다. 다른 도메인
-    # 파이프라인(사업기획서 등)의 "작성" 단계가 이름을 다르게 지어도
-    # 똑같이 검사받도록, 이미 있던 `is_primary_deliverable` 플래그로
-    # 바꾼다 — "이 단계 산출물이 Task의 진짜 최종 결과물"이라는 뜻이
-    # 정확히 "실제로 뭔가를 만들어내는 단계"와 일치해 의미상으로도
-    # 더 맞다. 펜스 코드 블록이 없는 산출물(기획서 프로즈 등)은
-    # 기존처럼 `not_measured`로 떨어질 뿐이라 안전하다.
-    gate_scores = dict(result["gate_scores"])
-    if stage["is_primary_deliverable"]:
-        gate_scores["code_syntax"] = agent_evaluation.compute_code_syntax_check(
-            stage_output
-        )
-    # 수치 근거·테스트 실제 실행(2026-11-23, P0-1·P0-3 — `agent_evaluation.attach_quality_checks`).
-    # 근거는 이 단계 입력(앞 단계 산출물 + 원 업무 요청). 단계 gate_ids에 넣지 않으면
-    # `_gate_pass_ratio()`가 세지 않으므로 통과 판정은 바꾸지 않는다(정보 제공·배지 표시).
-    # 근거 = 브리프·앞 단계 산출물 + 이번 단계의 도구 결과(2026-11-24 — 계산기 결과 수치 오탐 방지).
-    agent_evaluation.attach_quality_checks(
-        gate_scores, stage_output, "\n\n".join(filter(None, [combined_base, result.get("tool_evidence")]))
+    # 채점·통과 판정은 두 엔진 공통 함수(2026-11-25) — 근거 = 브리프·앞 단계 산출물 + 이번 단계의 도구 결과.
+    gate_scores, passed = score_stage_output(
+        conn, run_id, stage, result, stage_output,
+        "\n\n".join(filter(None, [combined_base, result.get("tool_evidence")])),
     )
-    # 실행 가능성 Gate(2026-11-22 C안) — 단계 gate_ids에 있을 때만 잰다(SW 개발 "구현").
-    if "deliverable_runnable" in json.loads(stage["gate_ids"] or "[]"):
-        gate_scores["deliverable_runnable"] = agent_evaluation.compute_deliverable_runnable(
-            stage_output
-        )
-
-    # 실측(2026-11-06, park_member 로드러너 게임 데모) — "구현" 단계
-    # 매니저가 'Delegate work to coworker'를 한 번도 호출하지 않고
-    # 자기 전문 분야(모듈 분해)대로 계획 문서만 다시 쓴 채 그대로
-    # 통과한 사례가 재현됨(crew_runtime.py의 hierarchical_description
-    # 안내문이 이미 위임을 강하게 유도하지만, LLM이 안 따를 수 있다는
-    # 건 2026-10-18에 이미 받아들인 리스크 — crew_runtime.py 주석
-    # 참고). 그 결과 빈 계획 문서가 "코드 검증" 단계로 넘어가서야
-    # `requirements_traceability`에 뒤늦게 걸려 재시도를 낭비했다.
-    # code_syntax와 달리 이건 "내용 품질"이 아니라 "이 단계의 핵심
-    # 메커니즘(위임) 자체가 작동했는지"를 보는 구조적 확인이라 —
-    # min_gate_pass_ratio=0.0(절대 차단 안 함, 위 code_syntax 주석과
-    # 같은 이유)을 그대로 두는 대신 `passed`를 직접 덮어써 "구현"
-    # 단계 안에서 바로 재시도시킨다.
-    if stage["mode"] == "parallel_delegated":
-        delegated_real_work = any(
-            d.get("tool") == "Delegate work to coworker"
-            for d in result.get("delegations", [])
-        )
-        gate_scores["delegation_check"] = {
-            "score": 1.0 if delegated_real_work else 0.0,
-            "status": "pass" if delegated_real_work else "fail",
-            "passed": delegated_real_work,
-            "not_measured": False,
-        }
-
-    # 이 단계는 바로 위 `prior` 조회처럼 이전 단계 출력만 보고 1단계
-    # (요구분석/계획 확정)의 요구사항 문서를 자동으로 보지 못한다 —
-    # 별도로 직접 조회해 LLM judge로 요구사항 추적성을 채점한다.
-    # 실제 차단 임계값이 걸려 있을 수 있는 단계라, 아직 임계값을
-    # 신뢰할 데이터가 없는 이 새 점수가 그 판정을 조용히 바꾸지 않도록
-    # `not_measured`를 강제한다 — 정보 제공 전용(v1), 실제 점수/세부
-    # 내역은 그대로 저장돼 화면에는 보인다.
-    #
-    # 사용자 요청(2026-11-08, "게임이 아닌 일상 사무 업무도 일반화") —
-    # 원래는 `stage["name"] == "코드 검증"` 문자열 매칭이었다. 다른
-    # 도메인 파이프라인의 검증 단계가 이름을 다르게 지어도 똑같이
-    # 요구사항 추적성을 검사받도록, 단계명과 무관한 명시적 플래그
-    # (`checks_requirements_traceability`)로 바꾼다.
-    stage_gate_ids = json.loads(stage["gate_ids"]) if stage["gate_ids"] else None
-    traceability = requirements_traceability_score(conn, run_id, stage, stage_output)
-    if traceability is not None:
-        gate_scores["requirements_traceability"] = traceability
-
-    # 검토 판정 반영(2026-11-25 실측 — 계약서·영업 파이프라인): 검토 단계가 '## 판정'에 "보완 요청"을 써도
-    # 통과/미통과는 Gate 점수로만 정해져, 고칠 곳을 짚은 검토가 그대로 최종 결과가 됐다. 되돌아갈 단계가
-    # 지정된 검토 단계에서는 판정을 읽어 "보완 요청"이면 미통과로 보고 작성 단계로 돌려보낸다(재시도 상한을
-    # 넘으면 지금처럼 사람 검토). 판정을 찾지 못하면 측정 안 함 — 막지 않는다.
-    verdict = None
-    if stage["on_fail_return_stage_id"]:
-        verdict = review_verdict(stage_output)
-        gate_scores["review_verdict"] = verdict
-
-    ratio = _gate_pass_ratio(gate_scores, stage_gate_ids)
-    passed = ratio >= stage["min_gate_pass_ratio"]
-    if stage["mode"] == "parallel_delegated" and not gate_scores["delegation_check"]["passed"]:
-        passed = False
-    if verdict is not None and not verdict["not_measured"] and not verdict["passed"]:
-        passed = False
 
     # 사용자 요청(2026-11-17, "Human Agency Scale... 사람 고유 능력을
     # 보호하는 Task는 Gate 점수와 무관하게 항상 사람에게 올라가야
