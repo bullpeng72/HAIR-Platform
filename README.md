@@ -97,6 +97,7 @@ Agent라고 다른 대우를 받지 않는다.
   필요" 표시), 개발 결과물의 Python 코드+테스트는 네트워크를 막은
   Docker에서 실제로 실행하며, 한국어 결과물에 섞인 한자·외국 문자는
   자동 교정한다(문장 교정으로 안 고쳐지면 긴 문장 속 짧은 한자 조각만 문맥과 함께 다시 교정).
+  모델이 지어낸 한국어 낱말(사전에 없는 낱말)은 참고용 "낱말확인" 배지로 알린다(`korean` extra).
   인용으로 옮긴 따옴표 문장이 근거 자료에 실제로 있는지,
   근거의 낱말에서 한 글자가 빠지거나 바뀐 용어("1분기"→"1분")가 없는지도
   대조해 배지로 표시한다.
@@ -226,9 +227,10 @@ PyPI에 `hair-platform`으로 배포된다 — `pip install "hair-platform[...]"
 | `crewai` | `pip install -e ".[crewai]"` | 여러 Agent를 실제 CrewAI Crew로 협업시킬 때("Crew 빌더"/파이프라인) | crewai, litellm |
 | `mcp` | `pip install -e ".[mcp]"` | Agent에 외부 MCP 도구 서버를 연결할 때 | crewai-tools[mcp], mcp(`<2.0` 고정 — 아래 참고) |
 | `documents` | `pip install -e ".[documents]"` | 대화창/지식 베이스에서 `.pdf`/`.html`/`.xlsx`/`.docx`/`.pptx` 파일을 업로드할 때(`.md`/`.txt`/`.csv`는 추가 설치 불필요) | pypdf, beautifulsoup4, openpyxl, python-docx, python-pptx |
+| `korean` | `pip install -e ".[korean]"` | 결과물에서 사전에 없는 한국어 낱말(모델이 지어낸 낱말)을 찾는 참고용 "낱말확인" 배지. 분석기가 메모리 약 360MB·디스크 약 100MB를 쓴다(`HAIR_LEXICON_CHECK=0`으로 끔) | kiwipiepy |
 | `graph` | `pip install -e ".[graph]"` | LangGraph 실행엔진(팀 관리에서 "그래프 엔진"을 켤 때 — 체크포인트·사람 승인 중단/재개). 없이 켜면 설치 안내가 뜬다 | langgraph, langgraph-checkpoint-sqlite |
 | `dev` | `pip install -e ".[dev]"` | 테스트/린트/포맷터를 돌릴 때 | pytest, black, ruff |
-| `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents`+`graph` 전부) | 위 extras 전부(dev 제외) |
+| `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents`+`graph`+`korean` 전부) | 위 extras 전부(dev 제외) |
 
 > `mcp`는 `mcp>=1.10.1,<2.0`으로 상한을 고정해둔다 — `crewai-tools`가
 > 쓰는 `mcpadapt==0.1.19`가 `mcp 2.x`의 API 이름 변경을 아직 못
@@ -514,6 +516,7 @@ src/hair_platform/
   org_policy.py      # 조직 정책(사번 형식·결과물 언어)
   numeric_check.py   # 결과물 퍼센트 수치가 요청·조회·도구 결과 숫자로 재현되는지 검증·문장 교정(numeric_grounding)
   text_checks.py     # 인용 문장 근거 대조(quote_grounding)·한 음절 빠짐/바뀜 용어 탐지(term_consistency)
+  korean_lexicon.py  # 사전에 없는 한국어 낱말 탐지(lexicon_check, 참고용 — Kiwi 형태소 분석기, korean extra)
   code_tests.py      # 개발 결과물의 Python 코드+테스트를 네트워크 차단 Docker에서 실제 실행(test_execution)
   progress.py        # 실행 중 현재 단계·경과 시간 기록(대화·워크스페이스 진행 표시)
   integrations.py    # 개인 API 키(Bearer) + 외부 알림(Slack/Teams 웹훅·메일)

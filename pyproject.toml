@@ -83,6 +83,10 @@ crewai = ["crewai>=1.0.0", "litellm>=1.0.0"]
 # sqlite`는 DB 서버 없이 파일 하나로 체크포인트를 관리해(`aiosqlite`
 # 전이 의존성), HAIR의 "SQLite 하나로 전부" 철학과 맞는다.
 graph = ["langgraph>=1.2,<2.0", "langgraph-checkpoint-sqlite>=3.1,<4.0"]
+# `korean_lexicon.py`가 지연 import한다(2026-11-25) — 결과물에서 사전에 없는 한국어 낱말(모델이 지어낸 낱말)을
+# 찾는 참고용 검사. 형태소 분석기 Kiwi(순수 pip, Java 불필요)이고 사전 모델이 약 100MB라 선택 설치로 둔다 —
+# 없으면 그 검사만 "미평가"로 남고 나머지는 그대로 동작한다.
+korean = ["kiwipiepy>=0.24,<0.25"]
 # crew_runtime.py의 _mcp_tools()가 지연 import한다 — Agent에 mcp_servers를
 # 실제로 설정했을 때만 필요하다(ADR 결정 10, 2026-09-27). MCPServerAdapter는
 # 생성 시점에 실제로 MCP 서버에 접속을 시도한다 — 접속 가능한 서버가 없으면
@@ -142,6 +146,7 @@ all = [
     "python-pptx>=0.6.23",
     "langgraph>=1.2,<2.0",
     "langgraph-checkpoint-sqlite>=3.1,<4.0",
+    "kiwipiepy>=0.24,<0.25",
 ]
 
 [project.urls]

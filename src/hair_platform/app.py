@@ -256,7 +256,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # 에서만 띄운다. 프로세스당 한 번.
     from hair_platform import automation
 
-    automation.start_loop(conn)
+    if automation.start_loop(conn):
+        # `hair serve`일 때만(자동화 루프와 같은 조건) — 낱말확인 분석기·어휘를 미리 만든다(2026-11-25).
+        from hair_platform import korean_lexicon
+
+        korean_lexicon.warm_up_in_background()
 
     @app.post("/login")
     def login(payload: LoginRequest, request: Request):

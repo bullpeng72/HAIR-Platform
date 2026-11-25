@@ -77,16 +77,19 @@ def test_gc_run_crew_returns_token_usage_in_response(client_and_conn):
             provider="openai",
         )
 
-    # crewai==1.6.1(현재 설치본) `UsageMetrics.model_dump()`가 실제로 내는
-    # 키 집합 — 테스트 작성 당시 가정했던 reasoning_tokens/cache_creation_tokens
-    # 필드는 이 버전의 모델에 없다(라이브러리 버전 drift, 우리 코드 변경과 무관).
-    assert result["token_usage"] == {
+    # `run_crew()`는 crewai `UsageMetrics.model_dump()`를 그대로 넘긴다. 필드 집합은 crewai 버전마다
+    # 다르다(1.6.1엔 없던 reasoning_tokens·cache_creation_tokens가 1.15에 추가 — 2026-11-25 이 테스트가
+    # 정확 일치 비교라 계속 실패했다). 우리가 쓰는 필드 값은 정확히, 라이브러리가 더한 필드는 숫자인지만 본다.
+    expected = {
         "total_tokens": 321,
         "prompt_tokens": 200,
         "cached_prompt_tokens": 0,
         "completion_tokens": 121,
         "successful_requests": 2,
     }
+    token_usage = result["token_usage"]
+    assert {k: token_usage.get(k) for k in expected} == expected
+    assert all(isinstance(v, int) for v in token_usage.values())
 
 
 def test_gc_crew_run_endpoint_exposes_token_usage(client_and_conn):

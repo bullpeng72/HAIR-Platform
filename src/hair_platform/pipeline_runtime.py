@@ -634,7 +634,8 @@ def _gate_pass_ratio(gate_scores: dict, gate_ids=None) -> float:
     if gate_ids is not None:
         wanted = set(gate_ids)
         gate_scores = {k: v for k, v in gate_scores.items() if k in wanted}
-    measured = [g for g in gate_scores.values() if not g.get("not_measured")]
+    # 참고용 검사(`advisory` — 낱말확인 등, 2026-11-25)는 통과 판정에 넣지 않는다.
+    measured = [g for g in gate_scores.values() if not g.get("not_measured") and not g.get("advisory")]
     if not measured:
         return 1.0  # 측정 신호가 없으면 막을 근거가 없다(기존 webui Gate 표시 원칙과 동일).
     passed = [g for g in measured if g.get("passed")]

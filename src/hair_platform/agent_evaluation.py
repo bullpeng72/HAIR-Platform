@@ -78,6 +78,7 @@ def has_failing_gate(gate_scores: dict) -> bool:
     때문에 "Gate 실패"로 잡혔다."""
     return any(
         isinstance(gate, dict) and gate.get("passed") is False and not gate.get("not_measured")
+        and not gate.get("advisory")
         for gate in (gate_scores or {}).values()
     )
 
@@ -570,6 +571,13 @@ def attach_quality_checks(gate_scores: dict, output: str, evidence: str | None =
                             ("term_consistency", text_checks.term_consistency(output or "", evidence))):
             if not result["not_measured"]:
                 gate_scores[key] = result
+    # 사전에 없는 한국어 낱말(2026-11-25 — `korean_lexicon.py`, 선택 설치 kiwipiepy): 참고용(advisory)이라 통과
+    # 판정·인박스 경고에는 들어가지 않고 낱말 목록만 배지로 보인다. 분석기가 없거나 글이 짧으면 기록하지 않는다.
+    from hair_platform import korean_lexicon
+
+    lexicon = korean_lexicon.gate_score(output or "", evidence)
+    if not lexicon["not_measured"]:
+        gate_scores["lexicon_check"] = lexicon
     tests = code_tests.compute_test_execution(output or "")
     if not tests["not_measured"] or "Docker" in (tests.get("reason") or ""):
         # 테스트가 있는데 격리 환경이 없어 못 돌린 경우도 "미평가" 배지로 남겨 사람이 알게 한다.

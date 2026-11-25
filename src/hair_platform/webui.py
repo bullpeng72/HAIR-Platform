@@ -3479,7 +3479,7 @@ const conversationsDefaultAiAuthorId = 0;
 // 점수는 과하다 — "Crew 실행" 관리자 화면에만 그 수준 상세를 둔다).
 function _conversationGateBadge(m) {
   if (!m.gate_scores) return "";
-  const measured = Object.values(m.gate_scores).filter(g => !g.not_measured);
+  const measured = Object.values(m.gate_scores).filter(g => !g.not_measured && !g.advisory);
   if (!measured.length) return "";
   const passed = measured.filter(g => g.passed).length;
   const allPass = passed === measured.length;
@@ -4921,14 +4921,19 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     const gateBadge = d.evaluation
       ? (() => {
           const gates = Object.values(d.evaluation.gate_scores);
-          const measured = gates.filter(g => !g.not_measured);
+          const measured = gates.filter(g => !g.not_measured && !g.advisory);
           if (measured.length === 0) {
             return '<span class="gate-badge gate-warn">Gate 측정 없음</span>';
           }
           const passed = measured.filter(g => g.passed).length;
           const cls = passed === measured.length ? "gate-ok" : "gate-warn";
+          // 낱말확인(참고용, 2026-11-25) — 통과 집계와 따로, 찾은 낱말이 있으면 노란 배지로 보인다.
+          const lex = d.evaluation.gate_scores.lexicon_check;
+          const lexBadge = lex && lex.words && lex.words.length
+            ? ' <span class="gate-badge gate-warn" title="' + escAttr("사전에 없는 낱말(참고용 — 지어낸 낱말일 수 있으니 확인): " + lex.words.map(w => w.word + " (…" + w.context + "…)").join(" / ")) + '">⚠ 낱말 확인 ' + lex.words.length + "</span>"
+            : "";
           return '<span class="gate-badge ' + cls + '">Gate ' + passed + "/" + measured.length +
-            " 통과" + (d.evaluation.tcr === null ? "" : " · TCR " + d.evaluation.tcr.toFixed(0) + "%") + '</span>';
+            " 통과" + (d.evaluation.tcr === null ? "" : " · TCR " + d.evaluation.tcr.toFixed(0) + "%") + '</span>' + lexBadge;
         })()
       : "";
     const side = d.author_type === "agent" ? "chat-agent" : "chat-human";
@@ -5185,7 +5190,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 있다. 아래 렌더링은 원래 제네릭하게 모든 키를 순회하므로 자동으로
   // 배지가 뜨지만, 긴 영문 키를 그대로 배지 글자로 쓰면 어색해 짧은
   // 한글 라벨로 바꿔 보여준다(A-G는 그대로 글자 자체가 식별자).
-  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인", numeric_grounding: "수치근거", deliverable_runnable: "실행가능", test_execution: "테스트실행", quote_grounding: "인용근거", term_consistency: "용어확인", review_verdict: "판정" };
+  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인", numeric_grounding: "수치근거", deliverable_runnable: "실행가능", test_execution: "테스트실행", quote_grounding: "인용근거", term_consistency: "용어확인", review_verdict: "판정", lexicon_check: "낱말확인" };
   const pipelineTimelineHtml = (run) => {
     if (!run) return "";
     const rows = run.stage_results.map(sr => {
@@ -5193,14 +5198,16 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         ? Object.entries(sr.gate_scores)
             .map(([gid, g]) => {
               const label = GATE_EXTRA_LABELS[gid] || gid;
-              const cls = g.not_measured ? "gate-na" : (g.passed ? "gate-ok" : "gate-warn");
+              // 참고용 검사(advisory — 낱말확인)는 통과 여부와 별개로 찾은 게 있으면 노란색(2026-11-25).
+              const cls = g.not_measured ? "gate-na" : (g.advisory ? (g.status === "warn" ? "gate-warn" : "gate-ok") : (g.passed ? "gate-ok" : "gate-warn"));
               const title = g.not_measured
                 ? "Gate " + label + " — 미평가" + (g.reason ? " (" + g.reason + ")" : "")
                 : "Gate " + label + " — " + (g.passed ? "통과" : "미통과") +
                   (typeof g.score === "number" ? " (점수 " + g.score + ")" : "") +
                   // 무엇이 걸렸는지 첫 몇 건(2026-11-24 — 수치근거·인용근거·용어확인).
                   (!g.passed && g.unsupported && g.unsupported.length ? " — 근거 없음: " + g.unsupported.slice(0, 3).map(u => u.text).join(" / ") : "") +
-                  (!g.passed && g.suspects && g.suspects.length ? " — 확인: " + g.suspects.slice(0, 3).map(u => "'" + u.found + "'(근거: '" + u.expected + "')").join(", ") : "");
+                  (!g.passed && g.suspects && g.suspects.length ? " — 확인: " + g.suspects.slice(0, 3).map(u => "'" + u.found + "'(근거: '" + u.expected + "')").join(", ") : "") +
+                  (g.words && g.words.length ? " — 사전에 없는 낱말(참고용): " + g.words.slice(0, 5).map(w => "'" + w.word + "'").join(", ") : "");
               return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + '">' + label + "</span>";
             })
             .join(" ")
@@ -12313,8 +12320,9 @@ const MANUAL_MARKDOWN = [
 '| 구문·실행가능·테스트실행 | (개발 결과물) 코드 문법, 그대로 실행되는 완성본인지, Python 코드+테스트를 네트워크를 막은 Docker에서 실제 실행 | 구현 단계 재시도 |',
 '| 추적성 | 1단계 요구사항을 빠짐없이 반영했는지(AI 판정, 짧은 답이라 출력 상한 4,096토큰) | 작성 단계로 되돌림 |',
 '| 판정 | 검토자가 쓴 `## 판정`이 승인인지 보완 요청인지 | 작성 단계로 되돌림 |',
+'| 낱말확인(참고용) | 한국어 사전에 없는 낱말 — 모델이 지어낸 낱말(실측: 퍼널 결론의 뜻 없는 "-니즘" 낱말, "분산 처리"가 깨진 낱말 등)을 찾음. 플랫폼 화면·스킬에 쓰는 외래어와 요청·앞 단계 결과에 나온 낱말, 합성어(지식재산·미집행)는 빼고 셈 | 통과 판정·인박스 경고에는 넣지 않고 노란 배지에 낱말 목록만 표시(사전에 없는 실제 낱말 — 예: 당월·별지 — 이 섞일 수 있음). 서버에 `korean` 확장이 있어야 동작 |',
 '',
-'**언어 교정**은 배지 없이 저장 전에 자동으로 합니다(조직 결과물 언어가 한국어일 때). 한국어 결과물에 섞인 한자·일본어·베트남어 문자·깨진 글자를 찾아 문맥에 맞는 한국어로 바꾸고, 문장 전체 교정으로 안 고쳐진 줄은 **문제 글자 부분만 앞뒤 문맥과 함께 다시 교정**합니다(긴 문장 속 "全覆盖"·"出具" 같은 짧은 한자도 잡힘). 고친 기록은 "활동 기록"에 `language_qa_repaired`로 남습니다. 단, **한국어 글자로 된 뜻 없는 낱말**(모델이 지어낸 단어)은 잡지 못하므로 최종 결과물은 사람이 한 번 읽어 보세요.',
+'**언어 교정**은 배지 없이 저장 전에 자동으로 합니다(조직 결과물 언어가 한국어일 때). 한국어 결과물에 섞인 한자·일본어·베트남어 문자·깨진 글자를 찾아 문맥에 맞는 한국어로 바꾸고, 문장 전체 교정으로 안 고쳐진 줄은 **문제 글자 부분만 앞뒤 문맥과 함께 다시 교정**합니다(긴 문장 속 "全覆盖"·"出具" 같은 짧은 한자도 잡힘). 고친 기록은 "활동 기록"에 `language_qa_repaired`로 남습니다. **한국어 글자로 된 뜻 없는 낱말**(모델이 지어낸 단어)은 자동으로 고치지 않고 위 **낱말확인** 배지로 알려 줍니다(서버에 `korean` 확장 설치 시) — 다른 실제 낱말로 바뀐 오타("발표"→"발포")는 용어확인이 근거와 대조해 일부만 잡으므로, 최종 결과물은 사람이 한 번 읽어 보세요.',
 '',
 '### 바로 써보기 — 기본 제공 "소프트웨어 개발 파이프라인"',
 '',
@@ -12494,7 +12502,7 @@ const MANUAL_MARKDOWN = [
 '  - **되돌림**: 모든 Agent의 모델 지정·비용·성과점수·마지막 결과물을 비웁니다. 상태는 **기본 Agent만 "활성"으로** 되돌리고, 관리자가 만든 Agent는 지금 상태(온보딩 대기·비활성 등)를 그대로 둡니다 — 승인 전 Agent가 초기화로 활성이 되지 않습니다.',
 '  - 초기화 뒤에는 계정이 하나도 없으므로 `hair bootstrap-admin -u <계정> -p <비밀번호>`로 첫 admin을 다시 만듭니다. 모델 레지스트리도 비므로 쓰던 모델을 다시 등록하세요.',
 '- **결과물이 한국어가 아닌 언어로 나와야 한다** → 설정 → 운영 관리 → "사용자 관리"(admin)의 조직 정책에서 **결과물 언어**를 바꾸면 모든 Agent에 그 언어로 쓰라고 지시합니다(한국어가 아니면 한국어 전용 자동 교정은 꺼짐).',
-'- **결과물에 이상한 한국어 낱말이 섞여 있다**(예: 사전에 없는 단어) → 자동 언어 교정은 한자·외국 문자만 고칩니다. 결과물 카드의 **"부분 수정 요청"**으로 그 문장만 고쳐 달라고 하거나 직접 편집하세요.',
+'- **결과물에 이상한 한국어 낱말이 섞여 있다**(예: 사전에 없는 단어) → 자동 언어 교정은 한자·외국 문자만 고칩니다. 결과물 카드의 **"⚠ 낱말 확인"** 배지(마우스를 올리면 낱말과 앞뒤 문맥)로 위치를 확인하고, **"부분 수정 요청"**으로 그 문장만 고쳐 달라고 하거나 직접 편집하세요. 배지가 아예 안 나오면 서버에 `korean` 확장(`pip install "hair-platform[korean]"`)이 없거나 `HAIR_LEXICON_CHECK=0`으로 꺼진 것입니다 — 분석기가 메모리를 약 360MB 쓰므로, 로컬 대형 모델과 메모리가 빠듯하면 꺼 두세요.',
 ].join("\\n");
 
 /* ---------- 연동 설정(2026-11-23, "P1 진행해줘" — P1-5 사람이 누르지 않아도 도는 자동화) ----------
