@@ -842,6 +842,13 @@ def get_checkpointer(conn: sqlite3.Connection):
 
 
 @llm_usage.with_scope(task_id=llm_usage.task_of_pipeline_run, pipeline_run_id="run_id")
+@llm_usage.with_scope(task_id=llm_usage.task_of_pipeline_run, pipeline_run_id="run_id")
+def resume_interrupted_graph_job(conn: sqlite3.Connection, run_id: int) -> dict:
+    """서버 재시작으로 중단된 그래프 실행을 마지막 체크포인트부터 이어 간다(2026-11-25, P1-6 — "이어서 실행").
+    사용량·평가 맥락(업무·실행)을 다른 작업 진입점과 같게 둔다."""
+    return resume_pipeline_graph(conn, run_id, get_checkpointer(conn))
+
+
 def run_pipeline_graph_job(conn: sqlite3.Connection, run_id: int, actor_id: int) -> dict:
     """`app.py`의 `trigger_pipeline_execution()`이 `payload.use_graph_
     engine=True`일 때 `BackgroundTasks`로 거는 진입점 — 공유

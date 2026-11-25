@@ -74,8 +74,32 @@ def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
     execution_failed: list[dict] = []
     low_gate_score: list[dict] = []
     completed: list[dict] = []
+    pipeline_failed: list[dict] = []
     for w in my_work:
         task_id = w["task_id"]
+        # 파이프라인 실행 실패·재시작 중단(2026-11-25, P2-15 — P1-6 "이어서 실행"과 함께). 그 업무의 가장 최근 실행만.
+        try:
+            last_run = conn.execute(
+                "SELECT r.id, r.status, r.current_stage_seq, r.finished_at, r.interrupted_at, t.name AS template_name "
+                "FROM pipeline_runs r JOIN pipeline_templates t ON t.id = r.pipeline_template_id "
+                "WHERE r.task_id = ? ORDER BY r.id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:  # interrupted_at 열이 생기기 전
+            last_run = None
+        if last_run is not None and last_run["status"] == "failed":
+            pipeline_failed.append(
+                {
+                    "type": "pipeline_failed",
+                    "task_id": task_id,
+                    "role_name": w["role_name"],
+                    "run_id": last_run["id"],
+                    "template_name": last_run["template_name"],
+                    "stage_seq": last_run["current_stage_seq"],
+                    "interrupted": bool(last_run["interrupted_at"]),
+                    "failed_at": last_run["finished_at"],
+                }
+            )
         jobs = deliverables.list_execution_jobs(conn, task_id)
         if jobs and jobs[0]["status"] == "failed":
             execution_failed.append(
@@ -125,6 +149,7 @@ def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
     # 그대로 따른다 — 뒤집지 않는다(실측으로 발견한 버그: 처음엔
     # reversed()를 잘못 넣어 오래된 task가 먼저 나왔었다).
     items.extend(execution_failed)
+    items.extend(pipeline_failed)
     items.extend(low_gate_score)
     items.extend(completed)
     return items

@@ -3302,6 +3302,34 @@ async function _pollMyMentions() {
 // 모름). 기존 멘션 폴링과 같은 주기(20초)로 `GET /api/inbox`를 같이
 // 불러 탭 버튼에 건수 배지를 띄운다 — 새 폴링 체계를 따로 만들지 않고
 // 같은 타이머에 얹는다.
+// 인박스 새 항목 데스크톱 알림(2026-11-25, P2-15) — 예전엔 건수 배지만 바뀌어 다른 탭·창에 있으면 결재 대기·실패·완료를
+// 몰랐다. 처음 불러온 목록은 "이미 있던 것"으로만 기억하고(로그인 직후 알림 폭주 방지), 그 뒤 새로 생긴 항목만 알린다.
+let _inboxSeenKeys = null;
+function _inboxItemKey(i) {
+  return i.type + ":" + (i.approval_id || i.job_id || i.run_id || i.deliverable_id || "") + ":" + (i.task_id || "") + ":" + (i.completed_at || i.failed_at || "");
+}
+function _inboxNotifyText(i) {
+  if (i.type === "approval_pending") return ["🗳 결재 대기", (i.task_role_name || i.resource_name || "새 결재 요청")];
+  if (i.type === "execution_failed") return ["⚠ AI 실행 실패", (i.role_name || "") + (i.error ? " — " + String(i.error).slice(0, 80) : "")];
+  if (i.type === "pipeline_failed") return [i.interrupted ? "⏸ 파이프라인 중단(서버 재시작)" : "⚠ 파이프라인 실패", (i.template_name || "") + " · " + (i.role_name || "")];
+  if (i.type === "low_gate_score") return ["🟡 낮은 Gate 점수", i.role_name || ""];
+  if (i.type === "completed") return ["✅ 업무 완료", i.role_name || ""];
+  return ["HAIR 알림", i.role_name || ""];
+}
+function _notifyNewInboxItems(items) {
+  const keys = new Set(items.map(_inboxItemKey));
+  if (_inboxSeenKeys === null) { _inboxSeenKeys = keys; return; }
+  const fresh = items.filter(i => !_inboxSeenKeys.has(_inboxItemKey(i)));
+  _inboxSeenKeys = keys;
+  if (!fresh.length || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  fresh.slice(0, 3).forEach(i => {
+    const [title, body] = _inboxNotifyText(i);
+    const notif = new Notification(title, { body, tag: "hair-inbox-" + _inboxItemKey(i) });
+    notif.onclick = () => { window.focus(); selectTab(i.type === "approval_pending" ? "approvals" : "inbox"); notif.close(); };
+  });
+  if (fresh.length > 3) new Notification("HAIR — 새 항목 " + fresh.length + "건", { body: "인박스에서 확인하세요.", tag: "hair-inbox-many" });
+}
+
 async function _pollInboxBadge() {
   const badge = document.getElementById("inbox-badge-count");
   if (!badge) return; // 아직 로그인 전/로그아웃 뒤 — nav가 없음
@@ -3311,6 +3339,7 @@ async function _pollInboxBadge() {
   } catch (e) {
     return; // 네트워크 일시 단절 등 — 다음 주기에 다시 시도
   }
+  _notifyNewInboxItems(items);
   if (items.length) {
     badge.textContent = items.length > 99 ? "99+" : String(items.length);
     badge.hidden = false;
@@ -3328,6 +3357,7 @@ function startMentionNotificationPolling() {
 }
 
 function stopMentionNotificationPolling() {
+  _inboxSeenKeys = null;  // 다음에 로그인하는 사람에게 이전 사람의 "본 항목"이 이어지지 않게(2026-11-25, P2-15)
   if (_mentionNotifyTimer) {
     clearInterval(_mentionNotifyTimer);
     _mentionNotifyTimer = null;
@@ -4197,6 +4227,7 @@ async function renderHome(content) {
   const todo = [
     ["approval_pending", "결재 대기", "approvals"],
     ["execution_failed", "AI 실행 실패", "inbox"],
+    ["pipeline_failed", "파이프라인 실패·중단", "inbox"],
     ["low_gate_score", "낮은 Gate 점수", "inbox"],
     ["completed", "최근 완료", "inbox"],
   ].map(([type, name, tab]) =>
@@ -4314,6 +4345,7 @@ async function renderInbox(content) {
   const labelOf = {
     approval_pending: "결재 대기",
     execution_failed: "AI 에이전트 실행 실패",
+    pipeline_failed: "파이프라인 실행 실패",
     low_gate_score: "낮은 Gate 점수 경고",
     completed: "✅ 완료됨",
   };
@@ -4338,6 +4370,13 @@ async function renderInbox(content) {
         '<div>' + esc(item.error || "") + '</div>' +
         '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
     }
+    if (item.type === "pipeline_failed") {
+      // 파이프라인 실패·서버 재시작 중단(2026-11-25, P2-15·P1-6) — 중단된 실행은 업무에서 "이어서 실행"할 수 있다.
+      return '<div class="deliverable-card"><div class="muted">' + (item.interrupted ? "⏸ 서버 재시작으로 중단됨" : labelOf[item.type]) +
+        " · " + esc(item.template_name || "") + " · " + esc(String(item.stage_seq)) + "단계 · " + esc(item.role_name) + "</div>" +
+        (item.interrupted ? '<div class="muted">업무를 열어 "이어서 실행"을 누르면 끝난 단계는 건너뛰고 이어 갑니다(admin·manager).</div>' : "") +
+        '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
+    }
     if (item.type === "completed") {
       // 사용자 요청(2026-11-12) — 결재가 필요 없는 성공 완료도 요청한
       // 사람이 알 수 있게 한다(지금까지 조용히 묻혔음, 위 inbox.py
@@ -4355,7 +4394,8 @@ async function renderInbox(content) {
     '<section class="card"><h2>내게 필요한 조치</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>결재 대기·AI 에이전트 실행 실패·낮은 Gate 점수 경고(승인/반려 전인 것만)·✅ 완료됨(결재가 필요 없는 성공, 최근 24시간 이내만)을 한 곳에 모았습니다.</li>' +
+      '<li>결재 대기·AI 에이전트 실행 실패·파이프라인 실패(서버 재시작 중단 포함)·낮은 Gate 점수 경고(승인/반려 전인 것만)·✅ 완료됨(결재가 필요 없는 성공, 최근 24시간 이내만)을 한 곳에 모았습니다.</li>' +
+      '<li>브라우저 알림을 허용하면 다른 탭·창에 있어도 새 항목이 생길 때 데스크톱 알림이 뜹니다(약 20초 간격으로 확인).</li>' +
       '<li>완전한 시간순 통합은 아니고 종류별로 묶여 있습니다 — 처리는 각 항목의 원래 화면(결재/내 업무)에서 합니다.</li>' +
       '</ul>'
     ) +
@@ -5288,9 +5328,18 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
             : '<button class="small danger" data-cancel-pipeline-run="' + latestPipelineRun.id + '">실행 중단 요청</button>' +
               '<p class="muted">진행 중인 단계가 끝나는 즉시 멈춥니다 — 이미 시작된 Crew 실행 자체를 바로 끊지는 않습니다.</p>')
         : '<p class="muted">등록된(활성) 파이프라인이 없습니다 — "파이프라인 관리" 탭에서 먼저 만드세요.</p>');
+  // 서버 재시작으로 중단된 실행(2026-11-25, P1-6) — 끝난 단계는 다시 하지 않고 진행 중이던 단계부터 이어 간다.
+  const interruptedHtml = (latestPipelineRun && latestPipelineRun.status === "failed" && latestPipelineRun.interrupted_at)
+    ? '<div class="msg error">⏸ 서버가 다시 시작되면서 이 실행이 ' + esc(fmtTime(latestPipelineRun.interrupted_at)) + "에 중단됐습니다(" +
+      esc(String(latestPipelineRun.current_stage_seq)) + "단계 진행 중). " +
+      (["admin", "manager"].includes(ME.role)
+        ? '<button class="small primary" data-resume-pipeline-run="' + latestPipelineRun.id + '" title="끝난 단계는 다시 하지 않고, 진행 중이던 단계부터 다시 실행합니다(그 단계의 AI 호출은 다시 듭니다).">이어서 실행</button>'
+        : "admin·manager가 이어서 실행할 수 있습니다.") + "</div>"
+    : "";
   const pipelineSectionHtml =
     '<section class="card"><h4>파이프라인 실행</h4>' +
     pipelineExecuteHtml +
+    interruptedHtml +
     pipelineTimelineHtml(latestPipelineRun) +
     '</section>';
 
@@ -5532,6 +5581,17 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         showMsg("global-msg", "파이프라인 실행을 시작했습니다.", "ok");
         renderCollabWorkspace(taskId, containerId);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  }
+  const resumePipelineRunBtn = detail.querySelector("[data-resume-pipeline-run]");
+  if (resumePipelineRunBtn) {
+    resumePipelineRunBtn.onclick = async () => {
+      resumePipelineRunBtn.disabled = true;
+      try {
+        await api("POST", "/api/pipeline-runs/" + resumePipelineRunBtn.dataset.resumePipelineRun + "/resume");
+        showMsg("global-msg", "중단된 단계부터 이어서 실행합니다.", "ok");
+        renderCollabWorkspace(taskId, containerId);
+      } catch (e) { resumePipelineRunBtn.disabled = false; showMsg("global-msg", e.message, "error"); }
     };
   }
   const cancelPipelineRunBtn = detail.querySelector("[data-cancel-pipeline-run]");
@@ -12821,7 +12881,7 @@ const MANUAL_MARKDOWN = [
 '',
 '맨 위 메뉴는 두 줄입니다 — 첫 줄 **"오늘 할 일"**(모든 사용자), 둘째 줄 **"설정"**(admin·manager).',
 '',
-'**오늘 할 일**: 홈(AI에게 일 맡기기·처리할 일·맡기는 방법·admin 관리 점검) · 대화 · 인박스(결재 대기·실행 실패·낮은 Gate 경고) · 내 업무 · 업무 요청 · 결재 · 갤러리(여러 할 일의 결과물) · 이용 가이드(이 화면) · **"더 보기"** 안에: 할 일 보드 · 성과 리뷰 · 인력 검색 · 조직도 · 연동 설정(viewer 제외 — 내 API 키, 정기 실행·이벤트 트리거는 admin·manager, 외부 알림·메일 알림·코드 저장소는 admin)',
+'**오늘 할 일**: 홈(AI에게 일 맡기기·처리할 일·맡기는 방법·admin 관리 점검) · 대화 · 인박스(결재 대기·실행 실패·파이프라인 실패·중단·낮은 Gate 경고·완료 — 브라우저 알림을 허용하면 새 항목을 데스크톱 알림으로도 받음) · 내 업무 · 업무 요청 · 결재 · 갤러리(여러 할 일의 결과물) · 이용 가이드(이 화면) · **"더 보기"** 안에: 할 일 보드 · 성과 리뷰 · 인력 검색 · 조직도 · 연동 설정(viewer 제외 — 내 API 키, 정기 실행·이벤트 트리거는 admin·manager, 외부 알림·메일 알림·코드 저장소는 admin)',
 '',
 '> 첫 줄에는 매일 쓰는 탭만 기본으로 보이고, 나머지는 **"더 보기"**를 누르면 펼쳐집니다(펼친 상태는 이 브라우저에 기억됨). 다른 화면의 바로가기로 접힌 탭에 가면 자동으로 펼쳐집니다.',
 '',
@@ -12941,6 +13001,13 @@ const MANUAL_MARKDOWN = [
 '- **해결**:',
 '  1. 결과물을 결재하기 전에 단계 결과의 노란 **"조건부 승인"** 배지에 마우스를 올려 짚은 문장을 확인하고, 직접 고치거나 **"부분 수정 요청"**으로 그 부분만 고칩니다.',
 '  2. 이런 일이 잦은 파이프라인이면 파이프라인 관리에서 그 검토 단계의 **"엄격 검토 켜기"**를 눌러 자동으로 되돌려 고치게 합니다(시간이 더 듦).',
+'**서버를 다시 시작했더니 진행 중이던 파이프라인이 멈췄다**',
+'',
+'- **원인**: 실행은 서버 프로그램 안에서 돌기 때문에, 서버가 꺼지면(재시작·PC 재부팅·잠자기 후 종료) 진행 중이던 실행이 함께 멈춥니다. 다시 켤 때 이런 실행은 **"서버 재시작으로 중단됨"**으로 표시됩니다.',
+'- **해결**: 그 업무의 협업 워크스페이스 → "파이프라인 실행"의 **"이어서 실행"**(admin·manager)을 누릅니다.',
+'  - 이미 끝난 단계는 다시 하지 않고, **진행 중이던 단계부터** 다시 실행합니다(그래프 엔진은 마지막 체크포인트부터). 그 단계의 AI 호출 비용은 다시 듭니다.',
+'  - 자동으로 이어 가지는 않습니다 — 멈춘 원인이 실행 자체(무한 반복 등)였다면 재시작할 때마다 같은 비용이 반복될 수 있어, 사람이 확인하고 누르게 했습니다.',
+'- **예방**: 긴 실행 중에는 서버를 끄거나 재시작하지 마세요. 대화 응답·단일 Agent 실행처럼 짧은 작업은 이어서 실행이 없으니 다시 요청하세요.',
 '**긴 결과물(발표자료 덱·단일 파일 앱)이 중간에 잘린다**',
 '',
 '- **원인**: 모델의 컨텍스트 창이 작아 앞 내용과 생성 중인 글이 다 들어가지 못했습니다.',
@@ -13012,6 +13079,12 @@ const MANUAL_MARKDOWN = [
 '  - 팀 — 그 팀의 **사람 구성원** 중 **로그인 계정이 연결된 사람**("사람 인력 관리"에서 계정 연결)과 admin',
 '- **해결**: 설정 → 그라운딩 관리 → **"지식 베이스"** 문서 목록의 **"공개 범위"**를 확인하고 필요하면 바꿉니다. 팀 범위인데 안 보이면, 그 사람이 팀 구성원으로 등록돼 있는지와 사람 인력에 로그인 계정이 연결돼 있는지 확인하세요.',
 '- **참고**: 정기 실행·이벤트 트리거는 **등록한 사람**을 요청자로 봅니다. 요청자를 알 수 없는 경우(드물게 도구가 별도로 실행될 때)에는 **전체 공개 문서만** 씁니다. Agent 결과물에서 나온 지식은 늘 전체 공개입니다.',
+'**다른 탭·창에 있으면 결재 대기·실행 결과를 늦게 안다**',
+'',
+'- **원인**: 브라우저 알림이 꺼져 있으면 새 항목이 인박스 탭의 건수 배지로만 표시됩니다.',
+'- **해결**: 처음 로그인할 때 브라우저가 묻는 **알림 허용**을 누르세요(놓쳤다면 주소창 왼쪽 자물쇠 → 알림 → 허용). 허용하면 HAIR 탭이 열려 있는 동안 약 20초마다 확인해 **새로 생긴** 결재 대기·AI 실행 실패·파이프라인 실패·중단·낮은 Gate 점수·완료를 데스크톱 알림으로 띄웁니다(로그인 직후 이미 있던 항목은 알리지 않음). 알림을 누르면 결재 또는 인박스 화면으로 갑니다.',
+'- **참고**: HAIR 탭을 모두 닫으면 알림이 오지 않습니다. 탭이 닫혀 있을 때도 받으려면 "연동 설정"의 외부 알림(웹훅)·메일 알림을 쓰세요.',
+'',
 '**비용이 걱정된다**',
 '',
 '- **모델을 호출하는(비용이 드는) 버튼**: 이름에 "실행"이 붙은 버튼(AI 에이전트 실행·팀 Agent 실행·파이프라인 실행·Crew 실행), "AI 의견 보기", "AI로 추천 받기", "AI로 분해 제안 받기", "부분 수정 요청"의 "수정안 만들기".',

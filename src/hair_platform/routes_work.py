@@ -1458,6 +1458,27 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             )
         return pipeline_runtime.list_pipeline_runs_for_task(conn, task_id)
 
+    @app.post("/api/pipeline-runs/{run_id}/resume")
+    def resume_pipeline_run_endpoint(
+        run_id: int,
+        background_tasks: BackgroundTasks,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """서버 재시작으로 중단된 실행 이어서 실행(2026-11-25, P1-6) — AI를 다시 부르므로 파이프라인 실행과 같은
+        권한(admin·manager). 끝난 단계는 다시 하지 않는다(기본 엔진: 진행 중이던 단계부터, 그래프: 마지막 체크포인트부터)."""
+        try:
+            engine = pipeline_runtime.resume_interrupted_run(conn, user["id"], run_id)
+        except ValueError as exc:
+            status = 404 if "찾을 수 없습니다" in str(exc) else 409
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+        if engine == "graph":
+            from hair_platform import execution_graph as _eg
+
+            background_tasks.add_task(_eg.resume_interrupted_graph_job, conn, run_id)
+        else:
+            background_tasks.add_task(pipeline_runtime.run_pipeline_stage_job, conn, run_id, user["id"])
+        return {"run_id": run_id, "status": "running", "engine": engine}
+
     @app.post("/api/pipeline-runs/{run_id}/cancel")
     def cancel_pipeline_run_endpoint(
         run_id: int, user: sqlite3.Row = Depends(get_current_user)

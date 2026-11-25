@@ -1712,6 +1712,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 엔진으로 시작된 run만 `execution_graph.run_pipeline_graph()`가
     # 'graph'로 바꾼다(기존 동작 100% 무변화).
     _ensure_column(conn, "pipeline_runs", "engine", "TEXT NOT NULL DEFAULT 'legacy'")
+    # 서버 재시작으로 중단된 실행 표시(2026-11-25, P1-6) — 이어서 실행할 수 있는 실패.
+    _ensure_column(conn, "pipeline_runs", "interrupted_at", "TEXT")
     _sync_dev_crew_pipeline_integration(conn)
     # 사용자 요청(2026-10-29, "TF팀을 teams의 확장으로, Team 온보딩
     # 라이프사이클 도입 — 기존 활성 팀은 전부 자동 active 처리") —

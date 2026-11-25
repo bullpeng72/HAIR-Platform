@@ -541,9 +541,36 @@ def reap_orphaned_pipeline_runs(conn: sqlite3.Connection) -> int:
             "WHERE id = ?",
             (row["id"],),
         )
+        # 재시작으로 중단됨 표시(2026-11-25, P1-6) — "이어서 실행"으로 진행 중이던 단계부터 다시 돌릴 수 있다.
+        # 자동으로 이어 가지는 않는다: 위 사례처럼 멈춘 실행이 재시작마다 같은 비용을 반복할 수 있어 사람이 확인한다.
+        try:
+            conn.execute("UPDATE pipeline_runs SET interrupted_at = datetime('now') WHERE id = ?", (row["id"],))
+        except sqlite3.OperationalError:
+            pass
     if rows:
         conn.commit()
     return len(rows)
+
+
+def resume_interrupted_run(conn: sqlite3.Connection, actor_id: int, run_id: int) -> str:
+    """재시작으로 중단된 실행을 다시 `running`으로 돌린다(2026-11-25, P1-6). 돌려주는 값은 엔진("legacy"|"graph") —
+    호출자가 그 엔진의 실행 함수를 백그라운드로 건다. 끝난 단계는 다시 하지 않는다: 기본 엔진은 진행 중이던 단계
+    (`current_stage_seq`)부터, 그래프 엔진은 마지막 체크포인트부터 이어 간다."""
+    run = conn.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+    if run is None:
+        raise ValueError("실행을 찾을 수 없습니다")
+    keys = run.keys()
+    if run["status"] != "failed" or "interrupted_at" not in keys or not run["interrupted_at"]:
+        raise ValueError("서버 재시작으로 중단된 실행만 이어서 실행할 수 있습니다")
+    conn.execute(
+        "UPDATE pipeline_runs SET status = 'running', finished_at = NULL, interrupted_at = NULL WHERE id = ?",
+        (run_id,),
+    )
+    audit.record(conn, actor_id, "pipeline_run_resumed", "pipeline_runs", run_id,
+                 before={"interrupted_at": run["interrupted_at"]},
+                 after={"stage_seq": run["current_stage_seq"], "engine": run["engine"] if "engine" in keys else "legacy"})
+    conn.commit()
+    return (run["engine"] if "engine" in keys else None) or "legacy"
 
 
 def start_pipeline_run(
@@ -1811,6 +1838,8 @@ def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[
                 "engine": run["engine"],
                 "created_at": run["created_at"],
                 "finished_at": run["finished_at"],
+                # 서버 재시작으로 중단됨(2026-11-25, P1-6) — 화면이 "이어서 실행" 버튼을 보여 준다.
+                "interrupted_at": run["interrupted_at"] if "interrupted_at" in run.keys() else None,
                 # 진행률(2026-11-24, P0-2) — 실행 중인 단계의 이름·지금 하는 일·시작 시각·작성 중 미리보기.
                 **_run_progress_fields(conn, run),
                 "stage_results": [
