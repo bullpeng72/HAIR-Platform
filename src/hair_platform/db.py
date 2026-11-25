@@ -1637,6 +1637,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 
     conn.executescript(llm_usage.SCHEMA)
     llm_usage.ensure_scope_columns(conn)  # 업무 맥락(2026-11-23, P2-11)
+    from hair_platform import ai_budget  # AI 사용 한도·사용자별 기록(2026-11-25, P2-14)
+
+    ai_budget.ensure_schema(conn)
     # 사용자 요청(2026-10-27, "에이전트, 도구/skill ID 체계를 수립하고
     # (종류 구분 가능) 초기화하여 정리") — 기존 DB에도 `code` 컬럼을
     # 추가한다. UNIQUE 인덱스는 컬럼이 확실히 생긴 뒤인 여기서만

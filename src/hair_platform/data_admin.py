@@ -594,6 +594,7 @@ def reset_to_factory_state(conn: sqlite3.Connection) -> dict[str, int]:
         )
         # 평가 기준 설정(2026-11-25)은 조직 설정이라 남긴다 — 지우는 사용자를 가리키지 않게 수정자만 비운다.
         conn.execute("UPDATE evaluation_config SET updated_by = NULL")
+        conn.execute("UPDATE ai_budget_config SET updated_by = NULL")  # AI 사용 한도는 남김(2026-11-25, P2-14)
         for table in _FACTORY_RESET_WIPE_TABLES:
             counts[table] = conn.execute(f"DELETE FROM {table}").rowcount
         counts["team_members"] = conn.execute(

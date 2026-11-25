@@ -11654,9 +11654,41 @@ async function renderDashboard(content) {
 
 /* ---------- 비용 ---------- */
 
+// AI 사용 한도(2026-11-25, P2-14) — 이번 달 사용·한도. 변경은 admin.
+function _aiBudgetCardHtml(b) {
+  if (!b) return "";
+  const c = b.config;
+  const money = v => (v === null || v === undefined) ? "제한 없음" : "$" + Number(v).toFixed(2);
+  const bar = r => (r === null || r === undefined) ? "" :
+    '<div class="progress-bar" style="max-width:16rem"><div class="progress-bar-fill" style="width:' + Math.min(100, Math.round(r * 100)) + '%;' +
+    (r >= 1 ? "background:var(--danger, #c0392b)" : (r >= c.warn_ratio ? "background:var(--warn, #d68910)" : "")) + '"></div></div>';
+  const warn = (b.org_ratio !== null && b.org_ratio >= c.warn_ratio) ? ' <span class="gate-badge gate-warn">한도의 ' + Math.round(b.org_ratio * 100) + "%</span>" : "";
+  const rows = (b.users || []).map(u => [
+    esc(u.username || ("#" + u.user_id)), esc(u.role || ""), "$" + Number(u.cost).toFixed(4),
+    u.ratio === null ? '<span class="muted">' + (u.role === "admin" ? "admin(사용자별 한도 제외)" : "-") + "</span>" : Math.round(u.ratio * 100) + "% " + bar(u.ratio),
+  ]);
+  const editable = ME.role === "admin";
+  const inp = (id, v, ph) => '<input type="number" min="0" step="0.01" id="' + id + '" value="' + (v === null || v === undefined ? "" : v) + '" placeholder="' + ph + '" style="width:8rem"' + (editable ? "" : " disabled") + ">";
+  return '<section class="card"><h2>AI 사용 한도(이번 달)</h2>' +
+    '<p class="muted">이번 달(UTC 1일부터) 실제 AI 호출 비용 = 토큰 × "모델 레지스트리" 단가입니다. 단가를 등록하지 않은 모델(로컬 Ollama 등)은 0으로 셉니다. 한도에 도달하면 그 사람(또는 조직 전체)의 AI 호출을 하지 않고 이유를 보여 줍니다. admin은 사용자별 한도에서 빠지고 조직 전체 한도만 적용됩니다.</p>' +
+    "<p><b>조직 전체</b> $" + Number(b.org_cost).toFixed(4) + " / " + money(c.org_monthly_usd) + warn + bar(b.org_ratio) + "</p>" +
+    '<form id="aib-form" class="inline" style="flex-wrap:wrap;gap:0.6rem">' +
+    "<label>사용자별 한 달 한도(USD) " + inp("aib-user", c.user_monthly_usd, "제한 없음") + "</label>" +
+    "<label>조직 전체 한 달 한도(USD) " + inp("aib-org", c.org_monthly_usd, "제한 없음") + "</label>" +
+    '<label>경고 비율 <input type="number" min="0.1" max="1" step="0.05" id="aib-warn" value="' + c.warn_ratio + '" style="width:5rem"' + (editable ? "" : " disabled") + "></label>" +
+    '<label><input type="checkbox" id="aib-viewer"' + (c.viewer_ai_allowed ? " checked" : "") + (editable ? "" : " disabled") + "> viewer도 대화에서 AI 호출 허용</label>" +
+    (editable ? '<button class="small primary" type="submit">저장</button>' : '<span class="muted">변경은 admin만 할 수 있습니다.</span>') +
+    "</form>" +
+    (rows.length ? table(["사용자", "역할", "이번 달 비용", "사용자별 한도 대비"], rows) : '<p class="muted">이번 달 사용자별 기록이 아직 없습니다.</p>') +
+    "</section>";
+}
+
 async function renderCost(content) {
-  const report = await api("GET", "/api/cost-report");
-  content.innerHTML = '<section class="card"><h2>비용 리포트(총액: ' + report.total_cost + ')</h2>' +
+  const [report, aiBudget] = await Promise.all([
+    api("GET", "/api/cost-report"),
+    api("GET", "/api/ai-budget").catch(() => null),
+  ]);
+  content.innerHTML = _aiBudgetCardHtml(aiBudget) + '<section class="card"><h2>비용 리포트(총액: ' + report.total_cost + ')</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
       '<li>이 "합계"는 "단가(cost_estimate, 사람/에이전트 관리 탭에서 수동 입력)" × "확정 배정 수"입니다.</li>' +
@@ -11703,6 +11735,20 @@ async function renderCost(content) {
   } catch (e) {
     box.innerHTML = '<h2>실제 AI 사용량</h2><p class="muted">' + esc(e.message) + "</p>";
   }
+  const aibForm = document.getElementById("aib-form");
+  if (aibForm && ME.role === "admin") aibForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const val = id => { const v = document.getElementById(id).value; return v === "" ? null : Number(v); };
+    try {
+      await api("PUT", "/api/ai-budget", {
+        user_monthly_usd: val("aib-user"), org_monthly_usd: val("aib-org"),
+        warn_ratio: Number(document.getElementById("aib-warn").value),
+        viewer_ai_allowed: document.getElementById("aib-viewer").checked,
+      });
+      showMsg("global-msg", "AI 사용 한도를 저장했습니다 — 다음 AI 호출부터 적용됩니다.", "ok");
+      renderCost(content);
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
 }
 
 /* ---------- 공정성 ---------- */
@@ -12971,6 +13017,18 @@ const MANUAL_MARKDOWN = [
 '- **모델을 호출하는(비용이 드는) 버튼**: 이름에 "실행"이 붙은 버튼(AI 에이전트 실행·팀 Agent 실행·파이프라인 실행·Crew 실행), "AI 의견 보기", "AI로 추천 받기", "AI로 분해 제안 받기", "부분 수정 요청"의 "수정안 만들기".',
 '- **비용이 없는 것**: 설정 저장(모델 설정·파인튜닝·팀·파이프라인 등록), 홈의 "추천 받기".',
 '- **실제 사용량·금액 확인**: "비용" 탭, "모델 레지스트리"의 실제 사용량 표.',
+'- **한도 정하기(admin)**: "비용" 탭 맨 위 **"AI 사용 한도"**에서 **사용자별 한 달 한도**와 **조직 전체 한 달 한도**(USD), 경고 비율, viewer의 AI 호출 허용 여부를 정합니다. 기본은 제한 없음입니다.',
+'  - 비용은 이번 달(UTC 1일부터) 토큰 × "모델 레지스트리" 단가로 계산합니다. **단가를 등록하지 않은 모델(로컬 Ollama 등)은 0으로 셉니다** — 한도를 쓰려면 클라우드 모델 단가를 먼저 등록하세요.',
+'  - admin은 사용자별 한도에서 빠지고 조직 전체 한도만 적용됩니다.',
+'',
+'**"AI 비용 한도에 도달해 AI를 부르지 않았습니다"가 나온다**',
+'',
+'- **원인**: 이번 달 내 사용(또는 조직 전체 사용)이 admin이 정한 한도에 닿았습니다. 그 실행은 모델을 부르지 않고 멈췄고, 비용은 들지 않았습니다.',
+'- **해결**:',
+'  1. 다음 달 1일(UTC)에 자동으로 다시 쓸 수 있습니다.',
+'  2. 급하면 admin에게 한도 조정을 요청하세요("비용" 탭 → "AI 사용 한도").',
+'  3. 단가가 없는 로컬 모델(Ollama)로 바꾸면 한도에 들어가지 않습니다("AI 에이전트 관리"의 모델 설정).',
+'- **viewer 계정**이 "AI를 부를 수 없도록 설정돼 있습니다"를 보면, admin이 viewer의 AI 호출을 껐다는 뜻입니다.',
 '',
 '**내가 요청한 배정을 내가 승인하고 싶다**',
 '',

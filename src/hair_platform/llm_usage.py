@@ -130,13 +130,24 @@ def record(provider: str, model: str, prompt_tokens: Any, completion_tokens: Any
         if p == 0 and c == 0:
             return
         ctx = _SCOPE.get()
+        from hair_platform import knowledge_access  # 요청자(2026-11-25, P2-14 — 사용자별 AI 비용 한도)
+
+        user_id = knowledge_access.current_viewer()
         with _LOCK:
-            conn.execute(
-                "INSERT INTO llm_usage (provider, model, prompt_tokens, completion_tokens, source, "
-                "task_id, agent_id, pipeline_run_id, conversation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (provider, model, p, c, source, ctx.get("task_id"), ctx.get("agent_id"),
-                 ctx.get("pipeline_run_id"), ctx.get("conversation_id")),
-            )
+            try:
+                conn.execute(
+                    "INSERT INTO llm_usage (provider, model, prompt_tokens, completion_tokens, source, "
+                    "task_id, agent_id, pipeline_run_id, conversation_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (provider, model, p, c, source, ctx.get("task_id"), ctx.get("agent_id"),
+                     ctx.get("pipeline_run_id"), ctx.get("conversation_id"), user_id),
+                )
+            except sqlite3.OperationalError:  # user_id 열이 생기기 전(마이그레이션 전) 스키마
+                conn.execute(
+                    "INSERT INTO llm_usage (provider, model, prompt_tokens, completion_tokens, source, "
+                    "task_id, agent_id, pipeline_run_id, conversation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (provider, model, p, c, source, ctx.get("task_id"), ctx.get("agent_id"),
+                     ctx.get("pipeline_run_id"), ctx.get("conversation_id")),
+                )
             conn.commit()
     except Exception:  # noqa: BLE001 — 기록 실패가 LLM 호출을 깨뜨리지 않게
         pass

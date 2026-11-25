@@ -710,6 +710,10 @@ def run_crew(
     `per_agent` 각 항목에 `"stage": "draft"|"final"` 키가 붙는다
     (`self_review=False`면 항상 `"final"` — 기존 소비자와 하위호환).
     """
+    # AI 사용 한도(2026-11-25, P2-14) — Crew 실행 전 한 번 확인(CrewAI 호출은 litellm으로 직접 나가 llm.call_llm을 거치지 않는다).
+    from hair_platform import ai_budget
+
+    ai_budget.check(provider=provider, model=model)
     if len(agent_ids) != len(task_descriptions):
         raise ValueError("agent_ids와 task_descriptions의 개수가 같아야 합니다")
     if not agent_ids:

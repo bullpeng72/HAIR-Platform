@@ -572,6 +572,7 @@ src/hair_platform/
   crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임 + 다이어그램 + 자가검토)
   crew_history.py    # Crew 실행 이력(crew_runs) — 팀/즉석 실행의 진행상태·협업다이어그램·토큰사용량 영구 저장
   vectorstore.py     # 내부지식검색 Agent(VectorDB) — 임베딩(OpenAI/Ollama)·색인·검색(코사인+키워드 재순위화), 원본은 SQLite
+  ai_budget.py       # AI 사용 한도 — 사용자별·조직 전체 월 한도(USD, 모델 레지스트리 단가 기준)·viewer AI 허용, AI 호출 직전에 확인
   knowledge_access.py # 지식 베이스 문서별 공개 범위(전체·manager 이상·admin만·팀) — 요청자 기준으로 검색 결과를 거름
   vector_backends.py # 지식 검색 벡터 백엔드 — ChromaDB 임베디드(HNSW, `<db>-vectors/`) 또는 SQLite 전체 비교, SQLite 원본과 자동 동기화
   graphquery.py      # 조직배정관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의

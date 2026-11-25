@@ -8,8 +8,10 @@ from __future__ import annotations
 import sqlite3
 
 from fastapi import (
+    Body,
     Depends,
     FastAPI,
+    HTTPException,
 )
 
 from hair_platform import (
@@ -89,6 +91,23 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         if user["role"] == Role.MEMBER.value:
             return performance.review_for_member(conn, user["id"])
         return performance.full_review(conn)
+
+    # AI 사용 한도(2026-11-25, P2-14 — `ai_budget.py`). 조회는 admin·manager(비용 화면), 변경은 admin.
+    @app.get("/api/ai-budget")
+    def get_ai_budget(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        from hair_platform import ai_budget
+
+        return ai_budget.status(conn)
+
+    @app.put("/api/ai-budget")
+    def put_ai_budget(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import ai_budget
+
+        try:
+            ai_budget.save(conn, user["id"], payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return ai_budget.status(conn)
 
     @app.get("/api/cost-report")
     def get_cost_report(

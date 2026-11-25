@@ -233,6 +233,10 @@ def call_llm(
     값을 넘겨 쓴다(아래 `_call_anthropic`/`_call_openai` 참고)."""
     # `temperature`(2026-11-21) — 에이전트 파인튜닝 값. 지정됐을 때만 넘겨
     # 기존 호출 모양(테스트 대역 포함)을 그대로 둔다.
+    # AI 사용 한도(2026-11-25, P2-14) — 넘었으면 호출하지 않고 사유를 올린다(설정이 없으면 아무것도 안 함).
+    from hair_platform import ai_budget
+
+    ai_budget.check(provider=provider, model=model)
     # `dict[str, Any]` — 값 타입을 float로 좁혀 추론하면 `max_output_tokens`(int) 자리와 충돌한다(타입 검사).
     extra: dict[str, Any] = {"temperature": temperature} if temperature is not None else {}
     # `max_output_tokens`(2026-11-25) — 짧은 JSON 채점 호출용 출력 상한(모델 한도보다 작을 때만 적용).
@@ -273,6 +277,10 @@ def call_llm_with_tools(
     `call_llm()`과 동일하게 1턴만 호출한다(불필요한 복잡도 없음,
     호출부가 매번 "도구가 있는지" 분기할 필요가 없도록 이 함수 안에서
     처리)."""
+    # AI 사용 한도(2026-11-25, P2-14) — 넘었으면 호출하지 않고 사유를 올린다(설정이 없으면 아무것도 안 함).
+    from hair_platform import ai_budget
+
+    ai_budget.check(provider=provider, model=model)
     # `dict[str, Any]` — 값 타입을 float로 좁혀 추론하면 `max_output_tokens`(int) 자리와 충돌한다(타입 검사).
     extra: dict[str, Any] = {"temperature": temperature} if temperature is not None else {}
     if not tools:

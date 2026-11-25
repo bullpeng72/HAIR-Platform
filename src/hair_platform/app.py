@@ -128,6 +128,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
     )
 
     evaluation_config.configure(conn)
+    from hair_platform import ai_budget  # AI 사용 한도(2026-11-25, P2-14)
+
+    ai_budget.configure(conn)
     llm_usage.install_litellm_callback()
     # 자동화 루프(정기 실행·외부 알림, 2026-11-23 — `automation.py`) — `hair serve`(HAIR_AUTOMATION=1)
     # 에서만 띄운다. 프로세스당 한 번.
