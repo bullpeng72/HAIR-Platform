@@ -238,14 +238,28 @@ def search(conn: sqlite3.Connection, mailbox: str | None = None, query: str = ""
     q = (query or "").strip()
     client = _open_checked(conn, row)
     try:
-        if q:
-            # 보낸 사람 또는 제목에 낱말(IMAP OR) — 한글은 UTF-8 CHARSET으로
-            typ, data = client.uid("SEARCH", "CHARSET", "UTF-8", *criteria, "OR", "FROM", f'"{q}"', "SUBJECT", f'"{q}"')
+        if q and not q.isascii():
+            # 한글 등 ASCII 밖 낱말(2026-11-26 실제 메일 서버 통합 테스트에서 발견): imaplib는 명령 인자를 ASCII로만 보내
+            # 한글 검색어가 UnicodeEncodeError로 실패했다. 낱말은 IMAP 리터럴(UTF-8 바이트)로 보내야 하는데, imaplib는
+            # 명령 하나에 리터럴 하나만 허용하므로 보낸 사람·제목을 따로 찾아 합친다.
+            found: set[bytes] = set()
+            for field in ("FROM", "SUBJECT"):
+                setattr(client, "literal", q.encode("utf-8"))  # noqa: B010 — imaplib 속성이 타입 정의(typeshed)에 없다
+                typ, data = client.uid("SEARCH", "CHARSET", "UTF-8", *criteria, field)
+                if typ != "OK":
+                    raise MailError("메일 검색에 실패했습니다")
+                found.update((data[0] or b"").split())
+            ordered = sorted(found, key=lambda u: int(u))
         else:
-            typ, data = client.uid("SEARCH", *criteria)
-        if typ != "OK":
-            raise MailError("메일 검색에 실패했습니다")
-        uids = (data[0] or b"").split()[-limit:][::-1]  # 최신부터
+            if q:
+                # 보낸 사람 또는 제목에 낱말(IMAP OR)
+                typ, data = client.uid("SEARCH", *criteria, "OR", "FROM", f'"{q}"', "SUBJECT", f'"{q}"')
+            else:
+                typ, data = client.uid("SEARCH", *criteria)
+            if typ != "OK":
+                raise MailError("메일 검색에 실패했습니다")
+            ordered = (data[0] or b"").split()
+        uids = ordered[-limit:][::-1]  # 최신부터
         results = []
         for uid in uids:
             uid_s = uid.decode() if isinstance(uid, bytes) else str(uid)

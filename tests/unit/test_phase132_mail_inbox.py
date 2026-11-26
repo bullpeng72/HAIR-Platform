@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import email
+import email.header
 from email.message import EmailMessage
 
 import pytest
@@ -44,10 +46,27 @@ class FakeIMAP:
         self.calls.append(("select", folder, readonly))
         return "OK", [b"2"]
 
+    literal = None
+
     def uid(self, command, *args):
+        # 실제 imaplib처럼 명령 인자는 ASCII만 — 한글 검색어를 인자로 넣으면 UnicodeEncodeError(2026-11-26 실제 메일
+        # 서버 통합 테스트에서 드러난 버그를 단위 테스트에서도 잡게). 한글은 리터럴(self.literal, UTF-8 바이트)로 온다.
+        for a in args:
+            if isinstance(a, str):
+                a.encode("ascii")
         self.calls.append(("uid", command, *args))
         if command == "SEARCH":
-            return "OK", [b" ".join(self.msgs)]
+            lit, self.literal = self.literal, None
+            if lit is None:
+                return "OK", [b" ".join(self.msgs)]
+            word, field = lit.decode("utf-8"), args[-1]
+            hits = []
+            for uid, raw in self.msgs.items():
+                header = email.message_from_bytes(raw)
+                value = str(email.header.make_header(email.header.decode_header(header.get(field.title(), ""))))
+                if word in value:
+                    hits.append(uid)
+            return "OK", [b" ".join(hits)]
         if command == "FETCH":
             uid, spec = args[0].encode(), args[1]
             raw = self.msgs.get(uid)
@@ -85,11 +104,13 @@ def test_search_and_read_are_read_only_and_audited(client_and_conn, imap):
     _register(conn)
     member = _uid(conn, "member1")
     with knowledge_access.as_viewer(member):
-        listing = mail_inbox.run_action(conn, "search", query="환불")
+        listing = mail_inbox.run_action(conn, "search", query="환불")  # 한글 검색어 — 리터럴로 보낸다
+        everything = mail_inbox.run_action(conn, "search")
         opened = mail_inbox.run_action(conn, "read", uid="11")
         html = mail_inbox.run_action(conn, "read", uid="12")
-    assert "uid=12" in listing and "환불 요청드립니다" in listing and "김고객" in listing
-    assert listing.index("uid=12") < listing.index("uid=11")  # 최신부터
+    assert "uid=11" in listing and "환불 요청드립니다" in listing and "김고객" in listing
+    assert "uid=12" not in listing  # 제목·보낸 사람에 "환불"이 없는 견적 문의는 빠진다
+    assert everything.index("uid=12") < everything.index("uid=11")  # 최신부터
     assert "주문번호 A-123" in opened and "영수증.pdf" in opened and "첨부" in opened
     assert "견적" in html and "부탁" in html and "드립니다" in html  # HTML만 있는 메일은 태그를 벗겨 본문으로
     assert "<b>" not in html
@@ -98,7 +119,7 @@ def test_search_and_read_are_read_only_and_audited(client_and_conn, imap):
         fetches = [c for c in inst.calls if c[:2] == ("uid", "FETCH")]
         assert fetches and all("BODY.PEEK" in c[3] for c in fetches)  # 읽음 표시 변경 없음
     rows = conn.execute("SELECT actor_id, after_value FROM audit_log WHERE action = 'mail_inbox_read'").fetchall()
-    assert len(rows) == 3 and all(r[0] == member for r in rows)
+    assert len(rows) == 4 and all(r[0] == member for r in rows)
 
 
 def test_visibility_and_unknown_requester_are_refused(client_and_conn, imap):
