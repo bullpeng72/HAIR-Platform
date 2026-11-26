@@ -1,9 +1,11 @@
-"""업무 영역 템플릿 — 재무·영업/고객지원·법무(2026-11-24, "P2 진행해줘" — P2-12, 사용자 선택 3개 영역).
+"""업무 영역 템플릿 — 재무·영업/고객지원·법무(2026-11-24, "P2 진행해줘" — P2-12, 사용자 선택 3개 영역)
++ 인사(2026-11-26, P1-9 "인사 템플릿 없음" — 채용 공고·면접 설계·인사 지표·온보딩).
 
 기본 제공 구성은 SW 개발·사업/기획·제안서·실적 보고뿐이라, 다른 부서는 스킬·Agent·파이프라인을
 처음부터 만들어야 했다. 영역마다 아래를 기본으로 넣는다:
 
-- **도구**(계산·점검을 모델 대신 코드로): 재무 지표 계산기·영업 퍼널 계산기·계약 조항 점검기.
+- **도구**(계산·점검을 모델 대신 코드로): 재무 지표 계산기·영업 퍼널 계산기·계약 조항 점검기·
+  인사 지표 계산기(이직률·채용 퍼널·연차)·채용 공고 점검기(차별 표현·필수 항목).
   수치 근거 검사(`numeric_check`)가 잡던 "모델이 직접 계산한 틀린 % / NPV"를 애초에 줄인다.
 - **스킬**(지침·출력 형식·예시·제약 — `skill_catalog`가 이 모듈의 `SKILL_GUIDES`를 합쳐 쓴다).
 - **Agent**와 **파이프라인** 1개씩(요구사항 승인 1회 → 분석 → 작성 → 검증, 검증 실패 시 작성으로 되돌림).
@@ -190,6 +192,136 @@ CONTRACT_CHECK_SOURCE = '''def tool_fn(query: str) -> str:
     }, ensure_ascii=False)
 '''
 
+HR_METRICS_SOURCE = """def tool_fn(query: str) -> str:
+    import json
+    from datetime import date
+
+    try:
+        p = json.loads(query)
+    except (json.JSONDecodeError, ValueError):
+        return '입력은 JSON이어야 합니다: {"turnover": {...}} / {"funnel": {...}} / {"annual_leave": {...}} 중 하나 이상'
+    if not isinstance(p, dict):
+        return "입력은 JSON 객체여야 합니다."
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    out = {}
+    t = p.get("turnover")
+    if isinstance(t, dict):
+        s0, s1, lv = t.get("start_headcount"), t.get("end_headcount"), t.get("leavers")
+        if num(s0) and num(s1) and num(lv) and (s0 + s1) > 0:
+            avg = (s0 + s1) / 2
+            row = {"기초 인원": s0, "기말 인원": s1, "퇴사자": lv, "평균 인원": round(avg, 2),
+                   "이직률(%)": round(lv / avg * 100, 2), "순증감": s1 - s0}
+            if num(t.get("hires")):
+                row["입사자"] = t["hires"]
+                row["입사율(%)"] = round(t["hires"] / avg * 100, 2)
+            if num(t.get("voluntary_leavers")):
+                row["자발적 이직률(%)"] = round(t["voluntary_leavers"] / avg * 100, 2)
+            out["이직률"] = row
+        else:
+            out["이직률"] = "start_headcount·end_headcount·leavers(숫자)가 필요합니다"
+    f = p.get("funnel")
+    if isinstance(f, dict) and len(f) >= 2:
+        names = list(f)
+        vals = [f[k] for k in names]
+        if all(num(v) for v in vals):
+            rows, weakest = [], None
+            for i in range(1, len(names)):
+                prev, cur = vals[i - 1], vals[i]
+                rate = round(cur / prev * 100, 2) if prev else None
+                rows.append({"구간": names[i - 1] + " → " + names[i], "이전": prev, "다음": cur, "전환율(%)": rate})
+                if rate is not None and (weakest is None or rate < weakest[1]):
+                    weakest = (rows[-1]["구간"], rate)
+            out["채용_퍼널"] = {"구간별": rows,
+                              "전체 전환율(%)": round(vals[-1] / vals[0] * 100, 2) if vals[0] else None,
+                              "가장 약한 구간": weakest[0] if weakest else None}
+    days = p.get("time_to_hire_days")
+    if isinstance(days, list) and days and all(num(d) for d in days):
+        ds = sorted(days)
+        mid = len(ds) // 2
+        median = ds[mid] if len(ds) % 2 else (ds[mid - 1] + ds[mid]) / 2
+        out["채용_소요일"] = {"건수": len(ds), "평균": round(sum(ds) / len(ds), 1), "중앙값": median, "최대": ds[-1]}
+    a = p.get("annual_leave")
+    if isinstance(a, dict):
+        try:
+            hired = date.fromisoformat(str(a.get("hire_date")))
+            as_of = date.fromisoformat(str(a.get("as_of") or date.today().isoformat()))
+        except ValueError:
+            out["연차"] = "hire_date·as_of는 YYYY-MM-DD 형식입니다"
+        else:
+            if as_of < hired:
+                out["연차"] = "as_of가 입사일보다 앞입니다"
+            else:
+                months = (as_of.year - hired.year) * 12 + (as_of.month - hired.month) - (1 if as_of.day < hired.day else 0)
+                years = months // 12
+                if years < 1:
+                    days_ = min(months, 11)
+                    basis = "근속 1년 미만 — 1개월 개근마다 1일(최대 11일)"
+                else:
+                    days_ = min(15 + (years - 1) // 2, 25)
+                    basis = "근속 " + str(years) + "년 — 15일 + 최초 1년을 넘는 근속 2년마다 1일(최대 25일)"
+                out["연차"] = {"입사일": hired.isoformat(), "기준일": as_of.isoformat(), "근속 개월": months,
+                              "근속 연수": years, "발생 연차(일)": days_, "근거": basis + " (근로기준법 제60조)",
+                              "가정": "직전 1년 출근율 80% 이상·매월 개근 가정, 입사일 기준. 회계연도 기준·단체협약·사내 규정이 있으면 그 기준을 따른다."}
+    if not out:
+        return '계산할 항목이 없습니다 — turnover / funnel / time_to_hire_days / annual_leave 중 하나 이상을 넣으세요.'
+    return json.dumps(out, ensure_ascii=False)
+"""
+
+JOB_POSTING_CHECK_SOURCE = """def tool_fn(query: str) -> str:
+    import json, re
+
+    text = query
+    try:
+        p = json.loads(query)
+        if isinstance(p, dict) and isinstance(p.get("text"), str):
+            text = p["text"]
+    except (json.JSONDecodeError, ValueError):
+        pass
+    if not text.strip():
+        return "채용 공고 본문이 비어 있습니다."
+    risks = [
+        (r"(남성|여성|남자|여자)\\s*(만|에\\s*한함|한정|우대|선호|지원\\s*가능)|성별\\s*[:：]?\\s*(남|여)\\b",
+         "성별 제한·우대 — 남녀고용평등법 위반 소지(직무상 불가피한 경우만 예외)"),
+        (r"만?\\s*\\d{2}\\s*세\\s*(이하|미만|이상|까지)|\\d{2}\\s*[~\\-]\\s*\\d{2}\\s*세|[2-6]0\\s*대\\s*(만|한정|우대|선호|환영)|연령\\s*(제한|[:：])|젊은\\s*(인재|분|사람)|나이\\s*제한",
+         "연령 제한·우대 — 고용상 연령차별금지법 위반 소지"),
+        (r"용모\\s*단정|외모|키\\s*\\d{3}|신장\\s*\\d|체중|몸무게|인상(이)?\\s*좋",
+         "용모·키·체중 등 신체 조건 — 직무와 무관하면 채용절차법 제4조의3 위반 소지"),
+        (r"미혼|기혼|혼인\\s*여부|결혼\\s*(여부|계획|예정)|자녀\\s*(유무|계획)|임신",
+         "혼인·임신·자녀 — 채용절차법 제4조의3·남녀고용평등법 위반 소지"),
+        (r"출신\\s*지역|고향|본적|(서울|경기|지방)\\s*출신",
+         "출신 지역 — 채용절차법 제4조의3 위반 소지"),
+        (r"(부모|가족|형제|직계)\\s*(의\\s*)?(직업|재산|학력)|재산\\s*(상태|정보)",
+         "본인 재산·가족의 학력·직업·재산 정보 요구 — 채용절차법 제4조의3 위반 소지"),
+        (r"종교|정당|정치\\s*성향|사진\\s*(부착|첨부|필수)",
+         "종교·정치 성향·사진 요구 — 직무와 무관한 정보 요구(차별·과도한 수집 소지)"),
+    ]
+    required = {
+        "담당 업무": ["담당 업무", "담당업무", "주요 업무", "직무 내용", "업무 내용", "하는 일"],
+        "자격 요건": ["자격 요건", "자격요건", "필수 요건", "지원 자격", "자격"],
+        "고용 형태": ["정규직", "계약직", "인턴", "고용 형태", "고용형태", "근무 형태", "근무형태"],
+        "근무지": ["근무지", "근무 장소", "근무장소", "근무 지역", "근무지역"],
+        "근무 시간": ["근무 시간", "근무시간", "근무 요일", "주 5일", "유연 근무", "시차 출퇴근"],
+        "급여·처우": ["급여", "연봉", "보수", "임금", "처우", "연봉 협의", "회사 내규"],
+        "전형 절차": ["전형", "채용 절차", "채용절차", "면접"],
+        "지원 방법": ["지원 방법", "지원방법", "접수 방법", "제출 서류", "지원 서류", "지원하기"],
+        "마감일": ["마감", "접수 기간", "모집 기간", "까지"],
+    }
+    flagged = []
+    for line in [ln.strip() for ln in text.splitlines() if ln.strip()]:
+        for pattern, reason in risks:
+            if re.search(pattern, line):
+                flagged.append({"문구": line[:160], "확인 사항": reason})
+    present = [k for k, words in required.items() if any(w in text for w in words)]
+    missing = [k for k in required if k not in present]
+    return json.dumps({
+        "주의_문구": flagged[:30],
+        "확인된_필수_항목": present,
+        "빠진_필수_항목": missing,
+        "판정": "차별 소지 문구 없음" if not flagged else "차별 소지 문구 " + str(len(flagged)) + "건 — 고쳐야 함",
+        "안내": "키워드 기반 1차 점검이다 — 표현을 바꾼 차별 문구는 못 잡을 수 있고, 직무상 불가피한 조건(예: 법정 자격)은 사유를 함께 적으면 된다. 법률 자문이 아니다.",
+    }, ensure_ascii=False)
+"""
+
 TOOL_SPECS: list[tuple[str, str, str, int]] = [
     (
         "재무 지표 계산기",
@@ -210,6 +342,25 @@ TOOL_SPECS: list[tuple[str, str, str, int]] = [
         "계약서 본문에서 표준 조항(범위·기간·대금·해지·손해배상·책임 제한·비밀유지·지식재산·개인정보·불가항력·양도·분쟁·준거법)의 "
         "유무와 주의 문구(일방적 변경, 자동 갱신, 무제한 책임 등)를 키워드로 1차 점검한다. 입력: 계약서 본문 텍스트.",
         CONTRACT_CHECK_SOURCE,
+        10,
+    ),
+    # 인사(2026-11-26, P1-9)
+    (
+        "인사 지표 계산기",
+        "이직률(기초·기말 인원·퇴사자 → 평균 인원 기준 이직률·입사율·자발적 이직률), 채용 퍼널 단계별 전환율·가장 약한 구간, "
+        "채용 소요일(평균·중앙값·최대), 연차 발생 일수(근로기준법 제60조, 입사일 기준)를 계산한다. "
+        '입력(JSON): {"turnover": {"start_headcount", "end_headcount", "leavers", "hires"?, "voluntary_leavers"?}, '
+        '"funnel": {"지원": 320, "서류 합격": 60, "면접": 25, "최종 합격": 6, "입사": 5}, "time_to_hire_days": [..], '
+        '"annual_leave": {"hire_date": "YYYY-MM-DD", "as_of": "YYYY-MM-DD"}} — 필요한 것만.',
+        HR_METRICS_SOURCE,
+        10,
+    ),
+    (
+        "채용 공고 점검기",
+        "채용 공고 본문에서 차별 소지 문구(성별·연령·용모·신체 조건·혼인·임신·출신 지역·가족 재산/직업·종교·사진 요구 — "
+        "남녀고용평등법·연령차별금지법·채용절차법 제4조의3 기준)와 빠진 필수 항목(담당 업무·자격 요건·고용 형태·근무지·근무 시간·"
+        "급여·전형 절차·지원 방법·마감일)을 키워드로 1차 점검한다. 입력: 채용 공고 본문 텍스트.",
+        JOB_POSTING_CHECK_SOURCE,
         10,
     ),
 ]
@@ -246,6 +397,30 @@ TOOL_INPUT_SCHEMAS: dict[str, dict] = {
         "properties": {"text": {"type": "string", "description": "계약서 본문 전체."}},
         "required": ["text"],
     },
+    "인사 지표 계산기": {
+        "type": "object",
+        "description": "turnover·funnel·time_to_hire_days·annual_leave 중 필요한 것만.",
+        "properties": {
+            "turnover": {"type": "object", "description": "기간 이직률.", "properties": {
+                "start_headcount": {"type": "number"}, "end_headcount": {"type": "number"},
+                "leavers": {"type": "number", "description": "기간 중 퇴사자 수"},
+                "hires": {"type": "number", "description": "기간 중 입사자 수(선택)"},
+                "voluntary_leavers": {"type": "number", "description": "자발적 퇴사자 수(선택)"},
+            }},
+            "funnel": {"type": "object", "additionalProperties": {"type": "number"},
+                       "description": '채용 단계 이름 → 인원, 순서대로. 예: {"지원": 320, "서류 합격": 60, "입사": 5}'},
+            "time_to_hire_days": {"type": "array", "items": {"type": "number"}, "description": "채용 건별 소요일"},
+            "annual_leave": {"type": "object", "properties": {
+                "hire_date": {"type": "string", "description": "입사일 YYYY-MM-DD"},
+                "as_of": {"type": "string", "description": "기준일 YYYY-MM-DD(생략하면 오늘)"},
+            }},
+        },
+    },
+    "채용 공고 점검기": {
+        "type": "object",
+        "properties": {"text": {"type": "string", "description": "채용 공고 본문 전체."}},
+        "required": ["text"],
+    },
 }
 
 # -------------------------------------------------------------------------------------- 스킬
@@ -254,6 +429,7 @@ TOOL_INPUT_SCHEMAS: dict[str, dict] = {
 _STYLE = "평서체(~한다·~이다)로 쓰고 결론을 먼저 둔다. 상투어·과장·번역투를 피한다."
 _NO_INVENT = "주어진 자료·도구 결과에 없는 수치·사실을 지어내지 않는다 — 없으면 '확인 필요'로 남긴다."
 _NOT_LEGAL_ADVICE = "결과물 끝에 '본 검토는 1차 검토이며 법률 자문이 아니다 — 체결 전 법무 담당 확인 필요'를 남긴다."
+_NO_PERSONAL = "실제 지원자·직원의 이름·연락처·평가 결과 같은 개인정보를 결과물에 옮기지 않는다 — 필요하면 '지원자 A'처럼 가린다."
 
 SKILL_SPECS: dict[str, dict] = {
     # ----------------------------------------------------------------------------- 재무
@@ -383,6 +559,61 @@ SKILL_SPECS: dict[str, dict] = {
             "때만 인용한다. ③ 실제 개인정보 값을 결과물에 옮기지 않는다. ④ " + _NOT_LEGAL_ADVICE,
         ),
     },
+    # ----------------------------------------------------------------------------- 인사(2026-11-26, P1-9)
+    "채용공고작성": {
+        "tool": "채용 공고 점검기",
+        "guide": (
+            "직무 요구사항으로 채용 공고를 쓴다: 회사·팀 소개(2~3문장) → 담당 업무(구체적 과업) → 자격 요건(필수)과 "
+            "우대 사항을 나눠 → 고용 형태·근무지·근무 시간·급여(처우) → 전형 절차·지원 방법·마감일. 다 쓴 뒤 본문 전체를 "
+            "'채용 공고 점검기'에 넣어 차별 소지 문구와 빠진 필수 항목을 확인하고 고친다.",
+            "'## 채용 공고'(제목 한 줄 → 위 순서의 소제목) → '## 점검 결과'(채용 공고 점검기 판정·고친 문구 | 원래 문구 | 이유, "
+            "빠진 항목이 있으면 '확인 필요'로).",
+            "나쁜 예 '30세 이하 용모 단정한 남성 우대, 열정 있는 분' → 좋은 예 '자격 요건: B2B SaaS 영업 3년 이상, 연 5억 "
+            "이상 계약 경험 | 우대: CRM(Salesforce) 운영 경험' — 나이·성별·용모 대신 직무 역량으로.",
+            "① 성별·연령·용모·키·체중·혼인·임신·출신 지역·가족의 학력·직업·재산·종교·사진을 요구하거나 우대하지 않는다"
+            "(직무상 불가피한 법정 자격은 사유를 함께). ② 점검기에 주의 문구가 남아 있으면 끝내지 않는다. ③ 급여·근무 조건이 "
+            "자료에 없으면 지어내지 말고 '협의'·'확인 필요'로 둔다. ④ " + _STYLE,
+        ),
+    },
+    "면접평가설계": {
+        "guide": (
+            "직무에 맞는 구조화 면접을 설계한다: 직무 요구사항에서 평가 역량 4~6개를 뽑는다 → 역량마다 행동 기반 질문"
+            "(과거 행동 '~했던 경험을 말해 주세요')과 상황 질문 1~2개, 꼬리 질문 → 1~5점 행동 기준 평가표(점수마다 관찰 "
+            "가능한 행동) → 면접관 공통 진행 순서·시간 배분. 모든 지원자에게 같은 질문·같은 기준을 쓴다.",
+            "'## 평가 역량'(표: 역량 | 정의 | 가중치) → '## 질문'(역량별: 주 질문 | 꼬리 질문 | 확인하려는 것) → "
+            "'## 평가표'(표: 역량 | 1점 | 3점 | 5점 — 관찰 행동) → '## 진행 순서와 시간' → '## 묻지 말아야 할 질문'.",
+            "나쁜 예 '리더십이 있나요?' → 좋은 예 '팀원 의견이 갈렸을 때 결정을 이끈 경험을 말해 주세요 — 꼬리: 반대한 "
+            "사람은 어떻게 설득했나요? | 5점: 이해관계자별 근거를 모아 합의안을 만들고 결과를 측정함'.",
+            "① 혼인·임신·자녀 계획·나이·종교·출신 지역·가족 직업·재산은 질문하지 않는다(묻지 말아야 할 질문 목록에 명시). "
+            "② 평가 기준은 관찰 가능한 행동으로 쓴다 — '성실함' 같은 인상 평가를 쓰지 않는다. ③ " + _NO_PERSONAL + " ④ " + _STYLE,
+        ),
+    },
+    "인사지표분석": {
+        "tool": "인사 지표 계산기",
+        "guide": (
+            "인력 현황과 인사 지표를 분석한다: 이직률·입사율·채용 퍼널 전환율·채용 소요일·연차 발생을 '인사 지표 계산기'로 "
+            "계산 → 이전 기간·부서별로 비교 → 원인 가설(근거 자료가 있을 때만)과 조치 제안. 개인 단위 평가는 하지 않는다.",
+            "'## 요약'(핵심 지표 3개와 변화) → '## 지표'(표: 지표 | 값 | 이전 기간 | 변화 — 계산기 결과 그대로) → "
+            "'## 채용 퍼널'(구간별 전환율, 가장 약한 구간) → '## 원인과 조치'(표: 관찰 | 근거 | 조치).",
+            "나쁜 예 '이직이 많은 편이다' → 좋은 예 '3분기 이직률 6.4%(퇴사 8명 / 평균 인원 125명), 2분기 3.9% 대비 +2.5%p — "
+            "자발적 이직 7명 중 5명이 입사 1년 미만, 온보딩 개선 필요'.",
+            "① 모든 비율·일수는 '인사 지표 계산기' 결과를 쓴다 — 직접 암산한 값을 쓰지 않는다. ② 연차는 계산기의 가정(출근율 "
+            "80%·입사일 기준)을 함께 밝힌다. ③ " + _NO_PERSONAL + " ④ " + _NO_INVENT + " ⑤ " + _STYLE,
+        ),
+    },
+    "온보딩계획수립": {
+        "guide": (
+            "신규 입사자 온보딩 계획을 세운다: 입사 전(계정·장비·자리 준비) → 첫날 → 첫 주 → 30·60·90일 목표 순으로, "
+            "각 항목에 담당자·기한·완료 기준을 붙인다. 버디·멘토 지정, 필수 교육(보안·개인정보·직장 내 괴롭힘 예방 등), "
+            "역할별 학습 자료를 넣는다. 캘린더를 읽을 수 있으면 팀 일정과 겹치지 않게 날짜를 잡는다.",
+            "'## 개요'(직무·입사일·버디) → '## 일정'(표: 시점 | 할 일 | 담당 | 기한 | 완료 기준) → '## 30·60·90일 목표'"
+            "(표: 기간 | 목표 | 확인 방법) → '## 준비물 체크리스트'.",
+            "나쁜 예 '첫 주에 회사에 적응한다' → 좋은 예 '1주 차 수: 고객 데모 1회 참관(담당 영업팀장, 완료 기준: 제품 핵심 "
+            "기능 3개를 설명할 수 있음)'.",
+            "① 법정 의무 교육은 사내 규정·지식 베이스에 근거가 있을 때만 이름과 기한을 적는다 — 없으면 '확인 필요'. "
+            "② 실제 날짜는 입사일·캘린더 조회 결과로 계산해 적는다. ③ " + _NO_PERSONAL + " ④ " + _STYLE,
+        ),
+    },
 }
 
 # ------------------------------------------------------------------------------------- Agent
@@ -395,6 +626,10 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     ("고객지원 상담원", ["고객문의응대", "내부지식검색", "메일수신함조회"], {"temperature": 0.3}),
     ("계약서 검토자", ["계약서검토", "개인정보처리점검"], {"temperature": 0.2}),
     ("규정 요약가", ["규정요약", "내부지식검색"], {"temperature": 0.2}),
+    # 인사(2026-11-26, P1-9)
+    ("채용 담당자", ["채용공고작성", "면접평가설계", "문서작성"], {"temperature": 0.4}),
+    ("인사 분석가", ["인사지표분석", "데이터시각화", "사내DB조회"], {"temperature": 0.2}),
+    ("온보딩 플래너", ["온보딩계획수립", "캘린더조회", "내부지식검색"], {"temperature": 0.3}),
 ]
 
 # --------------------------------------------------------------------------------- 파이프라인
@@ -454,6 +689,23 @@ PIPELINES: list[dict] = [
              "instructions": "먼저 '계약 조항 점검기'에 계약서 본문을 넣어 조항 유무와 주의 문구를 확인한 뒤, 1단계의 우리 측 지위·중점 사항 기준으로 조항별 검토표(문제점·위험도·수정 제안)와 협상 우선순위를 작성하세요."},
             {"name": "최종 검토 판정", "role": "문서 검토자", "review": True,
              "instructions": "검토 결과가 1단계 중점 사항을 모두 다뤘는지, 인용한 조항·문구가 실제 계약서에 있는지, 면책 문장이 있는지 검증하고 승인/보완 요청으로 판정하세요."},
+        ],
+    },
+    # 인사(2026-11-26, P1-9)
+    {
+        "name": "채용 공고·면접 설계 파이프라인",
+        "domain": "hr",
+        "description": (
+            "브리프 → 채용 요구사항 확정(직무·자격·근무 조건, 사람 승인 1회) → 채용 공고와 구조화 면접(질문·평가표) 작성"
+            "(채용 공고 점검기로 차별 소지 문구·빠진 항목 확인) → 문서 검토자의 최종 검토(실패 시 작성 단계로 되돌려 다시 씀)."
+        ),
+        "stages": [
+            {"name": "채용 요구사항 확정", "role": _REQUIREMENTS, "approval": True,
+             "instructions": "브리프를 채용 요구사항(직무명·팀, 담당 업무, 필수 자격과 우대 사항, 고용 형태·근무지·근무 시간·급여, 전형 절차, 마감일, 채용 인원)으로 정리하세요. 요청에 없는 조건은 '확인 필요'로 남기고, 성별·나이·용모·혼인 같은 직무와 무관한 조건이 요청에 있으면 빼야 한다고 적으세요."},
+            {"name": "공고·면접 설계", "role": "채용 담당자", "primary": True,
+             "instructions": "1단계 요구사항으로 ① 채용 공고와 ② 구조화 면접(평가 역량·질문·1~5점 평가표·묻지 말아야 할 질문)을 작성하세요. 공고 본문은 반드시 '채용 공고 점검기'에 넣어 주의 문구가 0건이 될 때까지 고치고, 점검 결과를 끝에 남기세요."},
+            {"name": "최종 검토 판정", "role": "문서 검토자", "review": True,
+             "instructions": "공고·면접 설계가 1단계 요구사항을 모두 반영했는지, 차별 소지 문구(성별·연령·용모·혼인·출신 지역·가족 정보 등)나 금지 질문이 없는지, 필수 항목(담당 업무·자격·근무 조건·급여·전형·지원 방법·마감일)이 빠지지 않았는지 검증하고 승인/보완 요청으로 판정하세요."},
         ],
     },
 ]

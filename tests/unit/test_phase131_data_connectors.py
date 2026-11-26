@@ -140,4 +140,4 @@ def test_tool_and_skill_are_seeded_for_analysis_agents(client_and_conn):
     tool = conn.execute("SELECT config FROM tool_pool WHERE name = '사내 DB 조회'").fetchone()
     assert tool is not None and "database_query" in tool[0]
     holders = {r[0] for r in conn.execute("SELECT role_name FROM agent_pool WHERE skill_tags LIKE '%사내DB조회%'")}
-    assert holders == {"데이터 분석가", "재무 분석가", "영업 분석가", "실적 보고서 작성자"}
+    assert holders == {"데이터 분석가", "재무 분석가", "영업 분석가", "실적 보고서 작성자", "인사 분석가"}  # 인사 분석가: 2026-11-26 인사 템플릿

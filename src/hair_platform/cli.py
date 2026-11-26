@@ -329,7 +329,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  - 활동 기록(audit_log), 팀/팀원('초기화 시 보호'를 켠 팀은 남김)\n"
             "\n"
             "남김:\n"
-            "  - Agent(기본 36종)·Tool/Skill Pool·파이프라인 템플릿 — 재기동 시 다시\n"
+            "  - Agent(기본 39종)·Tool/Skill Pool·파이프라인 템플릿 — 재기동 시 다시\n"
             "    채워지는 레퍼런스 데이터. 단 Agent의 비용·성과점수·LLM provider/model\n"
             "    지정·마지막 산출물은 비우고, 기본 Agent는 활성으로 되돌린다(관리자가\n"
             "    만든 Agent는 상태 유지).\n"

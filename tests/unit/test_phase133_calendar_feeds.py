@@ -149,7 +149,7 @@ def test_register_validation_api_rbac_and_reset(client_and_conn, ics_file):
     assert client.patch(f"/api/calendar-feeds/{fid}", json={"is_active": False}).json()["is_active"] is False
     assert client.post(f"/api/calendar-feeds/{fid}/test").status_code == 400
     holders = {row[0] for row in conn.execute("SELECT role_name FROM agent_pool WHERE skill_tags LIKE '%캘린더조회%'")}
-    assert holders == {"PM", "실적 보고서 작성자", "개발 계획 수립가"}
+    assert holders == {"PM", "실적 보고서 작성자", "개발 계획 수립가", "온보딩 플래너"}  # 온보딩 플래너: 2026-11-26 인사 템플릿
     data_admin.reset_to_factory_state(conn)
     assert conn.execute("SELECT COUNT(*) FROM calendar_feeds").fetchone()[0] == 0
 
