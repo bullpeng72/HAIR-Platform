@@ -591,14 +591,16 @@ AGENT_SPECS: list[tuple[str, list[str], dict]] = [
     # 파이프라인의 요구사항·내용 검증·표현 검토 단계에 SW 개발용 Agent(요구사항 분석가: EARS 명세,
     # 품질 관리자: Gate A-G·코드 커버리지)와 광고 카피 Agent가 배정돼 있던 것을 대신한다
     # (`db._reassign_business_pipeline_agents`가 기존 DB의 단계 배정을 한 번 바꾼다).
-    ("업무 요구사항 분석가", ["업무요구사항정리", "문서작성"], {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3}),
-    ("문서 검토자", ["문서품질검토", "커버리지체크"], {"temperature": 0.2}),
+    # 요구사항 정리·검토 역할은 추론(생각) 끔(2026-11-26 사용자 결정 — 실측: 채용 공고 파이프라인 34분 → 8분, 품질 점검 같음).
+    # 정해진 틀로 정리·판정하는 일이라 긴 사고 과정이 필요 없다. 기존 설치는 db._light_roles_reasoning_off가 맞춘다.
+    ("업무 요구사항 분석가", ["업무요구사항정리", "문서작성"], {"reasoning": False, "max_reasoning_attempts": 2, "temperature": 0.3}),
+    ("문서 검토자", ["문서품질검토", "커버리지체크"], {"temperature": 0.2, "reasoning": False}),
     ("문서 교정자", ["문서교정"], {"temperature": 0.3}),
     # --- Harness Methodology 개발 파이프라인(2026-10-13) ---
     (
         "요구사항 분석가",
         ["spec-driven-artifacts", "승인루프", "요구사항검증"],
-        {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.4},
+        {"reasoning": False, "max_reasoning_attempts": 2, "temperature": 0.4},
     ),
     (
         "스펙 작성자",

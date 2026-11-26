@@ -2510,6 +2510,31 @@ _BUSINESS_STAGE_REASSIGNMENTS: tuple[tuple[str | None, str, str], ...] = (
 _READ_ONLY_BUILTIN_MCP = ("일반 웹 검색(Parallel Search)", "Gate 조치 지식 조회(recommend_fix)")
 
 
+# 요구사항 정리·검토 역할 기본 추론 끔(2026-11-26 사용자 결정, 개선 계획 3-2 실측). 이전 기본 시드의 추론 설정 —
+# 이 값 그대로이거나 추론 설정이 아예 없을 때만 끈다(admin이 바꾼 값은 그대로 둔다).
+_LIGHT_ROLE_OLD_TUNING = {
+    "업무 요구사항 분석가": {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.3},
+    "요구사항 분석가": {"reasoning": True, "max_reasoning_attempts": 2, "temperature": 0.4},
+    "문서 검토자": {"temperature": 0.2},
+    "재무 검토자": {"temperature": 0.2},
+}
+
+
+def _light_roles_reasoning_off(conn: sqlite3.Connection) -> None:
+    for role, old in _LIGHT_ROLE_OLD_TUNING.items():
+        row = conn.execute("SELECT id, tuning_config FROM agent_pool WHERE role_name = ?", (role,)).fetchone()
+        if row is None:
+            continue
+        try:
+            tuning = json.loads(row["tuning_config"] or "{}")
+        except ValueError:
+            continue
+        if "reasoning" in tuning and tuning != old:
+            continue  # admin이 바꾼 설정
+        tuning["reasoning"] = False
+        conn.execute("UPDATE agent_pool SET tuning_config = ? WHERE id = ?", (json.dumps(tuning, ensure_ascii=False), row["id"]))
+    conn.commit()
+
 def _mark_unknown_mcp_side_effects(conn: sqlite3.Connection) -> None:
     """기존 설치의 MCP 도구 — 기본 제공 검색·조회 외에는 외부로 쓸 수 있는 도구로 표시(2026-11-26, 개선 계획 1-3).
     admin이 도구 Pool에서 끌 수 있다. 한 번만 실행(`_run_once`)."""
@@ -3582,6 +3607,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _run_once(conn, "2026-11-21-business-pipeline-agents", _reassign_business_pipeline_agents)
     _set_domain_required_tools(conn)  # 업무 영역 템플릿 단계의 필수 도구(2026-11-26, 개선 계획 1-2)
     _run_once(conn, "2026-11-26-mcp-side-effects", _mark_unknown_mcp_side_effects)
+    _run_once(conn, "2026-11-26-light-roles-reasoning-off", _light_roles_reasoning_off)
     _run_once(conn, "2026-11-21-pipeline-quality-settings", _review_pipeline_quality_settings)
     _run_once(conn, "2026-11-21-traceability-must-pass", _require_traceability_to_pass)
     _run_once(conn, "2026-11-22-runnable-implementation", _single_author_runnable_implementation)
