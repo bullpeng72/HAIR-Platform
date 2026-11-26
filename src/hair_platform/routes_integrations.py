@@ -156,6 +156,58 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except data_connectors.ConnectorError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # ---------- 메일 수신함 읽기(2026-11-26, P1-9 2단계 — `mail_inbox.py`, admin) ----------
+    @app.get("/api/mail-inboxes")
+    def list_mail_inboxes_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import mail_inbox
+
+        return mail_inbox.list_inboxes(conn, include_inactive=True)
+
+    @app.post("/api/mail-inboxes", status_code=201)
+    def register_mail_inbox_endpoint(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import mail_inbox
+
+        try:
+            return mail_inbox.register(
+                conn, user["id"], str(payload.get("name") or ""), str(payload.get("host") or ""),
+                str(payload.get("username") or ""), str(payload.get("password_env") or ""),
+                port=int(payload.get("port") or 993), folder=str(payload.get("folder") or "INBOX"),
+                visibility=str(payload.get("visibility") or "admin"), description=str(payload.get("description") or ""),
+            )
+        except (mail_inbox.MailError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/mail-inboxes/{inbox_id}")
+    def update_mail_inbox_endpoint(inbox_id: int, payload: dict = Body(...),
+                                   user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import mail_inbox
+
+        try:
+            return mail_inbox.update(
+                conn, user["id"], inbox_id,
+                is_active=bool(payload["is_active"]) if "is_active" in payload else None,
+                visibility=str(payload["visibility"]) if payload.get("visibility") else None,
+            )
+        except mail_inbox.MailError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/mail-inboxes/{inbox_id}/test")
+    def test_mail_inbox_endpoint(inbox_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """연결 확인 — admin 본인 이름으로 최근 1일 메일을 검색해 본다(읽기 전용)."""
+        from hair_platform import knowledge_access, mail_inbox
+
+        try:
+            box = mail_inbox.get(conn, inbox_id)
+            if not box["is_active"]:
+                raise mail_inbox.MailError("꺼진 메일함입니다")
+            with knowledge_access.as_viewer(user["id"]):
+                found = mail_inbox.search(conn, box["name"], days=1, limit=5)
+            return {"ok": True, "recent": len(found)}
+        except mail_inbox.MailError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # ---------- 기본 구성 점검(2026-11-23, P2-10 — `config_check.py`, admin) ----------
     @app.get("/api/admin/config-check")
     def config_check_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):

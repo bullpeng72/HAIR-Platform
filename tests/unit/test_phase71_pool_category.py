@@ -36,7 +36,7 @@ def test_category_column_backfilled_correctly_on_fresh_db():
     assert skill_categories == {"sw_dev", "general"}
     sw_dev_count = sum(1 for s in skills if s["category"] == "sw_dev")
     general_count = sum(1 for s in skills if s["category"] == "general")
-    assert sw_dev_count + general_count == len(skills) == 79  # +1: 사내DB조회(2026-11-26), +1: 코드저장소조회(2026-11-24), +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21), +9: 업무 영역 템플릿(2026-11-24)
+    assert sw_dev_count + general_count == len(skills) == 80  # +1: 메일수신함조회(2026-11-26), +1: 사내DB조회(2026-11-26), +1: 코드저장소조회(2026-11-24), +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21), +9: 업무 영역 템플릿(2026-11-24)
     # 2026-11-11 "SKL-NONE-023(승인루프)은 개발업무 Skill로 변경" —
     # 34 → 35, 17 → 16. 2026-11-17 "딥리서치 skill과... 최신(1주일)
     # 뉴스와 인사이트를 제공해 주는 Skill 추가"로 Skill 2종이 전부
@@ -49,18 +49,18 @@ def test_category_column_backfilled_correctly_on_fresh_db():
     # 출력 등이 가능하도록... 전담 팀을 구성해"로 Skill "데이터시각화
     # 가이드"가 category 기본값 'general'로 추가(18 → 19).
     assert sw_dev_count == 44  # +1: 코드저장소조회(2026-11-24), +3: 백엔드구현·API설계·보안점검, +3: 단위테스트작성·버그원인분석·코드베이스분석(2026-11-21), +1: 커버리지체크 재분류(2026-11-23)
-    assert general_count == 35  # +1: 사내DB조회(2026-11-26), +9: 재무·영업·법무 업무 영역 스킬(2026-11-24), +3: 업무요구사항정리·문서품질검토·문서교정(2026-11-21), +1: 프레젠테이션작성(2026-11-20), +3: 카피라이팅·사업성분석·회의록정리(2026-11-21), -1: 커버리지체크 sw_dev 재분류(2026-11-23)
+    assert general_count == 36  # +1: 메일수신함조회(2026-11-26), +1: 사내DB조회(2026-11-26), +9: 재무·영업·법무 업무 영역 스킬(2026-11-24), +3: 업무요구사항정리·문서품질검토·문서교정(2026-11-21), +1: 프레젠테이션작성(2026-11-20), +3: 카피라이팅·사업성분석·회의록정리(2026-11-21), -1: 커버리지체크 sw_dev 재분류(2026-11-23)
 
     tools = pool_registry.list_tools(conn)
     sw_dev_tool_count = sum(1 for t in tools if t["category"] == "sw_dev")
     general_tool_count = sum(1 for t in tools if t["category"] == "general")
-    assert sw_dev_tool_count + general_tool_count == len(tools) == 20  # +1: 사내 DB 조회(2026-11-26), +1: 코드 저장소 조회(2026-11-24), +1: 스킬·도구 목록 조회(2026-11-21), +3: 업무 영역 도구(2026-11-24)
+    assert sw_dev_tool_count + general_tool_count == len(tools) == 21  # +1: 메일 수신함 조회(2026-11-26), +1: 사내 DB 조회(2026-11-26), +1: 코드 저장소 조회(2026-11-24), +1: 스킬·도구 목록 조회(2026-11-21), +3: 업무 영역 도구(2026-11-24)
     assert sw_dev_tool_count == 6  # +1: 코드 저장소 조회(2026-11-24), +1: 골든셋 커버리지 체커 재분류(2026-11-23)
     # 2026-11-17 위와 같은 사용자 요청으로 Tool "실시간 뉴스 검색
     # (Tavily, 최근 7일)"이 category 기본값 'general'로 추가(8 → 9).
     # 2026-11-18 위와 같은 사용자 요청으로 Tool "차트 생성기"가 category
     # 기본값 'general'로 추가(9 → 10).
-    assert general_tool_count == 14  # +1: 사내 DB 조회(2026-11-26)  # +3: 업무 영역 도구(2026-11-24), +1: 스킬·도구 목록 조회(2026-11-21), -1: 골든셋 커버리지 체커 sw_dev 재분류(2026-11-23)
+    assert general_tool_count == 15  # +1: 메일 수신함 조회(2026-11-26), +1: 사내 DB 조회(2026-11-26)  # +3: 업무 영역 도구(2026-11-24), +1: 스킬·도구 목록 조회(2026-11-21), -1: 골든셋 커버리지 체커 sw_dev 재분류(2026-11-23)
 
 
 @pytest.mark.parametrize(

@@ -1421,6 +1421,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import data_connectors  # 사내 DB 조회 연동(2026-11-26, P1-9)
 
     data_connectors.ensure_schema(conn)
+    from hair_platform import mail_inbox  # 메일 수신함 읽기(2026-11-26, P1-9 2단계)
+
+    mail_inbox.ensure_schema(conn)
     # 결과물 → 저장소 커밋 기록(2026-11-24, P0-3 2단계 — `repo_commit.py`).
     from hair_platform import repo_commit
 
@@ -3023,6 +3026,15 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
                 "조회마다 활동 기록을 남긴다(2026-11-26, P1-9, `data_connectors.py`)."
             ),
             "database_query",
+        ),
+        (
+            "메일 수신함 조회",
+            (
+                "관리자가 등록한 업무 메일함(IMAP)을 읽기 전용으로 조회하는 네이티브 Tool — 메일함 목록·최근 메일 검색·"
+                "본문 읽기(첨부는 이름·크기만). 읽음 표시도 바꾸지 않고, 메일함별 공개 범위로 요청자를 확인하며, "
+                "조회마다 활동 기록을 남긴다(2026-11-26, P1-9 2단계, `mail_inbox.py`)."
+            ),
+            "mail_inbox_read",
         ),
     ]
     # 사용자 요청(2026-10-26, "도구/skill에서 동작하지 않는 검색은

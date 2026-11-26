@@ -12316,7 +12316,7 @@ const MANUAL_MARKDOWN = [
 '',
 '| 유형 | 이런 사람에게 | 할 수 있는 일 | 할 수 없는 일 |',
 '|---|---|---|---|',
-'| **admin** (관리자) | 플랫폼 운영 책임자 | manager가 할 수 있는 모든 일 + **admin 전용**: 사용자 생성·유형 지정, Agent 온보딩 승인, 업무 요청·할 일·사람·Agent **삭제**, 모델 레지스트리·LLM 설정 최적화, 평가 기준, 조직 정책·기본 구성 점검, 외부 알림·메일 알림·코드 저장소·사내 DB 연결 | 자기가 올린 배정 요청을 자기가 승인(다른 admin·manager가 승인) |',
+'| **admin** (관리자) | 플랫폼 운영 책임자 | manager가 할 수 있는 모든 일 + **admin 전용**: 사용자 생성·유형 지정, Agent 온보딩 승인, 업무 요청·할 일·사람·Agent **삭제**, 모델 레지스트리·LLM 설정 최적화, 평가 기준, 조직 정책·기본 구성 점검, 외부 알림·메일 알림·코드 저장소·사내 DB·메일 수신함 연결 | 자기가 올린 배정 요청을 자기가 승인(다른 admin·manager가 승인) |',
 '| **manager** (업무 관리자) | 팀장·PM처럼 일을 나누고 배정하는 사람 | 업무 요청을 할 일로 나누기, 배정 요청과 **결재 처리**, Agent 만들기·실행, 팀·파이프라인 실행, 사람 인력·팀·파이프라인·도구/스킬·지식 베이스 관리, 정기 실행·이벤트 트리거, 대시보드·비용·공정성 지표·활동 기록 보기 | 위 admin 전용 기능, 자기 요청 승인 |',
 '| **member** (실무자) | 업무를 요청하고 맡은 일을 하는 사람 | 대화(Agent 멘션 포함), **업무 요청 제출**, 배정 요청 올리기, 맡은 할 일의 협업 워크스페이스에서 결과물 작성·검토 요청·댓글, 내 API 키 발급, 성과 리뷰 보기 | **결재 처리**, 할 일로 나누기, Agent 만들기·실행, 파이프라인 실행, "설정" 메뉴 전체 |',
 '| **viewer** (열람자) | 내용을 보기만 하면 되는 사람(임원·외부 검토자 등) | 홈·인박스·내 업무·업무 요청·결재(목록)·갤러리·할 일 보드·인력 검색·조직도·이용 가이드 **열람**, **대화**(AI 답변 포함) | 업무 요청 제출, 배정 요청, 결재 처리, 결과물 작성, API 키, 홈의 "AI에게 일 맡기기", 성과 리뷰·연동 설정 탭, "설정" 메뉴 |',
@@ -12837,6 +12837,10 @@ const MANUAL_MARKDOWN = [
 '  - **읽기 전용**: SQL 검사(한 문장, SELECT·WITH·EXPLAIN만, 쓰기·DDL 거부)와 읽기 전용 연결 두 겹으로 막습니다. 한 번에 돌려주는 행 수(연결별, 기본 200)와 실행 시간(10초)에 상한이 있습니다. 가능하면 **조회 전용 DB 계정**을 쓰세요.',
 '  - **비밀번호는 저장하지 않습니다** — 서버 PC 환경변수에 넣고 그 **이름**(예: `HAIR_DB_SALES_PASSWORD`)만 적습니다. PostgreSQL·MySQL은 서버에 `pip install "hair-platform[dbconnect]"`가 필요합니다. 등록 뒤 **"연결 확인"**으로 테이블이 보이는지 확인하세요.',
 '  - **기록**: 조회마다 요청한 사람·연결·SQL·행 수가 "활동 기록"의 `data_query_executed`로 남습니다. 다른 Agent에게도 쓰게 하려면 "AI 에이전트 관리"에서 **사내DB조회** 스킬을 붙이세요.',
+'- **메일 수신함**(admin) — 공용 업무 메일함(IMAP: Gmail·Microsoft 365·사내 메일 서버)을 등록하면 **메일수신함조회** 스킬이 있는 Agent(고객지원 상담원·영업 제안 작성자)가 최근 메일을 검색하고 본문을 읽어 문의 요약·회신 초안·업무 정리에 씁니다.',
+'  - **읽기 전용**: 보내기·지우기·이동을 하지 않고 **읽음 표시도 바꾸지 않습니다**. 첨부는 이름·크기만 봅니다. 회신은 결과물(초안)로만 만듭니다.',
+'  - **공개 범위**: 메일함마다 누구의 요청일 때 읽을지 정합니다(admin만·manager 이상·모든 사람 — 기본 admin만). 요청한 사람을 알 수 없는 실행에서는 읽지 않습니다.',
+'  - **비밀번호**: 메일 서비스의 **앱 비밀번호**를 서버 PC 환경변수에 넣고 그 이름만 적습니다. 등록 뒤 **"연결 확인"**으로 접속을 확인하세요. 조회마다 활동 기록 `mail_inbox_read`가 남습니다.',
 '  - **읽기 전용이고 커밋된 파일만** 봅니다 — 미커밋 변경, `.gitignore`로 빠진 파일, `.env`·키 같은 비밀 파일은 읽지 않습니다. 최신 코드를 보게 하려면 그 폴더에서 `git pull`을 해 두세요.',
 '  - 대화에서는 "@코드베이스 분석가 shop-api 저장소의 주문 취소 흐름을 설명해 줘"처럼 저장소 이름을 함께 적습니다.',
 '- **결과물을 저장소에 커밋**(admin) — 결재를 마친 결과물 카드의 **"저장소에 커밋"** → 저장소 선택 → **미리보기**를 누르면 쓸 파일(새 파일·수정)과 점검 결과가 나옵니다.',
@@ -13124,7 +13128,7 @@ const MANUAL_MARKDOWN = [
 '',
 '| 구분 | 내용 |',
 '|---|---|',
-'| **지움** | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)과 Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소·사내 DB 연결 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |',
+'| **지움** | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)과 Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소·사내 DB·메일 수신함 연결 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |',
 '| **남김** | Agent 36종·스킬·도구·파이프라인 템플릿(관리자가 만든 것 포함), 조직 정책(사번 형식·결과물 언어·알림 웹훅·메일 수신자), 평가 기준, 플랫폼 공통 기본 LLM·보조 작업 모델·지식 검색 설정, "초기화 시 보호" 팀과 멤버 |',
 '| **되돌림** | 모든 Agent의 모델 지정·비용·성과점수·마지막 결과물을 비움. 상태는 **기본 Agent만 "활성"으로** 되돌리고, 관리자가 만든 Agent는 지금 상태(온보딩 대기·비활성 등)를 그대로 둠 — 승인 전 Agent가 초기화로 활성이 되지 않음 |',
 '',
@@ -13148,7 +13152,7 @@ async function renderIntegrations(content) {
   const isAdmin = ME.role === "admin";
   const canSchedule = ["admin", "manager"].includes(ME.role);
   const fmt = v => v ? esc(String(v).replace("T", " ")) : "-";
-  const [keys, schedules, templates, notify, repos, trig, dataConns] = await Promise.all([
+  const [keys, schedules, templates, notify, repos, trig, dataConns, mailBoxes] = await Promise.all([
     api("GET", "/api/api-keys"),
     canSchedule ? api("GET", "/api/pipeline-schedules") : Promise.resolve([]),
     canSchedule ? api("GET", "/api/pipeline-templates") : Promise.resolve([]),
@@ -13156,7 +13160,16 @@ async function renderIntegrations(content) {
     isAdmin ? api("GET", "/api/code-repositories") : Promise.resolve([]),
     canSchedule ? api("GET", "/api/automation-triggers") : Promise.resolve({ triggers: [], events: {} }),
     isAdmin ? api("GET", "/api/data-connections").catch(() => []) : Promise.resolve([]),  // 사내 DB(2026-11-26, P1-9)
+    isAdmin ? api("GET", "/api/mail-inboxes").catch(() => []) : Promise.resolve([]),  // 메일 수신함(2026-11-26, P1-9 2단계)
   ]);
+  const visLabel = v => ({ all: "모든 사람", manager: "manager 이상", admin: "admin만" })[v] || (String(v).startsWith("team:") ? "팀 #" + String(v).slice(5) : v);
+  const mbRows = (mailBoxes || []).map(b =>
+    "<tr><td>" + esc(b.name) + "</td><td>" + esc(b.username) + '<br><span class="muted">' + esc(b.host) + ":" + b.port + " · " + esc(b.folder) + "</span></td><td>" +
+    esc(visLabel(b.visibility)) + "</td><td>" + (b.password_set ? "✓ " : "⚠ 비어 있음 ") + "<code>" + esc(b.password_env) + "</code></td><td>" +
+    (b.is_active ? "켜짐" : "꺼짐") + "</td><td>" +
+    '<button class="small" data-test-mb="' + b.id + '">연결 확인</button> ' +
+    '<button class="small" data-toggle-mb="' + b.id + '" data-active="' + (b.is_active ? "0" : "1") + '">' + (b.is_active ? "끄기" : "켜기") + "</button></td></tr>"
+  ).join("");
   const dcRows = (dataConns || []).map(d =>
     "<tr><td>" + esc(d.name) + "</td><td>" + esc(d.kind) + "</td><td><code>" + esc(d.target) + "</code>" +
     (d.username ? " · " + esc(d.username) : "") + "</td><td>" + esc(String(d.row_limit)) + "행</td><td>" +
@@ -13291,7 +13304,25 @@ async function renderIntegrations(content) {
       '<input id="dc-desc" placeholder="설명(Agent가 어떤 DB인지 알 수 있게)" maxlength="500" style="min-width:14rem">' +
       '<button class="primary" type="submit">DB 연결 등록</button></form>' +
       (dcRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>종류</th><th>대상</th><th>행 수 상한</th><th>비밀번호</th><th>상태</th><th></th></tr></thead><tbody>' + dcRows + "</tbody></table></div>"
-        : '<p class="muted">등록된 DB 연결이 없습니다.</p>')
+        : '<p class="muted">등록된 DB 연결이 없습니다.</p>') +
+      // 메일 수신함(2026-11-26, P1-9 2단계 — `mail_inbox.py`).
+      "<h3>메일 수신함(admin)</h3>" +
+      '<p class="muted">공용 업무 메일함(고객지원·영업 등)을 IMAP으로 등록하면 <b>메일수신함조회</b> 스킬이 있는 Agent(고객지원 상담원·영업 제안 작성자)가 최근 메일을 검색하고 본문을 읽습니다. ' +
+      '<b>읽기 전용</b>입니다 — 보내기·지우기·이동은 하지 않고 <b>읽음 표시도 바꾸지 않습니다</b>. 첨부는 이름·크기만 봅니다. ' +
+      '<b>공개 범위</b>로 누구의 요청일 때 읽을지 정합니다(기본 admin만 — 지식 베이스 문서와 같은 규칙). 조회마다 활동 기록(<code>mail_inbox_read</code>)이 남습니다. ' +
+      '<b>비밀번호는 저장하지 않습니다</b> — 메일 서비스의 <b>앱 비밀번호</b>를 서버 PC 환경변수에 넣고 그 이름만 적으세요(Gmail: imap.gmail.com, Microsoft 365: outlook.office365.com, 포트 993).</p>' +
+      '<form id="mb-form" class="inline" style="flex-wrap:wrap">' +
+      '<input id="mb-name" placeholder="이름(예: support)" required maxlength="60">' +
+      '<input id="mb-host" placeholder="IMAP 서버(예: imap.gmail.com)" required>' +
+      '<input id="mb-port" type="number" min="1" max="65535" value="993" style="width:6rem" title="IMAP SSL 포트">' +
+      '<input id="mb-user" placeholder="메일 계정(예: support@회사.com)" required>' +
+      '<input id="mb-pwenv" placeholder="앱 비밀번호 환경변수 이름(예: HAIR_MAIL_SUPPORT_PASSWORD)" required maxlength="64" style="min-width:16rem">' +
+      '<input id="mb-folder" placeholder="폴더(기본 INBOX)" style="width:9rem">' +
+      '<select id="mb-vis"><option value="admin">admin만</option><option value="manager">manager 이상</option><option value="all">모든 사람</option></select>' +
+      '<input id="mb-desc" placeholder="설명(Agent가 어떤 메일함인지 알 수 있게)" maxlength="500" style="min-width:14rem">' +
+      '<button class="primary" type="submit">메일함 등록</button></form>' +
+      (mbRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>계정</th><th>공개 범위</th><th>비밀번호</th><th>상태</th><th></th></tr></thead><tbody>' + mbRows + "</tbody></table></div>"
+        : '<p class="muted">등록된 메일함이 없습니다.</p>')
       : "");
 
   document.getElementById("apikey-form").addEventListener("submit", async ev => {
@@ -13422,6 +13453,30 @@ async function renderIntegrations(content) {
         const r = await api("POST", "/api/data-connections/" + btn.dataset.testDc + "/test");
         showMsg("global-msg", "연결 성공 — " + r.tables.split(String.fromCharCode(10)).length + "줄의 테이블 목록을 읽었습니다.", "ok");
       } catch (e) { showMsg("global-msg", "연결 실패: " + e.message, "error"); }
+    }));
+    document.getElementById("mb-form").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      const v = id => document.getElementById(id).value.trim();
+      try {
+        const r = await api("POST", "/api/mail-inboxes", {
+          name: v("mb-name"), host: v("mb-host"), port: Number(v("mb-port") || 993), username: v("mb-user"),
+          password_env: v("mb-pwenv"), folder: v("mb-folder") || "INBOX", visibility: v("mb-vis"), description: v("mb-desc"),
+        });
+        showMsg("global-msg", "메일함 '" + r.name + "'을(를) 등록했습니다 — '연결 확인'으로 접속을 확인하세요.", "ok");
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+    content.querySelectorAll("[data-test-mb]").forEach(btn => btn.addEventListener("click", async () => {
+      try {
+        const r = await api("POST", "/api/mail-inboxes/" + btn.dataset.testMb + "/test");
+        showMsg("global-msg", "연결 성공 — 최근 1일 메일 " + r.recent + "통을 찾았습니다(읽음 표시 변경 없음).", "ok");
+      } catch (e) { showMsg("global-msg", "연결 실패: " + e.message, "error"); }
+    }));
+    content.querySelectorAll("[data-toggle-mb]").forEach(btn => btn.addEventListener("click", async () => {
+      try {
+        await api("PATCH", "/api/mail-inboxes/" + btn.dataset.toggleMb, { is_active: btn.dataset.active === "1" });
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
     }));
     content.querySelectorAll("[data-toggle-dc]").forEach(btn => btn.addEventListener("click", async () => {
       try {

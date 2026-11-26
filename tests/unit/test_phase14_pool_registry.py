@@ -482,7 +482,7 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     # ("excel 파일 등 수치가 담긴 데이터를 입력받아... 그래프 출력 등이
     # 가능하도록... 전담 팀을 구성해")로 추가된 "차트 생성기" 1개
     # (= 13 + 1 = 14) + 2026-11-21 "스킬·도구 목록 조회"(스킬생성용) 1개(= 15).
-    assert len(resp.json()) == 20  # P1-9 사내 DB 조회(2026-11-26): 도구 +1·스킬 +1, P0-3 코드 저장소 조회(2026-11-24): 도구 +1·스킬 +1, P2-12 업무 영역 템플릿(2026-11-24): 도구 +3·Agent +7·스킬 +9
+    assert len(resp.json()) == 21  # P1-9 2단계 메일 수신함: 도구 +1·스킬 +1, P1-9 사내 DB 조회(2026-11-26): 도구 +1·스킬 +1, P0-3 코드 저장소 조회(2026-11-24): 도구 +1·스킬 +1, P2-12 업무 영역 템플릿(2026-11-24): 도구 +3·Agent +7·스킬 +9
 
     # 사용자 결정(2026-09-29, "(a) MCP 종류만 admin 전용으로 좁히기") —
     # 매니저는 mcp_remote/mcp_stdio 등록이 이제 403이다. native는
@@ -536,7 +536,7 @@ def test_gc114_tool_pool_and_skill_pool_endpoints_rbac_and_crud(client_and_conn)
     resp = client.get("/api/skill-pool")
     assert resp.status_code == 200
     assert (
-        len(resp.json()) == 79  # P1-9 사내 DB 조회(2026-11-26): 스킬 +1, P0-3 코드 저장소 조회(2026-11-24): 도구 +1·스킬 +1
+        len(resp.json()) == 80  # P1-9 2단계 메일 수신함 +1, P1-9 사내 DB 조회(2026-11-26): 스킬 +1, P0-3 코드 저장소 조회(2026-11-24): 도구 +1·스킬 +1
     )  # (+1: 2026-11-20 "프레젠테이션작성") 시드된 22개(rag/graphdb 2 + agent-eval 절차 스킬 18 + 일반웹검색 1 +
     # 실시간웹검색 1) — vectordb/관계질의는 2026-10-06 자동완성 중복
     # 통합으로 제거됨. 2026-10-26 "대화에서 외부 검색이 가능한 방법을
