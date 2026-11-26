@@ -153,18 +153,49 @@ def record(provider: str, model: str, prompt_tokens: Any, completion_tokens: Any
         pass
 
 
+# 호출별 측정값 수집(2026-11-27, 성능 테스트 정교화 — `model_benchmark.py`). 이 문맥 안의 직접 호출마다 토큰 수와
+# (Ollama는) 로드·입력 처리·생성 시간과 생각 글자 수를 목록에 남긴다. 문맥 밖에서는 아무것도 하지 않는다.
+_MEASURE: contextvars.ContextVar[list | None] = contextvars.ContextVar("llm_usage_measure", default=None)
+
+
+@contextlib.contextmanager
+def measure():
+    items: list[dict] = []
+    token = _MEASURE.set(items)
+    try:
+        yield items
+    finally:
+        _MEASURE.reset(token)
+
+
+def _measured(item: dict) -> None:
+    items = _MEASURE.get()
+    if items is not None:
+        items.append(item)
+
+
 def record_anthropic(model: str, resp: Any) -> None:
     usage = getattr(resp, "usage", None)
+    _measured({"input_tokens": getattr(usage, "input_tokens", None), "output_tokens": getattr(usage, "output_tokens", None)})
     record("anthropic", model, getattr(usage, "input_tokens", 0), getattr(usage, "output_tokens", 0))
 
 
 def record_openai(model: str, resp: Any) -> None:
     usage = getattr(resp, "usage", None)
+    _measured({"input_tokens": getattr(usage, "prompt_tokens", None), "output_tokens": getattr(usage, "completion_tokens", None)})
     record("openai", model, getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0))
 
 
 def record_ollama(model: str, data: Any) -> None:
     if isinstance(data, dict):
+        ns = 1e9
+        message = data.get("message") or {}
+        _measured({
+            "input_tokens": data.get("prompt_eval_count"), "output_tokens": data.get("eval_count"),
+            "load_s": (data.get("load_duration") or 0) / ns, "prompt_s": (data.get("prompt_eval_duration") or 0) / ns,
+            "eval_s": (data.get("eval_duration") or 0) / ns,
+            "thinking_chars": len(message.get("thinking") or "") if isinstance(message, dict) else 0,
+        })
         record("ollama", model, data.get("prompt_eval_count"), data.get("eval_count"))
 
 

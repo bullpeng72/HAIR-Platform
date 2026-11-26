@@ -275,6 +275,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
     @app.post("/api/model-registry/{model_id}/benchmark", status_code=201)
     def run_model_registry_benchmark(
         model_id: int,
+        mode: str = "quick",
         user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
     ):
         """사용자 요청(2026-11-12, "ollama, openai 등 프로바이더의 모델
@@ -284,8 +285,10 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         참고용 tier 추천이며 품질 평가가 아니다(`model_benchmark.py`
         모듈 docstring 참고)."""
         try:
-            result = model_benchmark.run_benchmark(conn, model_id, user["id"])
+            result = model_benchmark.run_benchmark(conn, model_id, user["id"], mode=mode)
         except ValueError as exc:
+            if str(exc) == "invalid_mode":
+                raise HTTPException(status_code=400, detail="mode는 quick 또는 full입니다") from exc
             raise HTTPException(
                 status_code=404, detail="모델을 찾을 수 없습니다"
             ) from exc

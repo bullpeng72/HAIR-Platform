@@ -623,7 +623,9 @@ src/hair_platform/
   webui_assets/      # 화면 원본(2026-11-26 분리): index.html(셸)·app.css·manual.md(이용 가이드 원문)·js/NN-화면.js 29개(js/ORDER 순서로 이어 붙임)
   llm.py             # 실제 Anthropic/OpenAI/Ollama 연동(provider/model 선택 가능)
   model_registry.py  # provider별 사용 가능 모델 등록·관리("등록→재사용") + 모델별 LLM 설정 최적화 tier(deep_reasoning/precision_fast/standard) 직접 매핑
-  model_benchmark.py # 등록된 모델 실측 성능 테스트(응답 속도) + 속도 기반 tier 추천(품질 평가 아님)
+  model_benchmark.py # 모델 성능 테스트 — 빠른 측정(예열 후 3회: 생성 tok/s·첫 응답·첫 로드·생각 끔) / 전체 점검(도구·JSON·수치·한국어·생각 끄기·긴 문서 → 단계 예상 시간으로 tier 추천)
+  model_recommend.py # 모델 레지스트리 컨텍스트 한도·생성 옵션 추천(Ollama 모델 정보 + PC 메모리 / 클라우드 계열 표)
+  checker_crosscheck.py # 검토 승인 후 규칙 기반 점검기를 최종본에 다시 돌려 판정이 다르면 사람 결재로
   agent_runtime.py   # 온보딩된 Agent에게 온디맨드로 업무를 맡기는 실행 경로(RAG 증강 포함)
   crew_runtime.py    # 실제 CrewAI 연동(단일 생성 + 다중 Agent 협업/위임 + 다이어그램 + 자가검토)
   crew_history.py    # Crew 실행 이력(crew_runs) — 팀/즉석 실행의 진행상태·협업다이어그램·토큰사용량 영구 저장

@@ -77,22 +77,62 @@ async function renderModelRegistry(content) {
   // 추천한다(품질 평가 아님 — `model_benchmark.py` 모듈 docstring
   // 참고). "저장"은 직접 눌러야 기존 "최적화 Tier 매핑"에 반영된다
   // (추천이 자동 적용되지 않음 — ⚡ 최적화 추천과 같은 관례).
+  // 성능 테스트 결과(2026-11-27 정교화 — `model_benchmark.py`). 빠른 측정: 예열 후 3회 중앙값, 생성 속도·첫 응답·첫 로드를
+  // 나눠 보임. 전체 점검: 능력 점검(도구·JSON·수치·한국어·생각 끄기) + 긴 문서 읽기 → 단계 1회 예상 시간으로 tier 추천.
+  const _BENCH_CHECK_LABELS = { tools: "도구 호출", json: "JSON 형식", numbers: "수치 보존", korean: "한국어", think_off: "생각 끄기", long_doc: "긴 문서" };
+  const _fmtNum = (v, digits) => (typeof v === "number" ? v.toFixed(digits) : "?");
+  const _benchDetailHtml = (b) => {
+    const d = b.details;
+    if (!d) {  // 예전 방식(짧은 질문 1회, 글자/초)
+      return b.chars_per_second.toFixed(1) + '자/초 · ' + b.latency_seconds.toFixed(1) + '초 <span class="muted" title="모델 로드 시간이 섞인 1회 측정입니다 — 다시 측정하세요">(예전 방식)</span>';
+    }
+    const def = d.default || {};
+    const off = d.think_off;
+    let html = '<span title="생각(추론) 토큰 포함, 예열 후 ' + (def.runs || 3) + '회 중앙값">생성 ' + _fmtNum(def.gen_tps, 1) + ' tok/s</span>' +
+      ' · 응답 ' + _fmtNum(def.wall_s, 1) + '초';
+    if (off) html += ' · <span title="생각 끔일 때(같은 질문)">생각 끔 ' + _fmtNum(off.wall_s, 1) + '초</span>';
+    if (typeof d.load_s === "number" && d.load_s > 0.5) html += '<br><span class="muted" title="모델을 메모리에 올리는 시간 — 측정에서 뺐습니다">첫 로드 ' + _fmtNum(d.load_s, 1) + '초</span>';
+    if (typeof d.estimated_stage_s === "number") {
+      html += '<br><span title="' + escAttr(d.estimate_basis || "") + '">단계 1회 예상 ' + Math.round(d.estimated_stage_s) + '초</span>';
+    }
+    if (d.checks) {
+      html += '<br>' + Object.entries(d.checks).map(([k, c]) =>
+        '<span class="gate-badge ' + (c.passed ? "gate-ok" : "gate-warn") + '" title="' + escAttr(c.reason || "") +
+        (c.prefill_tps ? " — 입력 처리 " + c.prefill_tps + " tok/s" : "") + '">' + (c.passed ? "✓ " : "✗ ") + esc(_BENCH_CHECK_LABELS[k] || k) + "</span>"
+      ).join(" ");
+    }
+    if (d.warnings && d.warnings.length) {
+      html += '<br><span class="gate-warn" style="font-size:0.85em">⚠ ' + d.warnings.map(esc).join("<br>⚠ ") + "</span>";
+    }
+    return html;
+  };
   const benchmarkHtml = (m) => {
     const b = m.latest_benchmark;
     let resultHtml;
     if (!b) {
       resultHtml = '<span class="muted">아직 테스트 안 함</span>';
     } else if (b.status === "failed") {
-      resultHtml = '<span class="gate-badge gate-warn" title="' + esc(b.error || "") + '">실패</span> ' +
+      resultHtml = '<span class="gate-badge gate-warn" title="' + escAttr(b.error || "") + '">실패</span> ' +
         '<span class="muted">' + esc(fmtTime(b.tested_at)) + '</span>';
     } else {
-      resultHtml = b.chars_per_second.toFixed(1) + '자/초 · ' + b.latency_seconds.toFixed(1) + '초 소요 · ' +
-        '<span class="gate-badge" title="속도만 반영한 참고용 추천입니다 — 실제 응답 품질은 직접 확인하세요">추천: ' +
-        esc(_OPTIMIZATION_TIER_LABELS[b.recommended_tier] || b.recommended_tier) + '</span> ' +
-        '<button class="small" data-apply-benchmark-tier="' + m.id + '" data-tier="' + b.recommended_tier + '">이 tier로 저장</button> ' +
-        '<span class="muted">(' + esc(fmtTime(b.tested_at)) + ')</span>';
+      const tiers = (b.details && b.details.recommended_tiers) || (b.recommended_tier ? [b.recommended_tier] : []);
+      const modeLabel = b.details ? (b.details.mode === "full" ? "전체 점검" : "빠른 측정") : "";
+      resultHtml = _benchDetailHtml(b) + "<br>" +
+        (tiers.length
+          ? '<span class="gate-badge" title="' + (b.details && b.details.mode === "full" ? "단계 예상 시간과 능력 점검으로 정한 추천" : "생성 속도만 본 추천 — 심층추론은 전체 점검이 필요합니다") + '">추천: ' +
+            tiers.map(t => esc(_OPTIMIZATION_TIER_LABELS[t] || t)).join(" · ") + '</span> ' +
+            '<button class="small" data-apply-benchmark-tier="' + m.id + '" data-tiers="' + escAttr(tiers.join(",")) + '">추천 tier 저장</button> '
+          : '<span class="muted">추천 tier 없음</span> ') +
+        '<span class="muted">(' + esc(modeLabel) + (modeLabel ? " " : "") + esc(fmtTime(b.tested_at)) + ')</span>';
+      if (b.latest_full) {
+        const f = b.latest_full.details || {};
+        resultHtml += '<br><span class="muted" title="가장 최근 전체 점검의 추천과 경고">최근 전체 점검: ' +
+          ((f.recommended_tiers || []).map(t => esc(_OPTIMIZATION_TIER_LABELS[t] || t)).join(" · ") || "추천 없음") +
+          ((f.warnings || []).length ? " · ⚠ " + f.warnings.map(esc).join(" / ") : "") + "</span>";
+      }
     }
-    return resultHtml + '<br><button class="small" data-run-benchmark="' + m.id + '">성능 테스트</button>';
+    return resultHtml + '<br><button class="small" data-run-benchmark="' + m.id + '" data-mode="quick" title="예열 후 짧은 질문 3회 — 속도만(로컬 약 10~30초)">빠른 측정</button> ' +
+      '<button class="small" data-run-benchmark="' + m.id + '" data-mode="full" title="빠른 측정 + 도구 호출·JSON·수치 보존·한국어·생각 끄기 점검 + 긴 문서 읽기(로컬 약 30초~2분)">전체 점검</button>';
   };
   // 모델별 단가(2026-11-22, 하드코딩·스텁 점검 3순위) — 100만 토큰당 입력/출력. 비우면 금액을
   // 계산하지 않고 토큰 수만 보인다(단가표를 코드에 넣지 않는다). 로컬 모델은 0으로 둘 수 있다.
@@ -325,10 +365,14 @@ async function renderModelRegistry(content) {
   });
   content.querySelectorAll("[data-run-benchmark]").forEach(btn => {
     btn.onclick = async () => {
-      if (!(await confirmModal("이 모델에 실제로 테스트 프롬프트 1건을 보내 응답 속도를 측정합니다 — 클라우드 provider는 실제 API 비용이 발생합니다(Ollama는 로컬 연산이라 무료). 계속할까요?"))) return;
+      const full = btn.dataset.mode === "full";
+      const what = full
+        ? "예열 1회 + 짧은 질문 3회(생각 기능이 있으면 생각 끔 3회 더) + 능력 점검 4건 + 긴 문서(약 7천 토큰) 1건"
+        : "예열 1회 + 짧은 질문 3회(생각 기능이 있으면 생각 끔 3회 더)";
+      if (!(await confirmModal("이 모델에 실제로 " + what + "을 보내 측정합니다 — 클라우드 provider는 실제 API 비용이 발생합니다(Ollama는 로컬 연산이라 무료). 계속할까요?"))) return;
       try {
-        await withBusy(btn, "테스트 중…", () =>
-          api("POST", "/api/model-registry/" + btn.dataset.runBenchmark + "/benchmark", {})
+        await withBusy(btn, full ? "점검 중…" : "측정 중…", () =>
+          api("POST", "/api/model-registry/" + btn.dataset.runBenchmark + "/benchmark?mode=" + (full ? "full" : "quick"), {})
         );
         showMsg("global-msg", "성능 테스트가 끝났습니다.", "ok");
         refresh();
@@ -338,9 +382,9 @@ async function renderModelRegistry(content) {
   content.querySelectorAll("[data-apply-benchmark-tier]").forEach(btn => {
     btn.onclick = async () => {
       const modelId = btn.dataset.applyBenchmarkTier;
-      const tier = btn.dataset.tier;
+      const tiers = (btn.dataset.tiers || "").split(",").filter(Boolean);
       const existing = models.find(m => m.id === Number(modelId));
-      const nextTiers = Array.from(new Set([...(existing.optimization_tiers || []), tier]));
+      const nextTiers = Array.from(new Set([...(existing.optimization_tiers || []), ...tiers]));
       try {
         await api("PATCH", "/api/model-registry/" + modelId + "/optimization-tiers", {
           optimization_tiers: nextTiers,

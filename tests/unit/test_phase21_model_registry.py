@@ -424,21 +424,26 @@ def test_gc226_benchmark_success_records_speed_and_tier_recommendation(
         # 이름만 바꿔치기한다 — 테스트 클라이언트/FastAPI 내부가 쓰는
         # 실제 time.monotonic()까지 건드리면 요청 처리 자체가 무한 대기에
         # 빠질 위험이 있다(실제로 한 번 재현됨).
-        with patch("hair_platform.model_benchmark.time") as mock_time:
-            mock_time.monotonic.side_effect = [0.0, 3.0]
+        # 2026-11-27 정교화 — 예열 1회 + 3회 측정(호출마다 monotonic 두 번). 매번 1.5초씩 흐르게 한다.
+        import itertools
+
+        with patch("hair_platform.model_benchmark.time") as mock_time, \
+             patch("hair_platform.model_benchmark._capabilities", return_value=None):
+            mock_time.monotonic.side_effect = itertools.count(0.0, 1.5)
             resp = client.post(f"/api/model-registry/{model_id}/benchmark")
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["status"] == "success"
-    assert body["latency_seconds"] == 3.0
+    assert body["status"] == "success" and body["mode"] == "quick"
+    assert body["latency_seconds"] == 1.5  # 예열을 뺀 3회의 중앙값
     assert body["output_chars"] == 300
-    assert body["chars_per_second"] == 100.0
-    assert body["recommended_tier"] == "standard"  # 100자/초 >= 50(FAST 경계)
+    assert body["chars_per_second"] == 200.0
+    # 토큰 정보가 없는 대역 호출이라 생성 속도를 모른다 → 속도 추천 없음(글자/초로 추측하지 않는다)
+    assert body["recommended_tier"] is None and body["details"]["default"]["runs"] == 3
 
     # GET 목록에 최신 결과가 그대로 끼워져 나온다.
     rows = client.get("/api/model-registry").json()
     row = next(r for r in rows if r["id"] == model_id)
-    assert row["latest_benchmark"]["recommended_tier"] == "standard"
+    assert row["latest_benchmark"]["details"]["mode"] == "quick"
 
     # 이력도 쌓인다.
     history = client.get(f"/api/model-registry/{model_id}/benchmarks").json()
