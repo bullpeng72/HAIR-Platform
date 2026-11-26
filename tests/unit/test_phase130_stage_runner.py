@@ -22,8 +22,11 @@ def _ids(conn, *roles):
     return [conn.execute("SELECT id FROM agent_pool WHERE role_name = ?", (r,)).fetchone()[0] for r in roles]
 
 
-def test_default_runtime_is_crewai_with_same_arguments(conn, monkeypatch):
+def test_default_runtime_is_direct_and_crewai_keeps_same_arguments(conn, monkeypatch):
+    """운영 기본은 direct(2026-11-26 실측으로 결정), crewai를 고르면 예전과 같은 인자로 run_crew를 부른다."""
     monkeypatch.delenv("HAIR_STAGE_RUNTIME", raising=False)
+    assert stage_runner.runtime_for({"mode": "single"}) == "direct"
+    monkeypatch.setenv("HAIR_STAGE_RUNTIME", "crewai")
     stage = {"mode": "single", "name": "작성"}
     with patch("hair_platform.crew_runtime.run_crew", return_value={"agents": []}) as crew:
         stage_runner.run_stage_agents(conn, stage, [1], ["요청"], 7, provider="ollama", model="m",
@@ -40,7 +43,7 @@ def test_direct_runtime_only_for_single_and_relay(monkeypatch):
     assert stage_runner.runtime_for({"mode": "sequential_relay"}) == "direct"
     assert stage_runner.runtime_for({"mode": "parallel_delegated"}) == "crewai"  # hierarchical은 CrewAI가 필요
     monkeypatch.setenv("HAIR_STAGE_RUNTIME", "이상한값")
-    assert stage_runner.runtime_for({"mode": "single"}) == "crewai"
+    assert stage_runner.runtime_for({"mode": "single"}) == "direct"  # 모르는 값이면 기본(direct)
 
 
 def test_direct_relay_passes_previous_output_expected_format_and_tool_evidence(conn, monkeypatch):
@@ -135,3 +138,95 @@ def test_graph_engine_with_direct_runtime_via_api(client_and_conn, monkeypatch):
         assert client.post(f"/api/approvals/{ap[0]}/decide", json={"approve": True}).status_code == 200
     row = conn.execute("SELECT status, engine FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
     assert tuple(row) == ("completed", "graph")
+
+
+def test_stall_watchdog_abandons_stuck_stage_and_allows_resume(conn, monkeypatch):
+    """진척 없는 단계(실측: 도구 호출 뒤 잠금 대기로 21분 멈춤)를 정리한다 — 스택을 활동 기록에 남기고 "재시작으로
+    중단됨"으로 표시(이어서 실행 가능), 뒤늦게 깨어난 시도는 결과를 쓰지 않는다."""
+    import threading
+
+    monkeypatch.setenv("HAIR_STAGE_RUNTIME", "direct")
+    monkeypatch.setenv("HAIR_STAGE_STALL_SECONDS", "0.5")
+    monkeypatch.setenv("HAIR_STAGE_WATCHDOG_POLL_SECONDS", "0.1")
+    admin = create_user(conn, "wd_admin", "pw", Role.ADMIN)
+    tid = pr.create_pipeline_template(conn, admin, "stall", "", "general")
+    pr.add_stage(conn, admin, tid, "작성", "single", [("기획서 작성자", "")], is_primary_deliverable=True)
+    brief = conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, 'x', '[]')", (admin,)).lastrowid
+    task = conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)).lastrowid
+    conn.commit()
+    assert task is not None
+    release = threading.Event()
+
+    def stuck_agent(*a, **k):
+        import time
+
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:  # 멈춘 척 — 감시가 정리한 뒤 풀어 준다
+            row = conn.execute("SELECT status FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+            if row[0] != "running":
+                break
+            time.sleep(0.05)
+        release.set()
+        return "뒤늦은 결과"
+
+    run_id = pr.start_pipeline_run(conn, admin, tid, task)
+    with patch("hair_platform.agent_runtime.execute_agent", side_effect=stuck_agent):
+        pr.run_pipeline_stage_job(conn, run_id, admin)
+    assert release.is_set()
+    row = conn.execute("SELECT status, interrupted_at, progress FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+    assert row["status"] == "failed" and row["interrupted_at"] and "멈춤 감지" in row["progress"]
+    assert conn.execute("SELECT COUNT(*) FROM pipeline_run_stages WHERE pipeline_run_id = ?", (run_id,)).fetchone()[0] == 0
+    audit = conn.execute("SELECT after_value FROM audit_log WHERE action = 'pipeline_stage_stalled'").fetchone()
+    assert audit is not None and "Thread" in audit[0]  # 모든 스레드 스택이 남는다
+    # 이어서 실행 가능(P1-6과 같은 경로)
+    assert pr.resume_interrupted_run(conn, admin, run_id) == "legacy"
+
+
+def test_watchdog_does_not_fire_while_progress_keeps_coming(conn, monkeypatch):
+    from hair_platform import progress
+
+    monkeypatch.setenv("HAIR_STAGE_STALL_SECONDS", "0.4")
+    monkeypatch.setenv("HAIR_STAGE_WATCHDOG_POLL_SECONDS", "0.05")
+    admin = create_user(conn, "wd2_admin", "pw", Role.ADMIN)
+    tid = pr.create_pipeline_template(conn, admin, "busy", "", "general")
+    pr.add_stage(conn, admin, tid, "작성", "single", [("기획서 작성자", "")])
+    brief = conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, 'x', '[]')", (admin,)).lastrowid
+    task = conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)).lastrowid
+    conn.commit()
+    assert task is not None
+    run_id = pr.start_pipeline_run(conn, admin, tid, task)
+    stage = conn.execute("SELECT * FROM pipeline_stages WHERE pipeline_template_id = ?", (tid,)).fetchone()
+    import time
+
+    with pr.stage_progress(conn, run_id, stage):  # 1초 동안 진행 문구가 계속 들어온다 — 멈춤 아님
+        for _ in range(10):
+            progress.report("생성 중")
+            time.sleep(0.1)
+    assert conn.execute("SELECT status FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()[0] == "running"
+
+
+def test_graph_engine_job_marks_run_failed_on_error(conn, monkeypatch):
+    """그래프 엔진 노드에서 예외가 나도 실행이 'running'으로 남지 않는다(예전 공백)."""
+    pytest.importorskip("langgraph")
+    from hair_platform import execution_graph
+
+    monkeypatch.setenv("HAIR_STAGE_RUNTIME", "direct")
+    admin = create_user(conn, "ge_admin", "pw", Role.ADMIN)
+    tid = pr.create_pipeline_template(conn, admin, "graph-fail", "", "general")
+    pr.add_stage(conn, admin, tid, "작성", "single", [("기획서 작성자", "")], is_primary_deliverable=True)
+    brief = conn.execute("INSERT INTO briefs (submitted_by, raw_text, stub_roles) VALUES (?, 'x', '[]')", (admin,)).lastrowid
+    task = conn.execute("INSERT INTO tasks (brief_id, role_name, required_skills) VALUES (?, 'x', '[]')", (brief,)).lastrowid
+    conn.commit()
+    assert task is not None
+    run_id = pr.start_pipeline_run(conn, admin, tid, task)
+    with patch("hair_platform.agent_runtime.execute_agent", side_effect=RuntimeError("모델 연결 실패")):
+        assert execution_graph.run_pipeline_graph_job(conn, run_id, admin) is None
+    assert conn.execute("SELECT status FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()[0] == "failed"
+    err = conn.execute("SELECT after_value FROM audit_log WHERE action = 'pipeline_run_failed' ORDER BY id DESC").fetchone()
+    assert "모델 연결 실패" in err[0]
+
+
+def test_conditional_approval_catches_phrases_missed_in_measurement():
+    t1 = "## 판정\n\n**승인(조건부)** — 실무 발송 직전 상태입니다. 단, 수신자 확인 후 발송하세요.\n"
+    t2 = "## 판정\n**승인** — 요구사항을 충족합니다. 3개 개선사항은 반영하면 좋습니다.\n"
+    assert pr.review_verdict(t1)["verdict"] == pr.review_verdict(t2)["verdict"] == "조건부 승인"

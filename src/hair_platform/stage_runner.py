@@ -12,7 +12,9 @@
   한 번 다시 시킨다(CrewAI guardrail과 같은 바닥선).
   계획 분담(`plan_merge`)은 이미 직접 호출이고, 병행 위임(`parallel_delegated`)은 CrewAI hierarchical이 필요해 늘 `crewai`.
 
-고르는 방법: 환경변수 `HAIR_STAGE_RUNTIME`(crewai|direct, 기본 crewai). 실측(P1-7 2단계)으로 기본값을 정한다.
+고르는 방법: 환경변수 `HAIR_STAGE_RUNTIME`(direct|crewai). **기본 direct**(2026-11-26, P1-7 3단계 — 실측: 계약서 1차 검토
+613초(CrewAI)·660초(직접) 호출 6회 동일, 영업 제안 메일 1,894초·14회 → 1,558초·10회(−18%·−29%), 결과물 품질·판정 동일).
+`crewai`로 두면 예전 방식 그대로다.
 반환 형식은 `run_crew()`와 같다(`agents`·`final_output`·`gate_scores`·`tcr`·`delegations`·`tool_evidence`).
 """
 
@@ -32,9 +34,9 @@ _EMPTY_RETRY_NOTE = (
 
 def runtime_for(stage) -> str:
     """이 단계를 어떤 방식으로 실행할지."""
-    choice = os.environ.get("HAIR_STAGE_RUNTIME", "crewai").strip().lower()
+    choice = os.environ.get("HAIR_STAGE_RUNTIME", "direct").strip().lower()
     if choice not in RUNTIMES:
-        choice = "crewai"
+        choice = "direct"
     if choice == "direct" and stage["mode"] not in DIRECT_MODES:
         return "crewai"
     return choice
@@ -128,8 +130,9 @@ def _run_direct(conn, stage, agent_ids, task_descriptions, actor_id, *, provider
         return agents[-1]["output"] if agents else ""
 
     label = _role(conn, agent_ids[0]) if len(agent_ids) == 1 else f"{stage['name']}(순차 {len(agent_ids)}명)"
-    # 단일은 호출 1회라 응답 시간(C·D)을 잰다. 순차 릴레이는 여러 호출이라 CrewAI 경로와 같이 C·D를 재지 않는다.
-    scored = agent_evaluation.run_and_score(label, _chain, task_type=eval_task_type, long_running=len(agent_ids) > 1)
+    # 단계 채점은 CrewAI 경로와 같은 조건(2026-11-26, P1-7 3단계): 단계 하나는 도구 호출·이어 쓰기·교정까지 여러 호출을
+    # 묶은 단위라 응답 시간 SLA(C·D)를 재지 않는다 — 실측에서 직접 실행만 C·D 미통과로 보여 비교가 어긋났다.
+    scored = agent_evaluation.run_and_score(label, _chain, task_type=eval_task_type, long_running=True)
     return {
         "agents": agents,
         "final_output": scored["output"],

@@ -304,6 +304,8 @@ hair check                # .env + 셸 환경변수를 합쳐 보여주고 provi
 | `HAIR_LEXICON_CHECK` | `1`(켬) | `0`이면 사전에 없는 한국어 낱말 탐지("낱말확인" 배지)를 끔(분석기가 메모리 약 360MB를 씀, `korean` extra 필요) |
 | `HAIR_NUMERIC_CHECK` | `1`(켬) | `0`이면 결과물 퍼센트 수치가 근거 숫자로 재현되는지 검사("수치근거" 배지)를 끔 |
 | `HAIR_ALLOW_LOCAL_CODE_RUN` | `0`(끔) | `1`이면 Docker 샌드박스 대신 로컬에서 코드 테스트를 실행(Docker가 없는 개발 환경용 — 격리가 없어지므로 운영에는 권장하지 않음) |
+| `HAIR_STAGE_RUNTIME` | `direct` | 파이프라인 단일·순차 릴레이 단계의 Agent 실행 방식. `direct`는 대화와 같은 직접 호출(실측: 품질·판정 동일, 영업 메일 −18% 시간·−29% 호출), `crewai`는 예전 CrewAI 방식. 병행 위임 단계·팀 멘션·Crew 빌더는 늘 CrewAI |
+| `HAIR_STAGE_STALL_SECONDS` | `2700`(45분) | 파이프라인 단계가 이 시간 동안 진행 표시·작성 중 미리보기 없이 멈추면 정리하고(모든 스레드 스택을 활동 기록에 남김) "이어서 실행"할 수 있게 함. `0`이면 끔 |
 | `HAIR_VECTOR_BACKEND` | `chroma` | 지식 베이스 검색 엔진. `sqlite`면 예전 방식(SQLite의 임베딩 전체와 비교 — 정확하지만 청크가 많으면 느림). chromadb가 없거나 메모리 DB면 자동으로 `sqlite` |
 | `HAIR_VECTOR_DIR` | `<db 파일>-vectors` | 벡터 색인(ChromaDB) 저장 폴더. 원본은 SQLite에 있어 지워도 `hair reindex-vectors`(또는 다음 검색)가 비용 없이 다시 만듦 |
 | `HAIR_PLATFORM_DB_PATH` | `:memory:` | SQLite DB 경로. 보통 `hair serve --db-path`가 기동 시 이 값을 자동으로 맞춰 주므로 직접 설정할 일은 거의 없음 |

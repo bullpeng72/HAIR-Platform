@@ -844,6 +844,45 @@ def get_checkpointer(conn: sqlite3.Connection):
 
 
 @llm_usage.with_scope(task_id=llm_usage.task_of_pipeline_run, pipeline_run_id="run_id")
+def _fail_run_on_error(fn):
+    """그래프 엔진 백그라운드 작업의 최종 경계(2026-11-26, P1-7 3단계). 예전엔 노드에서 예외가 나면(LLM 호출 실패 등)
+    `graph.invoke()` 밖으로 그대로 올라가 실행이 'running'으로 영원히 남았다 — 기본 엔진처럼 실패로 기록한다.
+    멈춤 감시가 이미 정리한 시도(`StageAbandoned`)는 상태를 건드리지 않는다(이어서 실행 중일 수 있다)."""
+    import functools
+    import inspect
+
+    sig = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except pr.StageAbandoned:
+            return None
+        except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
+            bound = sig.bind_partial(*args, **kwargs).arguments
+            conn, run_id = bound.get("conn"), bound.get("run_id")
+            if conn is not None and run_id is not None:
+                try:
+                    conn.rollback()
+                    conn.execute(
+                        "UPDATE pipeline_runs SET status = 'failed', finished_at = datetime('now') "
+                        "WHERE id = ? AND status IN ('running', 'paused_for_approval')",
+                        (run_id,),
+                    )
+                    actor = conn.execute("SELECT actor_id FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+                    if actor is not None:
+                        audit.record(conn, actor[0], "pipeline_run_failed", "pipeline_run", run_id,
+                                     after={"error": str(exc), "engine": "graph"})
+                    conn.commit()
+                except sqlite3.Error:
+                    pass
+            return None
+
+    return wrapper
+
+
+@_fail_run_on_error
 @llm_usage.with_scope(task_id=llm_usage.task_of_pipeline_run, pipeline_run_id="run_id")
 def resume_interrupted_graph_job(conn: sqlite3.Connection, run_id: int) -> dict:
     """서버 재시작으로 중단된 그래프 실행을 마지막 체크포인트부터 이어 간다(2026-11-25, P1-6 — "이어서 실행").
@@ -851,6 +890,7 @@ def resume_interrupted_graph_job(conn: sqlite3.Connection, run_id: int) -> dict:
     return resume_pipeline_graph(conn, run_id, get_checkpointer(conn))
 
 
+@_fail_run_on_error
 def run_pipeline_graph_job(conn: sqlite3.Connection, run_id: int, actor_id: int) -> dict:
     """`app.py`의 `trigger_pipeline_execution()`이 `payload.use_graph_
     engine=True`일 때 `BackgroundTasks`로 거는 진입점 — 공유
@@ -858,6 +898,7 @@ def run_pipeline_graph_job(conn: sqlite3.Connection, run_id: int, actor_id: int)
     return run_pipeline_graph(conn, run_id, actor_id, get_checkpointer(conn))
 
 
+@_fail_run_on_error
 @llm_usage.with_scope(task_id=llm_usage.task_of_pipeline_run, pipeline_run_id="run_id")
 def run_pipeline_graph_job_with_callback(
     conn: sqlite3.Connection, run_id: int, actor_id: int, on_stage_resolved=None
@@ -870,6 +911,7 @@ def run_pipeline_graph_job_with_callback(
     )
 
 
+@_fail_run_on_error
 def resume_pipeline_graph_from_approval(
     conn: sqlite3.Connection, run_id: int, decision: dict
 ) -> dict:
@@ -885,6 +927,7 @@ def resume_pipeline_graph_from_approval(
     return resume_pipeline_graph(conn, run_id, get_checkpointer(conn), decision=decision)
 
 
+@_fail_run_on_error
 def resume_pipeline_graph_from_approval_with_callback(
     conn: sqlite3.Connection, run_id: int, decision: dict, on_stage_resolved=None
 ) -> None:

@@ -50,6 +50,10 @@ os.environ["OPENAI_API_KEY"] = "sk-test-hermetic-not-a-real-key"
 os.environ["TAVILY_API_KEY"] = "tvly-test-hermetic-not-a-real-key"
 # litellm은 import 때 모델 가격표를 인터넷(GitHub)에서 받으려 한다 — 내장 사본을 쓰게 한다.
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+# 파이프라인 단계 실행 방식(2026-11-26, P1-7 3단계 — 운영 기본은 direct). 기존 파이프라인 테스트 22개 파일은 진행 흐름
+# (재시도·에스컬레이션·취소·승인)을 `crew_runtime.run_crew`를 가짜로 바꿔 검증한다 — 흐름은 실행 방식과 무관하므로
+# 그 테스트들은 crewai 경로로 고정한다. 기본값(direct) 자체는 test_phase130_stage_runner.py가 두 엔진 종단까지 검증한다.
+os.environ["HAIR_STAGE_RUNTIME"] = "crewai"
 
 # 외부 네트워크 차단 — 테스트가 실제 외부 서비스(OpenAI·Tavily·PyPI 등)에 접속하면 PC·CI 네트워크 상태에 따라 결과가
 # 달라지고 비용이 들 수 있다. 같은 PC 안(localhost — 테스트용 HTTP 서버·로컬 Ollama 흉내)만 허용한다.

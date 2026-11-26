@@ -27,6 +27,19 @@ TOOL_LABELS: dict[str, str] = {}
 # CrewAI 이벤트 처리기는 실행기 스레드에서 돌 수 있어(2026-11-24 확인) 같은 연결로 쓰는 것을 직렬화한다.
 _WRITE_LOCK = threading.Lock()
 _TABLES = ("conversation_jobs", "agent_execution_jobs", "pipeline_runs")  # pipeline_runs: 2026-11-24 P0-2
+# 마지막 활동 시각(2026-11-26, P1-7 3단계 — 단계 멈춤 감시 `pipeline_runtime.StageWatchdog`가 읽는다). 진행 문구·작성 중
+# 미리보기가 들어올 때마다 갱신한다(미리보기는 DB에 쓰는 간격과 무관하게 매번).
+_ACTIVITY: dict[tuple[str, int], float] = {}
+
+
+def touch(table: str, job_id: int) -> None:
+    import time
+
+    _ACTIVITY[(table, job_id)] = time.monotonic()
+
+
+def last_activity(table: str, job_id: int) -> float | None:
+    return _ACTIVITY.get((table, job_id))
 
 
 def report(text: str) -> None:
@@ -60,6 +73,7 @@ def reporting(conn: sqlite3.Connection, table: str, job_id: int):
         raise ValueError(f"unsupported_progress_table:{table}")
 
     def write(text: str) -> None:
+        touch(table, job_id)
         with _WRITE_LOCK:
             conn.execute(
                 f"UPDATE {table} SET progress = ?, progress_at = datetime('now') WHERE id = ?",
@@ -73,6 +87,7 @@ def reporting(conn: sqlite3.Connection, table: str, job_id: int):
         import time
 
         now = time.monotonic()
+        touch(table, job_id)
         if now - last["at"] < PARTIAL_WRITE_INTERVAL_SECONDS:
             return
         last["at"] = now

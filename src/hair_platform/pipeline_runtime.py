@@ -735,6 +735,8 @@ _VERDICT_REWORK_WORDS = ("보완 요청", "보완요청", "반려", "재작성",
 _CONDITIONAL_FIX_RE = re.compile(
     r"(?:수정|보완|정정|교정)(?:하면|해야|이 필요|가 필요| 필요|을 권|를 권|하시기|해 주)"
     r"|고치면|고쳐야|바로잡아야|(?:통일|삭제|추가|보강|명시|정리)해야|맞춰야"
+    # 2026-11-26 실측(P1-7 영업 메일)에서 놓친 표현 — "승인(조건부) … 확인 후 발송하세요", "… 반영하면 좋습니다"
+    r"|조건부|반영하면|반영해야|반영이 필요|확인 후 (?:발송|진행|제출|사용|배포|공유)"
     r"|(?:오타|오기|오탈자|오류)[^.\n]{0,30}?(?:남아|있습니다|있음|있으며|있어|발견)"
 )
 
@@ -995,6 +997,11 @@ def run_pipeline_stage_job(
 
     try:
         _execute_stage_attempt(conn, run, stage, actor_id, on_stage_resolved)
+    except StageAbandoned:
+        # 멈춤 감시가 이미 정리한 시도가 뒤늦게 깨어났다 — 실행 상태는 감시가(또는 "이어서 실행"한 새 시도가) 정한다.
+        # 여기서 실패로 덮어쓰면 이어서 실행 중인 정상 실행을 망가뜨린다.
+        conn.rollback()
+        return
     except Exception as exc:  # noqa: BLE001 — 백그라운드 작업의 최종 경계
         conn.rollback()
         conn.execute(
@@ -1075,11 +1082,101 @@ def estimate_remaining(conn: sqlite3.Connection, run) -> dict | None:
     return {"remaining_seconds": int(total), "known_stages": known, "unknown_stages": unknown, "basis": basis}
 
 
+class StageAbandoned(RuntimeError):
+    """멈춤 감시가 이미 이 단계 시도를 정리했다 — 뒤늦게 끝난 결과는 쓰지 않는다."""
+
+
+class StageWatchdog:
+    """단계 멈춤 감시(2026-11-26, P1-7 3단계 — 실측: 그래프 엔진 + 직접 실행에서 도구 호출 직후 프로세스가 잠금 대기로
+    21분간 멈췄고, 다시 돌리면 재현되지 않았다(간헐). 원인을 찾을 때까지 운영이 무한정 묶이지 않게 한다).
+
+    단계가 도는 동안 진행 문구·작성 중 미리보기(`progress.touch`)가 `stall_seconds` 동안 한 번도 없으면 멈춘 것으로 본다:
+    모든 스레드의 파이썬 스택을 활동 기록에 남기고(원인 추적용), 실행을 "재시작으로 중단됨"과 같은 상태로 표시해
+    "이어서 실행"으로 다시 돌릴 수 있게 한다. 멈춘 스레드는 강제로 끝낼 수 없으므로, 나중에 깨어나도 결과를 쓰지 못하게
+    이 시도를 `abandoned`로 표시한다(`stage_progress`가 블록을 나올 때 `StageAbandoned`). 이어서 실행한 새 시도는
+    자기 감시 객체를 따로 가지므로 영향이 없다."""
+
+    def __init__(self, conn: sqlite3.Connection, run_id: int, stage, stall_seconds: float, poll_seconds: float):
+        import threading
+
+        self.conn, self.run_id, self.stage = conn, run_id, stage
+        self.stall_seconds, self.poll_seconds = stall_seconds, poll_seconds
+        self.abandoned = False
+        self._stop = threading.Event()
+        self._started = None
+        self._thread = threading.Thread(target=self._watch, name=f"hair-stage-watchdog-{run_id}", daemon=True)
+
+    def start(self) -> None:
+        import time
+
+        self._started = time.monotonic()
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _idle_seconds(self) -> float:
+        import time
+
+        from hair_platform import progress
+
+        last = progress.last_activity("pipeline_runs", self.run_id) or 0.0
+        return time.monotonic() - max(last, self._started or 0.0)
+
+    def _watch(self) -> None:
+        while not self._stop.wait(self.poll_seconds):
+            idle = self._idle_seconds()
+            if idle >= self.stall_seconds:
+                self._abandon(idle)
+                return
+
+    def _abandon(self, idle: float) -> None:
+        import faulthandler
+        import tempfile
+
+        self.abandoned = True
+        stacks = ""
+        try:
+            with tempfile.TemporaryFile("w+") as f:
+                faulthandler.dump_traceback(file=f, all_threads=True)
+                f.seek(0)
+                stacks = f.read()[-30000:]
+        except Exception:  # noqa: BLE001 — 스택을 못 남겨도 정리는 한다
+            stacks = "(스택을 남기지 못했습니다)"
+        minutes = int(idle // 60)
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE pipeline_runs SET status = 'failed', finished_at = datetime('now'), "
+                    "interrupted_at = datetime('now'), progress = ? WHERE id = ? AND status = 'running'",
+                    (f"멈춤 감지 — {minutes}분 동안 진척이 없어 중단했습니다(이어서 실행 가능)", self.run_id),
+                )
+            actor = self.conn.execute("SELECT actor_id FROM pipeline_runs WHERE id = ?", (self.run_id,)).fetchone()
+            if actor is not None:
+                audit.record(self.conn, actor[0], "pipeline_stage_stalled", "pipeline_runs", self.run_id,
+                             after={"stage": self.stage["name"], "idle_seconds": int(idle), "stacks": stacks})
+                self.conn.commit()
+        except sqlite3.Error:
+            pass
+
+
+def _stall_seconds() -> float:
+    import os
+
+    try:
+        return float(os.environ.get("HAIR_STAGE_STALL_SECONDS", "2700"))
+    except ValueError:
+        return 2700.0
+
+
 @contextlib.contextmanager
 def stage_progress(conn: sqlite3.Connection, run_id: int, stage) -> Iterator[None]:
     """단계 실행 중 진행 표시(2026-11-24, P0-2 "파이프라인 진행률") — 두 엔진이 단계를 돌리는 동안 감싼다.
     단계 시작 시각과 첫 문구를 남기고, 그 안의 `progress.report()`(CrewAI 작업·도구 이벤트, 단일 Agent
-    호출의 조회·생성·교정 단계)와 작성 중 미리보기가 이 실행 행에 기록된다."""
+    호출의 조회·생성·교정 단계)와 작성 중 미리보기가 이 실행 행에 기록된다. 멈춤 감시(`StageWatchdog`,
+    `HAIR_STAGE_STALL_SECONDS`, 기본 45분 — 0이면 끔)도 같이 돈다."""
+    import os
+
     from hair_platform import progress
 
     try:
@@ -1091,8 +1188,20 @@ def stage_progress(conn: sqlite3.Connection, run_id: int, stage) -> Iterator[Non
         conn.commit()
     except sqlite3.OperationalError:  # 컬럼이 생기기 전(마이그레이션 도중) — 표시 없이 진행
         pass
-    with progress.reporting(conn, "pipeline_runs", run_id):
-        yield
+    stall = _stall_seconds()
+    watchdog = None
+    if stall > 0:
+        poll = float(os.environ.get("HAIR_STAGE_WATCHDOG_POLL_SECONDS", "30") or 30)
+        watchdog = StageWatchdog(conn, run_id, stage, stall, poll)
+        watchdog.start()
+    try:
+        with progress.reporting(conn, "pipeline_runs", run_id):
+            yield
+    finally:
+        if watchdog is not None:
+            watchdog.stop()
+    if watchdog is not None and watchdog.abandoned:
+        raise StageAbandoned(f"pipeline_run {run_id}: 멈춤 감시가 정리한 단계 시도 — 결과를 쓰지 않습니다")
 
 
 def assemble_stage_output(stage, result: dict, fallback_agent_id: int) -> tuple[str, int]:
