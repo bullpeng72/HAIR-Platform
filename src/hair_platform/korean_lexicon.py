@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import re
 import threading
 from typing import Any
@@ -159,7 +160,10 @@ def _platform_corpus() -> str:
     try:
         from hair_platform import webui
 
-        parts.append(webui.INDEX_HTML)
+        # 이용 가이드는 페이지 안에서 JSON 문자열(따옴표 이스케이프)이라, 원문 마크다운으로 바꿔 넣는다
+        # (2026-11-26 화면 원본 파일 분리 — 그대로 두면 아래 "잘못된 예" 제외가 \"…\" 를 못 알아본다).
+        literal = json.dumps(webui.MANUAL_MARKDOWN, ensure_ascii=False).replace("</", "<\\/")
+        parts.append(webui.INDEX_HTML.replace(literal, "\n" + webui.MANUAL_MARKDOWN + "\n", 1))
     except Exception:  # noqa: BLE001, S110 — 어휘가 줄 뿐 검사는 계속한다
         pass
     try:
@@ -183,7 +187,7 @@ def _platform_corpus() -> str:
     return "\n".join(line for line in text.splitlines() if _HANGUL_RUN.search(line))
 
 
-_WRONG_EXAMPLE = re.compile(r"(?:→|->)\s*[\"'“‘「][^\"'”’」\n]{1,40}[\"'”’」]")
+_WRONG_EXAMPLE = re.compile(r"(?:→|->)\s*\\?[\"'“‘「][^\"'”’」\n\\]{1,40}\\?[\"'”’」]")  # \\? — 이스케이프된 따옴표도
 
 
 def _cache_path(corpus: str):

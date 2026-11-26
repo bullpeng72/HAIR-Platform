@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HAIR-Platform</title>
+<style>
+__HAIR_APP_CSS__</style>
+<!-- 사용자 요청(2026-10-14, "마크다운 처리 및 다이어그램, 차트, HTML
+     렌더링, 코드 표시가 모두 렌더링되어 미려하게 보이도록") — 이
+     플랫폼은 지금까지 외부 CDN 스크립트가 전혀 없는 자체완결형
+     단일 HTML이었다(손수 짠 정규식 마크다운/하이라이터만 사용).
+     사용자 확인(2026-10-14, "CDN에서 불러오기")을 받고 실제 렌더링
+     라이브러리로 교체한다 — marked(마크다운)·highlight.js(코드
+     하이라이팅)·DOMPurify(marked가 만든 HTML을 innerHTML에 넣기
+     전 필수 살균 — XSS 방지)·mermaid(다이어그램)·Chart.js(차트). -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script src="__CHART_JS_URL__"></script>
+<!-- 사용자 요청(2026-10-21, "팀 워크플로우 노드 캔버스") — "팀 관리"
+     화면에서 멤버 구조(순차 릴레이/매니저 위임)를 실행 전에도 보고
+     드래그로 순서를 바꿀 수 있게 한다. Drawflow: vanilla JS, 의존성
+     0개, MIT — 위 5개 CDN 라이브러리와 같은 패턴(런타임 CDN 로드,
+     pip 패키징 영향 없음). CDN 로드 실패 시 캔버스만 비고 기존 멤버
+     표(CRUD)는 전혀 영향받지 않는다(아래 renderTeams 참고). -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.css">
+<script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.js"></script>
+<!-- 사용자 요청(2026-11-05, 로드맵 8번 "Crew 빌더 diff 모드") — 로드러너
+     데모에서 Crew 재시도마다 기존 기능이 조용히 퇴행해도 매번 전체
+     코드를 사람이 다시 읽어 수동 비교해야 했다. jsdiff: vanilla JS,
+     의존성 0개, MIT — 위 라이브러리들과 같은 패턴. CDN 로드 실패 시
+     diff 없이 두 산출물을 그대로 나열해 보여주는 것으로 대체하고
+     나머지 기능은 전혀 영향받지 않는다(아래 renderTextDiff 참고). -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.2.0/diff.min.js"></script>
+<!-- 사용자 요청(2026-11-16, "PIP로 배포 가능한 환경에서 생성된 HTML을
+     수정할 수 있는 기능" 2단계 "가벼운 코드 에디터") — 1단계의 평범한
+     textarea 편집에 HTML 문법 강조를 붙인다. CodeMirror 5: vanilla JS,
+     의존성 0개, MIT — 위 라이브러리들과 같은 패턴(런타임 CDN 로드, pip
+     패키징 영향 없음). CDN 로드 실패 시 1단계의 평범한 textarea로 그대로
+     남는다(아래 renderContent()의 "수정" 버튼 핸들러 — `typeof CodeMirror
+     === "undefined"` 체크 참고) — 나머지 기능은 전혀 영향받지 않는다. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
+</head>
+<body>
+
+<div id="login-view" style="display:none">
+  <section class="card">
+    <h2>HAIR-Platform 로그인</h2>
+    <div id="login-msg"></div>
+    <form id="login-form">
+      <input id="login-username" placeholder="아이디" autocomplete="username" required>
+      <input id="login-password" type="password" placeholder="비밀번호" autocomplete="current-password" required>
+      <button class="primary" type="submit" style="width:100%">로그인</button>
+    </form>
+  </section>
+</div>
+
+<div id="app-view" style="display:none">
+  <header>
+    <h1>HAIR-Platform <span class="app-version" title="hair --version: hair __APP_VERSION__">v__APP_VERSION__</span></h1>
+    <span class="spacer"></span>
+    <span id="whoami" class="muted"></span>
+    <button id="logout-btn">로그아웃</button>
+  </header>
+  <nav id="tabs"></nav>
+  <main>
+    <div id="global-msg"></div>
+    <div id="content"></div>
+  </main>
+</div>
+
+<script>
+__HAIR_APP_JS__</script>
+</body>
+</html>

@@ -183,6 +183,10 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# 화면 원본(2026-11-26, P2-13 — `webui.py`가 기동 때 읽어 조립) — 파이썬 파일이 아니라 패키지 데이터로 넣는다.
+[tool.setuptools.package-data]
+hair_platform = ["webui_assets/*.html", "webui_assets/*.css", "webui_assets/*.md", "webui_assets/js/*.js", "webui_assets/js/ORDER"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
