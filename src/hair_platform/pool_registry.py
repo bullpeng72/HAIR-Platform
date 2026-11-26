@@ -271,6 +271,9 @@ def _tool_row_to_dict(row: sqlite3.Row) -> dict:
         "tool_names": json.loads(row["tool_names"]),
         "is_active": bool(row["is_active"]),
         "category": row["category"],
+        # 외부로 쓰거나 실행하는 도구(2026-11-26, 개선 계획 1-3). 빠져 있으면 화면 수정 양식이 늘 "꺼짐"으로 보여
+        # 설명만 고쳐 저장해도 표시가 조용히 꺼졌다(화면 자동 테스트가 발견).
+        "side_effects": bool(row["side_effects"]) if "side_effects" in row.keys() else False,
     }
 
 

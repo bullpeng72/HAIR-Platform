@@ -212,7 +212,10 @@ pip install -e ".[dev,all]" -c constraints.txt
 # `-c constraints.txt` — 전체 테스트를 통과한 버전 조합 그대로 설치한다(CI도 같은 방식). 빼면 범위 안의 최신
 # 버전이 깔려 동작이 미묘하게 다를 수 있다(`hair check`가 핵심 패키지 버전 차이를 경고한다).
 # `[dev]`만 설치하면 CrewAI 연동 테스트 일부가 실행 시점에 `ModuleNotFoundError`로 깨진다 — `all`까지 설치.
-pytest tests/ -q        # 골든셋 1,550건 이상 통과(오프라인 — 실제 LLM·외부 네트워크 호출 없음, 전부 mock)
+pytest tests/ -q        # 골든셋 1,700건 이상 통과(오프라인 — 실제 LLM·외부 네트워크 호출 없음, 전부 mock)
+# 화면 자동 테스트(선택, 2026-11-26) — 실제 서버 + 브라우저. 없으면 tests/e2e는 건너뛴다
+pip install -e ".[e2e]" && python -m playwright install chromium
+pytest tests/e2e -q      # 모든 화면 JS 오류 0건·메뉴 찾기·대화 화면 배치·필수 도구·쓰기 표시·역할별 메뉴 등
 ruff check src tests    # CI와 같은 정적 검사(규칙은 pyproject.toml `[tool.ruff.lint] select`)
 ```
 
@@ -244,6 +247,7 @@ PyPI에 `hair-platform`으로 배포된다 — `pip install "hair-platform[...]"
 | `vectordb` | `pip install -e ".[vectordb]"` | 지식 베이스 검색을 벡터 DB(ChromaDB, 서버 없이 `<db>-vectors/` 폴더)로 한다 — 청크 1만 개에서 검색 1회 약 1.7초 → 약 40ms(실측, 결과 동일). crewai를 설치하면 보통 함께 깔린다. 없으면 예전 방식(SQLite 전체 비교)으로 그대로 동작 | chromadb |
 | `graph` | `pip install -e ".[graph]"` | LangGraph 실행엔진(팀 관리에서 "그래프 엔진"을 켤 때 — 체크포인트·사람 승인 중단/재개). 없이 켜면 설치 안내가 뜬다 | langgraph, langgraph-checkpoint-sqlite |
 | `dev` | `pip install -e ".[dev]"` | 테스트/린트를 돌릴 때 | pytest, ruff, black(선택 — CI에서는 쓰지 않음: 기존 코드가 black 형식이 아님) |
+| `e2e` | `pip install -e ".[e2e]"` + `python -m playwright install chromium` | 화면 자동 테스트(`tests/e2e`)를 돌릴 때 — 개발용, 서버 설치에는 필요 없음 | playwright |
 | `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents`+`graph`+`korean`+`vectordb` 전부) | 위 extras 전부(dev 제외) |
 
 > `mcp`는 `mcp>=1.10.1,<2.0`으로 상한을 고정해둔다 — `crewai-tools`가
@@ -681,7 +685,7 @@ src/hair_platform/
 docs/
   OVERVIEW.md        # 지향점·핵심 개념·아키텍처·주요 기능 개요(과거 설계 논의·벤치마크는 git log 참고)
 .claude/skills/rbac-permission-audit/  # RBAC 권한 설정을 테스트로 감사하는 Claude Code 스킬
-.github/workflows/ci.yml               # pytest+ruff CI(constraints.txt로 같은 버전 조합 설치)
+.github/workflows/ci.yml               # pytest+ruff CI(constraints.txt로 같은 버전 조합 설치) + 화면 테스트(Playwright) 작업
 constraints.txt                        # 전체 테스트를 통과한 의존성 버전 조합(scripts/update_constraints.py가 생성)
 tests/unit/                            # 골든셋 1,550건 이상 통과
 ```

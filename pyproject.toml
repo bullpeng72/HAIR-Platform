@@ -61,6 +61,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0.0", "black>=23.0.0", "ruff>=0.5.0"]
+# 화면 자동 테스트(2026-11-26, 개선 계획 2-1 — tests/e2e). 개발용 선택 설치라 pip 설치·배포에는 영향이 없다.
+# 설치 뒤 브라우저도 받는다: python -m playwright install chromium (없으면 tests/e2e는 건너뛴다)
+e2e = ["playwright>=1.48,<2.0"]
 # llm.py가 지연 import한다 — use_llm=True 경로를 실제로 쓸 때만 필요하다.
 # Ollama는 로컬 서버(기본 http://localhost:11434)가 별도로 떠 있어야 한다.
 # (httpx는 기본 의존성으로 옮겨 여기 다시 적지 않는다 — 위 `dependencies` 주석 참고.)
@@ -195,6 +198,10 @@ pythonpath = ["."]
 # 어긋나면서 phoenix의 import 자체가 깨져 pytest 실행 전체가 막힌다(이 프로젝트와
 # 무관한 플러그인) — 이 프로젝트 범위에서만 명시적으로 비활성화한다.
 addopts = "-p no:phoenix"
+markers = [
+    "e2e: 실제 서버 + 브라우저(Playwright) 화면 테스트 — playwright·chromium이 없으면 건너뜀(2026-11-26)",
+    "integration: 실제 PostgreSQL·MySQL·메일 서버(Docker) 연결 테스트 — HAIR_IT_* 환경변수가 없으면 건너뜀(2026-11-26)",
+]
 
 [tool.pyright]
 # 타입 검사기 설정을 도구와 무관하게 한 곳에(2026-11-23) — VS Code의 `.vscode/settings.json`

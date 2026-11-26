@@ -135,3 +135,16 @@ def test_connector_tools_wrap_output_on_the_crewai_path_too(client_and_conn):
     tool = data_connectors.as_crewai_tool(conn)
     out = tool.run(action="connections")
     assert out.startswith(tool_audit.EXTERNAL_OPEN) and "등록된 DB 연결이 없습니다" in out
+
+
+def test_tool_list_exposes_side_effects_so_editing_does_not_reset_it(client_and_conn):
+    """화면 수정 양식이 목록 응답의 side_effects로 체크 상태를 정한다 — 빠지면 설명만 고쳐 저장해도 꺼진다
+    (2026-11-26 화면 자동 테스트가 발견)."""
+    client, conn = client_and_conn
+    admin = conn.execute("SELECT id FROM users WHERE username = 'admin1'").fetchone()[0]
+    tid = pool_registry.create_tool(conn, admin, "발송 MCP", "", "mcp_remote", {"url": "https://m.example.com"})
+    assert client.post("/login", json={"username": "admin1", "password": "adminpass"}).status_code == 200
+    row = next(t for t in client.get("/api/tool-pool").json() if t["id"] == tid)
+    assert row["side_effects"] is True
+    search = next(t for t in client.get("/api/tool-pool").json() if t["name"] == "일반 웹 검색(Parallel Search)")
+    assert search["side_effects"] is False
