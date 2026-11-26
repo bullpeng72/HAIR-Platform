@@ -263,6 +263,13 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except calendar_feeds.CalendarError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # ---------- 연결 상태 한눈에(2026-11-26, 개선 계획 2-3 — `connection_health.py`, admin) ----------
+    @app.get("/api/admin/connection-status")
+    def connection_status_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import connection_health
+
+        return {"items": connection_health.summary(conn), "warnings": connection_health.warnings(conn)}
+
     # ---------- 작업 프로세스 상태(2026-11-26, P1-6 2단계 — `job_queue.py`, admin) ----------
     @app.get("/api/admin/worker-status")
     def worker_status_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):

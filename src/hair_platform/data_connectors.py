@@ -214,6 +214,22 @@ def _open(row) -> Any:
     raise ConnectorError("지원하지 않는 DB 종류입니다")
 
 
+def _open_checked(conn: sqlite3.Connection, row) -> Any:
+    """연결을 열고 그 결과를 연결 상태로 남긴다(2026-11-26, 개선 계획 2-3 — `connection_health`)."""
+    from hair_platform import connection_health
+
+    try:
+        db = _open(row)
+    except ConnectorError as exc:
+        connection_health.record(conn, "data_connections", row["id"], False, str(exc))
+        raise
+    except Exception as exc:  # noqa: BLE001 — 드라이버별 접속 오류
+        connection_health.record(conn, "data_connections", row["id"], False, str(exc)[:300])
+        raise ConnectorError(f"접속 실패: {str(exc)[:300]}") from exc
+    connection_health.record(conn, "data_connections", row["id"], True)
+    return db
+
+
 def _cell(v: Any) -> str:
     s = "" if v is None else str(v)
     s = s.replace("\n", " ").replace("|", "\\|")
@@ -233,7 +249,7 @@ def run_query(conn: sqlite3.Connection, sql: str, connection: str | None = None)
     row = _row(conn, connection)
     body = check_sql(sql)
     limit = int(row["row_limit"] or DEFAULT_ROW_LIMIT)
-    db = _open(row)
+    db = _open_checked(conn, row)
     started = time.monotonic()
     try:
         cur = db.cursor()
@@ -290,7 +306,7 @@ def _describe_sql(kind: str, table: str) -> str:
 def _meta(conn: sqlite3.Connection, connection: str | None, sql_for) -> str:
     """메타데이터 조회는 내부 SQL이라 검사 대상(사용자 SQL)이 아니다 — 같은 읽기 전용 연결로 실행."""
     row = _row(conn, connection)
-    db = _open(row)
+    db = _open_checked(conn, row)
     try:
         cur = db.cursor()
         cur.execute(sql_for(row["kind"]))

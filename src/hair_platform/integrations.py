@@ -297,21 +297,29 @@ def send_email(recipients: list[str], subject: str, text: str) -> tuple[bool, st
     msg["From"] = cfg["sender"]
     msg["To"] = ", ".join(recipients)
     msg.set_content(text)
+    from hair_platform import tls  # 서버 인증서 검증(2026-11-26 — 기본값은 검증하지 않았다)
+
     try:
-        server = (smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=10) if cfg["ssl"]
+        ctx = tls.client_context()
+        server = (smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=10, context=ctx) if cfg["ssl"]
                   else smtplib.SMTP(cfg["host"], cfg["port"], timeout=10))
         with server:
+            encrypted = bool(cfg["ssl"])
             if not cfg["ssl"]:
                 try:
-                    server.starttls()
+                    server.starttls(context=ctx)
+                    encrypted = True
                 except smtplib.SMTPNotSupportedError:
-                    pass  # TLS 없는 사내 릴레이
+                    pass  # TLS 없는 사내 릴레이 — 인증 없이 보낼 때만 허용(아래)
             if cfg["user"]:
+                if not encrypted:
+                    # 예전엔 STARTTLS를 지원하지 않는 서버에도 비밀번호를 평문으로 보냈다(2026-11-26 수정).
+                    return False, "TLS를 지원하지 않는 서버에는 비밀번호를 보내지 않습니다(HAIR_SMTP_SSL=1로 465 포트를 쓰거나, 인증 없는 사내 릴레이면 HAIR_SMTP_USER를 비우세요)"
                 server.login(cfg["user"], cfg["secret"])
             server.send_message(msg)
         return True, None
     except Exception as exc:  # noqa: BLE001 — 메일 실패가 자동화 루프를 멈추지 않는다
-        return False, f"{type(exc).__name__}: {exc}"[:200]
+        return False, (tls.explain(exc) or f"{type(exc).__name__}: {exc}")[:200]
 
 
 def run_notifications(conn: sqlite3.Connection) -> int:

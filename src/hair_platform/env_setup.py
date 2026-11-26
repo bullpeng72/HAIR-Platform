@@ -107,6 +107,10 @@ ENV_VARS: tuple[EnvVar, ...] = (
         default="embedded",
     ),
     EnvVar(
+        "HAIR_TLS_CA_FILE", GROUP_OPERATION,
+        "사내 인증서(CA·자체 서명) 파일 경로 — 사내 메일 서버(IMAP·SMTP) 인증서를 확인할 수 없다고 나올 때만(비우면 시스템 기본 신뢰 목록)",
+    ),
+    EnvVar(
         "HAIR_TIMEZONE", GROUP_OPERATION,
         "캘린더 일정을 보여 줄 시간대(IANA 이름, 예: Asia/Seoul — 비우면 서버 PC 시간대)",
     ),
@@ -301,6 +305,8 @@ def cross_check(values: dict[str, str]) -> list[tuple[str, str]]:
         except Exception:  # noqa: BLE001 — ZoneInfoNotFoundError·ValueError
             issues.append(("warn", f"HAIR_TIMEZONE={_v('HAIR_TIMEZONE')!r}는 알 수 없는 시간대입니다(예: Asia/Seoul) — "
                                    "서버 PC 시간대로 동작합니다"))
+    if _v("HAIR_TLS_CA_FILE") and not os.path.isfile(os.path.expanduser(_v("HAIR_TLS_CA_FILE"))):
+        issues.append(("error", f"HAIR_TLS_CA_FILE={_v('HAIR_TLS_CA_FILE')!r} 파일이 없습니다 — 메일 서버 연결이 실패합니다"))
     if _v("HAIR_ALLOW_LOCAL_CODE_RUN") == "1":
         issues.append(("warn", "HAIR_ALLOW_LOCAL_CODE_RUN=1 — 코드 테스트가 격리 없이 서버 PC에서 실행됩니다(운영 비권장)"))
 

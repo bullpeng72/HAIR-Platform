@@ -177,6 +177,19 @@ def _fetch(row) -> str:
     return text
 
 
+def _fetch_checked(conn: sqlite3.Connection, row) -> str:
+    """ICS 받기 결과를 연결 상태로 남긴다(2026-11-26, 개선 계획 2-3 — `connection_health`)."""
+    from hair_platform import connection_health
+
+    try:
+        text = _fetch(row)
+    except CalendarError as exc:
+        connection_health.record(conn, "calendar_feeds", row["id"], False, str(exc))
+        raise
+    connection_health.record(conn, "calendar_feeds", row["id"], True)
+    return text
+
+
 def _unfold(text: str) -> list[str]:
     lines: list[str] = []
     for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
@@ -341,7 +354,7 @@ def events_between(conn: sqlite3.Connection, calendar: str | None = None, start:
     days = max(1, min(int(days or 7), MAX_DAYS))
     t0 = datetime(d0.year, d0.month, d0.day, tzinfo=tz)
     t1 = t0 + timedelta(days=days)
-    items, no_rrule = expand(parse_events(_fetch(row), tz), t0, t1)
+    items, no_rrule = expand(parse_events(_fetch_checked(conn, row), tz), t0, t1)
     q = (query or "").strip().lower()
     if q:
         items = [e for e in items if q in (e.get("summary", "") + " " + e.get("location", "")).lower()]

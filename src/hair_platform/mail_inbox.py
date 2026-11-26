@@ -149,7 +149,9 @@ def _open(row) -> imaplib.IMAP4:
     if not password:
         raise MailError(f"서버 환경변수 {row['password_env']}에 메일 비밀번호(앱 비밀번호)가 없습니다")
     try:
-        client = imaplib.IMAP4_SSL(row["host"], int(row["port"]), timeout=TIMEOUT_SECONDS)
+        from hair_platform import tls  # 서버 인증서 검증(2026-11-26 — 기본값은 검증하지 않았다)
+
+        client = imaplib.IMAP4_SSL(row["host"], int(row["port"]), timeout=TIMEOUT_SECONDS, ssl_context=tls.client_context())
         client.login(row["username"], password)
         typ, _ = client.select(_quote(row["folder"]), readonly=True)  # EXAMINE — 읽기 전용
         if typ != "OK":
@@ -158,7 +160,22 @@ def _open(row) -> imaplib.IMAP4:
     except MailError:
         raise
     except (imaplib.IMAP4.error, OSError) as exc:
-        raise MailError(f"메일 서버 접속 실패: {str(exc)[:200]}") from exc
+        from hair_platform import tls
+
+        raise MailError(tls.explain(exc) or f"메일 서버 접속 실패: {str(exc)[:200]}") from exc
+
+
+def _open_checked(conn: sqlite3.Connection, row) -> imaplib.IMAP4:
+    """IMAP 접속·로그인 결과를 연결 상태로 남긴다(2026-11-26, 개선 계획 2-3 — `connection_health`)."""
+    from hair_platform import connection_health
+
+    try:
+        client = _open(row)
+    except MailError as exc:
+        connection_health.record(conn, "mail_inboxes", row["id"], False, str(exc))
+        raise
+    connection_health.record(conn, "mail_inboxes", row["id"], True)
+    return client
 
 
 def _quote(folder: str) -> str:
@@ -219,7 +236,7 @@ def search(conn: sqlite3.Connection, mailbox: str | None = None, query: str = ""
     since = (datetime.now(UTC) - timedelta(days=days)).strftime("%d-%b-%Y")
     criteria = ["SINCE", since]
     q = (query or "").strip()
-    client = _open(row)
+    client = _open_checked(conn, row)
     try:
         if q:
             # 보낸 사람 또는 제목에 낱말(IMAP OR) — 한글은 UTF-8 CHARSET으로
@@ -252,7 +269,7 @@ def read(conn: sqlite3.Connection, uid: str, mailbox: str | None = None) -> dict
     row = _accessible(conn, mailbox, user_id)
     if not re.fullmatch(r"\d{1,12}", str(uid or "")):
         raise MailError("uid는 search 결과의 숫자입니다")
-    client = _open(row)
+    client = _open_checked(conn, row)
     try:
         typ, fetched = client.uid("FETCH", str(uid), "(BODY.PEEK[])")  # PEEK — 읽음 표시를 바꾸지 않음
         if typ != "OK" or not fetched or not isinstance(fetched[0], tuple):

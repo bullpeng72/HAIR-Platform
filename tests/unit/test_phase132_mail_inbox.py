@@ -28,7 +28,11 @@ def _messages():
 class FakeIMAP:
     instances: list[FakeIMAP] = []
 
-    def __init__(self, host, port, timeout=None):
+    def __init__(self, host, port, timeout=None, ssl_context=None):
+        import ssl
+
+        # 서버 인증서를 검증하는 TLS 설정을 넘겨야 한다(2026-11-26 — imaplib 기본값은 검증하지 않았다)
+        assert ssl_context is not None and ssl_context.verify_mode == ssl.CERT_REQUIRED and ssl_context.check_hostname
         self.host, self.port, self.calls = host, port, []
         self.msgs = _messages()
         FakeIMAP.instances.append(self)

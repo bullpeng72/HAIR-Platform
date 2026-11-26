@@ -173,7 +173,11 @@ def test_send_email_uses_starttls_and_login(monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def starttls(self):
+        def starttls(self, context=None):
+            import ssl
+
+            # 서버 인증서를 검증하는 TLS 설정을 넘겨야 한다(2026-11-26 — 기본값은 검증하지 않았다)
+            assert context is not None and context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
             calls.append(("starttls",))
 
         def login(self, user, secret):
@@ -187,3 +191,56 @@ def test_send_email_uses_starttls_and_login(monkeypatch):
     assert ok and err is None
     assert calls == [("connect", "smtp.example.com", 587), ("starttls",), ("login", "bot@example.com"),
                      ("send", "a@example.com, b@example.com", "[HAIR] 제목")]
+
+
+def test_send_email_refuses_password_over_plaintext_when_starttls_unsupported(monkeypatch):
+    """STARTTLS를 지원하지 않는 서버에 비밀번호를 평문으로 보내지 않는다(2026-11-26). 인증 없는 릴레이는 그대로 보낸다."""
+    import smtplib
+
+    monkeypatch.setenv("HAIR_SMTP_HOST", "relay.example.com")
+    sent = []
+
+    class _Plain:
+        def __init__(self, host, port, timeout):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self, context=None):
+            raise smtplib.SMTPNotSupportedError("no STARTTLS")
+
+        def login(self, user, secret):
+            sent.append("login")
+
+        def send_message(self, msg):
+            sent.append("send")
+
+    monkeypatch.setattr("smtplib.SMTP", _Plain)
+    monkeypatch.setenv("HAIR_SMTP_USER", "bot@example.com")
+    monkeypatch.setenv("HAIR_SMTP_PASSWORD", "app-password")
+    ok, err = integrations.send_email(["a@example.com"], "제목", "본문")
+    assert not ok and "평문" not in (err or "") and "비밀번호를 보내지 않습니다" in (err or "") and sent == []
+    monkeypatch.delenv("HAIR_SMTP_USER")
+    ok, err = integrations.send_email(["a@example.com"], "제목", "본문")
+    assert ok and sent == ["send"]
+
+
+def test_tls_context_verifies_and_explains_certificate_failures(tmp_path, monkeypatch):
+    import ssl
+
+    from hair_platform import tls
+
+    ctx = tls.client_context()
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+    assert "HAIR_TLS_CA_FILE" in (tls.explain(ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED")) or "")
+    assert tls.explain(OSError("connection refused")) is None
+    monkeypatch.setenv("HAIR_TLS_CA_FILE", str(tmp_path / "없음.pem"))
+    try:
+        tls.client_context()
+        raise AssertionError("없는 CA 파일이면 실패해야 한다")
+    except (FileNotFoundError, ssl.SSLError):
+        pass

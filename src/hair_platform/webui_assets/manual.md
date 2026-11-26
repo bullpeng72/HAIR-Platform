@@ -568,6 +568,7 @@ Gate A-G를 채점할 때 쓰는 기준을 화면에서 바꿉니다. **저장�
   - **읽기 전용**: 보내기·지우기·이동을 하지 않고 **읽음 표시도 바꾸지 않습니다**. 첨부는 이름·크기만 봅니다. 회신은 결과물(초안)로만 만듭니다.
   - **공개 범위**: 메일함마다 누구의 요청일 때 읽을지 정합니다(admin만·manager 이상·모든 사람 — 기본 admin만). 요청한 사람을 알 수 없는 실행에서는 읽지 않습니다.
   - **비밀번호**: 메일 서비스의 **앱 비밀번호**를 서버 PC 환경변수에 넣고 그 이름만 적습니다. 등록 뒤 **"연결 확인"**으로 접속을 확인하세요. 조회마다 활동 기록 `mail_inbox_read`가 남습니다.
+- **연결 상태**(admin) — 사내 DB·메일 수신함·캘린더 표의 **"마지막 확인"** 칸에 마지막으로 연결을 연 결과(✓ 시각 / 실패 — 사유는 마우스를 올리면)가 보입니다. "연결 확인" 버튼뿐 아니라 **Agent가 실제로 조회할 때**도 기록하므로, 비밀번호 환경변수가 비었거나 서버 주소가 바뀌면 홈의 **관리 점검**에 "연결 실패"로 뜹니다(SQL을 틀린 것처럼 연결과 무관한 실패는 세지 않음). 한 번도 확인하지 않은 연결도 관리 점검에 안내됩니다.
 - **캘린더**(admin) — 업무 캘린더의 **iCal(ICS) 주소**(Google 캘린더 "비공개 iCal 주소", Outlook "게시된 캘린더" ICS 링크, 그룹웨어 ICS 내보내기) 또는 서버의 `.ics` 파일을 등록하면 **캘린더조회** 스킬이 있는 Agent(PM·개발 계획 수립가·실적 보고서 작성자)가 기간 안의 일정을 읽어 회의 준비·주간 보고·일정 충돌 확인에 씁니다.
   - **읽기 전용**이고 반복 일정은 펼쳐서, 빠진 회차·옮긴 회차·취소 일정까지 반영해 보여 줍니다. **공개 범위**는 메일 수신함과 같습니다(기본 admin만).
   - 비공개 iCal 주소는 그 자체가 비밀 키라 **저장하지 않습니다** — 서버 PC 환경변수에 넣고 그 이름만 적습니다(https만). 시간대는 `HAIR_TIMEZONE`(예: `Asia/Seoul`), 없으면 서버 PC 시간대. 조회마다 활동 기록 `calendar_read`가 남습니다.
@@ -907,6 +908,7 @@ API 키·메일 서버·작업 방식처럼 **화면이 아니라 서버 PC에�
 | 메일 알림 | `HAIR_SMTP_HOST`·`_PORT`·`_USER`·`_PASSWORD`·`_FROM`·`_SSL` | 결재 대기·완료 알림을 메일로도 받을 때 |
 | 서버 운영 | `HAIR_WORKER_MODE` | `external`이면 웹 서버를 재시작해도 AI 실행이 계속됨(아래) |
 | | `HAIR_TIMEZONE` | 캘린더 일정 시간대(예: `Asia/Seoul`, 비우면 서버 PC 시간대) |
+| | `HAIR_TLS_CA_FILE` | 메일 수신함·메일 알림은 서버 인증서를 검증합니다. 사내 메일 서버가 사내 인증서를 써서 "서버 인증서를 확인할 수 없습니다"가 나올 때만 그 인증서 파일 경로를 지정 |
 | 고급 옵션 | `HAIR_STAGE_RUNTIME`·`HAIR_STAGE_STALL_SECONDS`·`HAIR_VECTOR_BACKEND`·`HAIR_VECTOR_DIR`·`HAIR_EVAL_HTML_REPORT`·`HAIR_LANGUAGE_QA`·`HAIR_LEXICON_CHECK`·`HAIR_NUMERIC_CHECK`·`HAIR_OLLAMA_AGENT_PLANNING`·`HAIR_OLLAMA_MAX_OUTPUT_TOKENS`·`HAIR_ALLOW_LOCAL_CODE_RUN` | 보통은 기본값 그대로. 실행 방식·검색 엔진·자동 검사 끄기 등(설명은 `hair init --help`·README) |
 
 **웹 서버를 재시작해도 AI 실행이 멈추지 않게 — `HAIR_WORKER_MODE=external`**

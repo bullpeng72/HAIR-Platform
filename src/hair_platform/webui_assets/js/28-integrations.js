@@ -7,7 +7,7 @@ async function renderIntegrations(content) {
   const isAdmin = ME.role === "admin";
   const canSchedule = ["admin", "manager"].includes(ME.role);
   const fmt = v => v ? esc(String(v).replace("T", " ")) : "-";
-  const [keys, schedules, templates, notify, repos, trig, dataConns, mailBoxes, calFeeds] = await Promise.all([
+  const [keys, schedules, templates, notify, repos, trig, dataConns, mailBoxes, calFeeds, health] = await Promise.all([
     api("GET", "/api/api-keys"),
     canSchedule ? api("GET", "/api/pipeline-schedules") : Promise.resolve([]),
     canSchedule ? api("GET", "/api/pipeline-templates") : Promise.resolve([]),
@@ -17,12 +17,23 @@ async function renderIntegrations(content) {
     isAdmin ? api("GET", "/api/data-connections").catch(() => []) : Promise.resolve([]),  // 사내 DB(2026-11-26, P1-9)
     isAdmin ? api("GET", "/api/mail-inboxes").catch(() => []) : Promise.resolve([]),  // 메일 수신함(2026-11-26, P1-9 2단계)
     isAdmin ? api("GET", "/api/calendar-feeds").catch(() => []) : Promise.resolve([]),  // 캘린더(2026-11-26, P1-9 3단계)
+    isAdmin ? api("GET", "/api/admin/connection-status").catch(() => null) : Promise.resolve(null),  // 연결 상태(2026-11-26, 2-3)
   ]);
+  // 마지막 확인(연결 확인 버튼·실제 조회 모두) — kind:id → 표 칸
+  const healthBy = {};
+  ((health && health.items) || []).forEach(h => { healthBy[h.kind + ":" + h.id] = h; });
+  const lastCheck = (kind, id) => {
+    const h = healthBy[kind + ":" + id];
+    if (!h || h.status === "unchecked") return '<span class="muted">확인 안 함</span>';
+    return h.status === "ok"
+      ? '<span title="' + escAttr(h.checked_at || "") + '">✓ ' + fmt(h.checked_at) + "</span>"
+      : '<span class="gate-badge gate-warn" title="' + escAttr(h.error || "") + '">실패</span> ' + fmt(h.checked_at);
+  };
   const visLabel = v => ({ all: "모든 사람", manager: "manager 이상", admin: "admin만" })[v] || (String(v).startsWith("team:") ? "팀 #" + String(v).slice(5) : v);
   const mbRows = (mailBoxes || []).map(b =>
     "<tr><td>" + esc(b.name) + "</td><td>" + esc(b.username) + '<br><span class="muted">' + esc(b.host) + ":" + b.port + " · " + esc(b.folder) + "</span></td><td>" +
     esc(visLabel(b.visibility)) + "</td><td>" + (b.password_set ? "✓ " : "⚠ 비어 있음 ") + "<code>" + esc(b.password_env) + "</code></td><td>" +
-    (b.is_active ? "켜짐" : "꺼짐") + "</td><td>" +
+    (b.is_active ? "켜짐" : "꺼짐") + "</td><td>" + lastCheck("mail_inboxes", b.id) + "</td><td>" +
     '<button class="small" data-test-mb="' + b.id + '">연결 확인</button> ' +
     '<button class="small" data-toggle-mb="' + b.id + '" data-active="' + (b.is_active ? "0" : "1") + '">' + (b.is_active ? "끄기" : "켜기") + "</button></td></tr>"
   ).join("");
@@ -30,13 +41,13 @@ async function renderIntegrations(content) {
     "<tr><td>" + esc(d.name) + "</td><td>" + esc(d.kind) + "</td><td><code>" + esc(d.target) + "</code>" +
     (d.username ? " · " + esc(d.username) : "") + "</td><td>" + esc(String(d.row_limit)) + "행</td><td>" +
     (d.password_env ? (d.password_set ? "✓ " : "⚠ 비어 있음 ") + "<code>" + esc(d.password_env) + "</code>" : "-") + "</td><td>" +
-    (d.is_active ? "켜짐" : "꺼짐") + "</td><td>" +
+    (d.is_active ? "켜짐" : "꺼짐") + "</td><td>" + lastCheck("data_connections", d.id) + "</td><td>" +
     '<button class="small" data-test-dc="' + d.id + '">연결 확인</button> ' +
     '<button class="small" data-toggle-dc="' + d.id + '" data-active="' + (d.is_active ? "0" : "1") + '">' + (d.is_active ? "끄기" : "켜기") + "</button></td></tr>"
   ).join("");
   const cfRows = (calFeeds || []).map(f =>
     "<tr><td>" + esc(f.name) + "</td><td>" + (f.source_kind === "url" ? "iCal 주소(환경변수)" : "ICS 파일") + "<br><code>" + esc(f.source) + "</code> " +
-    (f.source_ready ? "✓" : "⚠ 비어 있음") + "</td><td>" + esc(visLabel(f.visibility)) + "</td><td>" + (f.is_active ? "켜짐" : "꺼짐") + "</td><td>" +
+    (f.source_ready ? "✓" : "⚠ 비어 있음") + "</td><td>" + esc(visLabel(f.visibility)) + "</td><td>" + (f.is_active ? "켜짐" : "꺼짐") + "</td><td>" + lastCheck("calendar_feeds", f.id) + "</td><td>" +
     '<button class="small" data-test-cf="' + f.id + '">연결 확인</button> ' +
     '<button class="small" data-toggle-cf="' + f.id + '" data-active="' + (f.is_active ? "0" : "1") + '">' + (f.is_active ? "끄기" : "켜기") + "</button></td></tr>"
   ).join("");
@@ -165,7 +176,7 @@ async function renderIntegrations(content) {
       '<input id="dc-limit" type="number" min="1" max="2000" value="200" style="width:6rem" title="한 번에 돌려줄 최대 행 수">' +
       '<input id="dc-desc" placeholder="설명(Agent가 어떤 DB인지 알 수 있게)" maxlength="500" style="min-width:14rem">' +
       '<button class="primary" type="submit">DB 연결 등록</button></form>' +
-      (dcRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>종류</th><th>대상</th><th>행 수 상한</th><th>비밀번호</th><th>상태</th><th></th></tr></thead><tbody>' + dcRows + "</tbody></table></div>"
+      (dcRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>종류</th><th>대상</th><th>행 수 상한</th><th>비밀번호</th><th>상태</th><th>마지막 확인</th><th></th></tr></thead><tbody>' + dcRows + "</tbody></table></div>"
         : '<p class="muted">등록된 DB 연결이 없습니다.</p>') +
       // 메일 수신함(2026-11-26, P1-9 2단계 — `mail_inbox.py`).
       "<h3>메일 수신함(admin)</h3>" +
@@ -183,7 +194,7 @@ async function renderIntegrations(content) {
       '<select id="mb-vis"><option value="admin">admin만</option><option value="manager">manager 이상</option><option value="all">모든 사람</option></select>' +
       '<input id="mb-desc" placeholder="설명(Agent가 어떤 메일함인지 알 수 있게)" maxlength="500" style="min-width:14rem">' +
       '<button class="primary" type="submit">메일함 등록</button></form>' +
-      (mbRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>계정</th><th>공개 범위</th><th>비밀번호</th><th>상태</th><th></th></tr></thead><tbody>' + mbRows + "</tbody></table></div>"
+      (mbRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>계정</th><th>공개 범위</th><th>비밀번호</th><th>상태</th><th>마지막 확인</th><th></th></tr></thead><tbody>' + mbRows + "</tbody></table></div>"
         : '<p class="muted">등록된 메일함이 없습니다.</p>') +
       // 캘린더(2026-11-26, P1-9 3단계 — `calendar_feeds.py`).
       "<h3>캘린더(admin)</h3>" +
@@ -197,7 +208,7 @@ async function renderIntegrations(content) {
       '<select id="cf-vis"><option value="admin">admin만</option><option value="manager">manager 이상</option><option value="all">모든 사람</option></select>' +
       '<input id="cf-desc" placeholder="설명(Agent가 어떤 캘린더인지 알 수 있게)" maxlength="500" style="min-width:14rem">' +
       '<button class="primary" type="submit">캘린더 등록</button></form>' +
-      (cfRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>출처</th><th>공개 범위</th><th>상태</th><th></th></tr></thead><tbody>' + cfRows + "</tbody></table></div>"
+      (cfRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>출처</th><th>공개 범위</th><th>상태</th><th>마지막 확인</th><th></th></tr></thead><tbody>' + cfRows + "</tbody></table></div>"
         : '<p class="muted">등록된 캘린더가 없습니다.</p>')
       : "");
 

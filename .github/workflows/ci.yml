@@ -55,4 +55,55 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - run: pytest tests/e2e -q -p no:cacheprovider
 
+  # 외부 연결 통합 테스트(2026-11-26, 개선 계획 2-2) — 실제 PostgreSQL·MySQL·메일 서버(GreenMail)를 Docker 서비스로.
+  # 사내 DB 조회(읽기 전용·시간 상한), 메일 수신함(인증서 검증·읽음 표시 유지), 메일 알림 도착을 실제 서버로 확인한다.
+  integration:
+    name: External connections (Docker services)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: hairpw
+          POSTGRES_DB: hair_it
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: hairpw
+          MYSQL_DATABASE: hair_it
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -phairpw" --health-interval 5s --health-timeout 5s --health-retries 30
+      greenmail:
+        image: greenmail/standalone:2.0.1
+        env:
+          GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=hair:hairpw@example.com -Dgreenmail.users.login=local_part"
+        ports: ["3025:3025", "3993:3993"]
+    env:
+      HAIR_IT_PG: "127.0.0.1:5432/hair_it"
+      HAIR_IT_PG_USER: postgres
+      HAIR_IT_PG_PASSWORD: hairpw
+      HAIR_IT_MYSQL: "127.0.0.1:3306/hair_it"
+      HAIR_IT_MYSQL_USER: root
+      HAIR_IT_MYSQL_PASSWORD: hairpw
+      HAIR_IT_MAIL_HOST: 127.0.0.1
+      HAIR_IT_SMTP_PORT: "3025"
+      HAIR_IT_IMAPS_PORT: "3993"
+      HAIR_IT_MAIL_USER: hair
+      HAIR_IT_MAIL_PASSWORD: hairpw
+      HAIR_IT_MAIL_ADDRESS: hair@example.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: constraints.txt
+      - run: pip install -e ".[dev,all,dbconnect]" -c constraints.txt
+      - run: pytest tests/integration -q -p no:cacheprovider -rs
+
       # Gate A-G CI 잡은 아직 없다 — Harness Autopilot이 이 저장소에 설치되지 않아(.aoo/ 없음) claims audit 잡도 해당 없다.

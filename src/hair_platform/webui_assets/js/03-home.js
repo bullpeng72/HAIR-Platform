@@ -2,12 +2,13 @@
 async function renderHome(content) {
   const role = ME.role;
   const canManage = ["admin", "manager"].includes(role);
-  const [inbox, cfg, notify, usage, worker] = await Promise.all([
+  const [inbox, cfg, notify, usage, worker, health] = await Promise.all([
     api("GET", "/api/inbox").catch(() => []),
     role === "admin" ? api("GET", "/api/admin/config-check").catch(() => null) : Promise.resolve(null),
     role === "admin" ? api("GET", "/api/integrations/notify").catch(() => null) : Promise.resolve(null),
     canManage ? api("GET", "/api/llm-usage?days=30").catch(() => null) : Promise.resolve(null),
     role === "admin" ? api("GET", "/api/admin/worker-status").catch(() => null) : Promise.resolve(null),  // P1-6 2단계
+    role === "admin" ? api("GET", "/api/admin/connection-status").catch(() => null) : Promise.resolve(null),  // 연결 상태(2026-11-26, 2-3)
   ]);
   const count = type => inbox.filter(i => i.type === type).length;
   const todo = [
@@ -31,7 +32,8 @@ async function renderHome(content) {
   const checks = [];
   if (cfg && cfg.length) checks.push('기본 구성과 다른 곳 ' + cfg.length + '건 — <button class="small" data-go="admin">사용자 관리에서 점검</button>');
   if (notify && !notify.webhook_url) checks.push('외부 알림 웹훅이 설정되지 않았습니다 — 결재 대기를 메신저로 받으려면 <button class="small" data-go="integrations">연동 설정</button>');
-  (worker && worker.warnings || []).forEach(w => checks.push("⚠ " + esc(w)));  // 작업 프로세스(2026-11-26, P1-6 2단계)
+  (worker && worker.warnings || []).forEach(w => checks.push("⚠ " + esc(w)));
+  (health && health.warnings || []).forEach(w => checks.push((w.startsWith("아직") ? "" : "⚠ ") + esc(w) + ' <button class="small" data-go="integrations">연동 설정</button>'));  // 작업 프로세스(2026-11-26, P1-6 2단계)
   if (usage && usage.unpriced_models) checks.push("단가가 없는 모델 " + usage.unpriced_models + '개 — 실제 비용을 보려면 <button class="small" data-go="modelregistry">모델 레지스트리</button>에서 단가 입력');
   content.innerHTML =
     "<h2>홈</h2>" +

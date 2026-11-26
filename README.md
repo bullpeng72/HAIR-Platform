@@ -299,6 +299,7 @@ hair check --db-path hair.db   # + 연동 설정에 등록된 비밀 환경변�
 | 메일(SMTP) 알림 | `HAIR_SMTP_HOST`·`HAIR_SMTP_PORT`·`HAIR_SMTP_USER`·`HAIR_SMTP_PASSWORD`·`HAIR_SMTP_FROM`·`HAIR_SMTP_SSL` | 결재 대기·파이프라인 완료/실패 메일 알림(연동 설정 화면). `HOST`가 있어야 나머지가 의미가 있고, 465 포트면 `SSL=1`(`hair init`은 원할 때만 묻는다) |
 | 서버 운영(작업 프로세스·시간대) | `HAIR_WORKER_MODE` | `embedded`(기본) 또는 `external` — 아래 "작업 프로세스로 실행 유지" 참고 |
 | | `HAIR_TIMEZONE` | 캘린더 일정을 보여 줄 시간대(IANA 이름, 예: `Asia/Seoul`, 비우면 서버 PC 시간대) |
+| | `HAIR_TLS_CA_FILE` | 사내 인증서(사내 CA·자체 서명) 파일 경로. 메일 수신함(IMAP)·메일 알림(SMTP)은 서버 인증서를 검증한다(2026-11-26부터 — 예전엔 검증하지 않았다). 사내 메일 서버 연결이 "인증서를 확인할 수 없습니다"로 실패할 때만 지정 |
 | 고급 옵션(기본값 권장) | 아래 표의 `HAIR_STAGE_RUNTIME`~`HAIR_ALLOW_LOCAL_CODE_RUN` 11개 | `hair init`은 "고급 옵션을 설정하시겠습니까?"에 y일 때만 묻는다. `hair check`는 값이 정해진 범위(선택지·0/1·숫자) 밖이면 경고 |
 
 #### 작업 프로세스로 실행 유지 — `HAIR_WORKER_MODE`

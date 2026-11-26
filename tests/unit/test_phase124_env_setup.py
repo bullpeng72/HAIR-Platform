@@ -147,6 +147,7 @@ def test_init_interactive_fills_values_and_preserves_unknown_keys(tmp_path):
         "",             # HAIR_GITHUB_TOKEN(2026-11-25, P1-8)
         "n",            # 메일 알림 설정하시겠습니까?
         "external",     # HAIR_WORKER_MODE(2026-11-26, P1-6 2단계)
+        "",             # HAIR_TLS_CA_FILE(2026-11-26 — 메일 서버 인증서 검증)
         "",             # HAIR_TIMEZONE
         "n",            # 고급 옵션 설정하시겠습니까?
     ])
