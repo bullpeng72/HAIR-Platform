@@ -1465,6 +1465,20 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             )
         return pipeline_runtime.list_pipeline_runs_for_task(conn, task_id)
 
+    @app.get("/api/pipeline-runs/{run_id}/tool-calls")
+    def list_pipeline_run_tool_calls(run_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        """이 실행에서 Agent가 실제로 부른 도구(2026-11-26, 개선 계획 1-1 — `tool_audit`). 권한은 진행상황 카드와 같다."""
+        from hair_platform import tool_audit
+
+        run = conn.execute("SELECT task_id FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+        if run is None:
+            raise HTTPException(status_code=404, detail="파이프라인 실행을 찾을 수 없습니다")
+        if user["role"] not in ("admin", "manager") and (
+            deliverables.task_participant_relationship(conn, run["task_id"], user["id"]) is None
+        ):
+            raise HTTPException(status_code=403, detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다")
+        return tool_audit.for_run(conn, run_id)
+
     @app.post("/api/pipeline-runs/{run_id}/resume")
     def resume_pipeline_run_endpoint(
         run_id: int,

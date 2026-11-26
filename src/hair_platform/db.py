@@ -1430,6 +1430,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import job_queue  # 백그라운드 작업 큐·작업 프로세스(2026-11-26, P1-6 2단계)
 
     job_queue.ensure_schema(conn)
+    from hair_platform import tool_audit  # 도구 사용 기록(2026-11-26, 개선 계획 1-1)
+
+    tool_audit.ensure_schema(conn)
     # 결과물 → 저장소 커밋 기록(2026-11-24, P0-3 2단계 — `repo_commit.py`).
     from hair_platform import repo_commit
 

@@ -67,6 +67,14 @@ def partial_sink() -> Callable[[str], None] | None:
     return _PARTIAL.get()
 
 
+_JOB: contextvars.ContextVar[tuple[str, int] | None] = contextvars.ContextVar("progress_job", default=None)
+
+
+def current_job() -> tuple[str, int] | None:
+    """지금 실행 중인 작업 행(테이블, ID) — 도구 사용 기록(`tool_audit`, 2026-11-26)이 붙인다."""
+    return _JOB.get()
+
+
 @contextlib.contextmanager
 def reporting(conn: sqlite3.Connection, table: str, job_id: int):
     if table not in _TABLES:
@@ -101,9 +109,11 @@ def reporting(conn: sqlite3.Connection, table: str, job_id: int):
 
     token = _REPORTER.set(write)
     partial_token = _PARTIAL.set(write_partial)
+    job_token = _JOB.set((table, job_id))
     try:
         yield
     finally:
+        _JOB.reset(job_token)
         _PARTIAL.reset(partial_token)
         _REPORTER.reset(token)
         try:

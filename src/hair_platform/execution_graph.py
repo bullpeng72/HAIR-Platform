@@ -224,7 +224,7 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
 
     # 진행 표시(2026-11-24, P0-2 파이프라인 진행률) — 단계 시작 시각·지금 하는 일·작성 중 미리보기를
     # 실행 행에 남긴다(`stage_progress`).
-    with pr.stage_progress(conn, state["run_id"], stage):
+    with pr.stage_progress(conn, state["run_id"], stage, state["attempt"]):
         if stage["mode"] == "plan_merge":
             # 계획 분담(2026-11-23, P2-9) — 기존 엔진과 같은 `plan_merge.run()`. 병합본이 단계 산출물.
             from hair_platform import plan_merge

@@ -345,6 +345,11 @@ def run_tool(tools_by_name: dict, name: str, arguments: dict) -> str:
         and set(arguments) != {"query"}
     ):
         arguments = {"query": json.dumps(arguments, ensure_ascii=False)}
+    import time
+
+    from hair_platform import tool_audit  # 도구 사용 기록(2026-11-26, 개선 계획 1-1)
+
+    started = time.monotonic()
     if tool is None:
         result = f"알 수 없는 도구입니다: {name}"
     else:
@@ -352,6 +357,8 @@ def run_tool(tools_by_name: dict, name: str, arguments: dict) -> str:
             result = str(tool.run(**arguments))
         except Exception as exc:  # noqa: BLE001
             result = f"도구 실행 중 오류가 발생했습니다: {exc}"
+    tool_audit.record(name, progress.TOOL_LABELS.get(name, name), arguments, result,
+                      int((time.monotonic() - started) * 1000))
     log = _CALL_LOG.get()
     if log is not None:
         log.append((name, result))

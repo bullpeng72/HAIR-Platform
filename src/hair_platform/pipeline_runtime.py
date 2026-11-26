@@ -1175,7 +1175,7 @@ def _stall_seconds() -> float:
 
 
 @contextlib.contextmanager
-def stage_progress(conn: sqlite3.Connection, run_id: int, stage) -> Iterator[None]:
+def stage_progress(conn: sqlite3.Connection, run_id: int, stage, attempt: int | None = None) -> Iterator[None]:
     """단계 실행 중 진행 표시(2026-11-24, P0-2 "파이프라인 진행률") — 두 엔진이 단계를 돌리는 동안 감싼다.
     단계 시작 시각과 첫 문구를 남기고, 그 안의 `progress.report()`(CrewAI 작업·도구 이벤트, 단일 Agent
     호출의 조회·생성·교정 단계)와 작성 중 미리보기가 이 실행 행에 기록된다. 멈춤 감시(`StageWatchdog`,
@@ -1199,8 +1199,10 @@ def stage_progress(conn: sqlite3.Connection, run_id: int, stage) -> Iterator[Non
         poll = float(os.environ.get("HAIR_STAGE_WATCHDOG_POLL_SECONDS", "30") or 30)
         watchdog = StageWatchdog(conn, run_id, stage, stall, poll)
         watchdog.start()
+    from hair_platform import tool_audit  # 도구 사용 기록을 (실행, 단계, 시도)에 잇는다(2026-11-26, 개선 계획 1-1)
+
     try:
-        with progress.reporting(conn, "pipeline_runs", run_id):
+        with progress.reporting(conn, "pipeline_runs", run_id), tool_audit.stage(stage["id"], attempt):
             yield
     finally:
         if watchdog is not None:
@@ -1510,7 +1512,7 @@ def _execute_stage_attempt(
 
     # 진행 표시(2026-11-24, P0-2 파이프라인 진행률) — 단계 시작 시각·지금 하는 일·작성 중 미리보기를
     # 실행 행에 남긴다(`stage_progress`).
-    with stage_progress(conn, run_id, stage):
+    with stage_progress(conn, run_id, stage, attempt):
         if stage["mode"] == "plan_merge" and plan_lead is not None:
             from hair_platform import plan_merge
 
@@ -1879,6 +1881,8 @@ def _run_progress_fields(conn: sqlite3.Connection, run: sqlite3.Row) -> dict:
 
 def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[dict]:
     """Task 협업 워크스페이스 진행상황 카드가 폴링한다."""
+    from hair_platform import tool_audit
+
     runs = conn.execute(
         "SELECT * FROM pipeline_runs WHERE task_id = ? ORDER BY id DESC", (task_id,)
     ).fetchall()
@@ -1929,6 +1933,10 @@ def list_pipeline_runs_for_task(conn: sqlite3.Connection, task_id: int) -> list[
                         "deliverable_id": sr["deliverable_id"],
                         "is_primary_deliverable": bool(
                             sr["stage_is_primary_deliverable"]
+                        ),
+                        # 이 시도에서 실제로 부른 도구(2026-11-26, 개선 계획 1-1 — `tool_audit`).
+                        "tools": tool_audit.summary(
+                            tool_audit.for_stage_attempt(conn, run["id"], sr["stage_id"], sr["attempt"])
                         ),
                     }
                     for sr in stage_results

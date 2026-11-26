@@ -1188,7 +1188,7 @@ def run_crew(
         # 작업 시작/완료·도구 호출을 진행 문구로 남긴다. CrewAI 이벤트는 다른 스레드에서 올 수 있어
         # contextvar 대신 지금의 기록 함수를 미리 잡아 둔다(작업 밖이면 None — 아무 일도 안 함).
         from crewai.events.types.task_events import TaskCompletedEvent, TaskStartedEvent
-        from crewai.events.types.tool_usage_events import ToolUsageStartedEvent
+        from crewai.events.types.tool_usage_events import ToolUsageErrorEvent, ToolUsageStartedEvent
 
         from hair_platform import progress as _progress
 
@@ -1207,6 +1207,29 @@ def run_crew(
         def _on_task_completed(source, event) -> None:
             _say(f"{event.agent_role or 'Agent'} 작업 완료")
 
+        # 도구 사용 기록(2026-11-26, 개선 계획 1-1 — `tool_audit`). CrewAI 처리기는 다른 스레드에서 돌 수 있어
+        # 실행 문맥을 지금 잡아 둔다. 위임(동료에게 묻기)은 도구가 아니므로 남기지 않는다.
+        from hair_platform import tool_audit as _tool_audit
+
+        _audit_ctx = _tool_audit.capture()
+
+        def _record_tool(source, event, ok: bool, result) -> None:
+            if _looks_like_delegation(event.tool_name):
+                return
+            ms = None
+            started, finished = getattr(event, "started_at", None), getattr(event, "finished_at", None)
+            if started is not None and finished is not None:
+                ms = int((finished - started).total_seconds() * 1000)
+            name = event.tool_name or ""
+            _tool_audit.record(name, _progress.TOOL_LABELS.get(name, name),
+                               event.tool_args, str(result), ms, ok=ok, ctx=_audit_ctx)
+
+        def _on_tool_finished(source, event) -> None:
+            _record_tool(source, event, True, event.output)
+
+        def _on_tool_error(source, event) -> None:
+            _record_tool(source, event, False, f"도구 실행 중 오류가 발생했습니다: {event.error}")
+
         def _on_tool_started(source, event) -> None:
             if not _looks_like_delegation(event.tool_name):
                 label = _progress.TOOL_LABELS.get(event.tool_name, event.tool_name)
@@ -1219,6 +1242,8 @@ def run_crew(
             crewai_event_bus.on(TaskStartedEvent)(_on_task_started)
             crewai_event_bus.on(TaskCompletedEvent)(_on_task_completed)
             crewai_event_bus.on(ToolUsageStartedEvent)(_on_tool_started)
+            crewai_event_bus.on(ToolUsageFinishedEvent)(_on_tool_finished)
+            crewai_event_bus.on(ToolUsageErrorEvent)(_on_tool_error)
             # 사용자 요청(2026-09-29, "Gate A-G를 CrewAI 멀티에이전트 경로에도
             # 연결해줘") — 지금까지 Gate A-G는 단일 실행 경로(`agent_runtime.
             # execute_agent()`)에만 연결돼 있었다. `framework="crewai"`를 쓰면
