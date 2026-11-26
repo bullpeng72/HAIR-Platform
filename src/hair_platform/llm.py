@@ -23,6 +23,7 @@ OpenAI는 과금, Ollama는 로컬 실행이라 API 비용은 없지만 로컬 �
 from __future__ import annotations
 
 import contextlib
+import contextvars
 
 from typing import Any
 import json
@@ -255,6 +256,30 @@ def call_llm(
         if provider == "ollama":
             return _call_ollama(model, system, prompt, timeout_seconds, **extra)
     raise ValueError(f"지원하지 않는 provider입니다: {provider!r}")
+
+
+# 추론(생각) 켜고 끄기(2026-11-26, 개선 계획 3-2 실측) — 지금까지 Ollama 호출에 `think`를 넘기지 않아, 추론형 모델
+# (Ornith 35B 등)이 **모든 호출에서** 긴 사고 과정을 먼저 만들었다(실측: 같은 요구사항 정리가 생각을 끄면 15초,
+# 파이프라인 검토 단계 한 번이 34분). 이 문맥 안의 Ollama 호출에만 `think`를 붙인다. None이면 지금처럼 모델 기본값.
+_THINK: contextvars.ContextVar[bool | None] = contextvars.ContextVar("llm_think", default=None)
+
+
+@contextlib.contextmanager
+def reasoning(enabled: bool | None):
+    """이 안의 Ollama 호출에 추론을 켜거나(True) 끈다(False). None은 모델 기본값(바깥 설정을 그대로 둠)."""
+    if enabled is None:
+        yield
+        return
+    token = _THINK.set(bool(enabled))
+    try:
+        yield
+    finally:
+        _THINK.reset(token)
+
+
+def _think_field() -> dict:
+    value = _THINK.get()
+    return {} if value is None else {"think": value}
 
 
 HEARTBEAT_SECONDS = 30.0
@@ -524,7 +549,7 @@ def _call_ollama_with_tools(
                 "messages": messages,
                 "tools": tool_schemas,
                 "stream": False,
-                "options": model_options.request_options("ollama", model, temperature),
+                **_think_field(), "options": model_options.request_options("ollama", model, temperature),
             },
             timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
         )
@@ -567,7 +592,7 @@ def _call_ollama_with_tools(
                 "model": model,
                 "messages": messages,
                 "stream": False,
-                "options": model_options.request_options("ollama", model, temperature),
+                **_think_field(), "options": model_options.request_options("ollama", model, temperature),
             },
             timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
         )
@@ -687,7 +712,7 @@ def _call_ollama(
                 {"role": "user", "content": prompt},
             ],
             "stream": False,
-            "options": model_options.request_options("ollama", model, temperature, max_output_tokens),
+            **_think_field(), "options": model_options.request_options("ollama", model, temperature, max_output_tokens),
         },
         # 사용자 보고(2026-10-14, "@개발자... -> 일부 응답이 실패했습니다:
         # timed out") — 실측으로 원인 확인: `conversation_jobs`에 정확히
@@ -795,7 +820,7 @@ def _stream_ollama(model, system, prompt, timeout_seconds, on_partial, temperatu
             "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             "stream": True,
-            "options": model_options.request_options("ollama", model, temperature),
+            **_think_field(), "options": model_options.request_options("ollama", model, temperature),
         },
         timeout=timeout_seconds or OLLAMA_LLM_TIMEOUT_SECONDS,
     ) as resp:

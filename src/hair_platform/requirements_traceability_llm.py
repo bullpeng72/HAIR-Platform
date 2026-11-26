@@ -69,7 +69,8 @@ def assess_traceability(
             f"요구사항 문서:\n{requirements_text}\n\n"
             f"구현 결과물:\n{implementation_text}"
         )
-        raw = llm.call_llm(provider, model, _SYSTEM_PROMPT, prompt, max_output_tokens=JUDGE_MAX_OUTPUT_TOKENS)
+        with llm.reasoning(False):  # 짧은 JSON 판정 — 추론 없이(2026-11-26, 개선 계획 3-2 실측)
+            raw = llm.call_llm(provider, model, _SYSTEM_PROMPT, prompt, max_output_tokens=JUDGE_MAX_OUTPUT_TOKENS)
         match = _JSON_BLOCK_RE.search(raw)
         if not match:
             raise ValueError("no_json_block")

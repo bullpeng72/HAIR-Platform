@@ -408,8 +408,11 @@ def execute_agent(
     # 포함 — skill 기반 매칭만 보는 "기본 AI"보다 범위가 넓다).
     tool_calls: list[tuple[str, str]] = []
     progress.report(f"응답 생성 중 — {resolved_model}")
+    # 추론(생각) 켜고 끄기(2026-11-26, 개선 계획 3-2 실측) — 파인튜닝의 "추론 모드"(tuning_config.reasoning)를 Ollama
+    # `think`로 그대로 전한다. 지정이 없으면 모델 기본값(지금까지와 같음).
+    think = tuning.get("reasoning") if isinstance(tuning.get("reasoning"), bool) else None
     if callable_tools:
-        with tool_calling.record_calls() as tool_calls:
+        with tool_calling.record_calls() as tool_calls, llm.reasoning(think):
             output = llm.call_llm_with_tools(
                 resolved_provider,
                 resolved_model,
@@ -429,14 +432,15 @@ def execute_agent(
         call_extra: dict = dict(llm_extra)
         if sink:
             call_extra["on_partial"] = sink
-        output = llm.call_llm(
-            resolved_provider,
-            resolved_model,
-            system,
-            augmented_prompt,
-            timeout_seconds=timeout_seconds,
-            **call_extra,
-        )
+        with llm.reasoning(think):
+            output = llm.call_llm(
+                resolved_provider,
+                resolved_model,
+                system,
+                augmented_prompt,
+                timeout_seconds=timeout_seconds,
+                **call_extra,
+            )
     # 중간에 끊긴 것으로 보이면 이어서 완성시킨다(`_looks_truncated()`
     # 모듈 docstring 참고) — 최대 `_MAX_CONTINUATION_ATTEMPTS`번까지만
     # 시도해, 같은 이유로 매번 또 끊기는 드문 경우에도 무한히 돌지
@@ -452,18 +456,19 @@ def execute_agent(
         if not _looks_truncated(output):
             break
         progress.report("끊긴 응답 이어 쓰는 중")
-        continuation = llm.call_llm(
-            resolved_provider,
-            resolved_model,
-            system,
-            "직전 응답이 끝까지 작성되지 못하고 중간에 멈췄습니다. 아래는 "
-            "지금까지 작성된 내용의 마지막 부분입니다 — 처음부터 다시 쓰지 "
-            "말고, 끊긴 지점 바로 다음부터 자연스럽게 이어서 문서를 "
-            "완성하세요(펜스나 닫는 태그가 빠졌다면 그것도 포함해서 "
-            f"마무리하세요):\n\n...(생략)...\n{output[-1500:]}",
-            timeout_seconds=timeout_seconds,
-            **llm_extra,
-        )
+        with llm.reasoning(think):
+            continuation = llm.call_llm(
+                resolved_provider,
+                resolved_model,
+                system,
+                "직전 응답이 끝까지 작성되지 못하고 중간에 멈췄습니다. 아래는 "
+                "지금까지 작성된 내용의 마지막 부분입니다 — 처음부터 다시 쓰지 "
+                "말고, 끊긴 지점 바로 다음부터 자연스럽게 이어서 문서를 "
+                "완성하세요(펜스나 닫는 태그가 빠졌다면 그것도 포함해서 "
+                f"마무리하세요):\n\n...(생략)...\n{output[-1500:]}",
+                timeout_seconds=timeout_seconds,
+                **llm_extra,
+            )
         # 이어쓰기 결과 검사(2026-11-24 실측) — 추론형 로컬 모델이 이어쓰기 대신 "the user asked me
         # to continue from the cut-off point…" 같은 영어 혼잣말 1만 자를 돌려줘 결과물 끝에 그대로
         # 붙었다. 정리 후 비었거나, 한국어 본문에 영어 문단이 붙거나, 혼잣말 문단이 많으면 버리고 멈춘다.
