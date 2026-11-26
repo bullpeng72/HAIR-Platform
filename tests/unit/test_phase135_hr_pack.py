@@ -56,15 +56,16 @@ def test_turnover_funnel_and_time_to_hire():
 def test_job_posting_check_flags_discrimination_and_missing_items():
     check = _tool(domain_packs.JOB_POSTING_CHECK_SOURCE)
     bad = json.loads(check("[영업직 채용]\n30세 이하 남성 우대, 용모 단정한 분\n미혼자 선호, 사진 첨부 필수\n"
-                           "부모 직업 기재\n출신 지역 기재\n담당 업무: B2B 영업\n마감: 12월 31일까지"))
+                           "부모 직업 기재\n출신 지역 기재\n본적지 기재\n담당 업무: B2B 영업\n마감: 12월 31일까지"))
     reasons = " ".join(f["확인 사항"] for f in bad["주의_문구"])
     for law in ("남녀고용평등법", "연령차별금지법", "제4조의3"):
         assert law in reasons
-    assert len(bad["주의_문구"]) >= 7 and "고쳐야 함" in bad["판정"]
+    assert len(bad["주의_문구"]) >= 8 and "고쳐야 함" in bad["판정"]
     assert "급여·처우" in bad["빠진_필수_항목"] and "담당 업무" in bad["확인된_필수_항목"]
     good = json.loads(check(json.dumps({"text": (
         "담당 업무: B2B 영업\n자격 요건: 영업 3년 이상\n고용 형태: 정규직\n근무지: 서울\n근무 시간: 주 5일\n"
-        "급여: 연봉 협의\n전형 절차: 서류-면접\n지원 방법: 이메일\n마감: 12월 31일까지\n젊은 조직 문화, 성장하는 팀")},
+        "급여: 연봉 협의\n전형 절차: 서류-면접\n지원 방법: 이메일\n마감: 12월 31일까지\n젊은 조직 문화, 성장하는 팀\n"
+        "기본적인 협업 태도를 봅니다")},  # "기본적" ⊃ "본적" 오탐(2026-11-26 실측)
         ensure_ascii=False)))
     assert good["주의_문구"] == [] and good["빠진_필수_항목"] == [] and good["판정"] == "차별 소지 문구 없음"
 
