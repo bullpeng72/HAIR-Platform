@@ -1678,6 +1678,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "pipeline_stages", "strict_review", "INTEGER NOT NULL DEFAULT 0")
     # 필수 도구(2026-11-26, 개선 계획 1-2) — JSON 목록(도구 Pool 이름). NULL = 지정 안 함.
     _ensure_column(conn, "pipeline_stages", "required_tools", "TEXT")
+    # 단계별 모델(2026-11-26, 개선 계획 3-2) — NULL이면 대표 Agent의 모델
+    _ensure_column(conn, "pipeline_stages", "llm_provider", "TEXT")
+    _ensure_column(conn, "pipeline_stages", "llm_model", "TEXT")
     # 외부로 쓰거나 실행하는 도구(2026-11-26, 개선 계획 1-3) — 외부 데이터를 읽은 실행에서는 막힌다.
     _ensure_column(conn, "tool_pool", "side_effects", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "model_registry", "price_output_per_1m", "REAL")

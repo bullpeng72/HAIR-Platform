@@ -59,6 +59,12 @@ def assess_traceability(
     폴백한다 — 절대 raise하지 않는다."""
     try:
         provider, model = llm.resolve_provider_and_model(None, None, conn=conn)
+        # 짧은 JSON 채점이라 보조 작업 모델(있으면)로 — 큰 로컬 모델 하나를 모든 호출이 기다리지 않게(2026-11-26, 개선 계획 3-2)
+        from hair_platform import language_qa
+
+        helper_provider, helper_model = language_qa.helper_target(provider, model)
+        if helper_provider and helper_model:
+            provider, model = helper_provider, helper_model
         prompt = (
             f"요구사항 문서:\n{requirements_text}\n\n"
             f"구현 결과물:\n{implementation_text}"

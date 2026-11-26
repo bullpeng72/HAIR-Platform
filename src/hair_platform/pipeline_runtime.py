@@ -142,6 +142,9 @@ def _stage_to_dict(conn: sqlite3.Connection, stage_row: sqlite3.Row) -> dict:
         "is_requirements_source": bool(stage_row["is_requirements_source"]),
         "strict_review": bool(stage_row["strict_review"]) if "strict_review" in stage_row.keys() else False,
         "required_tools": _required_tools(stage_row),  # 필수 도구(2026-11-26, 개선 계획 1-2)
+        # 단계별 모델(2026-11-26, 개선 계획 3-2) — 비어 있으면 대표 Agent의 모델
+        "llm_provider": stage_row["llm_provider"] if "llm_provider" in stage_row.keys() else None,
+        "llm_model": stage_row["llm_model"] if "llm_model" in stage_row.keys() else None,
         "on_fail_return_stage_id": stage_row["on_fail_return_stage_id"],
         "output_content_type": stage_row["output_content_type"],
         "expected_output": stage_row["expected_output"],
@@ -391,6 +394,8 @@ def update_stage(
         "expected_output",
         "strict_review",
         "required_tools",
+        "llm_provider",
+        "llm_model",
     }
     unknown = set(fields) - allowed
     if unknown:
@@ -416,6 +421,10 @@ def update_stage(
     for key, value in fields.items():
         if key == "gate_ids":
             value = json.dumps(value, ensure_ascii=False)
+        elif key in ("llm_provider", "llm_model"):
+            value = (str(value).strip() or None) if value is not None else None
+            if key == "llm_provider" and value is not None and value not in ("anthropic", "openai", "ollama"):
+                raise ValueError(f"unsupported_provider:{value}")
         elif key == "required_tools":
             names = [str(t).strip() for t in (value or []) if str(t).strip()]
             known = {r[0] for r in conn.execute("SELECT name FROM tool_pool")}
@@ -962,6 +971,11 @@ def _resolve_stage_llm(
     돼 있으면(`NULL`) `(None, None)`을 돌려줘 기존 동작(자동판별)을
     그대로 유지한다 — 이 수정으로 "설정 안 한 기존 Task"가 갑자기
     달라지지 않는다."""
+    # 단계별 모델(2026-11-26, 개선 계획 3-2) — 지정돼 있으면 Agent 설정보다 우선. 여러 파이프라인이 같은 Agent(업무 요구사항
+    # 분석가 등)를 쓰므로, Agent 모델을 바꾸지 않고 이 단계만 작은 모델로 보낼 수 있게 한다.
+    keys = stage.keys() if hasattr(stage, "keys") else []
+    if "llm_provider" in keys and stage["llm_provider"]:
+        return stage["llm_provider"], stage["llm_model"] or None
     representative_role = (
         stage["lead_role_name"]
         if stage["mode"] in LEAD_MODES and stage["lead_role_name"]

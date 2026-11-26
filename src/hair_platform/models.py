@@ -810,6 +810,9 @@ class PipelineStageUpdate(BaseModel):
     expected_output: str | None = None
     strict_review: bool | None = None  # 조건부 승인도 보완 요청으로(2026-11-25, P0-4)
     required_tools: list[str] | None = None  # 이 단계에서 반드시 실제로 불러야 하는 도구(Pool 이름, 2026-11-26)
+    # 이 단계만 다른 모델로(2026-11-26, 개선 계획 3-2) — 빈 문자열이면 해제(대표 Agent의 모델)
+    llm_provider: str | None = None
+    llm_model: str | None = None
 
 
 class PipelineStageReorder(BaseModel):

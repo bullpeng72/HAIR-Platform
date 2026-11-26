@@ -63,6 +63,22 @@ function _pipelineStageCollaborationBadge(stage) {
 // 필수 도구(2026-11-26, 개선 계획 1-2) — 이 단계에서 Agent가 실제로 불러야 하는 도구. 부르지 않으면 단계 미통과 →
 // 다시 시도("필수 도구를 실제로 부르지 않았습니다"). 단계 Agent에 연결되지 않은 도구는 막지 않고 '측정 안 함'으로 알린다.
 let _pipelineToolNames = [];
+// 단계별 모델(2026-11-26, 개선 계획 3-2) — 비우면 대표 Agent의 모델. 요구사항 정리·형식 검토 같은 가벼운 단계를 작은
+// 모델로 보내 큰 로컬 모델 대기를 줄인다. 목록은 모델 레지스트리(provider → 모델명).
+let _pipelineModels = { anthropic: [], openai: [], ollama: [] };
+function _stageModelHtml(stage) {
+  const cur = stage.llm_provider ? stage.llm_provider + "|" + (stage.llm_model || "") : "";
+  const opts = ['<option value="">대표 Agent의 모델</option>'];
+  Object.entries(_pipelineModels).forEach(([prov, names]) => (names || []).forEach(n => {
+    const v = prov + "|" + n;
+    opts.push('<option value="' + escAttr(v) + '"' + (v === cur ? " selected" : "") + ">" + esc(prov + " · " + n) + "</option>");
+  }));
+  if (cur && !opts.some(o => o.includes('value="' + escAttr(cur) + '"'))) {
+    opts.push('<option value="' + escAttr(cur) + '" selected>' + esc(cur.replace("|", " · ")) + "(레지스트리에 없음)</option>");
+  }
+  return '<p class="muted"><span title="이 단계만 다른 모델로 실행합니다. 여러 파이프라인이 같은 Agent를 쓰므로 Agent 설정을 바꾸지 않고 가벼운 단계(요구사항 정리·형식 검토)만 작은 모델로 보낼 때 씁니다.">이 단계 모델:</span> ' +
+    '<select data-stage-model="' + stage.id + '">' + opts.join("") + "</select></p>";
+}
 function _stageRequiredToolsHtml(stage) {
   const req = stage.required_tools || [];
   const chips = req.map(t =>
@@ -109,6 +125,7 @@ function pipelineStageCardHtml(templateId, stage, index, total, stages) {
     " " + _pipelineStageCollaborationBadge(stage) + "</p>" +
     _stageReturnSelectHtml(stage, stages) +
     _stageRequiredToolsHtml(stage) +
+    _stageModelHtml(stage) +
     '<div class="actions">' +
     (index > 0 ? '<button class="small" data-reorder-stage="' + stage.id + ':up">↑</button>' : "") +
     (index < total - 1 ? '<button class="small" data-reorder-stage="' + stage.id + ':down">↓</button>' : "") +
@@ -187,6 +204,7 @@ async function renderPipelines(content) {
     api("GET", "/api/tool-pool").catch(() => []),  // 필수 도구 고르기(2026-11-26)
   ]);
   _pipelineToolNames = (toolPool || []).filter(t => t.is_active !== false && t.is_active !== 0).map(t => t.name);
+  _pipelineModels = await fetchModelsByProvider();  // 단계별 모델(2026-11-26)
   const activeAgents = agents.filter(a => a.status === "active");
   const details = await Promise.all(
     templates.map(t => api("GET", "/api/pipeline-templates/" + t.id))
@@ -317,6 +335,17 @@ async function renderPipelines(content) {
       refresh();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   };
+  content.querySelectorAll("[data-stage-model]").forEach(sel => {
+    sel.onchange = async () => {
+      const templateId = sel.closest("[data-pipeline-template-card]").dataset.pipelineTemplateCard;
+      const [prov, model] = sel.value ? sel.value.split("|") : ["", ""];
+      try {
+        await api("PATCH", "/api/pipeline-templates/" + templateId + "/stages/" + sel.dataset.stageModel, { llm_provider: prov, llm_model: model });
+        showMsg("global-msg", sel.value ? "이 단계 모델을 " + prov + " · " + model + "(으)로 바꿨습니다." : "이 단계는 대표 Agent의 모델을 씁니다.", "ok");
+        refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
   content.querySelectorAll("[data-add-required-tool]").forEach(sel => {
     sel.onchange = () => {
       if (!sel.value) return;
