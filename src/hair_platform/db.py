@@ -1673,6 +1673,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "pipeline_stages", "on_fail_return_stage_id", "INTEGER")
     # 엄격 검토(2026-11-25, P0-4) — 켜면 "조건부 승인"(승인하면서 고칠 곳을 지적)도 보완 요청으로 처리한다.
     _ensure_column(conn, "pipeline_stages", "strict_review", "INTEGER NOT NULL DEFAULT 0")
+    # 필수 도구(2026-11-26, 개선 계획 1-2) — JSON 목록(도구 Pool 이름). NULL = 지정 안 함.
+    _ensure_column(conn, "pipeline_stages", "required_tools", "TEXT")
+    # 외부로 쓰거나 실행하는 도구(2026-11-26, 개선 계획 1-3) — 외부 데이터를 읽은 실행에서는 막힌다.
+    _ensure_column(conn, "tool_pool", "side_effects", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "model_registry", "price_output_per_1m", "REAL")
     from hair_platform import llm_usage
 
@@ -2495,6 +2499,36 @@ _BUSINESS_STAGE_REASSIGNMENTS: tuple[tuple[str | None, str, str], ...] = (
     ("표현 검토", "콘텐츠 카피라이팅", "문서 교정자"),
 )
 
+
+# 기본 제공 MCP 도구 중 읽기 전용으로 확인한 것(검색·조회) — 그 밖의 MCP는 무엇을 하는지 모르므로 "쓸 수 있음"으로 둔다.
+_READ_ONLY_BUILTIN_MCP = ("일반 웹 검색(Parallel Search)", "Gate 조치 지식 조회(recommend_fix)")
+
+
+def _mark_unknown_mcp_side_effects(conn: sqlite3.Connection) -> None:
+    """기존 설치의 MCP 도구 — 기본 제공 검색·조회 외에는 외부로 쓸 수 있는 도구로 표시(2026-11-26, 개선 계획 1-3).
+    admin이 도구 Pool에서 끌 수 있다. 한 번만 실행(`_run_once`)."""
+    marks = ",".join("?" * len(_READ_ONLY_BUILTIN_MCP))
+    conn.execute(
+        f"UPDATE tool_pool SET side_effects = 1 WHERE kind IN ('mcp_stdio', 'mcp_remote') AND name NOT IN ({marks})",  # noqa: S608
+        _READ_ONLY_BUILTIN_MCP,
+    )
+    conn.commit()
+
+def _set_domain_required_tools(conn: sqlite3.Connection) -> None:
+    """업무 영역 템플릿에서 계산·점검을 도구로 하도록 지시한 단계에 필수 도구를 건다(2026-11-26, 개선 계획 1-2).
+    아직 지정이 없는(NULL) 단계만 — admin이 비우거나(빈 목록) 바꾼 값은 그대로 둔다. 새 설치·기존 설치 모두."""
+    from hair_platform import domain_packs
+
+    for spec in domain_packs.PIPELINES:
+        for st in spec["stages"]:
+            if not st.get("required_tools"):
+                continue
+            conn.execute(
+                "UPDATE pipeline_stages SET required_tools = ? WHERE required_tools IS NULL AND name = ? AND "
+                "pipeline_template_id = (SELECT id FROM pipeline_templates WHERE name = ?)",
+                (json.dumps(st["required_tools"], ensure_ascii=False), st["name"], spec["name"]),
+            )
+    conn.commit()
 
 def _reassign_business_pipeline_agents(conn: sqlite3.Connection) -> None:
     """사업/기획·제안서·실적 보고 파이프라인에서 SW 개발용·광고 카피 Agent가 맡던 단계를 업무
@@ -3540,6 +3574,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _apply_one_time_agent_skill_additions(conn)
     _upgrade_chart_generator_tool(conn)
     _run_once(conn, "2026-11-21-business-pipeline-agents", _reassign_business_pipeline_agents)
+    _set_domain_required_tools(conn)  # 업무 영역 템플릿 단계의 필수 도구(2026-11-26, 개선 계획 1-2)
+    _run_once(conn, "2026-11-26-mcp-side-effects", _mark_unknown_mcp_side_effects)
     _run_once(conn, "2026-11-21-pipeline-quality-settings", _review_pipeline_quality_settings)
     _run_once(conn, "2026-11-21-traceability-must-pass", _require_traceability_to_pass)
     _run_once(conn, "2026-11-22-runnable-implementation", _single_author_runnable_implementation)

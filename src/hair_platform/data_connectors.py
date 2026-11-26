@@ -348,6 +348,8 @@ def as_crewai_tool(conn: sqlite3.Connection):
         query(SQL 실행 — sql 필수, SELECT/WITH/EXPLAIN 한 문장, 결과는 행 수 상한까지).
         connection은 연결 이름(하나뿐이면 생략 가능). 먼저 tables/describe로 구조를 확인한 뒤 필요한 열·조건·집계만
         조회하라. 결과의 수치는 그대로 인용하고 추측으로 보태지 마라."""
-        return run_action(conn, action, connection, table, sql)
+        from hair_platform import tool_audit  # 외부 데이터 경계(2026-11-26, 개선 계획 1-3) — CrewAI 경로도
+
+        return tool_audit.wrap_external(run_action(conn, action, connection, table, sql), "사내 DB")
 
     return database_query

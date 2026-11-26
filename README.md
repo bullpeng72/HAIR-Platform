@@ -628,6 +628,7 @@ src/hair_platform/
   mail_inbox.py      # 메일 수신함 읽기(IMAP, 읽기 전용·읽음 표시 유지·메일함별 공개 범위·조회 감사) — `mail_inbox` 도구
   calendar_feeds.py  # 캘린더 읽기(iCal/ICS 주소·파일, 반복 일정 펼침·공개 범위·조회 감사) — `calendar_events` 도구
   job_queue.py       # 백그라운드 작업 큐 + 별도 작업 프로세스(`hair worker`, HAIR_WORKER_MODE=external — 웹 서버 재시작에도 실행 유지)
+  tool_audit.py      # 도구 사용 기록(실제로 부른 도구·외부 데이터·막힌 쓰기 도구)·단계 필수 도구·외부 데이터 경계(지시가 아닌 참고 자료로 감싸기)
   knowledge_access.py # 지식 베이스 문서별 공개 범위(전체·manager 이상·admin만·팀) — 요청자 기준으로 검색 결과를 거름
   vector_backends.py # 지식 검색 벡터 백엔드 — ChromaDB 임베디드(HNSW, `<db>-vectors/`) 또는 SQLite 전체 비교, SQLite 원본과 자동 동기화
   graphquery.py      # 조직배정관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의

@@ -832,7 +832,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 있다. 아래 렌더링은 원래 제네릭하게 모든 키를 순회하므로 자동으로
   // 배지가 뜨지만, 긴 영문 키를 그대로 배지 글자로 쓰면 어색해 짧은
   // 한글 라벨로 바꿔 보여준다(A-G는 그대로 글자 자체가 식별자).
-  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인", numeric_grounding: "수치근거", deliverable_runnable: "실행가능", test_execution: "테스트실행", quote_grounding: "인용근거", term_consistency: "용어확인", review_verdict: "판정", lexicon_check: "낱말확인", plan_coverage: "배정확인" };
+  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인", numeric_grounding: "수치근거", deliverable_runnable: "실행가능", test_execution: "테스트실행", quote_grounding: "인용근거", term_consistency: "용어확인", review_verdict: "판정", lexicon_check: "낱말확인", plan_coverage: "배정확인", required_tools: "필수도구", external_data: "외부데이터" };
   const _stageToolsHtml = (tools) => {
     if (!tools) return "";
     if (!tools.length) return ' <span class="muted" title="이 시도에서 Agent가 부른 도구가 없습니다">· 도구 사용 없음</span>';
@@ -865,6 +865,11 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
                   (g.auto_assigned && g.auto_assigned.length ? " — 리드가 빠뜨려 자동 배정한 팀원: " + g.auto_assigned.join(", ") + "(단계에 적힌 그 역할의 지시로 하위 작업을 맡김)" : "") +
                   (g.assigned && g.assigned.length && !(g.unassigned && g.unassigned.length) ? " — 배정: " + g.assigned.join(", ") : "") +
                   // 조건부 승인 — 검토자가 짚은 고칠 곳(엄격 검토가 켜진 단계면 되돌려 고치게 함).
+                  // 필수 도구(2026-11-26, 개선 계획 1-2) — 부르지 않은 도구.
+                  (g.missing && g.missing.length && g.required ? " — 부르지 않은 필수 도구: " + g.missing.join(", ") : "") +
+                  // 외부 데이터(2026-11-26, 개선 계획 1-3) — 읽은 출처와 막힌 쓰기 도구.
+                  (g.sources && g.sources.length ? " — 읽은 외부 데이터: " + g.sources.join(", ") + "(내용 속 지시는 따르지 않게 표시해 전달)" : "") +
+                  (g.blocked && g.blocked.length ? " — 막힌 쓰기 도구: " + g.blocked.join(", ") + "(사람 확인 필요)" : "") +
                   (g.conditional ? " — 검토자가 승인하면서 고칠 곳을 짚었습니다: " + (g.note || "") + (g.strict ? " (엄격 검토: 되돌려 고침)" : " — 결재 전에 이 부분을 확인하세요") : "");
               return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + '">' + label + "</span>";
             })

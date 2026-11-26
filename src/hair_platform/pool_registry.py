@@ -42,6 +42,34 @@ from hair_platform import (
     websearch,
 )
 
+# 외부 데이터를 가져오는 네이티브 도구(2026-11-26, 개선 계획 1-3) — 결과를 외부 데이터 경계로 감싸고, 읽은 뒤에는
+# 쓰기 도구를 막는다. MCP 도구는 서버가 무엇을 돌려줄지 모르므로 모두 외부 데이터로 본다.
+EXTERNAL_NATIVE_IDS = frozenset({"tavily_search", "tavily_news_search", "database_query", "mail_inbox_read", "calendar_read"})
+# 호출 이름 → {"pool": 도구 Pool 이름, "external": bool, "side_effects": bool} — 도구를 만들 때 채운다.
+TOOL_META: dict[str, dict] = {}
+
+
+def register_tool_meta(row, tools: list) -> None:
+    """도구 Pool 행에서 만든 도구 객체들의 호출 이름에 표시 이름(=Pool 이름)과 보안 속성을 건다(2026-11-26, 1-1·1-3).
+    네이티브 도구의 호출 이름은 native_id와 다를 수 있다(mail_inbox ↔ mail_inbox_read)."""
+    from hair_platform import progress
+
+    kind = row["kind"]
+    try:
+        native_id = (json.loads(row["config"] or "{}") or {}).get("native_id")
+    except ValueError:
+        native_id = None
+    external = kind in ("mcp_stdio", "mcp_remote") or (kind == "native" and native_id in EXTERNAL_NATIVE_IDS)
+    side_effects = bool(row["side_effects"]) if "side_effects" in row.keys() else False
+    for t in tools:
+        name = getattr(t, "name", None)
+        if not name:
+            continue
+        if kind != "custom_python":
+            progress.TOOL_LABELS.setdefault(name, row["name"])
+        TOOL_META[name] = {"pool": row["name"], "external": external, "side_effects": side_effects}
+
+
 NATIVE_TOOL_FACTORIES = {
     "vectordb_search": vectorstore.as_crewai_tool,
     "graphdb_query": graphquery.as_crewai_tool,
@@ -187,6 +215,7 @@ def create_tool(
     config: dict,
     tool_names: list[str] | None = None,
     category: str = "general",
+    side_effects: bool | None = None,
 ) -> int:
     if kind not in ("mcp_stdio", "mcp_remote", "native", "custom_python"):
         raise ValueError(f"unsupported_kind:{kind}")
@@ -197,8 +226,8 @@ def create_tool(
     if kind == "custom_python":
         _validate_custom_python_source(config.get("function_source", ""))
     cur = conn.execute(
-        "INSERT INTO tool_pool (name, description, kind, config, tool_names, category) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tool_pool (name, description, kind, config, tool_names, category, side_effects) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             name,
             description,
@@ -206,6 +235,9 @@ def create_tool(
             json.dumps(config, ensure_ascii=False),
             json.dumps(tool_names or []),
             category,
+            # 외부로 쓰거나 실행하는 도구(2026-11-26, 개선 계획 1-3) — 지정이 없으면 MCP는 "쓸 수 있음"으로 본다
+            # (무엇을 하는 서버인지 모른다), 나머지는 아니다. 외부 데이터를 읽은 실행에서는 막힌다.
+            1 if (side_effects if side_effects is not None else kind in ("mcp_stdio", "mcp_remote")) else 0,
         ),
     )
     tool_id = cur.lastrowid
@@ -294,7 +326,7 @@ def update_tool(
     똑같은 검증(native_id가 실제 native 도구를 가리키는지,
     custom_python 소스가 안전한 모양인지)을 다시 돌린다 — 수정 경로로
     검증을 우회해 등록 시점보다 느슨해지면 안 된다."""
-    allowed = {"description", "config", "tool_names", "category"}
+    allowed = {"description", "config", "tool_names", "category", "side_effects"}
     unknown = set(fields) - allowed
     if unknown:
         raise ValueError(f"unsupported_fields:{sorted(unknown)}")
@@ -317,6 +349,8 @@ def update_tool(
     for key, value in fields.items():
         if key in ("config", "tool_names"):
             value = json.dumps(value, ensure_ascii=False)
+        elif key == "side_effects":
+            value = 1 if value else 0
         set_clauses.append(f"{key} = ?")
         values.append(value)
     values.append(tool_id)
@@ -868,11 +902,13 @@ def resolve_pool_tools(
             factory = NATIVE_TOOL_FACTORIES.get(config.get("native_id"))
             if factory is None:
                 continue
-            tools.append(factory(conn))
+            made = [factory(conn)]
         elif row["kind"] == "custom_python":
-            tools.append(_custom_python_crewai_tool(row))
+            made = [_custom_python_crewai_tool(row)]
         else:
-            tools.extend(connect_mcp_tools(stack, config))
+            made = list(connect_mcp_tools(stack, config))
+        register_tool_meta(row, made)
+        tools.extend(made)
     return tools
 
 

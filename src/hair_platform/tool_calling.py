@@ -167,7 +167,9 @@ def resolve_callable_tools(
         if row["kind"] == "native":
             factory = pool_registry.NATIVE_TOOL_FACTORIES.get(json.loads(row["config"]).get("native_id"))
             if factory is not None:
-                tools.append(factory(conn))
+                made = [factory(conn)]
+                pool_registry.register_tool_meta(row, made)  # 표시 이름·외부 데이터·쓰기 여부(2026-11-26)
+                tools.extend(made)
             continue
         if row["kind"] in _MCP_KINDS:
             stack = _MCP_STACK.get()
@@ -177,13 +179,17 @@ def resolve_callable_tools(
 
             progress.report(f"도구 서버 연결 중 — {row['name']}")
             try:
-                tools.extend(pool_registry.connect_mcp_tools(stack, json.loads(row["config"])))
+                made = list(pool_registry.connect_mcp_tools(stack, json.loads(row["config"])))
+                pool_registry.register_tool_meta(row, made)
+                tools.extend(made)
             except Exception:  # noqa: BLE001 — 접속 실패(서버 없음·crewai-tools 미설치)는 그 도구만 건너뛴다
                 failed = _MCP_FAILED.get()
                 if failed is not None:
                     failed.append(row["id"])
             continue
-        tools.append(pool_registry._custom_python_crewai_tool(row))
+        made = [pool_registry._custom_python_crewai_tool(row)]
+        pool_registry.register_tool_meta(row, made)
+        tools.extend(made)
     return tools
 
 
@@ -350,6 +356,16 @@ def run_tool(tools_by_name: dict, name: str, arguments: dict) -> str:
     from hair_platform import tool_audit  # 도구 사용 기록(2026-11-26, 개선 계획 1-1)
 
     started = time.monotonic()
+    meta = pool_registry.TOOL_META.get(name, {})
+    label = progress.TOOL_LABELS.get(name, name)
+    # 외부 데이터 경계(2026-11-26, 개선 계획 1-3): 외부 데이터를 이미 읽은 실행에서는 외부로 쓰거나 실행하는 도구를 막는다.
+    if tool is not None and meta.get("side_effects") and tool_audit.is_tainted():
+        result = tool_audit.BLOCKED_MESSAGE.format(label=label)
+        tool_audit.record(name, label, arguments, result, 0, ok=False, blocked=True)
+        log = _CALL_LOG.get()
+        if log is not None:
+            log.append((name, result))
+        return result
     if tool is None:
         result = f"알 수 없는 도구입니다: {name}"
     else:
@@ -357,8 +373,10 @@ def run_tool(tools_by_name: dict, name: str, arguments: dict) -> str:
             result = str(tool.run(**arguments))
         except Exception as exc:  # noqa: BLE001
             result = f"도구 실행 중 오류가 발생했습니다: {exc}"
-    tool_audit.record(name, progress.TOOL_LABELS.get(name, name), arguments, result,
-                      int((time.monotonic() - started) * 1000))
+    tool_audit.record(name, label, arguments, result, int((time.monotonic() - started) * 1000),
+                      external=bool(meta.get("external")))
+    if meta.get("external") and not result.startswith(tool_audit.FAILURE_PREFIXES):
+        result = tool_audit.wrap_external(result, label)
     log = _CALL_LOG.get()
     if log is not None:
         log.append((name, result))

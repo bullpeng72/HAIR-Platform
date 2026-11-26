@@ -95,6 +95,48 @@ def find_issue_segments(text: str | None) -> list[str]:
     return seen
 
 
+# 작업 독백 제거(2026-11-26, 개선 계획 1-4 — 인사 파이프라인 실측: 한국어 결과물에 "Now I'll run the announcement
+# text through the checker."가 그대로 남았다). 로컬 모델이 도구를 부르기 전후의 영어 혼잣말을 결과물에 흘린다.
+# 번역하면 "이제 점검기로 확인하겠습니다" 같은 독백이 남을 뿐이라 **줄째 지운다**. 오탐을 막는 조건: 한국어가 주인
+# 결과물, 코드 블록·표·인용 밖, 한글이 한 글자도 없는 줄, 전형적인 작업 독백 시작 표현으로 시작, 400자 이하.
+# 일반 영어 문장(인용·태그라인·고유명사)은 건드리지 않는다. LLM 호출 없음.
+_NARRATION_RE = re.compile(
+    r"^(?:now,?\s+(?:i(?:'ll|’ll| will| am going to|'m going to)|let(?:'s| me))|let me\b|let's\b|i'll\b|i’ll\b|"
+    r"i will (?:now |first |next )?(?:run|check|use|call|write|create|draft|review|verify|start|begin|look|analy[sz]e|"
+    r"go|make|put|pass|apply|fix|update|summari[sz]e|compile|prepare)\b|i(?:'m| am) going to\b|"
+    r"(?:first|next|then|finally),? i(?:'ll| will| need to| should)\b|i need to\b|i should\b|"
+    r"okay[,.!]|ok,|alright[,.!]|sure[,.!]|here(?:'s| is) (?:my|the) (?:draft|plan|analysis|answer|result)\b)",
+    re.IGNORECASE,
+)
+
+
+@overload
+def strip_narration(text: str) -> tuple[str, int]: ...
+@overload
+def strip_narration(text: None) -> tuple[None, int]: ...
+def strip_narration(text: str | None) -> tuple[str | None, int]:
+    """한국어 결과물에서 영어 작업 독백 줄을 지운다. `(결과, 지운 줄 수)`."""
+    if not text or _is_html(text) or not is_mostly_korean(text):
+        return text, 0
+    out: list[str] = []
+    removed = 0
+    in_fence = False
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if (not in_fence and stripped and len(stripped) <= 400 and not stripped.startswith(("|", ">", "#"))
+                and not _HANGUL_RE.search(stripped) and _NARRATION_RE.match(stripped)):
+            removed += 1
+            continue
+        out.append(line)
+    if not removed:
+        return text, 0
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)), removed
+
+
 def _parse_json_list(raw: str, expected: int) -> list[str] | None:
     raw = raw.strip()
     fence = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
@@ -374,8 +416,21 @@ def repair_output(
     where: str,
 ) -> str | None:
     """응답 경로용 래퍼 — 같은 provider/model로 한 번 교정하고, 발견이 있었으면
-    감사로그(`language_qa_repaired`)를 남긴다. 어떤 예외도 밖으로 내보내지 않는다."""
-    if not enabled() or not find_issue_segments(text):
+    감사로그(`language_qa_repaired`)를 남긴다. 어떤 예외도 밖으로 내보내지 않는다.
+    영어 작업 독백 줄은 LLM 없이 먼저 지운다(2026-11-26, 개선 계획 1-4)."""
+    if not enabled():
+        return text
+    text, narration_removed = strip_narration(text)
+    if narration_removed:
+        try:
+            from hair_platform import audit
+
+            audit.record(conn, actor_id, "language_qa_narration_removed", "language_qa", None,
+                         after={"where": where, "lines": narration_removed})
+            conn.commit()
+        except Exception:  # noqa: BLE001, S110
+            pass
+    if not find_issue_segments(text):
         return text
     provider, model = helper_target(provider, model)  # 보조 작업 모델(있으면)
     if not provider or not model:

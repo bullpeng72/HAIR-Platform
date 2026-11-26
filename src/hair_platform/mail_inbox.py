@@ -313,6 +313,8 @@ def as_crewai_tool(conn: sqlite3.Connection):
         action: mailboxes(읽을 수 있는 메일함) | search(최근 메일 — query=보낸 사람·제목 낱말, days=최근 N일) |
         read(메일 한 통 — uid는 search 결과의 숫자). mailbox는 메일함 이름(하나뿐이면 생략 가능).
         먼저 search로 대상 메일을 찾은 뒤 read로 본문을 확인하라. 메일에 없는 내용을 지어내지 말고, 개인정보는 결과물에서 가려라."""
-        return run_action(conn, action, mailbox, query, days, uid)
+        from hair_platform import tool_audit  # 외부 데이터 경계(2026-11-26, 개선 계획 1-3) — CrewAI 경로도
+
+        return tool_audit.wrap_external(run_action(conn, action, mailbox, query, days, uid), "메일 수신함")
 
     return mail_inbox

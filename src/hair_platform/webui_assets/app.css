@@ -461,6 +461,10 @@
      자체로 옮겨 카드 크기 자체가 읽기 좋은 폭이 되게 한다. */
   .manual-card { max-width: 900px; margin: 0 auto; }
   .manual-content { font-size: 1.02rem; }
+  /* 필수 도구 칩(2026-11-26, 개선 계획 1-2 — 파이프라인 관리 단계 카드) */
+  .chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.4rem; border: 1px solid var(--color-border, #ccd); border-radius: 999px; background: #f6f8fb; font-size: 0.85rem; }
+  .chip button.small { padding: 0 0.3rem; line-height: 1.2; }
+  .stage-tools { font-size: 0.85rem; color: #475569; }
   /* 메뉴 찾기·이 화면 도움말(2026-11-26, P2-12 — js/29-menu-search.js) */
   header button.header-tool { background: rgba(255,255,255,0.14); color: #fff; border: 1px solid rgba(255,255,255,0.35); }
   header button.header-tool kbd { font-size: 0.7rem; opacity: 0.75; margin-left: 0.25rem; font-family: inherit; }

@@ -65,7 +65,7 @@ async function renderPoolRegistry(content) {
     '</ul>'
     ) +
     table(["코드", "이름", "종류", "분류", "설명", "활성", "동작"], tools.map(t => [
-      esc(t.code || "-"), esc(t.name), esc(t.kind), esc(POOL_CATEGORY_LABEL[t.category] || t.category), esc(t.description), t.is_active ? "활성" : "비활성",
+      esc(t.code || "-"), esc(t.name) + (t.side_effects ? ' <span class="gate-badge gate-warn" title="외부로 쓰거나 실행하는 도구 — 외부 데이터를 읽은 실행에서는 막고 사람 승인(2026-11-26)">쓰기</span>' : ""), esc(t.kind), esc(POOL_CATEGORY_LABEL[t.category] || t.category), esc(t.description), t.is_active ? "활성" : "비활성",
       (isAdmin || !["mcp_stdio", "mcp_remote", "custom_python"].includes(t.kind))
         ? '<div class="actions"><button class="small" data-edit-tool="' + t.id + '">수정</button>' +
           (isAdmin ? '<button class="small danger" data-delete-tool="' + t.id + '">삭제</button>' : "") +
@@ -92,6 +92,8 @@ async function renderPoolRegistry(content) {
     '<label style="display:block;margin-top:0.5rem">분류<br>' +
     '<select id="tp-category" style="width:100%;box-sizing:border-box;margin-top:0.2rem"><option value="general">일반업무</option><option value="sw_dev">개발업무</option></select>' +
     '</label>' +
+    // 외부로 쓰거나 실행하는 도구(2026-11-26, 개선 계획 1-3)
+    '<label style="display:block;margin-top:0.5rem" title="외부로 메시지를 보내거나, 파일·데이터를 바꾸거나, 명령을 실행하는 도구입니다. 메일·캘린더·사내 DB·웹 검색 같은 외부 데이터를 이미 읽은 실행에서는 이 도구를 자동으로 쓰지 못하게 막고 사람 승인으로 넘깁니다(외부 내용 속 지시로 AI가 조종되는 것을 막기 위해). MCP는 기본으로 켜져 있습니다."><input type="checkbox" id="tp-side-effects"> 외부로 쓰거나 실행하는 도구(메일 발송·파일/데이터 변경·명령 실행 등) <span class="muted">— 외부 데이터를 읽은 실행에서는 막고 사람 승인</span></label>' +
     '<label id="tp-config-wrap" style="display:block;margin-top:0.5rem">config JSON<br><input id="tp-config" placeholder="예: {&#39;native_id&#39;:&#39;vectordb_search&#39;}" style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
     '<div id="tp-custom-python-fields" style="display:none">' +
     '<label style="display:block;margin-top:0.5rem">Python 함수<br><textarea id="tp-custom-source" placeholder="def tool_fn(query: str) -> str:&#10;    return &#34;...&#34;" rows="18" style="width:100%;box-sizing:border-box;font-family:monospace;resize:vertical;min-height:320px;margin-top:0.2rem"></textarea></label>' +
@@ -227,6 +229,7 @@ async function renderPoolRegistry(content) {
         description: document.getElementById("tp-description").value,
         config,
         category: document.getElementById("tp-category").value,
+        side_effects: document.getElementById("tp-side-effects").checked,
       });
       showMsg("global-msg", "도구를 등록했습니다.", "ok");
       refresh();
@@ -298,6 +301,7 @@ async function renderPoolRegistry(content) {
         '<option value="general"' + (t.category === "general" ? " selected" : "") + '>일반업무</option>' +
         '<option value="sw_dev"' + (t.category === "sw_dev" ? " selected" : "") + '>개발업무</option>' +
         '</select></label>' +
+        '<label style="display:block;margin-top:0.4rem" title="외부로 메시지를 보내거나, 파일·데이터를 바꾸거나, 명령을 실행하는 도구입니다. 메일·캘린더·사내 DB·웹 검색 같은 외부 데이터를 이미 읽은 실행에서는 이 도구를 자동으로 쓰지 못하게 막고 사람 승인으로 넘깁니다(외부 내용 속 지시로 AI가 조종되는 것을 막기 위해). MCP는 기본으로 켜져 있습니다."><input type="checkbox" id="tpe-side-effects"' + (t.side_effects ? " checked" : "") + '> 외부로 쓰거나 실행하는 도구 <span class="muted">— 외부 데이터를 읽은 실행에서는 막고 사람 승인</span></label>' +
         (isCustom
           ? '<label style="display:block;margin-top:0.6rem">Python 함수<br>' +
             '<textarea id="tpe-custom-source" rows="24" style="width:100%;box-sizing:border-box;font-family:monospace;resize:vertical;min-height:420px;margin-top:0.2rem">' + esc(t.config.function_source || "") + '</textarea></label>' +
@@ -333,6 +337,7 @@ async function renderPoolRegistry(content) {
             description: tr.querySelector("#tpe-description").value,
             config,
             category: tr.querySelector("#tpe-category").value,
+            side_effects: tr.querySelector("#tpe-side-effects").checked,
           });
           showMsg("global-msg", "도구를 수정했습니다.", "ok");
           refresh();

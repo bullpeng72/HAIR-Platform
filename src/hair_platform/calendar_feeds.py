@@ -422,6 +422,8 @@ def as_crewai_tool(conn: sqlite3.Connection):
         action: calendars(읽을 수 있는 캘린더) | events(기간 안의 일정 — start=YYYY-MM-DD(기본 오늘), days=기간(기본 7일),
         query=제목·장소 낱말). calendar는 캘린더 이름(하나뿐이면 생략 가능). 반복 일정은 펼쳐서 보여 준다.
         날짜·시각은 결과 그대로 옮기고, 캘린더에 없는 일정을 지어내지 마라."""
-        return run_action(conn, action, calendar, start, days, query)
+        from hair_platform import tool_audit  # 외부 데이터 경계(2026-11-26, 개선 계획 1-3) — CrewAI 경로도
+
+        return tool_audit.wrap_external(run_action(conn, action, calendar, start, days, query), "캘린더")
 
     return calendar_events

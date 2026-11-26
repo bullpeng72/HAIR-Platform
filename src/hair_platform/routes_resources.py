@@ -666,6 +666,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 payload.config,
                 payload.tool_names,
                 payload.category,
+                payload.side_effects,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

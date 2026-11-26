@@ -141,6 +141,7 @@ def _stage_to_dict(conn: sqlite3.Connection, stage_row: sqlite3.Row) -> dict:
         ),
         "is_requirements_source": bool(stage_row["is_requirements_source"]),
         "strict_review": bool(stage_row["strict_review"]) if "strict_review" in stage_row.keys() else False,
+        "required_tools": _required_tools(stage_row),  # 필수 도구(2026-11-26, 개선 계획 1-2)
         "on_fail_return_stage_id": stage_row["on_fail_return_stage_id"],
         "output_content_type": stage_row["output_content_type"],
         "expected_output": stage_row["expected_output"],
@@ -389,6 +390,7 @@ def update_stage(
         "output_content_type",
         "expected_output",
         "strict_review",
+        "required_tools",
     }
     unknown = set(fields) - allowed
     if unknown:
@@ -414,6 +416,13 @@ def update_stage(
     for key, value in fields.items():
         if key == "gate_ids":
             value = json.dumps(value, ensure_ascii=False)
+        elif key == "required_tools":
+            names = [str(t).strip() for t in (value or []) if str(t).strip()]
+            known = {r[0] for r in conn.execute("SELECT name FROM tool_pool")}
+            unknown_tools = [t for t in names if t not in known]
+            if unknown_tools:
+                raise ValueError(f"unknown_required_tools:{unknown_tools}")
+            value = json.dumps(names, ensure_ascii=False) if names else None
         elif key in (
             "requires_human_approval",
             "is_primary_deliverable",
@@ -814,6 +823,17 @@ def rework_feedback(conn: sqlite3.Connection, run_id: int, stage) -> str:
     )
 
 
+def _required_tools(stage) -> list[str]:
+    try:
+        raw = stage["required_tools"] if "required_tools" in stage.keys() else None
+    except (AttributeError, IndexError):
+        raw = stage.get("required_tools") if isinstance(stage, dict) else None
+    if not raw:
+        return []
+    value = json.loads(raw) if isinstance(raw, str) else raw
+    return [str(t) for t in value if str(t).strip()]
+
+
 def _gate_failure_summary(gate_scores: dict) -> str:
     failed = [
         f"{gid}({g.get('score')})"
@@ -824,6 +844,13 @@ def _gate_failure_summary(gate_scores: dict) -> str:
     verdict = gate_scores.get("review_verdict")
     if isinstance(verdict, dict) and verdict.get("conditional") and verdict.get("note"):
         failed.append(f"검토자가 고치라고 한 곳: {verdict['note']}")
+    # 필수 도구(2026-11-26, 개선 계획 1-2) — 무엇을 다르게 해야 하는지 분명하게.
+    tools = gate_scores.get("required_tools")
+    if isinstance(tools, dict) and not tools.get("not_measured") and not tools.get("passed"):
+        failed.append(
+            "필수 도구를 실제로 부르지 않았습니다(" + ", ".join(tools.get("missing") or []) + ") — 결과를 적기 전에 "
+            "반드시 그 도구를 호출하고, 도구가 돌려준 결과를 그대로 근거로 쓰세요(호출 기록이 남아 확인됩니다)"
+        )
     return ", ".join(failed) if failed else "(세부 사유 없음)"
 
 
@@ -1248,7 +1275,8 @@ def assemble_stage_output(stage, result: dict, fallback_agent_id: int) -> tuple[
 
 
 def score_stage_output(
-    conn: sqlite3.Connection, run_id: int, stage, result: dict, stage_output: str, evidence: str
+    conn: sqlite3.Connection, run_id: int, stage, result: dict, stage_output: str, evidence: str,
+    attempt: int | None = None,
 ) -> tuple[dict, bool]:
     """단계 산출물 채점과 통과 판정 — 두 실행 엔진 공통(2026-11-25 기술 부채 정리). 예전엔 두 엔진에 같은 코드가 따로
     있어 새 검사(검토 판정 등)를 양쪽에 손으로 넣어야 했다. `evidence`는 근거(업무 요청·앞 단계 산출물·이번 단계
@@ -1335,6 +1363,22 @@ def score_stage_output(
     passed = ratio >= stage["min_gate_pass_ratio"]
     if verdict is not None and not verdict["not_measured"] and not verdict["passed"]:
         passed = False
+    # 필수 도구(2026-11-26, 개선 계획 1-2 — 인사 실측: 결과물에 "점검기 결과 0건"이라고만 적고 실제 호출은
+    # 확인할 수 없었다). 단계에 지정한 도구를 이 시도에서 실제로 부르지 않았으면 미통과 — 다시 시도에서 반드시 부르게.
+    # 외부 데이터(2026-11-26, 개선 계획 1-3) — 읽은 외부 데이터와 막힌 쓰기 도구를 참고 항목으로 남긴다.
+    from hair_platform import tool_audit as _ta
+
+    ext = _ta.external_data_gate(conn, run_id, stage["id"], attempt)
+    if ext is not None:
+        gate_scores["external_data"] = ext
+    required = _required_tools(stage)
+    if required:
+        from hair_platform import tool_audit
+
+        tool_gate = tool_audit.check_required(conn, run_id, stage, attempt, required)
+        gate_scores["required_tools"] = tool_gate
+        if not tool_gate["not_measured"] and not tool_gate["passed"]:
+            passed = False
     # 엄격 검토(2026-11-25, P0-4): 조건부 승인도 되돌려 지적된 곳을 고치게 한다(재시도 상한 안에서).
     if verdict is not None and verdict.get("conditional") and _stage_flag(stage, "strict_review"):
         verdict["passed"] = False
@@ -1549,6 +1593,7 @@ def _execute_stage_attempt(
     gate_scores, passed = score_stage_output(
         conn, run_id, stage, result, stage_output,
         "\n\n".join(filter(None, [combined_base, result.get("tool_evidence")])),
+        attempt=attempt,
     )
 
     # 사용자 요청(2026-11-17, "Human Agency Scale... 사람 고유 능력을
@@ -1566,6 +1611,8 @@ def _execute_stage_attempt(
     ).fetchone()
     stage_requires_human = bool(
         stage["requires_human_approval"] or task_row["requires_human_judgment"]
+        # 외부 데이터를 읽은 실행에서 쓰기 도구가 막혔으면 사람이 확인(2026-11-26, 개선 계획 1-3)
+        or (gate_scores.get("external_data") or {}).get("blocked")
     )
 
     cur = conn.execute(

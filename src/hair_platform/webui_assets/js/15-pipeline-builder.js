@@ -60,6 +60,23 @@ function _pipelineStageCollaborationBadge(stage) {
 
 // 검토 실패 시 되돌아갈 단계(2026-11-22, 하드코딩·스텁 점검 4순위) — Gate 기준이 있는 단계에서만
 // 의미가 있다. 이 단계보다 앞선 단계만 고를 수 있다.
+// 필수 도구(2026-11-26, 개선 계획 1-2) — 이 단계에서 Agent가 실제로 불러야 하는 도구. 부르지 않으면 단계 미통과 →
+// 다시 시도("필수 도구를 실제로 부르지 않았습니다"). 단계 Agent에 연결되지 않은 도구는 막지 않고 '측정 안 함'으로 알린다.
+let _pipelineToolNames = [];
+function _stageRequiredToolsHtml(stage) {
+  const req = stage.required_tools || [];
+  const chips = req.map(t =>
+    '<span class="chip">🔧 ' + esc(t) + ' <button class="small" type="button" data-remove-required-tool="' + stage.id + '" data-tool="' + escAttr(t) + '" title="필수 도구에서 빼기">×</button></span>'
+  ).join(" ");
+  const options = _pipelineToolNames.filter(n => !req.includes(n))
+    .map(n => '<option value="' + escAttr(n) + '">' + esc(n) + "</option>").join("");
+  return '<p class="muted" data-required-tools="' + escAttr(JSON.stringify(req)) + '" data-stage-id="' + stage.id + '">' +
+    '<span title="이 단계에서 Agent가 반드시 실제로 불러야 하는 도구 — 부르지 않고 결과만 적으면 미통과로 다시 시도합니다(호출 기록으로 확인).">필수 도구:</span> ' +
+    (chips || "없음") +
+    (options ? ' <select data-add-required-tool="' + stage.id + '"><option value="">+ 필수 도구 추가</option>' + options + "</select>" : "") +
+    "</p>";
+}
+
 function _stageReturnSelectHtml(stage, stages) {
   const earlier = (stages || []).filter(s => s.seq_order < stage.seq_order);
   if (!earlier.length || !(stage.min_gate_pass_ratio > 0)) return "";
@@ -91,6 +108,7 @@ function pipelineStageCardHtml(templateId, stage, index, total, stages) {
     stage.max_retry + "회 · 사람 승인 " + (stage.requires_human_approval ? "필요" : "불필요") +
     " " + _pipelineStageCollaborationBadge(stage) + "</p>" +
     _stageReturnSelectHtml(stage, stages) +
+    _stageRequiredToolsHtml(stage) +
     '<div class="actions">' +
     (index > 0 ? '<button class="small" data-reorder-stage="' + stage.id + ':up">↑</button>' : "") +
     (index < total - 1 ? '<button class="small" data-reorder-stage="' + stage.id + ':down">↓</button>' : "") +
@@ -163,10 +181,12 @@ function pipelineTemplateCardHtml(t, detail, activeAgents) {
 }
 
 async function renderPipelines(content) {
-  const [templates, agents] = await Promise.all([
+  const [templates, agents, toolPool] = await Promise.all([
     api("GET", "/api/pipeline-templates"),
     api("GET", "/api/agent-pool"),
+    api("GET", "/api/tool-pool").catch(() => []),  // 필수 도구 고르기(2026-11-26)
   ]);
+  _pipelineToolNames = (toolPool || []).filter(t => t.is_active !== false && t.is_active !== 0).map(t => t.name);
   const activeAgents = agents.filter(a => a.status === "active");
   const details = await Promise.all(
     templates.map(t => api("GET", "/api/pipeline-templates/" + t.id))
@@ -286,6 +306,28 @@ async function renderPipelines(content) {
         showMsg("global-msg", "단계 설정을 바꿨습니다.", "ok");
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  const _saveRequiredTools = async (el, next) => {
+    const templateId = el.closest("[data-pipeline-template-card]").dataset.pipelineTemplateCard;
+    const stageId = el.closest("[data-required-tools]").dataset.stageId;
+    try {
+      await api("PATCH", "/api/pipeline-templates/" + templateId + "/stages/" + stageId, { required_tools: next });
+      showMsg("global-msg", "필수 도구를 바꿨습니다.", "ok");
+      refresh();
+    } catch (e) { showMsg("global-msg", e.message, "error"); }
+  };
+  content.querySelectorAll("[data-add-required-tool]").forEach(sel => {
+    sel.onchange = () => {
+      if (!sel.value) return;
+      const cur = JSON.parse(sel.closest("[data-required-tools]").dataset.requiredTools || "[]");
+      _saveRequiredTools(sel, cur.concat([sel.value]));
+    };
+  });
+  content.querySelectorAll("[data-remove-required-tool]").forEach(btn => {
+    btn.onclick = () => {
+      const cur = JSON.parse(btn.closest("[data-required-tools]").dataset.requiredTools || "[]");
+      _saveRequiredTools(btn, cur.filter(t => t !== btn.dataset.tool));
     };
   });
   content.querySelectorAll("[data-delete-stage]").forEach(btn => {

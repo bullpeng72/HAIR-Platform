@@ -326,6 +326,13 @@ def tavily_context_for_prompt(query: str, top_k: int = 3) -> str:
     return text
 
 
+def _wrap_ext(text):
+    """웹 검색 결과는 외부 데이터 — 경계 표시(2026-11-26, 개선 계획 1-3). 오류 문구도 그대로 감싼다(무해)."""
+    from hair_platform import tool_audit
+
+    return tool_audit.wrap_external(text, "웹 검색")
+
+
 def as_tavily_crewai_tool(conn=None, top_k: int = 3) -> Tool:
     """실시간 웹 검색을 실제 CrewAI Tool로 감싼다(`as_crewai_tool()`과
     같은 패턴 — ASCII 함수명 제약도 동일하게 적용된다). `crewai`는
@@ -337,7 +344,7 @@ def as_tavily_crewai_tool(conn=None, top_k: int = 3) -> Tool:
         """최신 뉴스·실시간 정보처럼 Wikipedia에 없는 최신/일반 웹
         정보가 필요할 때 검색한다. 내부 정보나 백과사전 지식으로
         충분하면 호출하지 마라."""
-        return tavily_context_for_prompt(query, top_k=top_k)
+        return _wrap_ext(tavily_context_for_prompt(query, top_k=top_k))
 
     # crewai `@tool`은 실행 시 Tool 객체를 돌려주지만 타입 표기상 원래 함수로 보인다.
     return cast("Tool", search_realtime_web)
@@ -384,7 +391,7 @@ def as_tavily_news_crewai_tool(conn=None, top_k: int = 5, days: int = 7) -> Tool
         """특정 주제의 최근 뉴스/업계 동향이 필요할 때 검색한다 —
         일반 웹 검색과 달리 실제로 최근 며칠 이내로 기간이 제한된
         결과만 돌려준다. 오래된 일반 정보면 호출하지 마라."""
-        return tavily_news_context_for_prompt(query, top_k=top_k, days=days)
+        return _wrap_ext(tavily_news_context_for_prompt(query, top_k=top_k, days=days))
 
     # crewai `@tool`은 실행 시 Tool 객체를 돌려주지만 타입 표기상 원래 함수로 보인다.
     return cast("Tool", search_recent_news)

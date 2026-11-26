@@ -268,6 +268,7 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
     gate_scores, passed = pr.score_stage_output(
         conn, state["run_id"], stage, result, stage_output,
         "\n\n".join(filter(None, [combined_base, result.get("tool_evidence")])),
+        attempt=state["attempt"],
     )
 
     task_row = conn.execute(
@@ -277,6 +278,8 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
     needs_human_on_pass = bool(
         stage["requires_human_approval"]
         or (task_row is not None and task_row["requires_human_judgment"])
+        # 외부 데이터를 읽은 실행에서 쓰기 도구가 막혔으면 사람이 확인(2026-11-26, 개선 계획 1-3)
+        or (gate_scores.get("external_data") or {}).get("blocked")
     )
 
     attempt = state["attempt"]

@@ -809,6 +809,7 @@ class PipelineStageUpdate(BaseModel):
     output_content_type: ContentType | None = None
     expected_output: str | None = None
     strict_review: bool | None = None  # 조건부 승인도 보완 요청으로(2026-11-25, P0-4)
+    required_tools: list[str] | None = None  # 이 단계에서 반드시 실제로 불러야 하는 도구(Pool 이름, 2026-11-26)
 
 
 class PipelineStageReorder(BaseModel):
@@ -890,6 +891,8 @@ class ToolPoolCreate(BaseModel):
     config: dict = {}
     tool_names: list[str] = []
     category: PoolCategory = "general"
+    # 외부로 쓰거나 실행하는 도구인가(2026-11-26, 개선 계획 1-3). 생략하면 MCP는 예, 나머지는 아니오.
+    side_effects: bool | None = None
 
 
 class ToolPoolUpdate(BaseModel):
@@ -909,6 +912,7 @@ class ToolPoolUpdate(BaseModel):
     config: dict | None = None
     tool_names: list[str] | None = None
     category: PoolCategory | None = None
+    side_effects: bool | None = None  # 외부로 쓰거나 실행하는 도구(2026-11-26, 개선 계획 1-3)
 
 
 class ToolActiveUpdate(BaseModel):

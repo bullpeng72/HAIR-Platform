@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from hair_platform import websearch
+from hair_platform import tool_audit, websearch
 
 
 def _mock_response(payload: dict, status_ok: bool = True) -> MagicMock:
@@ -283,7 +283,8 @@ def test_gc199_as_tavily_crewai_tool_has_ascii_name_and_wraps_context_for_prompt
     ) as ctx_mock:
         result = tool.func("질문 내용")
     ctx_mock.assert_called_once_with("질문 내용", top_k=2)
-    assert result == "검색 결과 텍스트"
+    # 웹 검색 결과는 외부 데이터 경계로 감싸 돌려준다(2026-11-26, 개선 계획 1-3)
+    assert result == tool_audit.wrap_external("검색 결과 텍스트", "웹 검색")
 
 
 # ---------- Phase 76 — 최근 뉴스 검색(사용자 요청, 2026-11-17, "딥리서치
@@ -358,4 +359,5 @@ def test_as_tavily_news_crewai_tool_has_ascii_name_and_wraps_context_for_prompt(
     ) as ctx_mock:
         result = tool.func("AI 업계 동향")
     ctx_mock.assert_called_once_with("AI 업계 동향", top_k=5, days=7)
-    assert result == "뉴스 결과 텍스트"
+    # 웹 검색 결과는 외부 데이터 경계로 감싸 돌려준다(2026-11-26, 개선 계획 1-3)
+    assert result == tool_audit.wrap_external("뉴스 결과 텍스트", "웹 검색")

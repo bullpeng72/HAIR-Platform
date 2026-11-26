@@ -22,6 +22,8 @@ OpenAI는 과금, Ollama는 로컬 실행이라 API 비용은 없지만 로컬 �
 
 from __future__ import annotations
 
+import contextlib
+
 from typing import Any
 import json
 import os
@@ -245,13 +247,51 @@ def call_llm(
         extra["max_output_tokens"] = max_output_tokens
     if on_partial is not None and provider in ("anthropic", "openai", "ollama"):
         return _STREAMERS[provider](model, system, prompt, timeout_seconds, on_partial, temperature)
-    if provider == "anthropic":
-        return _call_anthropic(model, system, prompt, timeout_seconds, **extra)
-    if provider == "openai":
-        return _call_openai(model, system, prompt, timeout_seconds, **extra)
-    if provider == "ollama":
-        return _call_ollama(model, system, prompt, timeout_seconds, **extra)
+    with _waiting_heartbeat(model):  # 스트리밍이 아닌 호출 — 끝날 때까지 경과 시간 표시(2026-11-26, 1-5)
+        if provider == "anthropic":
+            return _call_anthropic(model, system, prompt, timeout_seconds, **extra)
+        if provider == "openai":
+            return _call_openai(model, system, prompt, timeout_seconds, **extra)
+        if provider == "ollama":
+            return _call_ollama(model, system, prompt, timeout_seconds, **extra)
     raise ValueError(f"지원하지 않는 provider입니다: {provider!r}")
+
+
+HEARTBEAT_SECONDS = 30.0
+
+
+@contextlib.contextmanager
+def _waiting_heartbeat(model: str):
+    """스트리밍이 아닌 LLM 호출을 기다리는 동안 작업 행 진행 문구에 경과 시간을 남긴다(2026-11-26, 개선 계획 1-5).
+    작업 밖(진행 표시가 없는 호출)이면 아무것도 하지 않는다. 이 표시는 멈춤 감시(`StageWatchdog`)에도 활동으로
+    보인다 — 모델이 실제로 응답을 만드는 중이므로 맞다(호출 자체는 HTTP 시간 상한으로 끝난다)."""
+    import threading
+    import time
+
+    from hair_platform import progress
+
+    reporter = progress._REPORTER.get()
+    if reporter is None or HEARTBEAT_SECONDS <= 0:
+        yield
+        return
+    stop = threading.Event()
+    started = time.monotonic()
+
+    def beat() -> None:
+        while not stop.wait(HEARTBEAT_SECONDS):
+            elapsed = int(time.monotonic() - started)
+            try:
+                reporter(f"응답 생성 중 — {model} · {elapsed // 60}분 {elapsed % 60:02d}초 경과"
+                         "(도구를 쓰는 응답은 끝날 때 한꺼번에 받습니다)")
+            except Exception:  # noqa: BLE001, S110 — 표시 실패가 호출을 막으면 안 된다
+                pass
+
+    thread = threading.Thread(target=beat, name="hair-llm-heartbeat", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
 
 
 def call_llm_with_tools(
@@ -285,18 +325,21 @@ def call_llm_with_tools(
     extra: dict[str, Any] = {"temperature": temperature} if temperature is not None else {}
     if not tools:
         return call_llm(provider, model, system, prompt, timeout_seconds=timeout_seconds, **extra)
-    if provider == "anthropic":
-        return _call_anthropic_with_tools(
-            model, system, prompt, tools, timeout_seconds, max_iterations, **extra
-        )
-    if provider == "openai":
-        return _call_openai_with_tools(
-            model, system, prompt, tools, timeout_seconds, max_iterations, **extra
-        )
-    if provider == "ollama":
-        return _call_ollama_with_tools(
-            model, system, prompt, tools, timeout_seconds, max_iterations, **extra
-        )
+    # 도구 호출 루프는 스트리밍이 아니다 — 끝날 때까지 경과 시간 표시(2026-11-26, 1-5 — 인사 실측: 도구가 붙은 검토
+    # 단계가 34분 동안 진행 표시 없이 "응답 생성 중"에 멈춰 보였다).
+    with _waiting_heartbeat(model):
+        if provider == "anthropic":
+            return _call_anthropic_with_tools(
+                model, system, prompt, tools, timeout_seconds, max_iterations, **extra
+            )
+        if provider == "openai":
+            return _call_openai_with_tools(
+                model, system, prompt, tools, timeout_seconds, max_iterations, **extra
+            )
+        if provider == "ollama":
+            return _call_ollama_with_tools(
+                model, system, prompt, tools, timeout_seconds, max_iterations, **extra
+            )
     raise ValueError(f"지원하지 않는 provider입니다: {provider!r}")
 
 
