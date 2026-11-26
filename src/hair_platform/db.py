@@ -1424,6 +1424,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import mail_inbox  # 메일 수신함 읽기(2026-11-26, P1-9 2단계)
 
     mail_inbox.ensure_schema(conn)
+    from hair_platform import calendar_feeds  # 캘린더 읽기(2026-11-26, P1-9 3단계)
+
+    calendar_feeds.ensure_schema(conn)
     # 결과물 → 저장소 커밋 기록(2026-11-24, P0-3 2단계 — `repo_commit.py`).
     from hair_platform import repo_commit
 
@@ -3035,6 +3038,15 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
                 "조회마다 활동 기록을 남긴다(2026-11-26, P1-9 2단계, `mail_inbox.py`)."
             ),
             "mail_inbox_read",
+        ),
+        (
+            "캘린더 조회",
+            (
+                "관리자가 등록한 업무 캘린더(iCal/ICS 주소 또는 .ics 파일)의 일정을 읽기 전용으로 조회하는 네이티브 Tool — "
+                "기간·낱말로 일정 목록(반복 일정 펼침, 예외·변경 회차 반영, 취소 일정 제외). 캘린더별 공개 범위로 요청자를 "
+                "확인하고 조회마다 활동 기록을 남긴다(2026-11-26, P1-9 3단계, `calendar_feeds.py`)."
+            ),
+            "calendar_read",
         ),
     ]
     # 사용자 요청(2026-10-26, "도구/skill에서 동작하지 않는 검색은

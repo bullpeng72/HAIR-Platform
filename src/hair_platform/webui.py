@@ -12316,7 +12316,7 @@ const MANUAL_MARKDOWN = [
 '',
 '| 유형 | 이런 사람에게 | 할 수 있는 일 | 할 수 없는 일 |',
 '|---|---|---|---|',
-'| **admin** (관리자) | 플랫폼 운영 책임자 | manager가 할 수 있는 모든 일 + **admin 전용**: 사용자 생성·유형 지정, Agent 온보딩 승인, 업무 요청·할 일·사람·Agent **삭제**, 모델 레지스트리·LLM 설정 최적화, 평가 기준, 조직 정책·기본 구성 점검, 외부 알림·메일 알림·코드 저장소·사내 DB·메일 수신함 연결 | 자기가 올린 배정 요청을 자기가 승인(다른 admin·manager가 승인) |',
+'| **admin** (관리자) | 플랫폼 운영 책임자 | manager가 할 수 있는 모든 일 + **admin 전용**: 사용자 생성·유형 지정, Agent 온보딩 승인, 업무 요청·할 일·사람·Agent **삭제**, 모델 레지스트리·LLM 설정 최적화, 평가 기준, 조직 정책·기본 구성 점검, 외부 알림·메일 알림·코드 저장소·사내 DB·메일 수신함·캘린더 연결 | 자기가 올린 배정 요청을 자기가 승인(다른 admin·manager가 승인) |',
 '| **manager** (업무 관리자) | 팀장·PM처럼 일을 나누고 배정하는 사람 | 업무 요청을 할 일로 나누기, 배정 요청과 **결재 처리**, Agent 만들기·실행, 팀·파이프라인 실행, 사람 인력·팀·파이프라인·도구/스킬·지식 베이스 관리, 정기 실행·이벤트 트리거, 대시보드·비용·공정성 지표·활동 기록 보기 | 위 admin 전용 기능, 자기 요청 승인 |',
 '| **member** (실무자) | 업무를 요청하고 맡은 일을 하는 사람 | 대화(Agent 멘션 포함), **업무 요청 제출**, 배정 요청 올리기, 맡은 할 일의 협업 워크스페이스에서 결과물 작성·검토 요청·댓글, 내 API 키 발급, 성과 리뷰 보기 | **결재 처리**, 할 일로 나누기, Agent 만들기·실행, 파이프라인 실행, "설정" 메뉴 전체 |',
 '| **viewer** (열람자) | 내용을 보기만 하면 되는 사람(임원·외부 검토자 등) | 홈·인박스·내 업무·업무 요청·결재(목록)·갤러리·할 일 보드·인력 검색·조직도·이용 가이드 **열람**, **대화**(AI 답변 포함) | 업무 요청 제출, 배정 요청, 결재 처리, 결과물 작성, API 키, 홈의 "AI에게 일 맡기기", 성과 리뷰·연동 설정 탭, "설정" 메뉴 |',
@@ -12841,6 +12841,9 @@ const MANUAL_MARKDOWN = [
 '  - **읽기 전용**: 보내기·지우기·이동을 하지 않고 **읽음 표시도 바꾸지 않습니다**. 첨부는 이름·크기만 봅니다. 회신은 결과물(초안)로만 만듭니다.',
 '  - **공개 범위**: 메일함마다 누구의 요청일 때 읽을지 정합니다(admin만·manager 이상·모든 사람 — 기본 admin만). 요청한 사람을 알 수 없는 실행에서는 읽지 않습니다.',
 '  - **비밀번호**: 메일 서비스의 **앱 비밀번호**를 서버 PC 환경변수에 넣고 그 이름만 적습니다. 등록 뒤 **"연결 확인"**으로 접속을 확인하세요. 조회마다 활동 기록 `mail_inbox_read`가 남습니다.',
+'- **캘린더**(admin) — 업무 캘린더의 **iCal(ICS) 주소**(Google 캘린더 "비공개 iCal 주소", Outlook "게시된 캘린더" ICS 링크, 그룹웨어 ICS 내보내기) 또는 서버의 `.ics` 파일을 등록하면 **캘린더조회** 스킬이 있는 Agent(PM·개발 계획 수립가·실적 보고서 작성자)가 기간 안의 일정을 읽어 회의 준비·주간 보고·일정 충돌 확인에 씁니다.',
+'  - **읽기 전용**이고 반복 일정은 펼쳐서, 빠진 회차·옮긴 회차·취소 일정까지 반영해 보여 줍니다. **공개 범위**는 메일 수신함과 같습니다(기본 admin만).',
+'  - 비공개 iCal 주소는 그 자체가 비밀 키라 **저장하지 않습니다** — 서버 PC 환경변수에 넣고 그 이름만 적습니다(https만). 시간대는 `HAIR_TIMEZONE`(예: `Asia/Seoul`), 없으면 서버 PC 시간대. 조회마다 활동 기록 `calendar_read`가 남습니다.',
 '  - **읽기 전용이고 커밋된 파일만** 봅니다 — 미커밋 변경, `.gitignore`로 빠진 파일, `.env`·키 같은 비밀 파일은 읽지 않습니다. 최신 코드를 보게 하려면 그 폴더에서 `git pull`을 해 두세요.',
 '  - 대화에서는 "@코드베이스 분석가 shop-api 저장소의 주문 취소 흐름을 설명해 줘"처럼 저장소 이름을 함께 적습니다.',
 '- **결과물을 저장소에 커밋**(admin) — 결재를 마친 결과물 카드의 **"저장소에 커밋"** → 저장소 선택 → **미리보기**를 누르면 쓸 파일(새 파일·수정)과 점검 결과가 나옵니다.',
@@ -13128,7 +13131,7 @@ const MANUAL_MARKDOWN = [
 '',
 '| 구분 | 내용 |',
 '|---|---|',
-'| **지움** | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)과 Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소·사내 DB·메일 수신함 연결 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |',
+'| **지움** | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)과 Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소·사내 DB·메일 수신함·캘린더 연결 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |',
 '| **남김** | Agent 36종·스킬·도구·파이프라인 템플릿(관리자가 만든 것 포함), 조직 정책(사번 형식·결과물 언어·알림 웹훅·메일 수신자), 평가 기준, 플랫폼 공통 기본 LLM·보조 작업 모델·지식 검색 설정, "초기화 시 보호" 팀과 멤버 |',
 '| **되돌림** | 모든 Agent의 모델 지정·비용·성과점수·마지막 결과물을 비움. 상태는 **기본 Agent만 "활성"으로** 되돌리고, 관리자가 만든 Agent는 지금 상태(온보딩 대기·비활성 등)를 그대로 둠 — 승인 전 Agent가 초기화로 활성이 되지 않음 |',
 '',
@@ -13152,7 +13155,7 @@ async function renderIntegrations(content) {
   const isAdmin = ME.role === "admin";
   const canSchedule = ["admin", "manager"].includes(ME.role);
   const fmt = v => v ? esc(String(v).replace("T", " ")) : "-";
-  const [keys, schedules, templates, notify, repos, trig, dataConns, mailBoxes] = await Promise.all([
+  const [keys, schedules, templates, notify, repos, trig, dataConns, mailBoxes, calFeeds] = await Promise.all([
     api("GET", "/api/api-keys"),
     canSchedule ? api("GET", "/api/pipeline-schedules") : Promise.resolve([]),
     canSchedule ? api("GET", "/api/pipeline-templates") : Promise.resolve([]),
@@ -13161,6 +13164,7 @@ async function renderIntegrations(content) {
     canSchedule ? api("GET", "/api/automation-triggers") : Promise.resolve({ triggers: [], events: {} }),
     isAdmin ? api("GET", "/api/data-connections").catch(() => []) : Promise.resolve([]),  // 사내 DB(2026-11-26, P1-9)
     isAdmin ? api("GET", "/api/mail-inboxes").catch(() => []) : Promise.resolve([]),  // 메일 수신함(2026-11-26, P1-9 2단계)
+    isAdmin ? api("GET", "/api/calendar-feeds").catch(() => []) : Promise.resolve([]),  // 캘린더(2026-11-26, P1-9 3단계)
   ]);
   const visLabel = v => ({ all: "모든 사람", manager: "manager 이상", admin: "admin만" })[v] || (String(v).startsWith("team:") ? "팀 #" + String(v).slice(5) : v);
   const mbRows = (mailBoxes || []).map(b =>
@@ -13177,6 +13181,12 @@ async function renderIntegrations(content) {
     (d.is_active ? "켜짐" : "꺼짐") + "</td><td>" +
     '<button class="small" data-test-dc="' + d.id + '">연결 확인</button> ' +
     '<button class="small" data-toggle-dc="' + d.id + '" data-active="' + (d.is_active ? "0" : "1") + '">' + (d.is_active ? "끄기" : "켜기") + "</button></td></tr>"
+  ).join("");
+  const cfRows = (calFeeds || []).map(f =>
+    "<tr><td>" + esc(f.name) + "</td><td>" + (f.source_kind === "url" ? "iCal 주소(환경변수)" : "ICS 파일") + "<br><code>" + esc(f.source) + "</code> " +
+    (f.source_ready ? "✓" : "⚠ 비어 있음") + "</td><td>" + esc(visLabel(f.visibility)) + "</td><td>" + (f.is_active ? "켜짐" : "꺼짐") + "</td><td>" +
+    '<button class="small" data-test-cf="' + f.id + '">연결 확인</button> ' +
+    '<button class="small" data-toggle-cf="' + f.id + '" data-active="' + (f.is_active ? "0" : "1") + '">' + (f.is_active ? "끄기" : "켜기") + "</button></td></tr>"
   ).join("");
   // 이벤트 트리거(2026-11-24, P1-5).
   const tplOptions = templates.filter(t => t.is_active !== 0).map(t => '<option value="' + t.id + '">' + esc(t.name) + "</option>").join("");
@@ -13322,7 +13332,21 @@ async function renderIntegrations(content) {
       '<input id="mb-desc" placeholder="설명(Agent가 어떤 메일함인지 알 수 있게)" maxlength="500" style="min-width:14rem">' +
       '<button class="primary" type="submit">메일함 등록</button></form>' +
       (mbRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>계정</th><th>공개 범위</th><th>비밀번호</th><th>상태</th><th></th></tr></thead><tbody>' + mbRows + "</tbody></table></div>"
-        : '<p class="muted">등록된 메일함이 없습니다.</p>')
+        : '<p class="muted">등록된 메일함이 없습니다.</p>') +
+      // 캘린더(2026-11-26, P1-9 3단계 — `calendar_feeds.py`).
+      "<h3>캘린더(admin)</h3>" +
+      '<p class="muted">업무 캘린더의 <b>iCal(ICS) 주소</b>(Google 캘린더 설정 → "비공개 iCal 주소", Outlook → 캘린더 게시 → ICS 링크) 또는 서버의 <code>.ics</code> 파일을 등록하면 <b>캘린더조회</b> 스킬이 있는 Agent(PM·개발 계획 수립가·실적 보고서 작성자)가 기간 안의 일정을 읽습니다(반복 일정 펼침, 취소 일정 제외). ' +
+      '<b>읽기 전용</b>이고 <b>공개 범위</b>로 누구의 요청일 때 읽을지 정합니다(기본 admin만). 조회마다 활동 기록(<code>calendar_read</code>)이 남습니다. ' +
+      '비공개 iCal 주소는 그 자체가 비밀 키라 <b>저장하지 않습니다</b> — 서버 PC 환경변수에 넣고 그 이름만 적으세요(https만). 시간대는 환경변수 <code>HAIR_TIMEZONE</code>(예: Asia/Seoul), 없으면 서버 PC 시간대입니다.</p>' +
+      '<form id="cf-form" class="inline" style="flex-wrap:wrap">' +
+      '<input id="cf-name" placeholder="이름(예: sales_team)" required maxlength="60">' +
+      '<select id="cf-kind"><option value="url">iCal 주소(환경변수)</option><option value="file">서버의 .ics 파일</option></select>' +
+      '<input id="cf-source" placeholder="환경변수 이름(예: HAIR_CAL_SALES_URL) 또는 .ics 경로" required style="min-width:18rem">' +
+      '<select id="cf-vis"><option value="admin">admin만</option><option value="manager">manager 이상</option><option value="all">모든 사람</option></select>' +
+      '<input id="cf-desc" placeholder="설명(Agent가 어떤 캘린더인지 알 수 있게)" maxlength="500" style="min-width:14rem">' +
+      '<button class="primary" type="submit">캘린더 등록</button></form>' +
+      (cfRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>출처</th><th>공개 범위</th><th>상태</th><th></th></tr></thead><tbody>' + cfRows + "</tbody></table></div>"
+        : '<p class="muted">등록된 캘린더가 없습니다.</p>')
       : "");
 
   document.getElementById("apikey-form").addEventListener("submit", async ev => {
@@ -13471,6 +13495,29 @@ async function renderIntegrations(content) {
         const r = await api("POST", "/api/mail-inboxes/" + btn.dataset.testMb + "/test");
         showMsg("global-msg", "연결 성공 — 최근 1일 메일 " + r.recent + "통을 찾았습니다(읽음 표시 변경 없음).", "ok");
       } catch (e) { showMsg("global-msg", "연결 실패: " + e.message, "error"); }
+    }));
+    document.getElementById("cf-form").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      const v = id => document.getElementById(id).value.trim();
+      try {
+        const r = await api("POST", "/api/calendar-feeds", {
+          name: v("cf-name"), source_kind: v("cf-kind"), source: v("cf-source"), visibility: v("cf-vis"), description: v("cf-desc"),
+        });
+        showMsg("global-msg", "캘린더 '" + r.name + "'을(를) 등록했습니다 — '연결 확인'으로 일정을 읽을 수 있는지 확인하세요.", "ok");
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+    content.querySelectorAll("[data-test-cf]").forEach(btn => btn.addEventListener("click", async () => {
+      try {
+        const r = await api("POST", "/api/calendar-feeds/" + btn.dataset.testCf + "/test");
+        showMsg("global-msg", "연결 성공 — 전체 일정 " + r.events + "건, 앞으로 30일 " + r.upcoming + "건(" + r.tz + ").", "ok");
+      } catch (e) { showMsg("global-msg", "연결 실패: " + e.message, "error"); }
+    }));
+    content.querySelectorAll("[data-toggle-cf]").forEach(btn => btn.addEventListener("click", async () => {
+      try {
+        await api("PATCH", "/api/calendar-feeds/" + btn.dataset.toggleCf, { is_active: btn.dataset.active === "1" });
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
     }));
     content.querySelectorAll("[data-toggle-mb]").forEach(btn => btn.addEventListener("click", async () => {
       try {

@@ -33,6 +33,7 @@ from hair_platform import (
     code_repos,
     data_connectors,
     mail_inbox,
+    calendar_feeds,
     graphquery,
     id_scheme,
     pool_catalog,
@@ -63,6 +64,8 @@ NATIVE_TOOL_FACTORIES = {
     data_connectors.NATIVE_ID: data_connectors.as_crewai_tool,
     # 메일 수신함 읽기(2026-11-26, P1-9 2단계 — `mail_inbox.py`).
     mail_inbox.NATIVE_ID: mail_inbox.as_crewai_tool,
+    # 캘린더 읽기(2026-11-26, P1-9 3단계 — `calendar_feeds.py`).
+    calendar_feeds.NATIVE_ID: calendar_feeds.as_crewai_tool,
 }
 
 

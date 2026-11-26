@@ -208,6 +208,61 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except mail_inbox.MailError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # ---------- 캘린더 읽기(2026-11-26, P1-9 3단계 — `calendar_feeds.py`, admin) ----------
+    @app.get("/api/calendar-feeds")
+    def list_calendar_feeds_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import calendar_feeds
+
+        return calendar_feeds.list_feeds(conn, include_inactive=True)
+
+    @app.post("/api/calendar-feeds", status_code=201)
+    def register_calendar_feed_endpoint(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import calendar_feeds
+
+        try:
+            return calendar_feeds.register(
+                conn, user["id"], str(payload.get("name") or ""), str(payload.get("source_kind") or ""),
+                str(payload.get("source") or ""), visibility=str(payload.get("visibility") or "admin"),
+                description=str(payload.get("description") or ""),
+            )
+        except (calendar_feeds.CalendarError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/calendar-feeds/{feed_id}")
+    def update_calendar_feed_endpoint(feed_id: int, payload: dict = Body(...),
+                                      user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import calendar_feeds
+
+        try:
+            return calendar_feeds.update(
+                conn, user["id"], feed_id,
+                is_active=bool(payload["is_active"]) if "is_active" in payload else None,
+                visibility=str(payload["visibility"]) if payload.get("visibility") else None,
+            )
+        except calendar_feeds.CalendarError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/calendar-feeds/{feed_id}/test")
+    def test_calendar_feed_endpoint(feed_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """연결 확인 — admin 본인 이름으로 오늘부터 30일 일정을 읽어 본다(읽기 전용)."""
+        from hair_platform import calendar_feeds, knowledge_access
+
+        try:
+            feed = calendar_feeds.get(conn, feed_id)
+            if not feed["is_active"]:
+                raise calendar_feeds.CalendarError("꺼진 캘린더입니다")
+            calendar_feeds._CACHE.pop(feed_id, None)
+            with knowledge_access.as_viewer(user["id"]):
+                r = calendar_feeds.events_between(conn, feed["name"], days=30)
+            # 테스트용 ICS는 과거 날짜일 수 있어, 30일 안이 비면 전체 VEVENT 수도 알려 준다
+            total = len(calendar_feeds.parse_events(calendar_feeds._fetch(conn.execute(
+                "SELECT * FROM calendar_feeds WHERE id = ?", (feed_id,)).fetchone()), calendar_feeds.local_tz()))
+            return {"ok": True, "upcoming": len(r["events"]), "events": total, "tz": r["tz"]}
+        except calendar_feeds.CalendarError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # ---------- 기본 구성 점검(2026-11-23, P2-10 — `config_check.py`, admin) ----------
     @app.get("/api/admin/config-check")
     def config_check_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
