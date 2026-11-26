@@ -713,7 +713,9 @@ class TeamCrewExecuteRequest(BaseModel):
     manager_model: str | None = None
 
 
-PipelineStageMode = Literal["single", "sequential_relay", "parallel_delegated"]
+# 2026-11-26(P1-7 4단계): 병행 위임(parallel_delegated) 제거 — 계획 분담(plan_merge)으로 대체. 예전엔 plan_merge가
+# 여기 빠져 있어 화면에 선택지가 있는데도 API가 422로 거부했다(단계를 새로 만들 수 없었음).
+PipelineStageMode = Literal["single", "sequential_relay", "plan_merge"]
 # A-G(agent-evaluator) + 플랫폼이 직접 재는 점수(2026-11-22 — 마이그레이션이 단계에 넣는 값인데
 # API가 A-G만 받아, admin이 그 단계의 Gate 목록을 고쳐 저장하면 422가 났다).
 GateId = Literal[

@@ -131,7 +131,7 @@ def test_create_template_and_add_stages_round_trip():
         admin_id,
         tid,
         "구현",
-        "parallel_delegated",
+        "plan_merge",
         [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")],
         lead_role_name="개발 계획 수립가",
     )
@@ -142,18 +142,18 @@ def test_create_template_and_add_stages_round_trip():
     assert [a["role_name"] for a in tpl["stages"][1]["agents"]] == ["AA", "DA"]
     assert tpl["stages"][2]["lead_role_name"] == "개발 계획 수립가"
 
-    # 역할 1개 제약(단독), 리드 포함 2개 이상 제약(병행 위임)
+    # 역할 1개 제약(단독), 리드 포함 2개 이상 제약(계획 분담)
     with pytest.raises(ValueError, match="single_mode_requires_exactly_one_agent"):
         pr.add_stage(conn, admin_id, tid, "x", "single", [("a", ""), ("b", "")])
     with pytest.raises(
-        ValueError, match="parallel_delegated_requires_at_least_one_coworker"
+        ValueError, match="plan_merge_requires_at_least_one_coworker"
     ):
         pr.add_stage(
             conn,
             admin_id,
             tid,
             "y",
-            "parallel_delegated",
+            "plan_merge",
             [("a", "")],
             lead_role_name="a",
         )
@@ -254,90 +254,38 @@ def test_single_mode_stage_requiring_approval_pauses_run():
     assert approval is not None and approval["subject_id"] == stage_result["id"]
 
 
-def test_sequential_relay_then_parallel_delegated_auto_advance_without_approval():
+def test_sequential_relay_then_plan_merge_auto_advance_without_approval():
+    """2026-11-26 — 예전 병행 위임(hierarchical) 자리를 계획 분담이 대신한다: 리드가 나누고 팀원이 맡은 뒤 리드가 합친다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
     task_id = _make_task(conn)
     tid = pr.create_pipeline_template(conn, admin_id, "p2", "", "x")
-    pr.add_stage(
-        conn,
-        admin_id,
-        tid,
-        "설계",
-        "sequential_relay",
-        [("AA", "AA 역할"), ("DA", "DA 역할")],
-    )
-    pr.add_stage(
-        conn,
-        admin_id,
-        tid,
-        "구현",
-        "parallel_delegated",
-        [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")],
-        lead_role_name="개발 계획 수립가",
-    )
+    pr.add_stage(conn, admin_id, tid, "설계", "sequential_relay", [("AA", "AA 역할"), ("DA", "DA 역할")])
+    pr.add_stage(conn, admin_id, tid, "구현", "plan_merge",
+                 [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")], lead_role_name="개발 계획 수립가")
+    crew_calls, plan_calls = [], []
 
-    calls = []
+    def _tracking_run_crew(conn, agent_ids, task_descriptions, actor_id, process="sequential", **kwargs):
+        crew_calls.append(process)
+        return _good_run_crew()(conn, agent_ids, task_descriptions, actor_id, process)
 
-    def _tracking_run_crew(
-        conn,
-        agent_ids,
-        task_descriptions,
-        actor_id,
-        process="sequential",
-        provider=None,
-        model=None,
-        manager_agent_id=None,
-        expected_outputs=None,
-        self_review=False,
-        memory=True,
-        **_kwargs,
-    ):
-        calls.append(
-            {
-                "agent_ids": agent_ids,
-                "process": process,
-                "manager_agent_id": manager_agent_id,
-                "descriptions": task_descriptions,
-                "expected_outputs": expected_outputs,
-                "self_review": self_review,
-            }
-        )
-        return _good_run_crew()(
-            conn,
-            agent_ids,
-            task_descriptions,
-            actor_id,
-            process,
-            provider,
-            model,
-            manager_agent_id,
-            expected_outputs,
-            self_review,
-        )
+    def _fake_plan_merge(conn, lead, workers, base, actor_id, **kwargs):
+        plan_calls.append((lead["role_name"], [w["role_name"] for w in workers]))
+        return _good_run_crew()(conn, [lead["agent_id"]] + [w["agent_id"] for w in workers], [base], actor_id)
 
-    with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew):
+    with patch("hair_platform.crew_runtime.run_crew", side_effect=_tracking_run_crew), \
+            patch("hair_platform.plan_merge.run", side_effect=_fake_plan_merge):
         run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
         pr.run_pipeline_stage_job(conn, run_id, admin_id)
 
     run = conn.execute("SELECT * FROM pipeline_runs WHERE id=?", (run_id,)).fetchone()
     assert run["status"] == "completed"
-    assert len(calls) == 2
-    assert calls[0]["process"] == "sequential"
-    assert calls[0]["manager_agent_id"] is None
-    assert calls[1]["process"] == "hierarchical"
-    assert (
-        calls[1]["manager_agent_id"] == calls[1]["agent_ids"][0]
-    )  # 리드가 매니저로 지정됨
-
-    deliverables_rows = conn.execute(
-        "SELECT * FROM deliverables WHERE task_id=?", (task_id,)
-    ).fetchall()
+    assert crew_calls == ["sequential"]  # 설계(순차 릴레이)
+    assert plan_calls == [("개발 계획 수립가", ["백엔드 개발자"])]  # 구현(계획 분담, 리드 = 개발 계획 수립가)
+    deliverables_rows = conn.execute("SELECT * FROM deliverables WHERE task_id=?", (task_id,)).fetchall()
     assert len(deliverables_rows) == 2
-    assert all(
-        d["status"] == "approved" for d in deliverables_rows
-    )  # 승인 불필요 단계는 자동 승인
+    assert all(d["status"] == "approved" for d in deliverables_rows)  # 승인 불필요 단계는 자동 승인
 
 
 def test_on_stage_resolved_callback_fires_once_per_auto_advanced_stage():

@@ -230,3 +230,17 @@ def test_conditional_approval_catches_phrases_missed_in_measurement():
     t1 = "## 판정\n\n**승인(조건부)** — 실무 발송 직전 상태입니다. 단, 수신자 확인 후 발송하세요.\n"
     t2 = "## 판정\n**승인** — 요구사항을 충족합니다. 3개 개선사항은 반영하면 좋습니다.\n"
     assert pr.review_verdict(t1)["verdict"] == pr.review_verdict(t2)["verdict"] == "조건부 승인"
+
+
+def test_plan_merge_stage_can_be_created_via_api_and_parallel_delegated_cannot(client_and_conn):
+    """2026-11-26 — 예전엔 API 모델에 plan_merge가 빠져 화면에서 계획 분담 단계를 만들면 422였다(선택지는 있었음)."""
+    client, _conn = client_and_conn
+    assert client.post("/login", json={"username": "admin1", "password": "adminpass"}).status_code == 200
+    tpl = client.post("/api/pipeline-templates", json={"name": "api-plan", "description": "", "category": "general"}).json()
+    tid = tpl["id"] if isinstance(tpl, dict) else tpl
+    body = {"name": "분담", "mode": "plan_merge", "agents": [{"role_name": "PM"}, {"role_name": "데이터 분석가"}],
+            "lead_role_name": "PM"}
+    r = client.post(f"/api/pipeline-templates/{tid}/stages", json=body)
+    assert r.status_code in (200, 201), r.text
+    r2 = client.post(f"/api/pipeline-templates/{tid}/stages", json={**body, "name": "위임", "mode": "parallel_delegated"})
+    assert r2.status_code == 422

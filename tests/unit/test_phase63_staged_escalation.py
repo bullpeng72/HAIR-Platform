@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from hair_platform import conversations, db, reference_pipeline_seeds
 from hair_platform import pipeline_runtime as pr
 from hair_platform.auth import Role, create_user
@@ -158,43 +160,17 @@ def test_final_retry_attempt_uses_self_review_for_sequential_relay_mode():
     assert calls[1]["self_review"] is True
 
 
-def test_parallel_delegated_mode_never_uses_self_review():
-    """구조적 비호환 가드 — hierarchical(parallel_delegated)은 self_review와
-    함께 쓰면 `crew_runtime.run_crew()`가 ValueError를 던지므로, 마지막
-    시도여도 self_review=False로 고정돼야 한다(회귀 방지)."""
+def test_parallel_delegated_mode_is_gone():
+    """2026-11-26 — hierarchical(병행 위임)과 self_review의 비호환 가드는 모드 제거로 필요 없어졌다(마지막 자동 재시도는
+    모든 단계가 self_review). 새로 만들 수 없는지만 확인한다."""
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
-    admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
-    task_id = _make_task(conn)
-    tid = pr.create_pipeline_template(conn, admin_id, "p", "", "x")
-    pr.add_stage(
-        conn,
-        admin_id,
-        tid,
-        "구현",
-        "parallel_delegated",
-        [("개발 계획 수립가", ""), ("백엔드 개발자", "")],
-        lead_role_name="개발 계획 수립가",
-        max_retry=2,
-        min_gate_pass_ratio=0.9,
-    )
-
-    calls: list[dict] = []
-    with patch(
-        "hair_platform.crew_runtime.run_crew",
-        side_effect=_bad_run_crew_tracking(calls),
-    ):
-        run_id = pr.start_pipeline_run(conn, admin_id, tid, task_id)
-        pr.run_pipeline_stage_job(conn, run_id, admin_id)
-
-    assert len(calls) == 2
-    assert calls[0]["self_review"] is False
-    assert calls[1]["self_review"] is False  # parallel_delegated라 끝까지 False
-
-    run = conn.execute("SELECT * FROM pipeline_runs WHERE id=?", (run_id,)).fetchone()
-    assert (
-        run["status"] == "paused_for_approval"
-    )  # 정상적으로 에스컬레이션(크래시 없음)
+    admin_id = create_user(conn, "admin_pd", "adminpass", Role.ADMIN)
+    tid = pr.create_pipeline_template(conn, admin_id, "pd", "", "x")
+    with pytest.raises(ValueError):
+        pr.add_stage(conn, admin_id, tid, "구현", "parallel_delegated", [("리드", ""), ("팀원", "")],
+                     lead_role_name="리드")
+    assert "parallel_delegated" not in pr.VALID_MODES
 
 
 def test_non_final_retry_does_not_use_self_review():

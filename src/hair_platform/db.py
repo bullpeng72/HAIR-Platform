@@ -1084,6 +1084,31 @@ _OLD_STAGE_MODE_CHECK = "CHECK (mode IN ('single', 'sequential_relay', 'parallel
 _NEW_STAGE_MODE_CHECK = "CHECK (mode IN ('single', 'sequential_relay', 'parallel_delegated', 'plan_merge'))"
 
 
+def _migrate_parallel_delegated_to_plan_merge(conn: sqlite3.Connection) -> int:
+    """병행 위임 단계를 계획 분담으로(2026-11-26, P1-7 4단계 — 사용자 결정 "계획 분담으로 자동 전환"). 같은 리드·같은 팀원이라
+    가장 가까운 방식이다(리드가 나누고 팀원이 각자 맡은 뒤 리드가 합침 — CrewAI 위임 도구 대신 명시적 계획). 리드가 비어 있으면
+    첫 참여 역할을 리드로. admin이 있으면 활동 기록을 남긴다. 다시 돌려도 아무 일 없다."""
+    rows = conn.execute(
+        "SELECT s.id, s.name, s.lead_role_name, t.name AS template FROM pipeline_stages s "
+        "JOIN pipeline_templates t ON t.id = s.pipeline_template_id WHERE s.mode = 'parallel_delegated'"
+    ).fetchall()
+    for r in rows:
+        lead = r["lead_role_name"] or (conn.execute(
+            "SELECT role_name FROM pipeline_stage_agents WHERE stage_id = ? ORDER BY seq_order LIMIT 1", (r["id"],)
+        ).fetchone() or [None])[0]
+        conn.execute("UPDATE pipeline_stages SET mode = 'plan_merge', lead_role_name = ? WHERE id = ?", (lead, r["id"]))
+    if rows:
+        admin = conn.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").fetchone()
+        if admin is not None:
+            from hair_platform import audit
+
+            audit.record(conn, admin[0], "pipeline_stage_mode_migrated", "pipeline_stages", None,
+                         after={"from": "parallel_delegated", "to": "plan_merge",
+                                "stages": [f"{r['template']}:{r['name']}" for r in rows]})
+        conn.commit()
+    return len(rows)
+
+
 def _migrate_pipeline_stage_plan_merge_mode(conn: sqlite3.Connection) -> None:
     """`pipeline_stages.mode` CHECK에 'plan_merge'(계획 분담 — 2026-11-23, P2-9 `plan_merge.py`)를
     더한다. SQLite는 CHECK를 ALTER로 못 바꿔 테이블을 다시 만든다(`_migrate_tool_pool_custom_
@@ -1439,6 +1464,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "agent_pool", "tuning_config", "TEXT NOT NULL DEFAULT '{}'")
     _migrate_tool_pool_custom_python_kind(conn)
     _migrate_pipeline_stage_plan_merge_mode(conn)
+    _migrate_parallel_delegated_to_plan_merge(conn)
     # 사용자 요청(2026-10-14, "호출 받은 사람에게 브라우저 알림이
     # 오고... ") — 실측으로 발견한 버그: 처음엔 "최초 폴링은 알림 없이
     # 기준점만 잡는다"는 클라이언트 메모리 커서(`_mentionNotifySinceId`)

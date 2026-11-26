@@ -5315,8 +5315,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       '<label class="muted" style="display:block;margin-top:0.3rem">' +
       '<input type="checkbox" id="ws-pipeline-use-graph-engine"> ' +
       '신규 실행엔진(LangGraph) 사용 — 서버 재시작에도 중단 지점부터 ' +
-      '정확히 재개됩니다. "위임형(parallel_delegated)" 단계가 있는 ' +
-      '템플릿은 아직 지원하지 않습니다.</label>' +
+      '정확히 재개됩니다(모든 단계 모드 지원).</label>' +
       '<p class="muted">선택한 파이프라인의 1단계부터 순서대로 진행됩니다 — "사람 승인 필요"로 표시된 단계가 아니면 Gate 기준 통과 시 자동으로 다음 단계로 넘어갑니다.</p>'
     // 사용자 요청(2026-11-17, "Human Agency Scale... 코파일럿... 실행
     // 중단 요청" → "구현 시작") — 진행 중인 실행에 "중단 요청" 버튼을
@@ -9296,7 +9295,6 @@ async function renderTeams(content) {
 const PIPELINE_MODE_LABEL = {
   single: "단독(1명)",
   sequential_relay: "순차 릴레이(N명, 앞사람 결과를 이어받음)",
-  parallel_delegated: "병행 위임(리드 1명이 코워커에게 실제로 위임)",
   // 계획 분담(2026-11-23, P2-9) — 첫 번째 역할이 리드: 계획 → 나머지가 분담 실행 → 리드가 병합
   plan_merge: "계획 분담(첫 역할=리드가 나눠 맡기고 결과를 합침)",
 };
@@ -9409,7 +9407,7 @@ function pipelineAddStageFormHtml(templateId, activeAgents) {
     // "QA 기능테스트" 단계도 "구현" 단계와 같은 기대 산출물 문구). 빈
     // 칸이면 그 공통 문구를 그대로 쓴다.
     '<textarea class="stage-expected-output" placeholder="이 단계의 기대 산출물(선택 — 예: &quot;실제로 실행 가능한 테스트 코드와 통과/실패 리포트&quot;, 비우면 공통 기본 문구 사용)" style="width:100%;margin-top:0.3rem;min-height:2.2rem"></textarea>' +
-    '<p class="muted" style="margin:0.3rem 0 0">역할을 추가한 순서가 "순차 릴레이"의 처리 순서입니다. "병행 위임"에서는 <b>첫 번째로 추가한 역할이 리드(위임하는 쪽)</b>가 됩니다.</p>' +
+    '<p class="muted" style="margin:0.3rem 0 0">역할을 추가한 순서가 "순차 릴레이"의 처리 순서입니다. "계획 분담"에서는 <b>첫 번째로 추가한 역할이 리드(나누고 합치는 쪽)</b>가 됩니다.</p>' +
     '<div class="stage-agent-rows">' + pipelineStageAgentRowHtml(activeAgents) + "</div>" +
     '<button type="button" class="small stage-add-agent-row">+ 역할 추가</button>' +
     '<div class="inline" style="margin-top:0.4rem">' +
@@ -9467,11 +9465,11 @@ async function renderPipelines(content) {
     '<section class="card"><h2>파이프라인 관리 — 단계형 개발/업무 Agent 팀</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>"단계(stage)"를 순서대로 쌓아 파이프라인을 만듭니다 — 각 단계는 <b>단독(1명)</b>, <b>순차 릴레이(N명이 순서대로 이어받음)</b>, <b>병행 위임(리드 1명이 코워커들에게 실제로 하위 과업을 쪼개 위임)</b> 중 하나로 동작합니다.</li>' +
+      '<li>"단계(stage)"를 순서대로 쌓아 파이프라인을 만듭니다 — 각 단계는 <b>단독(1명)</b>, <b>순차 릴레이(N명이 순서대로 이어받음)</b>, <b>계획 분담(리드가 팀원별 하위 작업을 나누고, 팀원이 각자 맡은 뒤, 리드가 하나로 합침)</b> 중 하나로 동작합니다.</li>' +
       '<li>단계별로 통과 판정에 쓸 Gate 목록·통과 비율·최대 재시도·"사람 승인 필요" 여부를 정할 수 있습니다 — 승인이 필요 없는 단계는 기준만 통과하면 자동으로 다음 단계로 넘어갑니다(최소 HITL). 반복해도 기준을 못 넘기면 그때만 결재함으로 올라갑니다(최소 HOTL). 기본 템플릿의 검증 단계는 Gate A와 요구사항 추적성(둘 다 필수), 구현 단계는 실행 가능성 Gate로 판정합니다 — C·D·F·G는 내용과 무관하게 비슷한 값이 나와 기록만 합니다.</li>' +
       '<li>단계 카드에서 <b>요구사항 정의 단계</b>(요구사항 추적성의 기준 — 지정이 없으면 1단계)와 <b>요구사항 추적성 검사</b>를 켜고 끌 수 있고, Gate 기준이 있는 단계는 <b>검토 실패 시</b> 같은 검토를 다시 돌리는 대신 앞 단계(작성·구현)로 되돌려 검토 의견을 반영해 다시 쓰게 할 수 있습니다.</li>' +
-      '<li><b>병행 위임</b>은 리드가 실제로 위임하지 않고 계획만 요약하는 경우가 반복 확인돼 신중히 쓰세요 — 리드가 위임했는지 "위임확인" Gate로 따로 검사해 위임이 없으면 재시도합니다. 여러 명이 이어받으면 되는 일은 순차 릴레이가 더 안정적입니다(기본 템플릿 4종 모두 순차 릴레이 사용).</li>' +
-      '<li>실행은 할 일(Task)의 협업 워크스페이스에서 "파이프라인 실행"으로 시작합니다 — 이 화면은 템플릿(설계도)만 관리합니다. 실행할 때 "신규 실행엔진(LangGraph)"을 고를 수 있지만, 병행 위임 단계가 있는 템플릿은 그 엔진을 지원하지 않습니다.</li>' +
+      '<li>예전의 <b>병행 위임</b>(리드가 도구로 그때그때 위임)은 리드가 실제로 위임하지 않고 혼자 처리하는 문제가 반복돼 2026-11-26에 없앴습니다 — 남아 있던 단계는 같은 리드·팀원의 계획 분담으로 자동 전환됩니다.</li>' +
+      '<li>실행은 할 일(Task)의 협업 워크스페이스에서 "파이프라인 실행"으로 시작합니다 — 이 화면은 템플릿(설계도)만 관리합니다. 실행할 때 "신규 실행엔진(LangGraph)"을 고를 수 있습니다.</li>' +
       '<li>SW 개발뿐 아니라 시장조사-분석(3C/SWOT)-전략/기획 같은 다른 업무도 같은 방식으로 만들 수 있습니다(역할만 다를 뿐 엔진은 동일).</li>' +
       "</ul>"
     ) +
@@ -9519,8 +9517,8 @@ async function renderPipelines(content) {
       if (mode === "single" && roleAgents.length !== 1) {
         showMsg("global-msg", "단독 모드는 역할이 정확히 1개여야 합니다.", "error"); return;
       }
-      if ((mode === "parallel_delegated" || mode === "plan_merge") && roleAgents.length < 2) {
-        showMsg("global-msg", (mode === "plan_merge" ? "계획 분담" : "병행 위임") + " 모드는 리드(첫 번째 역할) 포함 최소 2개 역할이 필요합니다.", "error"); return;
+      if (mode === "plan_merge" && roleAgents.length < 2) {
+        showMsg("global-msg", "계획 분담 모드는 리드(첫 번째 역할) 포함 최소 2개 역할이 필요합니다.", "error"); return;
       }
       const payload = {
         name: form.querySelector(".stage-name").value,
@@ -9535,7 +9533,7 @@ async function renderPipelines(content) {
         checks_requirements_traceability: form.querySelector(".stage-checks-trace").checked,
         expected_output: form.querySelector(".stage-expected-output").value,
       };
-      if (mode === "parallel_delegated" || mode === "plan_merge") payload.lead_role_name = roleAgents[0].role_name;
+      if (mode === "plan_merge") payload.lead_role_name = roleAgents[0].role_name;
       try {
         await api("POST", "/api/pipeline-templates/" + templateId + "/stages", payload);
         showMsg("global-msg", "단계를 추가했습니다.", "ok");
@@ -10677,7 +10675,7 @@ async function _renderCrewPromotionPanel(container, { agentIds, taskDescriptions
     '<button class="small" type="submit">이 구성을 파이프라인 단계로 저장</button>' +
     '</form>' +
     (process === "hierarchical" && !managerAgentId
-      ? '<p class="muted">매니저를 자동 배정으로 두고 실행했습니다 — 파이프라인 단계(병행 위임)는 매니저를 반드시 지정해야 해서, 이 조합은 파이프라인으로 저장할 수 없습니다. 매니저를 직접 골라 다시 실행하면 저장할 수 있습니다.</p>'
+      ? '<p class="muted">매니저를 자동 배정으로 두고 실행했습니다 — 파이프라인 단계(계획 분담)는 리드가 될 매니저를 반드시 지정해야 해서, 이 조합은 파이프라인으로 저장할 수 없습니다. 매니저를 직접 골라 다시 실행하면 저장할 수 있습니다.</p>'
       : "") +
     "</section>";
 
@@ -10709,7 +10707,7 @@ async function _renderCrewPromotionPanel(container, { agentIds, taskDescriptions
   pipelineForm.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     if (process === "hierarchical" && !managerAgentId) {
-      showMsg("global-msg", "매니저를 지정하지 않고 실행한 조합은 파이프라인 단계로 저장할 수 없습니다(병행 위임은 매니저가 필수).", "error");
+      showMsg("global-msg", "매니저를 지정하지 않고 실행한 조합은 파이프라인 단계로 저장할 수 없습니다(계획 분담은 리드가 될 매니저가 필수).", "error");
       return;
     }
     const stageName = document.getElementById("crewbuilder-save-pipeline-stage-name").value.trim();
@@ -10722,13 +10720,14 @@ async function _renderCrewPromotionPanel(container, { agentIds, taskDescriptions
         const tpl = await api("POST", "/api/pipeline-templates", { name: newName });
         templateId = tpl.id;
       }
-      const mode = agentIds.length === 1 ? "single" : (process === "hierarchical" ? "parallel_delegated" : "sequential_relay");
+      // 위임형(hierarchical) Crew는 계획 분담 단계로 저장한다(2026-11-26 — 병행 위임 모드 제거, 매니저가 리드).
+      const mode = agentIds.length === 1 ? "single" : (process === "hierarchical" ? "plan_merge" : "sequential_relay");
       const stageAgents = agentIds.map((id, i) => ({
         role_name: roleNameById[id],
         instructions: taskDescriptions[i] || "",
       }));
       const body = { name: stageName, mode, agents: stageAgents };
-      if (mode === "parallel_delegated") body.lead_role_name = roleNameById[managerAgentId];
+      if (mode === "plan_merge") body.lead_role_name = roleNameById[managerAgentId];
       await api("POST", "/api/pipeline-templates/" + templateId + "/stages", body);
       showMsg("global-msg", '파이프라인 단계 "' + esc(stageName) + '"로 저장했습니다 — "파이프라인 관리" 탭에서 확인·조정할 수 있습니다.', "ok");
     } catch (e) { showMsg("global-msg", e.message, "error"); }
@@ -12485,7 +12484,7 @@ const MANUAL_MARKDOWN = [
 '',
 '- **"이 업무의 AI 에이전트 실행(비용 발생)"** — Agent 1명에게 맡깁니다. 옆의 **"📎 참고자료"**로 이번 한 번만 쓸 파일을 첨부할 수 있습니다(대화 첨부처럼 저장되지 않음).',
 '- **"팀 Agent 실행(Crew, 비용 발생)"** — 배정된 팀의 Agent 멤버 전원을 함께 실행합니다(4절).',
-'- **"파이프라인 실행(비용 발생)"** — 템플릿을 골라 처음부터 끝까지 단계별로 자동 진행합니다(6절). **"신규 실행엔진(LangGraph) 사용"**을 켜면 서버가 재시작돼도 멈춘 단계부터 이어서 진행합니다(서버에 `graph` 확장 설치 필요, 병행 위임 단계가 있는 템플릿은 사용 불가).',
+'- **"파이프라인 실행(비용 발생)"** — 템플릿을 골라 처음부터 끝까지 단계별로 자동 진행합니다(6절). **"신규 실행엔진(LangGraph) 사용"**을 켜면 서버가 재시작돼도 멈춘 단계부터 이어서 진행합니다(서버에 `graph` 확장 설치 필요).',
 '- **"검토 요청"** — 사람이 직접 쓴 결과물도 이 버튼을 누르면 Agent 결과물과 같은 결재를 거칩니다.',
 '- **"재시도 예산"**(admin·manager) — 이 할 일의 파이프라인·Crew 재시도를 합쳐 최대 몇 번까지 허용할지 정합니다(빈 값 = 제한 없음). 다 쓰면 단계의 재시도 횟수가 남아 있어도 바로 사람 승인으로 넘어가, 같은 일을 반복하며 비용만 쓰는 것을 막습니다.',
 '- **"사람 판단 필수"**(admin·manager) — 켜면 이 할 일은 어떤 파이프라인을 타든 **모든 단계가 Gate 점수와 상관없이 결재를 거칩니다**. 협상·대외 커뮤니케이션처럼 사람이 꼭 봐야 하는 일에 씁니다.',
@@ -12558,13 +12557,13 @@ const MANUAL_MARKDOWN = [
 '팀으로 등록하지 않고 Agent를 골라 바로 함께 실행합니다. 하위 모드는 세 가지입니다.',
 '',
 '- **"업무에 바로 실행"**(기본) — 실제 할 일에 결과를 남깁니다. Agent 여러 개와 처리 방식을 고릅니다.',
-'  - **sequential(권장)**: 순서대로 앞 결과를 이어받습니다. Agent 행마다 **"병렬(독립 작업)"**을 체크하면 그 Agent는 앞 결과를 기다리지 않고 동시에 시작합니다(서로 결과가 필요 없는 독립 작업용 — 6절의 "병행 위임"과는 다른 기능).',
+'  - **sequential(권장)**: 순서대로 앞 결과를 이어받습니다. Agent 행마다 **"병렬(독립 작업)"**을 체크하면 그 Agent는 앞 결과를 기다리지 않고 동시에 시작합니다(서로 결과가 필요 없는 독립 작업용 — 6절의 "계획 분담"과는 다른 기능).',
 '  - "병렬"을 하나도 체크하지 않은 sequential이면 **"자기 검토"**를 켤 수 있습니다 — 각 Agent가 초안을 원 요구사항과 대조해 한 번 더 고친 뒤 제출합니다(결과물에는 최종본만, 초안은 실행 이력에만 남음).',
 '  - hierarchical(매니저 위임)은 매니저가 실제로 위임하지 않고 끝나는 경우가 많아 권하지 않습니다.',
 '- **"즉석 테스트(저장 안 됨)"** — 할 일에 연결하지 않고 협업 구조만 시험합니다. 결과가 남지 않습니다.',
 '- **"실행 이력"** — 과거 실행의 협업 다이어그램·토큰 사용량·Gate 점수를 다시 봅니다. 같은 할 일을 다시 실행한 기록이 있으면 **"이전 실행과 비교"**로 최종 결과물과 Agent별 결과물을 줄 단위로 비교합니다(재시도하면서 전에 되던 내용이 사라지지 않았는지 확인하는 용도).',
 '',
-'**조합 저장** — "업무에 바로 실행"을 한 번 하면 결과 아래 "이 조합을 저장해 다음에 재사용" 패널이 나옵니다(admin·manager). 방금 쓴 구성을 **"팀으로 저장"**하거나 기존 파이프라인에 **"파이프라인 단계로 저장"**할 수 있습니다(hierarchical로 실행한 조합은 병행 위임 단계로 저장되며, 매니저를 직접 지정해 실행했을 때만 저장 가능).',
+'**조합 저장** — "업무에 바로 실행"을 한 번 하면 결과 아래 "이 조합을 저장해 다음에 재사용" 패널이 나옵니다(admin·manager). 방금 쓴 구성을 **"팀으로 저장"**하거나 기존 파이프라인에 **"파이프라인 단계로 저장"**할 수 있습니다(hierarchical로 실행한 조합은 매니저를 리드로 한 계획 분담 단계로 저장되며, 매니저를 직접 지정해 실행했을 때만 저장 가능).',
 '',
 '<h2 id="agent">5. Agent / Agent 그룹 만들기</h2>',
 '',
@@ -12623,7 +12622,6 @@ const MANUAL_MARKDOWN = [
 '|---|---|---|',
 '| 단독(single) | Agent 1명이 혼자 처리 | 요구사항 분석가 1명 |',
 '| 순차 릴레이(sequential_relay) | N명이 순서대로 앞 사람 결과를 이어받음 | AA → DA → UI 기획자 |',
-'| 병행 위임(parallel_delegated) | 리드 1명이 도구 호출로 팀원에게 일을 나눠 위임(신뢰성 낮음 — 아래 주의) | admin이 직접 구성 |',
 '| 계획 분담(plan_merge) | 리드(첫 번째 역할)가 팀원별 하위 작업을 정함 → 팀원이 각자 수행 → 리드가 하나로 합침. 나누기를 모델의 즉흥적 위임에 맡기지 않고 플랫폼이 세 단계로 직접 진행 | 시장 조사가·재무 분석가가 나눠 쓰고 편집장이 합치는 보고서 |',
 '',
 '**판정과 재시도** — 단계마다 **판정에 쓸 Gate 목록·통과 비율·최대 재시도 횟수·"사람 승인 필요" 여부**를 정합니다.',
@@ -12811,10 +12809,10 @@ const MANUAL_MARKDOWN = [
 '📍 **메뉴**: 파이프라인 관리',
 '',
 '1. **"파이프라인 등록"**으로 이름·설명·도메인(예: software_dev, biz_strategy)을 정합니다.',
-'2. **"단계 추가"**로 단계를 하나씩 쌓습니다. 모드를 고르면 역할 선택 칸이 바뀝니다 — 단독은 1명, 순차 릴레이는 여러 명과 순서, **병행 위임·계획 분담은 첫 번째 역할이 리드이고 팀원이 1명 이상** 필요합니다.',
+'2. **"단계 추가"**로 단계를 하나씩 쌓습니다. 모드를 고르면 역할 선택 칸이 바뀝니다 — 단독은 1명, 순차 릴레이는 여러 명과 순서, **계획 분담은 첫 번째 역할이 리드이고 팀원이 1명 이상** 필요합니다.',
 '   - 함께 정하는 것: 공통 지시문, Gate 통과 비율(%), 최대 재시도, **"사람 승인 필요"**, **산출물 형식**(텍스트·마크다운·HTML·코드 — 코드면 화면에 문법 강조), **"요구사항 정의 단계"**(요구사항 추적성의 기준 문서를 내는 단계, 지정이 없으면 1단계), **"요구사항 추적성 검사"**(이 단계 결과물을 그 요구사항과 대조).',
 '   - 만든 뒤에도 단계 카드에서 요구사항 정의 단계·추적성 검사를 켜고 끌 수 있고, Gate 기준이 있는 단계에는 **"검토 실패 시"**(이 단계만 재시도 / 앞 단계로 되돌림) 선택이 보입니다.',
-'   - ⚠️ **병행 위임은 신중하게 쓰세요** — 리드가 "Delegate work to coworker" 도구로 그때그때 위임하는 방식인데, 실측에서 위임 대신 계획만 요약하고 끝나는 경우가 반복됐습니다. 그래서 병행 위임 단계는 리드가 실제로 위임했는지 **"위임확인"** 검사를 따로 해서, 위임 없이 끝나면 Gate 점수와 상관없이 재시도합니다. 또 병행 위임 단계가 있는 템플릿은 신규 실행엔진(LangGraph)으로 돌릴 수 없습니다. 병행 위임을 기본 템플릿에 쓰지 않는 이유입니다.',
+'   - 예전의 **병행 위임**(리드가 "Delegate work to coworker" 도구로 그때그때 위임)은 실측에서 위임 대신 계획만 요약하거나 혼자 처리하고 끝나는 경우가 반복돼 2026-11-26에 없앴습니다. 남아 있던 단계는 같은 리드·팀원의 **계획 분담**으로 자동 전환되고(활동 기록 `pipeline_stage_mode_migrated`), 리드가 빠뜨린 팀원도 자동으로 하위 작업을 받습니다.',
 '   - **여러 Agent가 일을 나눠 맡아야 하면 계획 분담을 쓰세요** — 리드가 팀원별 하위 작업을 JSON 계획으로 내면 플랫폼이 팀원을 실행하고(클라우드 모델이면 최대 3명 동시, 로컬 Ollama는 한 명씩), 리드가 결과를 하나의 완성본으로 합칩니다. 계획을 읽지 못하면 단계에 적은 팀원별 지시로 대신 진행해 멈추지 않습니다. Gate는 합친 최종본으로 판정하며 두 실행엔진에서 모두 동작합니다. 로컬 모델에서는 리드 호출 2번(계획·병합)만큼 순차 릴레이보다 오래 걸립니다.',
 '3. 단계 순서는 카드의 위·아래 버튼으로 나중에도 바꿀 수 있습니다.',
 '',
@@ -12987,7 +12985,7 @@ const MANUAL_MARKDOWN = [
 '',
 '**팀·파이프라인 실행이 오래 걸리거나 실패한다**',
 '',
-'- **원인**: 참여 Agent가 많을수록(특히 순차 릴레이·병행 위임) 모델 호출이 늘어납니다. 로컬(Ollama) 대형 모델은 호출 한 번에 수십 초~몇 분이 걸립니다.',
+'- **원인**: 참여 Agent가 많을수록(특히 순차 릴레이·계획 분담) 모델 호출이 늘어납니다. 로컬(Ollama) 대형 모델은 호출 한 번에 수십 초~몇 분이 걸립니다.',
 '- **이미 적용돼 있는 것**: 로컬 모델에서는 **작업 전 계획(추론 모드)을 자동으로 끄고, 도구 반복 상한 기본값을 8회**로 둡니다(파인튜닝에서 `max_iter`를 직접 정한 Agent와 위임형 팀은 그 값을 씀). 실측: 예전 기본 설정(계획 2회 + 반복 16회)으로는 로컬 35B 모델의 조사 단계 하나가 1시간 50분·호출 92회에도 끝나지 않았고, 지금 설정으로는 24분·호출 4회에 끝났습니다. 클라우드 모델은 Agent 설정 그대로 계획을 씁니다.',
 '- **해결**:',
 '  1. 로컬 모델에서도 계획을 쓰고 싶으면 서버를 `HAIR_OLLAMA_AGENT_PLANNING=1`로 띄웁니다(느려짐).',

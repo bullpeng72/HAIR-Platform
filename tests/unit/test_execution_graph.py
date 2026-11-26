@@ -98,15 +98,22 @@ def setup(client_and_conn):
 # ---------- validate_template_supported() ----------
 
 
-def test_validate_template_rejects_parallel_delegated(setup):
+def test_parallel_delegated_is_rejected_and_old_stages_migrate_to_plan_merge(setup):
+    """2026-11-26(P1-7 4단계) — 병행 위임 모드 제거. 새로 만들 수 없고, 예전 DB에 남은 단계는 기동 때 계획 분담으로."""
     conn, admin_id, agent_id, task_id, template_id, run_id = setup
-    _make_agent(conn, "리드")
-    pr.add_stage(
-        conn, admin_id, template_id, "병렬단계", "parallel_delegated",
-        [("리드", ""), ("역할1", "")], lead_role_name="리드",
-    )
-    with pytest.raises(ValueError, match="unsupported_stage_mode_for_graph_engine"):
-        execution_graph.validate_template_supported(conn, template_id)
+    with pytest.raises(ValueError):
+        pr.add_stage(conn, admin_id, template_id, "병렬단계", "parallel_delegated",
+                     [("리드", ""), ("팀원", "")], lead_role_name="리드")
+    sid = pr.add_stage(conn, admin_id, template_id, "병렬단계", "single", [("리드", "")])
+    conn.execute("UPDATE pipeline_stages SET mode = 'parallel_delegated', lead_role_name = NULL WHERE id = ?", (sid,))
+    conn.commit()
+    from hair_platform import db as _db
+
+    assert _db._migrate_parallel_delegated_to_plan_merge(conn) == 1
+    row = conn.execute("SELECT mode, lead_role_name FROM pipeline_stages WHERE id = ?", (sid,)).fetchone()
+    assert tuple(row) == ("plan_merge", "리드")  # 리드가 없으면 첫 참여 역할이 리드
+    assert _db._migrate_parallel_delegated_to_plan_merge(conn) == 0  # 다시 돌려도 아무 일 없음
+    execution_graph.validate_template_supported(conn, template_id)  # 그래프 엔진도 그대로 실행 가능
 
 
 def test_validate_template_accepts_single_and_sequential_relay(setup):

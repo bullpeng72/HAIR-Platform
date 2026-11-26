@@ -78,8 +78,11 @@ from hair_platform import (
 
 # `plan_merge`(2026-11-23, P2-9 — `plan_merge.py`): 리드 계획 → 팀원 분담 실행 → 리드 병합을 플랫폼이
 # 직접 진행한다(위임형처럼 모델의 즉흥 위임에 맡기지 않는다).
-VALID_MODES = ("single", "sequential_relay", "parallel_delegated", "plan_merge")
-LEAD_MODES = ("parallel_delegated", "plan_merge")
+# 병행 위임(parallel_delegated, CrewAI hierarchical)은 2026-11-26 제거(P1-7 4단계) — 실측에서 리드가 실제로 위임하지 않고
+# 혼자 처리하거나 계획만 요약하는 문제가 반복돼 신규 지정을 막아 뒀고 사용 0건이었다. 남은 단계는 기동 때 계획 분담으로
+# 바뀐다(`db._migrate_parallel_delegated_to_plan_merge`).
+VALID_MODES = ("single", "sequential_relay", "plan_merge")
+LEAD_MODES = ("plan_merge",)
 GATE_IDS = ["A", "B", "C", "D", "E", "F", "G"]
 
 
@@ -1296,17 +1299,6 @@ def score_stage_output(
     # min_gate_pass_ratio=0.0(절대 차단 안 함, 위 code_syntax 주석과
     # 같은 이유)을 그대로 두는 대신 `passed`를 직접 덮어써 "구현"
     # 단계 안에서 바로 재시도시킨다.
-    if stage["mode"] == "parallel_delegated":
-        delegated_real_work = any(
-            d.get("tool") == "Delegate work to coworker"
-            for d in result.get("delegations", [])
-        )
-        gate_scores["delegation_check"] = {
-            "score": 1.0 if delegated_real_work else 0.0,
-            "status": "pass" if delegated_real_work else "fail",
-            "passed": delegated_real_work,
-            "not_measured": False,
-        }
 
     # 이 단계는 바로 위 `prior` 조회처럼 이전 단계 출력만 보고 1단계
     # (요구분석/계획 확정)의 요구사항 문서를 자동으로 보지 못한다 —
@@ -1337,8 +1329,6 @@ def score_stage_output(
 
     ratio = _gate_pass_ratio(gate_scores, stage_gate_ids)
     passed = ratio >= stage["min_gate_pass_ratio"]
-    if stage["mode"] == "parallel_delegated" and not gate_scores["delegation_check"]["passed"]:
-        passed = False
     if verdict is not None and not verdict["not_measured"] and not verdict["passed"]:
         passed = False
     # 엄격 검토(2026-11-25, P0-4): 조건부 승인도 되돌려 지적된 곳을 고치게 한다(재시도 상한 안에서).
@@ -1460,9 +1450,7 @@ def _execute_stage_attempt(
     # "품질 관리 최종 판정" — 실제로 에스컬레이션 가능한 유일한 3단계
     # — 는 전부 `single`/`sequential_relay`라 영향받음).
     retry_feedback += rework_feedback(conn, run_id, stage)
-    use_self_review_tier = (
-        attempt == stage["max_retry"] and stage["mode"] != "parallel_delegated"
-    )
+    use_self_review_tier = attempt == stage["max_retry"]
     if use_self_review_tier:
         retry_feedback += (
             "\n\n[마지막 자동 재시도] 이번이 자동 재시도의 마지막 기회입니다 — "
@@ -1479,26 +1467,7 @@ def _execute_stage_attempt(
     # 계획 분담 단계에서만 채운다(아래 실행부도 같은 조건에서만 쓴다 — 타입 검사기용 초기값).
     plan_lead: dict | None = None
     plan_workers: list[dict] = []
-    if stage["mode"] == "parallel_delegated":
-        lead_agent_id = _resolve_role_agent_id(conn, stage["lead_role_name"])
-        coworker_rows = [
-            a for a in stage_agents if a["role_name"] != stage["lead_role_name"]
-        ]
-        coworker_guides = "\n".join(
-            f"- {a['role_name']}: {a['instructions']}"
-            for a in coworker_rows
-            if a["instructions"]
-        )
-        lead_description = combined_base
-        if coworker_guides:
-            lead_description += f"\n\n[코워커별 참고 가이드]\n{coworker_guides}"
-        run_agent_ids = [lead_agent_id] + [
-            _resolve_role_agent_id(conn, a["role_name"]) for a in coworker_rows
-        ]
-        task_descriptions = [lead_description] * len(run_agent_ids)
-        process = "hierarchical"
-        manager_agent_id = lead_agent_id
-    elif stage["mode"] == "plan_merge":
+    if stage["mode"] == "plan_merge":
         # 계획 분담(2026-11-23, P2-9) — 실행은 아래에서 `plan_merge.run()`이 한다.
         lead_agent_id = _resolve_role_agent_id(conn, stage["lead_role_name"])
         plan_lead = {"agent_id": lead_agent_id, "role_name": stage["lead_role_name"], "instructions": ""}

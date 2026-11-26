@@ -52,7 +52,7 @@ def _set_agent_llm(conn, role_name, provider, model):
 # ---------- _resolve_stage_llm ----------
 
 
-def test_resolve_stage_llm_uses_lead_role_for_parallel_delegated():
+def test_resolve_stage_llm_uses_lead_role_for_plan_merge():
     conn = db.get_connection(":memory:")
     db.init_schema(conn)
     admin_id = create_user(conn, "admin1", "adminpass", Role.ADMIN)
@@ -65,7 +65,7 @@ def test_resolve_stage_llm_uses_lead_role_for_parallel_delegated():
         admin_id,
         tid,
         "구현",
-        "parallel_delegated",
+        "plan_merge",
         [("개발 계획 수립가", ""), ("백엔드 개발자", "백엔드")],
         lead_role_name="개발 계획 수립가",
     )
