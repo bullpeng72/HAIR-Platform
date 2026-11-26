@@ -17,6 +17,7 @@ from fastapi import (
 )
 from fastapi.responses import PlainTextResponse
 
+from hair_platform import job_queue  # 백그라운드 작업 큐(2026-11-26, P1-6 2단계)
 from hair_platform import (
     agent_evaluation,
     agent_optimizer,
@@ -1440,9 +1441,8 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 "nothing_to_retry": "재시도할 Agent가 남아있지 않습니다(이미 전원 완료됨)",
             }.get(str(exc), str(exc))
             raise HTTPException(status_code=400, detail=detail) from None
-        background_tasks.add_task(
-            deliverables.run_adhoc_crew_job,
-            conn,
+        job_queue.enqueue(
+            conn, "deliverable.adhoc_crew",
             retry["job_by_agent_id"],
             retry["task_id"],
             user["id"],
@@ -1452,6 +1452,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             None,
             None,
             None,
+            background_tasks=background_tasks,
         )
         return {"job_ids": list(retry["job_by_agent_id"].values()), "status": "running"}
 

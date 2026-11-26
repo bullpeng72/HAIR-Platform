@@ -519,6 +519,7 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "deliverable_repo_commits",
     "deliverable_edit_proposals",  # 부분 재작성 제안(2026-11-24, P1-6)
     "code_repositories",
+    "background_jobs",  # 작업 큐 기록(2026-11-26, P1-6 2단계) — 실행 이력과 같이 지운다
     "calendar_feeds",  # 캘린더(2026-11-26, P1-9 3단계)
     "mail_inboxes",  # 메일 수신함(2026-11-26, P1-9 2단계)
     "data_connections",  # 사내 DB 연결(2026-11-26, P1-9) — 코드 저장소 등록과 같이 지운다

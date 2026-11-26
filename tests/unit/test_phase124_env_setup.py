@@ -146,6 +146,9 @@ def test_init_interactive_fills_values_and_preserves_unknown_keys(tmp_path):
         "y",            # 세션 서명 키 자동 생성?
         "",             # HAIR_GITHUB_TOKEN(2026-11-25, P1-8)
         "n",            # 메일 알림 설정하시겠습니까?
+        "external",     # HAIR_WORKER_MODE(2026-11-26, P1-6 2단계)
+        "",             # HAIR_TIMEZONE
+        "n",            # 고급 옵션 설정하시겠습니까?
     ])
     with patch("builtins.input", lambda _prompt="": next(answers)):
         code = cli.main(["init", "--path", str(env_path)])
@@ -155,6 +158,7 @@ def test_init_interactive_fills_values_and_preserves_unknown_keys(tmp_path):
     assert values["ANTHROPIC_API_KEY"] == "sk-ant-test"
     assert len(values["HAIR_PLATFORM_SECRET_KEY"]) == 64
     assert "HAIR_SMTP_HOST" not in values  # 메일 알림을 건너뜀
+    assert values["HAIR_WORKER_MODE"] == "external" and "HAIR_STAGE_RUNTIME" not in values  # 고급 옵션은 건너뜀
     assert values["CUSTOM_FLAG"] == "1"  # 알 수 없는 기존 값은 보존
 
 
@@ -256,3 +260,78 @@ def test_dependency_check_warns_on_minor_version_drift(monkeypatch):
     assert len(issues) == 1 and issues[0][0] == "warn" and "crewai 1.6.1" in issues[0][1] and "1.15.22" in issues[0][1]
     monkeypatch.setattr(md, "version", lambda name: {"crewai": "1.15.9"}.get(name) or (_ for _ in ()).throw(md.PackageNotFoundError(name)))
     assert env_setup.dependency_check() == []  # 패치 차이는 경고하지 않는다
+
+
+
+# ---------- 서버 운영·고급 옵션·연동 비밀값(2026-11-26) ----------
+
+def test_every_hair_env_var_read_by_code_is_documented():
+    """코드가 읽는 HAIR_* 환경변수는 모두 hair init/check 목록이나 README의 "자동 설정·내부용" 표에 있다."""
+    import re
+    from pathlib import Path
+
+    src = Path(env_setup.__file__).parent
+    read = set()
+    for f in src.glob("*.py"):
+        read |= set(re.findall(r"environ(?:\.get)?\(\s*[\"'](HAIR_[A-Z0-9_]+)", f.read_text(encoding="utf-8")))
+        read |= set(re.findall(r"environ\[[\"'](HAIR_[A-Z0-9_]+)", f.read_text(encoding="utf-8")))
+        read |= set(re.findall(r"getenv\(\s*[\"'](HAIR_[A-Z0-9_]+)", f.read_text(encoding="utf-8")))
+    known = {v.key for v in env_setup.ENV_VARS}
+    readme = (src.parent.parent / "README.md").read_text(encoding="utf-8")
+    missing = sorted(k for k in read if k not in known and f"`{k}`" not in readme)
+    assert read and missing == [], missing
+
+
+def test_cross_check_flags_bad_operation_and_advanced_values():
+    issues = dict(env_setup.cross_check({
+        "HAIR_PLATFORM_LLM_PROVIDER": "ollama",
+        "HAIR_WORKER_MODE": "separate", "HAIR_TIMEZONE": "Seoul/Korea", "HAIR_STAGE_RUNTIME": "fast",
+        "HAIR_LANGUAGE_QA": "yes", "HAIR_STAGE_STALL_SECONDS": "45m", "HAIR_ALLOW_LOCAL_CODE_RUN": "1",
+    }))
+    text = " ".join(m for _l, m in env_setup.cross_check({
+        "HAIR_PLATFORM_LLM_PROVIDER": "ollama", "HAIR_WORKER_MODE": "separate", "HAIR_TIMEZONE": "Seoul/Korea",
+        "HAIR_STAGE_RUNTIME": "fast", "HAIR_LANGUAGE_QA": "yes", "HAIR_STAGE_STALL_SECONDS": "45m",
+        "HAIR_ALLOW_LOCAL_CODE_RUN": "1"}))
+    assert issues  # 최소 하나
+    for needle in ("HAIR_WORKER_MODE='separate'", "HAIR_TIMEZONE='Seoul/Korea'", "HAIR_STAGE_RUNTIME='fast'",
+                   "HAIR_LANGUAGE_QA='yes'", "HAIR_STAGE_STALL_SECONDS='45m'", "HAIR_ALLOW_LOCAL_CODE_RUN=1"):
+        assert needle in text, needle
+    clean = env_setup.cross_check({"HAIR_PLATFORM_LLM_PROVIDER": "ollama", "HAIR_WORKER_MODE": "external",
+                                   "HAIR_TIMEZONE": "Asia/Seoul", "HAIR_STAGE_STALL_SECONDS": "0"})
+    assert clean == []
+
+
+def test_check_reports_connector_secrets_and_missing_worker(tmp_path, capsys, monkeypatch):
+    from hair_platform import calendar_feeds, data_connectors, db, job_queue, mail_inbox
+
+    for k in ("HAIR_DB_SALES_PASSWORD", "HAIR_MAIL_SUPPORT_PASSWORD", "HAIR_CAL_TEAM_URL"):
+        monkeypatch.delenv(k, raising=False)
+    dbp = tmp_path / "hair.db"
+    conn = db.get_connection(str(dbp))
+    db.init_schema(conn)
+    admin = int(conn.execute("INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin')").lastrowid or 0)
+    conn.commit()
+    sales = tmp_path / "sales.db"
+    sales.write_bytes(b"")
+    data_connectors.register(conn, admin, "sales_db", "postgresql", "db:5432/sales", username="r",
+                             password_env="HAIR_DB_SALES_PASSWORD")
+    mail_inbox.register(conn, admin, "support", "imap.example.com", "s@example.com", "HAIR_MAIL_SUPPORT_PASSWORD")
+    calendar_feeds.register(conn, admin, "team", "url", "HAIR_CAL_TEAM_URL")
+    job_queue.ensure_schema(conn)
+    conn.close()
+    env_path = tmp_path / ".env"
+    env_path.write_text("HAIR_PLATFORM_LLM_PROVIDER=ollama\nHAIR_WORKER_MODE=external\nHAIR_DB_SALES_PASSWORD=pw\n",
+                        encoding="utf-8")
+    cli.main(["check", "--path", str(env_path), "--db-path", str(dbp)])
+    out = capsys.readouterr().out
+    assert "[연동 비밀값" in out
+    assert "✓ HAIR_DB_SALES_PASSWORD (사내 DB 비밀번호 「sales_db」)" in out
+    assert "· HAIR_MAIL_SUPPORT_PASSWORD" in out and "· HAIR_CAL_TEAM_URL" in out
+    assert "pw" not in out.split("[연동 비밀값")[1].split("[점검 결과]")[0]  # 값은 보이지 않는다
+    assert "작업 프로세스가 실행되고 있지 않습니다" in out
+    assert "[서버 운영(작업 프로세스·시간대)]" in out and "HAIR_WORKER_MODE = external" in out
+
+
+def test_check_without_db_skips_connector_section(tmp_path, capsys):
+    cli.main(["check", "--path", str(tmp_path / ".env"), "--db-path", str(tmp_path / "none.db")])
+    assert "[연동 비밀값" not in capsys.readouterr().out

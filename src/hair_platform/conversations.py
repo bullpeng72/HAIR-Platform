@@ -283,7 +283,7 @@ def delete_conversation(
     conn.commit()
 
 
-def reap_orphaned_conversation_jobs(conn: sqlite3.Connection) -> int:
+def reap_orphaned_conversation_jobs(conn: sqlite3.Connection, keep: frozenset[int] | set[int] = frozenset()) -> int:
     """사용자 보고(2026-11-19, "ollama 실행되지 않고 있는데... 실행
     중이 표시됨") 조사 중 발견한 갭 — `deliverables.reap_orphaned_
     execution_jobs()`/`pipeline_runtime.reap_orphaned_pipeline_runs()`
@@ -300,6 +300,8 @@ def reap_orphaned_conversation_jobs(conn: sqlite3.Connection) -> int:
     rows = conn.execute(
         "SELECT id FROM conversation_jobs WHERE status = 'running'"
     ).fetchall()
+    # 작업 큐에 아직 대기 중인 작업의 행은 남긴다(2026-11-26, P1-6 2단계 — 작업 프로세스가 곧 실행한다).
+    rows = [r for r in rows if r["id"] not in keep]
     for row in rows:
         conn.execute(
             "UPDATE conversation_jobs SET status = 'failed', "

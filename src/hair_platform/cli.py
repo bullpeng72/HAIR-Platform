@@ -90,10 +90,13 @@ HAIR-Platform 통합 CLI — 사람과 AI Agent를 하나의 조직도에서 관
   init              .env 환경변수 설정(최초 1회, 대화형)
   check             .env/환경변수 점검
   serve             Web UI + API 서버 실행
+  worker            작업 프로세스 실행(HAIR_WORKER_MODE=external — 웹 서버를 재시작해도 AI 실행 유지)
   bootstrap-admin   최초 ADMIN 계정 생성(콜드스타트 전용)
   reset-data        운영 데이터 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 '초기화 시 보호' 팀만 유지)
   eval              Gate A/B/D/E/G 측정 1회 + HTML 리포트 생성(results/)
+  reindex-vectors   지식 베이스 벡터 색인 다시 맞추기(ChromaDB)
 
+환경변수 전체 목록: hair init --help · 점검: hair check (--db-path로 연동 비밀값·작업 프로세스까지)
 자세한 도움말:       hair --help
 명령어별 도움말:     hair <command> --help
 버전 확인:           hair --version
@@ -124,9 +127,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "init",
         help=".env 환경변수 설정(최초 1회, 대화형)",
         description=(
-            "LLM API 키·세션 서명 키·메일(SMTP) 알림 등 주요 환경변수를 하나씩 물어보고\n"
-            ".env 파일로 저장한다. 전부 선택(optional)이다 — 아무것도 입력하지 않아도 서버는\n"
-            "뜬다. 이미 .env가 있으면 기존 값을 보여주고 Enter로 그대로 둘 수 있다(덮어쓰지 않음)."
+            "LLM API 키·세션 서명 키·메일(SMTP) 알림·작업 프로세스(HAIR_WORKER_MODE)·시간대 등 환경변수를\n"
+            "하나씩 물어보고 .env 파일로 저장한다. 메일 알림·고급 옵션은 원할 때만 묻는다. 전부 선택(optional)\n"
+            "이다 — 아무것도 입력하지 않아도 서버는 뜬다. 이미 .env가 있으면 기존 값을 보여주고 Enter로 그대로\n"
+            "둘 수 있다(덮어쓰지 않음). 사내 DB·메일 수신함·캘린더 연동의 비밀값은 연동 설정 화면에서 정한\n"
+            "환경변수 이름으로 .env에 직접 추가한다(예: HAIR_DB_SALES_PASSWORD=...) — 그대로 보존된다."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -135,6 +140,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "  hair init --yes                묻지 않고 저장(세션 서명 키가 없으면 자동 생성)\n"
             "  hair init --path config/.env   다른 경로에 저장\n"
             "\n"
+            "묻는 그룹: LLM Provider API 키 · 로컬 LLM(Ollama) · 외부 웹 검색(Tavily) · 플랫폼 공통 기본 LLM ·\n"
+            "  서버/보안 · 코드 저장소 PR(GitHub) · 메일(SMTP) 알림(선택) · 서버 운영(작업 프로세스·시간대) ·\n"
+            "  고급 옵션(선택 — 실행 방식·검색 엔진·자동 검사 끄기 등)\n"
             "저장한 값 확인: hair check\n"
         ),
     )
@@ -149,20 +157,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "check",
         help=".env/환경변수 점검",
         description=(
-            "현재 .env 파일과 셸 환경변수를 합쳐(셸 쪽이 우선 — python-dotenv 기본 동작과 동일) 주요\n"
-            "환경변수가 어떻게 설정돼 있는지 보여주고, provider/API 키 불일치·SMTP 설정 누락 같은\n"
-            "흔한 실수를 찾아낸다. 값을 바꾸지는 않는다(점검만)."
+            "현재 .env 파일과 셸 환경변수를 합쳐(셸 쪽이 우선 — python-dotenv 기본 동작과 동일) 환경변수가\n"
+            "어떻게 설정돼 있는지 보여주고, provider/API 키 불일치·SMTP 설정 누락·잘못된 값(작업 방식·시간대·\n"
+            "0/1 플래그·숫자) 같은 흔한 실수를 찾아낸다. --db-path의 DB가 있으면 연동 설정(사내 DB·메일 수신함·\n"
+            "캘린더)에 등록된 비밀 환경변수가 채워졌는지와, HAIR_WORKER_MODE=external일 때 작업 프로세스가\n"
+            "떠 있는지도 본다. 값을 바꾸지는 않는다(점검만)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "예시:\n"
             "  hair check                점검(기본: ./.env)\n"
             "  hair check --path config/.env\n"
+            "  hair check --db-path /srv/hair/hair.db   운영 DB의 연동 비밀값·작업 프로세스까지\n"
             "\n"
             "문제가 있거나 값을 바꾸려면: hair init\n"
         ),
     )
     p_check.add_argument("--path", default=".env", help=".env 파일 경로(기본: ./.env)")
+    p_check.add_argument(
+        "--db-path", default="hair.db",
+        help="연동(사내 DB·메일 수신함·캘린더)에 등록된 비밀 환경변수와 작업 프로세스 상태를 함께 점검할 DB(기본: hair.db, 없으면 건너뜀)",
+    )
     p_check.set_defaults(func=_cmd_check)
 
     p_serve = sub.add_parser(
@@ -194,6 +209,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "\"평가 리포트\") 끄기\n"
             "  HAIR_OLLAMA_AGENT_PLANNING=1  로컬(Ollama) 모델에서도 Agent 작업 전 계획 켜기"
             "(기본 꺼짐)\n"
+            "  HAIR_WORKER_MODE=external        AI 실행을 별도 작업 프로세스(hair worker)로 — 웹 서버를\n"
+            "                                   재시작해도 실행 유지. hair worker를 같은 --db-path로 함께 띄운다\n"
+            "  HAIR_TIMEZONE=Asia/Seoul         캘린더 일정을 보여 줄 시간대(기본: 서버 PC 시간대)\n"
+            "  전체 목록·설명: hair init --help, 점검: hair check, 자세히는 README \"환경변수\"·이용 가이드\n"
             "  Gate별 통과 기준·응답 시간 SLA는 서버 화면 \"평가 기준\"(admin)에서 바꾼다.\n"
         ),
     )
@@ -226,6 +245,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="서버 실행 후 브라우저를 자동으로 열지 않음(기본: 자동으로 염)",
     )
     p_serve.set_defaults(func=_cmd_serve)
+
+    # 별도 작업 프로세스(2026-11-26, P1-6 2단계 — `job_queue.py`).
+    p_worker = sub.add_parser(
+        "worker",
+        help="작업 프로세스 실행 — 웹 서버를 재시작해도 파이프라인·Agent 실행이 계속 돈다",
+        description=(
+            "대화 응답·Agent/Crew 실행·파이프라인·지식 등록을 웹 서버와 다른 프로세스에서 실행한다.\n"
+            "웹 서버를 HAIR_WORKER_MODE=external로 띄우면 서버는 작업을 기록만 하고 이 프로세스가 가져가 실행한다.\n"
+            "작업 프로세스는 하나만 실행한다(살아 있는 다른 작업 프로세스가 있으면 시작을 거부)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "예시(터미널 두 개 — 같은 --db-path):\n"
+            "  HAIR_WORKER_MODE=external hair serve\n"
+            "  HAIR_WORKER_MODE=external hair worker\n"
+            "또는 .env에 HAIR_WORKER_MODE=external을 넣고 hair serve / hair worker(hair init의 '서버 운영'에서도 설정).\n"
+            "작업 프로세스는 웹 서버와 같은 .env(API 키·연동 비밀값 등)를 읽는다 — 같은 폴더에서 실행하세요.\n"
+            "상태 확인: 홈 화면 '관리 점검'(admin) 또는 hair check --db-path <DB>.\n"
+            "작업 프로세스를 재시작하면 실행 중이던 작업은 '중단됨'이 되고 화면에서 이어서 실행할 수 있다.\n"
+        ),
+    )
+    p_worker.add_argument("--db-path", default="hair.db", help="SQLite DB 파일 경로(웹 서버와 같은 파일, 기본: hair.db)")
+    p_worker.add_argument("--concurrency", type=int, default=4, help="동시에 실행할 작업 수(기본: 4)")
+    p_worker.set_defaults(func=_cmd_worker)
 
     p_boot = sub.add_parser(
         "bootstrap-admin",
@@ -429,6 +472,43 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_worker(args: argparse.Namespace) -> int:
+    import signal
+
+    load_dotenv()
+    if args.db_path == ":memory:":
+        print("작업 프로세스는 웹 서버와 같은 DB 파일을 써야 합니다(:memory:는 쓸 수 없음).", file=sys.stderr)
+        return 2
+    from hair_platform import db, job_queue
+
+    if job_queue.mode() != "external":
+        print("주의: HAIR_WORKER_MODE=external이 아닙니다 — 웹 서버도 같은 값으로 띄워야 작업이 이 프로세스로 옵니다.",
+              file=sys.stderr)
+    conn = db.get_connection(args.db_path)
+    db.init_schema(conn)
+    job_queue.configure_runtime(conn)
+    worker = job_queue.Worker(args.db_path, max_concurrent=args.concurrency)
+    try:
+        cleaned = worker.start()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"작업 프로세스 시작: {worker.name} (DB {args.db_path}, 동시 {worker.max_concurrent}개)")
+    if any(cleaned.values()):
+        print(f"  이전 작업 프로세스가 남긴 실행 정리: {cleaned} — 화면에서 '이어서 실행'할 수 있습니다.")
+
+    def _graceful(_sig, _frame):
+        print("종료 요청 — 새 작업은 가져가지 않습니다(실행 중인 작업은 다음 기동 때 '중단됨'으로 정리).")
+        worker.stop()
+
+    signal.signal(signal.SIGTERM, _graceful)
+    try:
+        worker.run_forever()
+    except KeyboardInterrupt:
+        worker.stop()
+    return 0
+
+
 def _cmd_bootstrap_admin(args: argparse.Namespace) -> int:
     from hair_platform.bootstrap import bootstrap_admin
 
@@ -539,12 +619,12 @@ def _run_init_wizard(values: dict) -> None:
 
     print("HAIR-Platform .env 설정을 시작합니다. Enter만 누르면 지금 값을 그대로 둡니다.\n")
     for group, vars_ in env_setup.by_group().items():
-        if group == "메일(SMTP) 알림":
+        if group in env_setup.OPTIONAL_GROUPS:  # 메일 알림·고급 옵션 — 원할 때만
             configured = any((values.get(v.key) or "").strip() for v in vars_)
             verb = "바꾸시겠습니까" if configured else "하시겠습니까"
             choices = "Y/n" if configured else "y/N"
             answer = input(
-                f"[{group}] 결재·완료 등 알림을 메일로도 받으려면 설정하세요.\n"
+                f"[{group}] {env_setup.OPTIONAL_GROUPS[group]}\n"
                 f"  설정을 {verb}? [{choices}]: "
             ).strip().lower()
             want = answer != "n" if configured else answer == "y"
@@ -599,10 +679,18 @@ def _cmd_check(args: argparse.Namespace) -> int:
                 shown = env_setup.mask(value) if var.secret else value
                 print(f"  ✓ {var.key} = {shown}")
             else:
-                print(f"  · {var.key} (설정 안 됨)")
+                print(f"  · {var.key} (설정 안 됨{' — 기본 ' + var.default if var.default else ''})")
         print()
 
-    problems = env_setup.cross_check(values) + env_setup.dependency_check()
+    # 연동 설정 화면에서 등록한 연결이 쓰는 비밀 환경변수(이름은 등록한 사람이 정함)·작업 프로세스 상태(2026-11-26).
+    secrets_rows, connector_issues = env_setup.connector_secret_check(args.db_path, values)
+    if secrets_rows:
+        print(f"[연동 비밀값 — {args.db_path}에 등록된 연결]")
+        for label, name, env, ok in secrets_rows:
+            print(f"  {'✓' if ok else '·'} {env} ({label} 「{name}」){'' if ok else ' (설정 안 됨)'}")
+        print()
+
+    problems = env_setup.cross_check(values) + connector_issues + env_setup.dependency_check()
     if problems:
         print("[점검 결과]")
         for level, message in problems:

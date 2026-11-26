@@ -19,6 +19,7 @@ from fastapi import (
     UploadFile,
 )
 
+from hair_platform import job_queue  # 백그라운드 작업 큐(2026-11-26, P1-6 2단계)
 from hair_platform import (
     assignments,
     audit,
@@ -1123,9 +1124,8 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 },
             )
             conn.commit()
-        background_tasks.add_task(
-            deliverables.run_agent_execution_job,
-            conn,
+        job_queue.enqueue(
+            conn, "deliverable.agent_execution",
             job["job_id"],
             task_id,
             job["agent_id"],
@@ -1135,6 +1135,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             provider,
             model,
             content_type,
+            background_tasks=background_tasks,
         )
         return {"job_id": job["job_id"], "status": "running"}
 
@@ -1204,9 +1205,8 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         effective_manager_agent_id = payload.manager_agent_id or (
             team_defaults["default_manager_agent_id"] if team_defaults else None
         )
-        background_tasks.add_task(
-            deliverables.run_team_crew_job,
-            conn,
+        job_queue.enqueue(
+            conn, "deliverable.team_crew",
             job["job_by_agent_id"],
             task_id,
             payload.team_id,
@@ -1220,6 +1220,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             planning=payload.planning,
             manager_provider=payload.manager_provider,
             manager_model=payload.manager_model,
+            background_tasks=background_tasks,
         )
         return {"job_ids": list(job["job_by_agent_id"].values()), "status": "running"}
 
@@ -1302,9 +1303,8 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 "manager_agent_not_in_agent_ids": "매니저로 지정한 Agent가 참여 Agent 목록에 없습니다",
             }.get(str(exc), str(exc))
             raise HTTPException(status_code=400, detail=detail) from None
-        background_tasks.add_task(
-            deliverables.run_adhoc_crew_job,
-            conn,
+        job_queue.enqueue(
+            conn, "deliverable.adhoc_crew",
             job["job_by_agent_id"],
             task_id,
             user["id"],
@@ -1321,6 +1321,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             manager_model=payload.manager_model,
             parallel_agent_ids=payload.parallel_agent_ids,
             self_review=payload.self_review,
+            background_tasks=background_tasks,
         )
         return {"job_ids": list(job["job_by_agent_id"].values()), "status": "running"}
 
@@ -1430,12 +1431,18 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 )
                 conn.commit()
                 raise HTTPException(status_code=400, detail=str(exc)) from None
-            background_tasks.add_task(
-                execution_graph.run_pipeline_graph_job, conn, run_id, user["id"]
+            job_queue.enqueue(
+                conn, "pipeline.graph",
+                run_id,
+                user["id"],
+                background_tasks=background_tasks,
             )
         else:
-            background_tasks.add_task(
-                pipeline_runtime.run_pipeline_stage_job, conn, run_id, user["id"]
+            job_queue.enqueue(
+                conn, "pipeline.stage",
+                run_id,
+                user["id"],
+                background_tasks=background_tasks,
             )
         return {"run_id": run_id, "status": "running"}
 
@@ -1472,11 +1479,18 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             status = 404 if "찾을 수 없습니다" in str(exc) else 409
             raise HTTPException(status_code=status, detail=str(exc)) from exc
         if engine == "graph":
-            from hair_platform import execution_graph as _eg
-
-            background_tasks.add_task(_eg.resume_interrupted_graph_job, conn, run_id)
+            job_queue.enqueue(
+                conn, "pipeline.resume_graph",
+                run_id,
+                background_tasks=background_tasks,
+            )
         else:
-            background_tasks.add_task(pipeline_runtime.run_pipeline_stage_job, conn, run_id, user["id"])
+            job_queue.enqueue(
+                conn, "pipeline.stage",
+                run_id,
+                user["id"],
+                background_tasks=background_tasks,
+            )
         return {"run_id": run_id, "status": "running", "engine": engine}
 
     @app.post("/api/pipeline-runs/{run_id}/cancel")

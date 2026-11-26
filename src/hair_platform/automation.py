@@ -226,13 +226,9 @@ def run_due_schedules(conn: sqlite3.Connection, now: dt.datetime | None = None,
                      schedule_id, after={"task_id": task_id, "run_id": run_id})
         conn.commit()
         if run_stages is None:
-            from hair_platform import pipeline_runtime
+            from hair_platform import job_queue  # 작업 큐(2026-11-26, P1-6 2단계) — external이면 작업 프로세스가 실행
 
-            threading.Thread(
-                target=pipeline_runtime.run_pipeline_stage_job,
-                args=(conn, run_id, schedule["created_by"]),
-                name=f"hair-schedule-{schedule_id}", daemon=True,
-            ).start()
+            job_queue.enqueue(conn, "pipeline.stage", run_id, schedule["created_by"])
         else:
             run_stages(run_id, schedule["created_by"])
         started.append(run_id)

@@ -14,11 +14,11 @@ from fastapi import (
     HTTPException,
 )
 
+from hair_platform import job_queue  # 백그라운드 작업 큐(2026-11-26, P1-6 2단계)
 from hair_platform import approvals as approvals_mod
 from hair_platform import (
     assignments,
     audit,
-    conversations,
     deliverables,
     knowledge_submissions,
     pipeline_runtime,
@@ -363,10 +363,10 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         if knowledge_submission_to_register is not None:
             # 승인된 지식 등록 — 임베딩은 오래 걸릴 수 있어 커밋 뒤
             # 백그라운드에서 색인한다(`knowledge_submissions` 모듈 설명).
-            background_tasks.add_task(
-                knowledge_submissions.register_submission,
-                conn,
+            job_queue.enqueue(
+                conn, "knowledge.register_submission",
                 knowledge_submission_to_register,
+                background_tasks=background_tasks,
             )
         if pipeline_run_id is not None and pipeline_run_is_graph_engine:
             # 사용자 요청(2026-11-18, "결재함과 연결") — 이 run은 아직
@@ -378,14 +378,14 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             # — 대화에서 트리거된 run이면 재개 후 진행 메시지도 올린다
             # (`run_pipeline_stage_job_and_notify()`와 같은 이유, 레거시
             # 엔진도 직접 `pipeline_runtime`을 안 부르고 그 래퍼를 씀).
-            background_tasks.add_task(
-                conversations.resume_pipeline_graph_from_approval_and_notify,
-                conn,
+            job_queue.enqueue(
+                conn, "conversation.resume_graph_from_approval",
                 pipeline_run_id,
                 {
                     "decision": "approve" if payload.approve else "reject",
                     "reason": payload.reason,
                 },
+                background_tasks=background_tasks,
             )
         elif pipeline_run_id is not None:
             pipeline_run_row = conn.execute(
@@ -411,11 +411,11 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 # 후 그 대화에도 진행 상황을 올려야 하므로
                 # `conversations.run_pipeline_stage_job_and_notify()`가
                 # 감싼다(Task 기원 run은 평소와 동일하게 동작).
-                background_tasks.add_task(
-                    conversations.run_pipeline_stage_job_and_notify,
-                    conn,
+                job_queue.enqueue(
+                    conn, "conversation.pipeline_stage_and_notify",
                     pipeline_run_id,
                     pipeline_run_row["actor_id"],
+                    background_tasks=background_tasks,
                 )
         if new_pipeline_run_id is not None:
             # 배정(assignment) 승인으로 새로 시작된 run — 연결된 대화가
@@ -424,11 +424,11 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             # 가 아니라 배정을 원래 요청한 사람(`new_pipeline_run_actor_id`)
             # — 위 self-approval 교착과 똑같은 이유.
             assert new_pipeline_run_actor_id is not None
-            background_tasks.add_task(
-                pipeline_runtime.run_pipeline_stage_job,
-                conn,
+            job_queue.enqueue(
+                conn, "pipeline.stage",
                 new_pipeline_run_id,
                 new_pipeline_run_actor_id,
+                background_tasks=background_tasks,
             )
         return {
             "id": approval_id,

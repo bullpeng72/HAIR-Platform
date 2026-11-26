@@ -34,6 +34,23 @@ def generate_secret_key() -> str:
     return secrets.token_hex(32)
 
 
+GROUP_OPERATION = "서버 운영(작업 프로세스·시간대)"
+GROUP_ADVANCED = "고급 옵션(기본값 권장)"
+GROUP_SMTP = "메일(SMTP) 알림"
+# 원할 때만 묻는 그룹(`hair init`) — 값이 하나라도 있으면 기본 답이 "예".
+OPTIONAL_GROUPS = {
+    GROUP_SMTP: "결재·완료 등 알림을 메일로도 받으려면 설정하세요.",
+    GROUP_ADVANCED: "보통은 기본값 그대로 둡니다(실행 방식·검색 엔진·자동 검사 끄기 등).",
+}
+
+# 연동 설정 화면(admin)에서 등록하는 연결이 "이름"만 저장하는 비밀 환경변수 — 이름은 등록하는 사람이 정한다
+# (`hair check --db-path`가 등록된 이름을 읽어 값이 있는지 보여 준다). 표: (테이블, 열, 설명, 연결 이름 열).
+CONNECTOR_SECRET_SOURCES: tuple[tuple[str, str, str, str], ...] = (
+    ("data_connections", "password_env", "사내 DB 비밀번호", "name"),
+    ("mail_inboxes", "password_env", "메일 수신함 앱 비밀번호", "name"),
+    ("calendar_feeds", "source", "캘린더 iCal 주소", "name"),
+)
+
 # 순서·그룹은 env.sample과 맞춘다 — `render_env_file()`이 그대로 이 순서로 쓴다.
 ENV_VARS: tuple[EnvVar, ...] = (
     EnvVar(
@@ -76,12 +93,47 @@ ENV_VARS: tuple[EnvVar, ...] = (
         "비우면 PR 만들기 링크만 드린다",
         secret=True,
     ),
-    EnvVar("HAIR_SMTP_HOST", "메일(SMTP) 알림", "SMTP 서버 호스트(비우면 메일 알림이 비활성)"),
-    EnvVar("HAIR_SMTP_PORT", "메일(SMTP) 알림", "SMTP 포트(기본 587, HAIR_SMTP_SSL=1이면 465)"),
-    EnvVar("HAIR_SMTP_USER", "메일(SMTP) 알림", "SMTP 로그인 계정"),
-    EnvVar("HAIR_SMTP_PASSWORD", "메일(SMTP) 알림", "SMTP 로그인 비밀번호", secret=True),
-    EnvVar("HAIR_SMTP_FROM", "메일(SMTP) 알림", "발신자 표시 주소(기본: HAIR_SMTP_USER)"),
-    EnvVar("HAIR_SMTP_SSL", "메일(SMTP) 알림", '1이면 SMTPS(465), 그 외엔 STARTTLS'),
+    EnvVar("HAIR_SMTP_HOST", GROUP_SMTP, "SMTP 서버 호스트(비우면 메일 알림이 비활성)"),
+    EnvVar("HAIR_SMTP_PORT", GROUP_SMTP, "SMTP 포트(기본 587, HAIR_SMTP_SSL=1이면 465)"),
+    EnvVar("HAIR_SMTP_USER", GROUP_SMTP, "SMTP 로그인 계정"),
+    EnvVar("HAIR_SMTP_PASSWORD", GROUP_SMTP, "SMTP 로그인 비밀번호", secret=True),
+    EnvVar("HAIR_SMTP_FROM", GROUP_SMTP, "발신자 표시 주소(기본: HAIR_SMTP_USER)"),
+    EnvVar("HAIR_SMTP_SSL", GROUP_SMTP, '1이면 SMTPS(465), 그 외엔 STARTTLS'),
+    # 서버 운영(2026-11-26, P1-6 2단계·P1-9 3단계)
+    EnvVar(
+        "HAIR_WORKER_MODE", GROUP_OPERATION,
+        "AI 실행 방식 — embedded(기본: 웹 서버가 직접 실행) | external(웹 서버는 기록만, `hair worker`가 실행 — "
+        "웹 서버를 재시작해도 실행이 계속됨. hair serve와 hair worker를 같은 값·같은 --db-path로 함께 띄운다)",
+        default="embedded",
+    ),
+    EnvVar(
+        "HAIR_TIMEZONE", GROUP_OPERATION,
+        "캘린더 일정을 보여 줄 시간대(IANA 이름, 예: Asia/Seoul — 비우면 서버 PC 시간대)",
+    ),
+    # 고급 옵션 — 기본값 그대로 두는 것을 권장. `hair init`은 원할 때만 묻는다.
+    EnvVar("HAIR_STAGE_RUNTIME", GROUP_ADVANCED,
+           "파이프라인 단일·순차 릴레이 단계 실행 방식 — direct(기본, 대화와 같은 직접 호출) | crewai(예전 방식)",
+           default="direct"),
+    EnvVar("HAIR_STAGE_STALL_SECONDS", GROUP_ADVANCED,
+           "파이프라인 단계가 이 초 동안 진행 없이 멈추면 정리하고 '이어서 실행'할 수 있게 함(기본 2700=45분, 0=끔)",
+           default="2700"),
+    EnvVar("HAIR_VECTOR_BACKEND", GROUP_ADVANCED,
+           "지식 베이스 검색 엔진 — chroma(기본) | sqlite(예전 방식, 청크가 많으면 느림)", default="chroma"),
+    EnvVar("HAIR_VECTOR_DIR", GROUP_ADVANCED,
+           "벡터 색인 저장 폴더(기본 <DB 파일>-vectors, 지워도 hair reindex-vectors로 다시 만듦)"),
+    EnvVar("HAIR_EVAL_HTML_REPORT", GROUP_ADVANCED,
+           "0이면 평가마다 만드는 Gate A-G HTML 리포트를 만들지 않음(기본 1)", default="1"),
+    EnvVar("HAIR_LANGUAGE_QA", GROUP_ADVANCED, "0이면 한국어 결과물 자동 언어 교정을 끔(기본 1)", default="1"),
+    EnvVar("HAIR_LEXICON_CHECK", GROUP_ADVANCED,
+           "0이면 사전에 없는 한국어 낱말 탐지('낱말확인')를 끔(기본 1, 분석기 메모리 약 360MB)", default="1"),
+    EnvVar("HAIR_NUMERIC_CHECK", GROUP_ADVANCED,
+           "0이면 결과물 퍼센트 수치 근거 검사('수치근거')를 끔(기본 1)", default="1"),
+    EnvVar("HAIR_OLLAMA_AGENT_PLANNING", GROUP_ADVANCED,
+           "1이면 로컬(Ollama) 모델에서도 Agent 작업 전 계획을 켬(기본 0 — 속도 우선)", default="0"),
+    EnvVar("HAIR_OLLAMA_MAX_OUTPUT_TOKENS", GROUP_ADVANCED,
+           "Ollama 모델의 최대 출력 토큰 재정의(비우면 모델 레지스트리 설정값)"),
+    EnvVar("HAIR_ALLOW_LOCAL_CODE_RUN", GROUP_ADVANCED,
+           "1이면 Docker 샌드박스 대신 로컬에서 코드 테스트 실행(격리 없음 — 운영 비권장, 기본 0)", default="0"),
 )
 
 _BY_KEY: dict[str, EnvVar] = {v.key: v for v in ENV_VARS}
@@ -224,7 +276,77 @@ def cross_check(values: dict[str, str]) -> list[tuple[str, str]]:
     elif any((values.get(k) or "").strip() for k in other_smtp):
         issues.append(("warn", "HAIR_SMTP_HOST 없이 다른 SMTP 값만 있습니다 — 메일 알림이 비활성 상태입니다"))
 
+    # 서버 운영·고급 옵션(2026-11-26) — 정해진 값 밖이면 코드가 조용히 기본값으로 동작하므로 알려 준다.
+    def _v(key: str) -> str:
+        return (values.get(key) or "").strip()
+
+    choices = {"HAIR_WORKER_MODE": ("embedded", "external"), "HAIR_STAGE_RUNTIME": ("direct", "crewai"),
+               "HAIR_VECTOR_BACKEND": ("chroma", "sqlite")}
+    for key, allowed in choices.items():
+        if _v(key) and _v(key).lower() not in allowed:
+            issues.append(("warn", f"{key}={_v(key)!r}는 쓸 수 없는 값입니다 — {'·'.join(allowed)} 중 하나(지금은 기본값 "
+                                   f"{allowed[0]}로 동작)"))
+    for key in ("HAIR_EVAL_HTML_REPORT", "HAIR_LANGUAGE_QA", "HAIR_LEXICON_CHECK", "HAIR_NUMERIC_CHECK",
+                "HAIR_OLLAMA_AGENT_PLANNING", "HAIR_ALLOW_LOCAL_CODE_RUN"):
+        if _v(key) and _v(key) not in ("0", "1"):
+            issues.append(("warn", f"{key}={_v(key)!r} — 0 또는 1로 적으세요"))
+    for key in ("HAIR_STAGE_STALL_SECONDS", "HAIR_OLLAMA_MAX_OUTPUT_TOKENS"):
+        if _v(key) and not _v(key).isdigit():
+            issues.append(("error", f"{key}={_v(key)!r}가 숫자가 아닙니다"))
+    if _v("HAIR_TIMEZONE"):
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(_v("HAIR_TIMEZONE"))
+        except Exception:  # noqa: BLE001 — ZoneInfoNotFoundError·ValueError
+            issues.append(("warn", f"HAIR_TIMEZONE={_v('HAIR_TIMEZONE')!r}는 알 수 없는 시간대입니다(예: Asia/Seoul) — "
+                                   "서버 PC 시간대로 동작합니다"))
+    if _v("HAIR_ALLOW_LOCAL_CODE_RUN") == "1":
+        issues.append(("warn", "HAIR_ALLOW_LOCAL_CODE_RUN=1 — 코드 테스트가 격리 없이 서버 PC에서 실행됩니다(운영 비권장)"))
+
     return issues
+
+
+def connector_secret_check(db_path: str, values: dict[str, str]) -> tuple[list[tuple[str, str, str, bool]],
+                                                                         list[tuple[str, str]]]:
+    """DB에 등록된 연동(사내 DB·메일 수신함·캘린더)이 이름만 저장한 비밀 환경변수와, 작업 프로세스 상태.
+    반환: ([(종류, 연결 이름, 환경변수 이름, 값 있음)], [(level, message)]). DB가 없으면 빈 목록."""
+    import sqlite3
+
+    rows: list[tuple[str, str, str, bool]] = []
+    issues: list[tuple[str, str]] = []
+    if not db_path or db_path == ":memory:" or not Path(db_path).exists():
+        return rows, issues
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return rows, issues
+    try:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        for table, col, label, name_col in CONNECTOR_SECRET_SOURCES:
+            if table not in tables:
+                continue
+            where = " WHERE is_active = 1" + (" AND source_kind = 'url'" if table == "calendar_feeds" else "")
+            for r in conn.execute(f"SELECT {name_col} AS n, {col} AS env FROM {table}{where} ORDER BY n"):  # noqa: S608
+                env = (r["env"] or "").strip()
+                if not env:
+                    continue
+                ok = bool((values.get(env) or os.environ.get(env) or "").strip())
+                rows.append((label, r["n"], env, ok))
+                if not ok:
+                    issues.append(("warn", f"{label} — 연결 「{r['n']}」이 쓰는 환경변수 {env}가 비어 있습니다(.env에 넣거나 export)"))
+        mode = (values.get("HAIR_WORKER_MODE") or "embedded").strip().lower()
+        if mode == "external" and "worker_heartbeats" in tables:
+            import time
+
+            alive = [r for r in conn.execute("SELECT beat_at FROM worker_heartbeats") if time.time() - r[0] <= 30]
+            if not alive:
+                issues.append(("warn", "HAIR_WORKER_MODE=external인데 작업 프로세스가 실행되고 있지 않습니다 — "
+                                       f"'hair worker --db-path {db_path}'를 함께 띄우세요(없으면 AI 실행이 쌓이기만 함)"))
+    finally:
+        conn.close()
+    return rows, issues
 
 
 def dependency_check() -> list[tuple[str, str]]:

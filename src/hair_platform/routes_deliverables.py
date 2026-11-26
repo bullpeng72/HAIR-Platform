@@ -15,6 +15,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse
 
+from hair_platform import job_queue  # 백그라운드 작업 큐(2026-11-26, P1-6 2단계)
 from hair_platform import (
     deliverables,
     webui,
@@ -453,14 +454,14 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             except LookupError:
                 skipped_agent_ids.append(agent["id"])
                 continue
-            background_tasks.add_task(
-                deliverables.run_comment_triggered_execution_job,
-                conn,
+            job_queue.enqueue(
+                conn, "deliverable.comment_execution",
                 job_id,
                 deliverable_id,
                 agent["id"],
                 user["id"],
                 payload.content,
+                background_tasks=background_tasks,
             )
             triggered_jobs.append({"agent_id": agent["id"], "job_id": job_id})
 

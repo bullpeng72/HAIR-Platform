@@ -515,7 +515,7 @@ def reorder_stage(
 # ---------- 실행 엔진 ----------
 
 
-def reap_orphaned_pipeline_runs(conn: sqlite3.Connection) -> int:
+def reap_orphaned_pipeline_runs(conn: sqlite3.Connection, keep: frozenset[int] | set[int] = frozenset()) -> int:
     """실측(2026-11-06, park_member 로드러너 게임 데모) — CrewAI 매니저가
     위임을 반복하다 LLM 컨텍스트 윈도우를 초과하면, 그 예외가 CrewAI/
     LiteLLM 내부에서 로그만 남기고(`ERROR:root:...`) 재시도를 무한히
@@ -537,6 +537,8 @@ def reap_orphaned_pipeline_runs(conn: sqlite3.Connection) -> int:
     rows = conn.execute(
         "SELECT id FROM pipeline_runs WHERE status = 'running'"
     ).fetchall()
+    # 작업 큐에 아직 대기 중인 작업의 행은 남긴다(2026-11-26, P1-6 2단계 — 작업 프로세스가 곧 실행한다).
+    rows = [r for r in rows if r["id"] not in keep]
     for row in rows:
         conn.execute(
             "UPDATE pipeline_runs SET status = 'failed', finished_at = datetime('now') "

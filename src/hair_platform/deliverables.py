@@ -2280,7 +2280,7 @@ def list_execution_jobs(conn: sqlite3.Connection, task_id: int) -> list[dict]:
     return jobs
 
 
-def reap_orphaned_execution_jobs(conn: sqlite3.Connection) -> int:
+def reap_orphaned_execution_jobs(conn: sqlite3.Connection, keep: frozenset[int] | set[int] = frozenset()) -> int:
     """**실측으로 발견한 갭(2026-09-28, "Phase1~4까지... 분석하고
     개선해줘" 리뷰 중)**: `status='running'`인 job은 프로세스가 죽기
     전엔 절대 그 상태로 남을 이유가 없다(`run_agent_execution_job()`이
@@ -2295,6 +2295,8 @@ def reap_orphaned_execution_jobs(conn: sqlite3.Connection) -> int:
     rows = conn.execute(
         "SELECT id FROM agent_execution_jobs WHERE status = 'running'"
     ).fetchall()
+    # 작업 큐에 아직 대기 중인 작업의 행은 남긴다(2026-11-26, P1-6 2단계 — 작업 프로세스가 곧 실행한다).
+    rows = [r for r in rows if r["id"] not in keep]
     for row in rows:
         conn.execute(
             "UPDATE agent_execution_jobs SET status = 'failed', "

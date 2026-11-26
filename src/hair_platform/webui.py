@@ -358,6 +358,9 @@ INDEX_HTML = """<!DOCTYPE html>
   th.sortable-col .sort-indicator { font-size: 0.75em; color: #14213d; margin-left: 0.15rem; }
   input, select, textarea { padding: 0.35rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; }
   form.inline { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+  /* 2026-11-26 사용자 보고(대화 화면 provider·model 선택 상자가 붙어 보임) — 마크업에서 공백 없이 이어 붙인 선택 상자 사이에도
+     버튼 사이 공백과 비슷한 간격을 준다(flex가 아닌 div.inline 줄). */
+  div.inline > select + select { margin-left: 0.4rem; }
   button.primary { background: #14213d; color: #fff; border: none; padding: 0.4rem 0.9rem; border-radius: 4px; cursor: pointer; }
   button.danger { background: #d64545; color: #fff; border: none; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; }
   button.small { padding: 0.25rem 0.5rem; font-size: 0.8rem; cursor: pointer; }
@@ -3808,6 +3811,17 @@ async function renderConversationDetail(conversationId, containerId) {
     '<label><input type="checkbox" id="conv-auto-reply"' + (conv.ai_auto_reply ? " checked" : "") + '> AI 자동응답</label>' +
     '</div>' +
     '<p class="muted">AI 자동응답이 켜져 있으면 멘션 없는 메시지에도 매번 LLM 호출이 발생합니다(비용 발생). provider/model을 고른 뒤 "모델 설정 저장"을 눌러야 반영됩니다.</p>' +
+    // 사용자 요청(2026-10-14, "대화창에 사용중인 모델이 명시되도록 UI를 개선해줘"). 2026-11-26 사용자 요청
+    // ("안내에 오류가 없는지 확인")으로 코드와 대조해 고쳤다 — ① @Team은 "서버 자동 판별"이 아니라 팀 전체가 한
+    // 모델을 쓴다(`conversations.run_team_mention_job`: 매니저가 있으면 매니저 Agent에 저장된 모델, 없으면
+    // `llm.resolve_provider_and_model(conn=)`의 플랫폼 공통 기본 LLM). ② 이 설정은 기본 AI 응답 말고도 오래된
+    // 메시지 요약(`_ensure_context_summary` — @Agent·@Team 응답의 맥락에도 들어감)과 "업무 요청으로 전환"의 AI
+    // 정리(`brief_draft_from_conversation`)에 쓰인다. 메시지마다 실제 모델은 작성자 줄(`_conversationAuthorLabel`).
+    '<p class="muted">⚠️ 이 모델 설정은 <b>멘션 없는 기본 AI 응답</b>에 쓰입니다(비워 두면 "LLM 설정"의 플랫폼 공통 기본 LLM). ' +
+    '<code>@Agent이름</code>으로 부르면 그 Agent에 저장된 모델이, ' +
+    '<code>@Team이름</code>으로 부르면 팀 전체가 한 모델(매니저가 있는 팀은 매니저 Agent의 모델, 없으면 플랫폼 공통 기본 LLM)을 씁니다. ' +
+    '다만 대화가 10건을 넘으면 오래된 메시지를 요약하는 데와 "업무 요청으로 전환"의 AI 정리에는 멘션과 관계없이 이 설정이 쓰입니다. ' +
+    '각 메시지에 실제로 쓰인 모델은 메시지 작성자 줄에 표시됩니다.</p>' +
     // 대화 → 업무 요청 전환(2026-11-23, P1-4) — 대화에서 정한 일을 결재·Gate가 붙는 정식 업무로
     // 넘길 때 내용을 직접 복사하지 않게 한다. 초안은 저장하지 않고, 다듬어 제출해야 만들어진다.
     '<details class="conv-to-brief" id="conv-to-brief"><summary>📋 업무 요청으로 전환</summary>' +
@@ -3819,17 +3833,6 @@ async function renderConversationDetail(conversationId, containerId) {
     '<textarea id="conv-brief-text" rows="10" style="width:100%;margin-top:0.4rem" hidden></textarea>' +
     '<button type="button" class="small primary" id="conv-brief-submit-btn" hidden>업무 요청 제출</button>' +
     '</details>' +
-    // 사용자 요청(2026-10-14, "대화창에 사용중인 모델이 명시되도록 UI를
-    // 개선해줘") — 실측으로 확인한 사실: 이 설정은 **멘션 없는 기본 AI
-    // 응답에만** 적용된다. `@Agent`로 직접 부르면 그 Agent 자신에게 저장된
-    // 모델이 쓰이고, `@Team`으로 부르면 서버 환경변수/API 키로 자동
-    // 판별한 값이 쓰인다(둘 다 이 설정과 무관). 각 메시지가 실제로 어떤
-    // 모델로 응답했는지는 메시지 카드 작성자 줄에 표시한다(아래
-    // `_conversationAuthorLabel()` 참고).
-    '<p class="muted">⚠️ 이 모델 설정은 <b>멘션 없는 기본 AI 응답</b>에만 적용됩니다. ' +
-    '<code>@Agent이름</code>으로 부르면 그 Agent 자신에게 저장된 모델이, ' +
-    '<code>@Team이름</code>으로 부르면 서버가 자동 판별한 모델이 쓰입니다(이 설정과 무관). ' +
-    '각 메시지에 실제로 쓰인 모델은 메시지 작성자 줄에 표시됩니다.</p>' +
     '<h4>참가자</h4>' +
     '<ul id="conv-participant-list">' + participantRows + '</ul>' +
     (participantRows ? '' : '<p class="muted" id="conv-participant-empty-hint">참가자가 없습니다.</p>') +
@@ -4217,11 +4220,12 @@ async function _loadTaskConversation(taskId) {
 async function renderHome(content) {
   const role = ME.role;
   const canManage = ["admin", "manager"].includes(role);
-  const [inbox, cfg, notify, usage] = await Promise.all([
+  const [inbox, cfg, notify, usage, worker] = await Promise.all([
     api("GET", "/api/inbox").catch(() => []),
     role === "admin" ? api("GET", "/api/admin/config-check").catch(() => null) : Promise.resolve(null),
     role === "admin" ? api("GET", "/api/integrations/notify").catch(() => null) : Promise.resolve(null),
     canManage ? api("GET", "/api/llm-usage?days=30").catch(() => null) : Promise.resolve(null),
+    role === "admin" ? api("GET", "/api/admin/worker-status").catch(() => null) : Promise.resolve(null),  // P1-6 2단계
   ]);
   const count = type => inbox.filter(i => i.type === type).length;
   const todo = [
@@ -4245,6 +4249,7 @@ async function renderHome(content) {
   const checks = [];
   if (cfg && cfg.length) checks.push('기본 구성과 다른 곳 ' + cfg.length + '건 — <button class="small" data-go="admin">사용자 관리에서 점검</button>');
   if (notify && !notify.webhook_url) checks.push('외부 알림 웹훅이 설정되지 않았습니다 — 결재 대기를 메신저로 받으려면 <button class="small" data-go="integrations">연동 설정</button>');
+  (worker && worker.warnings || []).forEach(w => checks.push("⚠ " + esc(w)));  // 작업 프로세스(2026-11-26, P1-6 2단계)
   if (usage && usage.unpriced_models) checks.push("단가가 없는 모델 " + usage.unpriced_models + '개 — 실제 비용을 보려면 <button class="small" data-go="modelregistry">모델 레지스트리</button>에서 단가 입력');
   content.innerHTML =
     "<h2>홈</h2>" +
@@ -12346,6 +12351,8 @@ const MANUAL_MARKDOWN = [
 '',
 '같은 홈 화면에는 **처리할 일**(결재 대기·AI 실행 실패·낮은 Gate 점수·최근 완료 건수 — 누르면 해당 화면으로 이동)과 **일을 맡기는 방법 4가지** 안내가 있고, admin에게는 **관리 점검**(기본 구성과 다른 곳·외부 알림 미설정·단가 없는 모델)이 함께 보입니다.',
 '',
+'**서버를 재시작해도 실행이 멈추지 않게 하려면(작업 프로세스)** — 기본은 웹 서버가 AI 실행을 직접 돌려, `hair serve`를 재시작하면 실행 중이던 파이프라인·Agent 실행이 "중단됨"이 됩니다(화면에서 "이어서 실행" 가능). 서버 PC에서 환경변수 `HAIR_WORKER_MODE=external`(`.env`에 넣어도 됨)로 **`hair serve`와 `hair worker`를 함께** 띄우면, 웹 서버는 작업을 기록만 하고 작업 프로세스가 실행해 **웹 서버를 재시작해도 실행이 계속됩니다**. 작업 프로세스는 하나만 띄우고(두 번째는 시작을 거부), 꺼져 있으면 홈의 **관리 점검**에 경고가 뜹니다.',
+'',
 '### 1단계 — 대화 열기',
 '',
 '**"대화"** 탭은 로그인하면 가장 먼저 열리는 화면입니다.',
@@ -12380,7 +12387,7 @@ const MANUAL_MARKDOWN = [
 '',
 '대화 상단의 provider·모델 선택에서 고른 뒤 **"모델 설정 저장"**을 눌러야 반영됩니다.',
 '',
-'> ⚠️ **이 설정은 멘션 없이 답하는 기본 AI에만 적용됩니다.** `@Agent`로 부르면 그 Agent에 저장된 모델을 쓰고, `@팀`으로 부르면 팀 전체가 한 모델을 함께 씁니다(매니저가 있는 기존 위임형 팀은 매니저 Agent의 모델, 그 밖에는 아래 ①의 플랫폼 공통 기본 LLM). 메시지마다 실제로 쓴 모델이 작성자 줄에 표시됩니다.',
+'> ⚠️ **이 설정은 멘션 없이 답하는 기본 AI에만 적용됩니다.** `@Agent`로 부르면 그 Agent에 저장된 모델을 쓰고, `@팀`으로 부르면 팀 전체가 한 모델을 함께 씁니다(매니저가 있는 기존 위임형 팀은 매니저 Agent의 모델, 그 밖에는 아래 ①의 플랫폼 공통 기본 LLM). 단, 대화가 10건을 넘을 때 오래된 메시지를 요약하는 일과 "업무 요청으로 전환"의 AI 정리에는 멘션과 관계없이 이 설정이 쓰입니다. 메시지마다 실제로 쓴 모델이 작성자 줄에 표시됩니다.',
 '>',
 '> provider와 model을 둘 다 **"기본값 사용"**으로 두면 ① admin이 "LLM 설정 최적화" 탭의 **"플랫폼 공통 기본 LLM"** 카드에 지정한 모델 → ② 없으면 서버 환경변수 → ③ 그래도 없으면 설치된 API 키로 자동 판별한 모델 순서로 정해집니다. provider만 고르고 model을 "기본값 사용"으로 두면 ①을 건너뛰고 그 provider의 표준 모델을 씁니다.',
 '>',
@@ -13004,6 +13011,17 @@ const MANUAL_MARKDOWN = [
 '  3. 실행 실패는 **"인박스"**에서 확인합니다. 로컬 모델 타임아웃은 Crew·파이프라인 기준 5,400초로 길게 잡혀 있지만, 35B급 모델은 한 단계에 수십 분이 걸릴 수 있습니다.',
 '  4. **서버 PC가 잠자기에 들어가면 로컬 생성도 멈춥니다.** 긴 실행 중에는 잠자기를 꺼 두세요.',
 '',
+'**대화 응답·실행이 "실행 중"인데 전혀 시작되지 않는다**',
+'',
+'- **원인**: 서버가 `HAIR_WORKER_MODE=external`(작업 프로세스 모드)로 떠 있는데 `hair worker`가 꺼져 있습니다 — 웹 서버는 작업을 기록만 하고 실행은 작업 프로세스가 합니다.',
+'- **확인**: 홈의 **관리 점검**(admin)이나 서버 PC에서 `hair check --db-path hair.db`에 "작업 프로세스가 실행되고 있지 않습니다" 경고가 보입니다.',
+'- **해결**: 같은 폴더에서 `hair worker --db-path <hair serve와 같은 DB>`를 띄우면 쌓인 작업부터 실행합니다. 작업 프로세스를 쓰지 않으려면 `.env`에서 `HAIR_WORKER_MODE`를 지우고(또는 `embedded`) `hair serve`를 재시작하세요.',
+'',
+'**서버를 재시작했더니 실행이 "중단됨"이 됐다**',
+'',
+'- **원인**: 기본 모드(`embedded`)에서는 웹 서버가 실행을 직접 돌려, 재시작하면 그때 실행 중이던 것이 멈춥니다.',
+'- **해결**: 인박스·실행 이력에서 **"이어서 실행"**을 누르면 끝난 단계는 건너뛰고 이어서 돕니다. 앞으로 재시작에도 멈추지 않게 하려면 "서버 PC 환경 설정"의 `HAIR_WORKER_MODE=external`을 쓰세요.',
+'',
 '**검토는 "승인"인데 검토자가 지적한 오타가 결과물에 그대로 남아 있다**',
 '',
 '- **원인**: 검토자가 승인하면서 고칠 곳을 짚었습니다("조건부 승인"). 기본 설정은 다시 쓰는 시간이 들지 않게 이를 통과로 처리합니다.',
@@ -13131,7 +13149,7 @@ const MANUAL_MARKDOWN = [
 '',
 '| 구분 | 내용 |',
 '|---|---|',
-'| **지움** | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)과 Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소·사내 DB·메일 수신함·캘린더 연결 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |',
+'| **지움** | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)과 Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소·사내 DB·메일 수신함·캘린더 연결, 작업 큐 기록 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |',
 '| **남김** | Agent 36종·스킬·도구·파이프라인 템플릿(관리자가 만든 것 포함), 조직 정책(사번 형식·결과물 언어·알림 웹훅·메일 수신자), 평가 기준, 플랫폼 공통 기본 LLM·보조 작업 모델·지식 검색 설정, "초기화 시 보호" 팀과 멤버 |',
 '| **되돌림** | 모든 Agent의 모델 지정·비용·성과점수·마지막 결과물을 비움. 상태는 **기본 Agent만 "활성"으로** 되돌리고, 관리자가 만든 Agent는 지금 상태(온보딩 대기·비활성 등)를 그대로 둠 — 승인 전 Agent가 초기화로 활성이 되지 않음 |',
 '',
@@ -13144,6 +13162,50 @@ const MANUAL_MARKDOWN = [
 '',
 '- **원인**: 팀은 초기화 대상입니다.',
 '- **해결**: "팀 관리"에서 다시 등록하세요. 앞으로 남겨야 하는 팀은 팀 카드의 **"초기화 시 보호"**를 켜 두면 초기화해도 유지됩니다.',
+'',
+'### 서버 PC 환경 설정(admin) — `hair init`·`hair check`·환경변수',
+'',
+'API 키·메일 서버·작업 방식처럼 **화면이 아니라 서버 PC에서 정하는 값**은 환경변수로 둡니다. 서버를 띄우는 폴더의 `.env` 파일에 `이름=값` 한 줄씩 적으면 되고, 직접 고치는 대신 아래 명령을 쓰면 편합니다. 값을 바꾼 뒤에는 **`hair serve`(작업 프로세스를 쓰면 `hair worker`도) 재시작**이 필요합니다.',
+'',
+'| 명령 | 하는 일 |',
+'|---|---|',
+'| `hair init` | 항목을 하나씩 물어 `.env`에 저장합니다. Enter는 지금 값 유지, 메일 알림·고급 옵션은 원할 때만 묻습니다. `.env`에 직접 추가한 줄(연동 비밀값 등)은 그대로 둡니다 |',
+'| `hair check` | 실제로 적용될 값을 보여 주고(비밀값은 가림) 흔한 실수를 찾습니다 — API 키와 provider 불일치, SMTP 누락, 잘못된 값(작업 방식·시간대·0/1·숫자) |',
+'| `hair check --db-path hair.db` | 위 내용 + 연동 설정에 등록한 연결이 쓰는 **비밀 환경변수가 채워졌는지**와, 작업 프로세스 모드일 때 **`hair worker`가 떠 있는지** |',
+'| `hair init --help` | 묻는 항목 전체 목록 |',
+'',
+'**항목 한눈에 보기**',
+'',
+'| 그룹 | 환경변수 | 언제 필요한가 |',
+'|---|---|---|',
+'| LLM | `ANTHROPIC_API_KEY`·`OPENAI_API_KEY`·`OLLAMA_BASE_URL`·`HAIR_PLATFORM_LLM_PROVIDER`·`HAIR_PLATFORM_LLM_MODEL` | AI 실행. 보통은 화면 "LLM 설정"에서 정하고, 환경변수는 키와 기본값 |',
+'| 웹 검색 | `TAVILY_API_KEY` | 실시간웹검색·딥리서치 같은 스킬 |',
+'| 보안 | `HAIR_PLATFORM_SECRET_KEY` | 다른 PC에서 접속하게 띄울 때(`--host 0.0.0.0`) 필수 — `hair init`이 만들어 줍니다 |',
+'| 저장소 PR | `HAIR_GITHUB_TOKEN` | 결과물을 브랜치로 올린 뒤 PR을 자동으로 열 때 |',
+'| 메일 알림 | `HAIR_SMTP_HOST`·`_PORT`·`_USER`·`_PASSWORD`·`_FROM`·`_SSL` | 결재 대기·완료 알림을 메일로도 받을 때 |',
+'| 서버 운영 | `HAIR_WORKER_MODE` | `external`이면 웹 서버를 재시작해도 AI 실행이 계속됨(아래) |',
+'| | `HAIR_TIMEZONE` | 캘린더 일정 시간대(예: `Asia/Seoul`, 비우면 서버 PC 시간대) |',
+'| 고급 옵션 | `HAIR_STAGE_RUNTIME`·`HAIR_STAGE_STALL_SECONDS`·`HAIR_VECTOR_BACKEND`·`HAIR_VECTOR_DIR`·`HAIR_EVAL_HTML_REPORT`·`HAIR_LANGUAGE_QA`·`HAIR_LEXICON_CHECK`·`HAIR_NUMERIC_CHECK`·`HAIR_OLLAMA_AGENT_PLANNING`·`HAIR_OLLAMA_MAX_OUTPUT_TOKENS`·`HAIR_ALLOW_LOCAL_CODE_RUN` | 보통은 기본값 그대로. 실행 방식·검색 엔진·자동 검사 끄기 등(설명은 `hair init --help`·README) |',
+'',
+'**웹 서버를 재시작해도 AI 실행이 멈추지 않게 — `HAIR_WORKER_MODE=external`**',
+'',
+'1. `.env`에 `HAIR_WORKER_MODE=external`을 넣습니다(`hair init`의 "서버 운영"에서 `external` 입력).',
+'2. 같은 폴더에서 터미널 두 개로 `hair serve`와 `hair worker`를 함께 띄웁니다 — **같은 `--db-path`**, 작업 프로세스는 **하나만**(두 번째는 시작을 거부).',
+'3. 이제 웹 서버를 재시작해도 실행 중인 파이프라인·Agent 실행은 작업 프로세스에서 계속 돕니다. 작업 프로세스를 재시작하면 그때 실행 중이던 것만 "중단됨"이 되고 화면에서 "이어서 실행"할 수 있습니다.',
+'4. 작업 프로세스가 꺼져 있으면 AI 실행이 시작되지 않고 쌓입니다 — 홈의 **관리 점검**과 `hair check --db-path`에 경고가 뜹니다.',
+'',
+'**연동 비밀값 — 이름은 연동 설정 화면에서 정합니다**',
+'',
+'사내 DB·메일 수신함·캘린더를 등록할 때 비밀번호·iCal 주소 대신 **환경변수 이름**(대문자·숫자·`_`)을 적습니다. 그 이름으로 서버 PC의 `.env`에 값을 넣으세요.',
+'',
+'| 연결 | 등록할 때 적는 것 | `.env`에 넣는 줄(예) |',
+'|---|---|---|',
+'| 사내 DB(PostgreSQL·MySQL) | 비밀번호 환경변수 이름 | `HAIR_DB_SALES_PASSWORD=조회전용계정비밀번호` |',
+'| 메일 수신함 | 앱 비밀번호 환경변수 이름 | `HAIR_MAIL_SUPPORT_PASSWORD=앱비밀번호` |',
+'| 캘린더 | iCal 주소 환경변수 이름 | `HAIR_CAL_SALES_URL=https://...basic.ics` |',
+'',
+'- 연동 설정 화면의 표에 **✓**(값 있음) 또는 **⚠ 비어 있음**이 보입니다. 값을 넣은 뒤 `hair serve`를 재시작하고 **"연결 확인"**을 누르세요.',
+'- 작업 프로세스(`hair worker`)도 같은 `.env`를 읽어야 하므로 **같은 폴더에서 실행**합니다.',
 ].join("\\n");
 
 /* ---------- 연동 설정(2026-11-23, "P1 진행해줘" — P1-5 사람이 누르지 않아도 도는 자동화) ----------

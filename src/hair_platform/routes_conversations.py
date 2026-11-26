@@ -16,6 +16,7 @@ from fastapi import (
     UploadFile,
 )
 
+from hair_platform import job_queue  # 백그라운드 작업 큐(2026-11-26, P1-6 2단계)
 from hair_platform import (
     conversations,
     documents,
@@ -355,13 +356,13 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             job_id = conversations.start_agent_mention_job(
                 conn, conversation_id, agent["id"], user["id"]
             )
-            background_tasks.add_task(
-                conversations.run_agent_mention_job,
-                conn,
+            job_queue.enqueue(
+                conn, "conversation.agent_mention",
                 job_id,
                 conversation_id,
                 agent["id"],
                 user["id"],
+                background_tasks=background_tasks,
             )
             triggered_jobs.append(
                 {
@@ -374,13 +375,13 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             job_id = conversations.start_team_mention_job(
                 conn, conversation_id, team["id"], user["id"]
             )
-            background_tasks.add_task(
-                conversations.run_team_mention_job,
-                conn,
+            job_queue.enqueue(
+                conn, "conversation.team_mention",
                 job_id,
                 conversation_id,
                 team["id"],
                 user["id"],
+                background_tasks=background_tasks,
             )
             triggered_jobs.append(
                 {
@@ -393,13 +394,13 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             job_id = conversations.start_default_ai_job(
                 conn, conversation_id, user["id"], result["skill"]
             )
-            background_tasks.add_task(
-                conversations.run_default_ai_job,
-                conn,
+            job_queue.enqueue(
+                conn, "conversation.default_ai",
                 job_id,
                 conversation_id,
                 user["id"],
                 result["skill"],
+                background_tasks=background_tasks,
             )
             triggered_jobs.append(
                 {
@@ -468,8 +469,10 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except PermissionError as exc:
             raise _knowledge_submission_http_error(exc) from None
         if result.pop("needs_registration"):
-            background_tasks.add_task(
-                knowledge_submissions.register_submission, conn, result["id"]
+            job_queue.enqueue(
+                conn, "knowledge.register_submission",
+                result["id"],
+                background_tasks=background_tasks,
             )
         return result
 
@@ -732,8 +735,10 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             raise _knowledge_submission_http_error(exc) from None
         if result.pop("needs_registration"):
             # admin 본인 제출 — 결재 없이 바로 색인(경로 A와 같은 권한).
-            background_tasks.add_task(
-                knowledge_submissions.register_submission, conn, result["id"]
+            job_queue.enqueue(
+                conn, "knowledge.register_submission",
+                result["id"],
+                background_tasks=background_tasks,
             )
         return result
 
@@ -825,8 +830,10 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             (submission_id,),
         )
         conn.commit()
-        background_tasks.add_task(
-            knowledge_submissions.register_submission, conn, submission_id
+        job_queue.enqueue(
+            conn, "knowledge.register_submission",
+            submission_id,
+            background_tasks=background_tasks,
         )
         return {**row, "status": "registering", "error": None}
 

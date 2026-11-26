@@ -268,10 +268,11 @@ hair --help
 공유하는 단일 목록).
 
 ```bash
-hair init                 # LLM API 키·세션 서명 키·메일(SMTP) 알림 등을 대화형으로 물어 .env에 저장
+hair init                 # LLM API 키·세션 서명 키·메일(SMTP) 알림·작업 프로세스·시간대(+원하면 고급 옵션)를 대화형으로 물어 .env에 저장
 hair init --yes           # 묻지 않고 바로 저장(세션 서명 키만 없으면 자동 생성, 나머지는 기존 값 그대로)
 hair init --path .env.prod   # 다른 경로에 저장(기본: ./.env)
-hair check                # .env + 셸 환경변수를 합쳐 보여주고 provider/키 불일치·SMTP 설정 누락을 찾음
+hair check                # .env + 셸 환경변수를 합쳐 보여주고 provider/키 불일치·SMTP 누락·잘못된 값을 찾음
+hair check --db-path hair.db   # + 연동 설정에 등록된 비밀 환경변수(사내 DB·메일·캘린더)와 작업 프로세스 상태(기본 hair.db)
 ```
 
 `hair init`은 이미 있는 `.env`를 읽어 현재 값을 보여주고 Enter로 그대로 둘 수
@@ -291,10 +292,47 @@ hair check                # .env + 셸 환경변수를 합쳐 보여주고 provi
 | 플랫폼 공통 기본 LLM(선택적 폴백) | `HAIR_PLATFORM_LLM_PROVIDER` | 웹 UI "LLM 설정"으로 아직 안 지정했을 때 쓰는 기본 provider(anthropic/openai/ollama) |
 | | `HAIR_PLATFORM_LLM_MODEL` | 위 provider와 함께 지정하는 기본 모델명(provider 없이 지정하면 무시됨) |
 | 서버/보안 | `HAIR_PLATFORM_SECRET_KEY` | 세션 서명 키 — 127.0.0.1/localhost 바깥으로 띄우면 필수(위 "사내망에서 여러 명이 함께 쓰기" 참고) |
-| 메일(SMTP) 알림 | `HAIR_SMTP_HOST`·`HAIR_SMTP_PORT`·`HAIR_SMTP_USER`·`HAIR_SMTP_PASSWORD`·`HAIR_SMTP_FROM`·`HAIR_SMTP_SSL` | 결재 대기·파이프라인 완료/실패 메일 알림(연동 설정 화면). `HOST`가 있어야 나머지가 의미가 있고, 465 포트면 `SSL=1` |
+| 메일(SMTP) 알림 | `HAIR_SMTP_HOST`·`HAIR_SMTP_PORT`·`HAIR_SMTP_USER`·`HAIR_SMTP_PASSWORD`·`HAIR_SMTP_FROM`·`HAIR_SMTP_SSL` | 결재 대기·파이프라인 완료/실패 메일 알림(연동 설정 화면). `HOST`가 있어야 나머지가 의미가 있고, 465 포트면 `SSL=1`(`hair init`은 원할 때만 묻는다) |
+| 서버 운영(작업 프로세스·시간대) | `HAIR_WORKER_MODE` | `embedded`(기본) 또는 `external` — 아래 "작업 프로세스로 실행 유지" 참고 |
+| | `HAIR_TIMEZONE` | 캘린더 일정을 보여 줄 시간대(IANA 이름, 예: `Asia/Seoul`, 비우면 서버 PC 시간대) |
+| 고급 옵션(기본값 권장) | 아래 표의 `HAIR_STAGE_RUNTIME`~`HAIR_ALLOW_LOCAL_CODE_RUN` 11개 | `hair init`은 "고급 옵션을 설정하시겠습니까?"에 y일 때만 묻는다. `hair check`는 값이 정해진 범위(선택지·0/1·숫자) 밖이면 경고 |
 
-위 목록 밖에 있는, 기본값을 그대로 둬도 되는 고급 옵션(이쪽은 `hair init`/
-`hair check`가 다루지 않는다 — 각 기능 코드에 직접 적힌 토글):
+#### 작업 프로세스로 실행 유지 — `HAIR_WORKER_MODE`
+
+기본(`embedded`)은 웹 서버가 AI 실행(대화 응답·Agent/Crew·파이프라인·지식 등록)을 직접 돌려, `hair serve`를
+재시작하면 실행 중이던 것이 "중단됨"이 된다(화면에서 "이어서 실행"). `external`로 두면 웹 서버는 작업을 기록만
+하고 별도 작업 프로세스가 실행해 **웹 서버를 재시작해도 실행이 계속된다**.
+
+```bash
+# .env에 한 줄(또는 hair init의 "서버 운영"에서 external 입력)
+HAIR_WORKER_MODE=external
+# 같은 폴더(같은 .env)에서 터미널 두 개 — 같은 --db-path
+hair serve --db-path hair.db
+hair worker --db-path hair.db --concurrency 4
+hair check --db-path hair.db      # 작업 프로세스가 떠 있는지까지 점검
+```
+
+- 작업 프로세스는 **하나만** 띄운다(살아 있는 다른 작업 프로세스가 있으면 시작을 거부).
+- 작업 프로세스를 재시작하면 실행 중이던 것은 "중단됨"으로 정리되고 화면에서 이어서 실행할 수 있다. 꺼져 있는 동안
+  들어온 작업은 정리하지 않고 다음 기동 때 실행한다.
+- 작업 프로세스가 꺼져 있으면 홈 "관리 점검"(admin)과 `hair check --db-path`에 경고가 뜬다.
+
+#### 연동 비밀값 — 이름은 연동 설정 화면에서 정한다
+
+사내 DB·메일 수신함·캘린더 연결은 비밀번호·iCal 주소를 **DB에 저장하지 않고 환경변수 이름만** 저장한다. 이름은
+등록하는 admin이 정하고(대문자·숫자·`_`), 값은 서버 PC의 `.env`(또는 export)에 넣는다 — `hair init`은 모르는 줄도
+그대로 보존한다. `hair check --db-path`가 등록된 이름마다 값이 있는지 보여 준다(값 자체는 표시하지 않음).
+
+| 연결(연동 설정 화면) | 저장되는 것 | `.env` 예시 |
+|------|------|------|
+| 사내 DB(PostgreSQL·MySQL) | 비밀번호 환경변수 이름 | `HAIR_DB_SALES_PASSWORD=...` |
+| 메일 수신함(IMAP) | 앱 비밀번호 환경변수 이름 | `HAIR_MAIL_SUPPORT_PASSWORD=...` |
+| 캘린더(iCal 주소) | iCal 주소 환경변수 이름(https만) | `HAIR_CAL_SALES_URL=https://calendar.google.com/calendar/ical/.../basic.ics` |
+| 코드 저장소 PR | 고정 이름 | `HAIR_GITHUB_TOKEN=...`(위 표) |
+
+웹 서버와 작업 프로세스(`hair worker`)는 같은 `.env`를 읽어야 한다 — 같은 폴더에서 실행한다.
+
+고급 옵션(기본값을 그대로 둬도 된다 — `hair init`은 원할 때만 묻고, `hair check`가 값을 점검한다):
 
 | 변수 | 기본값 | 효과 |
 |------|--------|------|
@@ -309,7 +347,14 @@ hair check                # .env + 셸 환경변수를 합쳐 보여주고 provi
 | `HAIR_STAGE_STALL_SECONDS` | `2700`(45분) | 파이프라인 단계가 이 시간 동안 진행 표시·작성 중 미리보기 없이 멈추면 정리하고(모든 스레드 스택을 활동 기록에 남김) "이어서 실행"할 수 있게 함. `0`이면 끔 |
 | `HAIR_VECTOR_BACKEND` | `chroma` | 지식 베이스 검색 엔진. `sqlite`면 예전 방식(SQLite의 임베딩 전체와 비교 — 정확하지만 청크가 많으면 느림). chromadb가 없거나 메모리 DB면 자동으로 `sqlite` |
 | `HAIR_VECTOR_DIR` | `<db 파일>-vectors` | 벡터 색인(ChromaDB) 저장 폴더. 원본은 SQLite에 있어 지워도 `hair reindex-vectors`(또는 다음 검색)가 비용 없이 다시 만듦 |
+
+자동 설정·내부용(직접 설정할 일이 거의 없다 — `hair init`/`hair check`가 다루지 않음):
+
+| 변수 | 기본값 | 효과 |
+|------|--------|------|
 | `HAIR_PLATFORM_DB_PATH` | `:memory:` | SQLite DB 경로. 보통 `hair serve --db-path`가 기동 시 이 값을 자동으로 맞춰 주므로 직접 설정할 일은 거의 없음 |
+| `HAIR_AUTOMATION` | `hair serve`가 `1`로 설정 | 정기 실행·이벤트 트리거·외부 알림 자동화 루프. `hair serve`로 띄운 서버에서만 돈다(테스트·외부 uvicorn 실행에서는 꺼짐). `0`으로 export하고 `hair serve`를 띄우면 그 서버에서는 자동화가 돌지 않음 |
+| `HAIR_STAGE_WATCHDOG_POLL_SECONDS` | `30` | 파이프라인 단계 멈춤 감시(`HAIR_STAGE_STALL_SECONDS`)가 확인하는 간격(초). 시험용 |
 
 콜드스타트(신규 배포 시 최초 ADMIN 계정 생성 — 유일한 진입 경로,
 `users` 테이블이 완전히 비어 있을 때만 동작):
@@ -322,7 +367,7 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 
 | 구분 | 내용 |
 |------|------|
-| 지운다 | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)·Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소 등록·사내 DB·메일 수신함·캘린더 연결, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |
+| 지운다 | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)·Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소 등록·사내 DB·메일 수신함·캘린더 연결, 작업 큐 기록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |
 | 남긴다 | Agent(36종)·스킬·도구·파이프라인 템플릿, 조직 정책(사번 형식·결과물 언어·알림 웹훅·메일 수신자), 평가 기준, 플랫폼 공통 기본 LLM·보조 작업 모델·지식 검색 설정, "초기화 시 보호" 팀 |
 | 되돌린다 | Agent의 모델 지정·비용·성과점수·마지막 결과물은 비운다. 상태는 기본 Agent만 '활성'으로 되돌리고, 관리자가 만든 Agent는 그대로 둔다(온보딩 대기 Agent가 승인 없이 활성이 되지 않음) |
 
@@ -457,6 +502,8 @@ Web UI 실행(부트스트랩으로 만든 ADMIN 계정으로 로그인):
 hair serve                # http://127.0.0.1:8000/, hair.db(기본)에 저장 — 브라우저 자동으로 열림
 hair serve --reload       # 개발 중 — 코드 변경 시 자동 재시작
 hair serve --no-browser   # 브라우저 자동 열기 끄기(서버만 실행)
+# 웹 서버를 재시작해도 AI 실행이 멈추지 않게(.env에 HAIR_WORKER_MODE=external) — 터미널을 하나 더 열어:
+hair worker               # 작업 프로세스(같은 폴더·같은 --db-path, 하나만)
 ```
 
 ### 사내망에서 여러 명이 함께 쓰기
@@ -579,6 +626,7 @@ src/hair_platform/
   data_connectors.py # 사내 DB 조회(SQLite·PostgreSQL·MySQL, 읽기 전용 두 겹·행 수/시간 상한·조회 감사) — `database_query` 도구
   mail_inbox.py      # 메일 수신함 읽기(IMAP, 읽기 전용·읽음 표시 유지·메일함별 공개 범위·조회 감사) — `mail_inbox` 도구
   calendar_feeds.py  # 캘린더 읽기(iCal/ICS 주소·파일, 반복 일정 펼침·공개 범위·조회 감사) — `calendar_events` 도구
+  job_queue.py       # 백그라운드 작업 큐 + 별도 작업 프로세스(`hair worker`, HAIR_WORKER_MODE=external — 웹 서버 재시작에도 실행 유지)
   knowledge_access.py # 지식 베이스 문서별 공개 범위(전체·manager 이상·admin만·팀) — 요청자 기준으로 검색 결과를 거름
   vector_backends.py # 지식 검색 벡터 백엔드 — ChromaDB 임베디드(HNSW, `<db>-vectors/`) 또는 SQLite 전체 비교, SQLite 원본과 자동 동기화
   graphquery.py      # 조직배정관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의

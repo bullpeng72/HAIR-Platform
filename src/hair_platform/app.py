@@ -45,7 +45,6 @@ from hair_platform import (
     conversations,
     db,
     deliverables,
-    llm_usage,
     pipeline_runtime,
     retention,
     webui,
@@ -104,34 +103,38 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # 죽으면 agent_execution_jobs가 영원히 'running'으로 남아 해당
     # task의 실행 버튼이 복구 불가능하게 막힌다. 단일 프로세스 전제이므로
     # 기동 시점의 'running'은 전부 이전 프로세스의 잔재로 확정하고 정리한다.
-    deliverables.reap_orphaned_execution_jobs(conn)
+    #
+    # 작업 큐(2026-11-26, P1-6 2단계 — `job_queue.py`): external 모드면 "실행 중" 작업은 작업 프로세스(`hair worker`)의
+    # 것이라 웹 서버 재시작 때 정리하지 않는다(작업 프로세스가 자기 기동 때 정리). embedded면 이 서버가 남긴 것만
+    # 정리하되, 기록만 되고 시작하지 못한 대기 작업의 행은 남겨 아래에서 이어서 실행한다.
+    from hair_platform import job_queue
+
+    external_worker = job_queue.mode() == "external"
+    keep = job_queue.protected_ids(conn) if not external_worker else {}
+    if not external_worker:
+        job_queue.mark_interrupted(conn, "server-")
+        deliverables.reap_orphaned_execution_jobs(conn, keep["agent_execution_jobs"])
     # 실측(2026-11-06, park_member 로드러너 게임 데모) — CrewAI 매니저가
     # 위임 반복 중 LLM 컨텍스트 윈도우를 초과하면 그 예외가 CrewAI/
     # LiteLLM 내부에서 로그만 남기고 우리 코드까지 안 올라와,
     # `pipeline_runs.status='running'`이 영원히 방치된다(위 agent_
     # execution_jobs와 같은 "단일 프로세스 재기동 시 정리" 전제).
-    pipeline_runtime.reap_orphaned_pipeline_runs(conn)
+    if not external_worker:
+        pipeline_runtime.reap_orphaned_pipeline_runs(conn, keep["pipeline_runs"])
     # 사용자 보고(2026-11-19, "ollama 실행되지 않고 있는데... 실행 중이
     # 표시됨") — 위 두 reap과 같은 이유로 `conversation_jobs`(기본 AI/
     # Agent 멘션/Team 멘션)도 정리가 빠져 있었다 — 서버 재시작으로도
     # 안 풀리는 "실행 중" 먹통 상태의 원인이었다.
-    conversations.reap_orphaned_conversation_jobs(conn)
+    if not external_worker:
+        conversations.reap_orphaned_conversation_jobs(conn, keep["conversation_jobs"])
     # 사용자 결정(2026-09-29, "assignment_history/audit_log 보관기간 1년") —
     # 오래 켜진 배포에서 기동 때마다 자연스럽게 정리되도록 여기서도 실행한다
     # (retention.py 참고, 지울 게 없으면 DB에 손도 대지 않는다).
     retention.purge_expired(conn)
     app.state.db = conn
     # 실제 LLM 사용량 기록(2026-11-22) — 직접 호출(`llm.py`)과 CrewAI(litellm) 경로 모두.
-    llm_usage.configure(conn)
-    from hair_platform import (
-        evaluation_config,  # 평가 기준 설정(2026-11-25) — 평가 경로가 읽을 연결
-    )
-
-    evaluation_config.configure(conn)
-    from hair_platform import ai_budget  # AI 사용 한도(2026-11-25, P2-14)
-
-    ai_budget.configure(conn)
-    llm_usage.install_litellm_callback()
+    # 평가 기준 설정·AI 사용 한도·litellm 콜백도 — 작업 프로세스(`hair worker`)와 같은 설정(2026-11-26, P1-6 2단계).
+    job_queue.configure_runtime(conn)
     # 자동화 루프(정기 실행·외부 알림, 2026-11-23 — `automation.py`) — `hair serve`(HAIR_AUTOMATION=1)
     # 에서만 띄운다. 프로세스당 한 번.
     from hair_platform import automation
@@ -266,4 +269,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return webui.INDEX_HTML
 
 
+    if not external_worker:
+        job_queue.resume_queued(conn)  # 이전 서버가 기록만 하고 시작하지 못한 작업(2026-11-26, P1-6 2단계)
     return app
