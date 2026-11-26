@@ -1399,7 +1399,25 @@ def score_stage_output(
         verdict["status"] = "fail"
         verdict["strict"] = True
         passed = False
+    # 점검기 대조(2026-11-27, 개선 계획 2-4 후반) — 검토는 승인했는데 점검기가 최종본에서 문제를 찾으면 사람이 정한다
+    # (참고용 — 통과 판정은 바꾸지 않고, 결재 단계에서 `needs_human_for_gates`가 사람에게 올린다).
+    if passed and verdict is not None:
+        from hair_platform import checker_crosscheck
+
+        cross = checker_crosscheck.crosscheck(conn, run_id, stage, verdict)
+        if cross is not None:
+            gate_scores["checker_crosscheck"] = cross
     return gate_scores, passed
+
+
+def needs_human_for_gates(gate_scores: dict) -> bool:
+    """Gate 결과 때문에 통과해도 사람 결재가 필요한가 — 두 실행 엔진 공통."""
+    return bool(
+        # 외부 데이터를 읽은 실행에서 쓰기 도구가 막혔으면 사람이 확인(2026-11-26, 개선 계획 1-3)
+        (gate_scores.get("external_data") or {}).get("blocked")
+        # 점검기와 검토 판정이 다르면 사람이 확인(2026-11-27, 개선 계획 2-4 후반)
+        or (gate_scores.get("checker_crosscheck") or {}).get("disagree")
+    )
 
 def _execute_stage_attempt(
     conn: sqlite3.Connection,
@@ -1625,8 +1643,7 @@ def _execute_stage_attempt(
     ).fetchone()
     stage_requires_human = bool(
         stage["requires_human_approval"] or task_row["requires_human_judgment"]
-        # 외부 데이터를 읽은 실행에서 쓰기 도구가 막혔으면 사람이 확인(2026-11-26, 개선 계획 1-3)
-        or (gate_scores.get("external_data") or {}).get("blocked")
+        or needs_human_for_gates(gate_scores)
     )
 
     cur = conn.execute(
