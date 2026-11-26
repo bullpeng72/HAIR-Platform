@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException
 
 from hair_platform.auth import Role, require_role
 from hair_platform.models import (
@@ -110,6 +110,51 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except code_repos.RepoError as exc:
             raise HTTPException(status_code=404, detail=_REPO_ERROR_KO.get(str(exc), str(exc))) from exc
         return {"id": repo_id, "is_active": payload.is_active}
+
+    # ---------- 사내 DB 조회 연동(2026-11-26, P1-9 — `data_connectors.py`, admin) ----------
+    @app.get("/api/data-connections")
+    def list_data_connections_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import data_connectors
+
+        return data_connectors.list_connections(conn, include_inactive=True)
+
+    @app.post("/api/data-connections", status_code=201)
+    def register_data_connection_endpoint(
+        payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        from hair_platform import data_connectors
+
+        try:
+            return data_connectors.register(
+                conn, user["id"], str(payload.get("name") or ""), str(payload.get("kind") or ""),
+                str(payload.get("target") or ""), username=payload.get("username") or None,
+                password_env=payload.get("password_env") or None, description=str(payload.get("description") or ""),
+                row_limit=int(payload.get("row_limit") or data_connectors.DEFAULT_ROW_LIMIT),
+            )
+        except (data_connectors.ConnectorError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/data-connections/{connection_id}")
+    def set_data_connection_active_endpoint(
+        connection_id: int, payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))
+    ):
+        from hair_platform import data_connectors
+
+        try:
+            return data_connectors.set_active(conn, user["id"], connection_id, bool(payload.get("is_active")))
+        except data_connectors.ConnectorError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/data-connections/{connection_id}/test")
+    def test_data_connection_endpoint(connection_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """연결 확인 — 테이블 목록을 읽어 본다(쓰기 없음)."""
+        from hair_platform import data_connectors
+
+        try:
+            row = data_connectors.get(conn, connection_id)
+            return {"ok": True, "tables": data_connectors.list_tables(conn, row["name"])}
+        except data_connectors.ConnectorError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # ---------- 기본 구성 점검(2026-11-23, P2-10 — `config_check.py`, admin) ----------
     @app.get("/api/admin/config-check")

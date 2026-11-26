@@ -70,7 +70,7 @@ Agent라고 다른 대우를 받지 않는다.
 - 대화에서 쓸 스킬을 직접 고를 수 있는데, **"개발업무" 스킬은
   일반 사용자에게 불필요하므로 기본적으로 목록에서 숨겨진다** —
   "개발업무 스킬도 보기"를 켜야 보이고, 평소엔 일반 업무용 스킬
-  (78개 중 다수)·도구(19개 중 일반업무용)만 노출된다. (Agent/Task에 미리 등록해둔
+  (79개 중 다수)·도구(20개 중 일반업무용)만 노출된다. (Agent/Task에 미리 등록해둔
   스킬 태그나 CrewAI 실행 자체는 이 필터와 무관하게 전부 동작한다.)
 - 특정 업무(Task)에 종속된 대화는 그 업무로 자동 흡수된다. 독립
   대화는 결재·Gate 채점이 필요해지면 "업무 요청으로 전환"으로 대화
@@ -240,6 +240,7 @@ PyPI에 `hair-platform`으로 배포된다 — `pip install "hair-platform[...]"
 | `mcp` | `pip install -e ".[mcp]"` | Agent에 외부 MCP 도구 서버를 연결할 때 | crewai-tools[mcp], mcp(`<2.0` 고정 — 아래 참고) |
 | `documents` | `pip install -e ".[documents]"` | 대화창/지식 베이스에서 `.pdf`/`.html`/`.xlsx`/`.docx`/`.pptx` 파일을 업로드할 때(`.md`/`.txt`/`.csv`는 추가 설치 불필요) | pypdf, beautifulsoup4, openpyxl, python-docx, python-pptx |
 | `korean` | `pip install -e ".[korean]"` | 결과물에서 사전에 없는 한국어 낱말(모델이 지어낸 낱말)을 찾는 참고용 "낱말확인" 배지. 분석기가 메모리 약 360MB·디스크 약 100MB를 쓴다(`HAIR_LEXICON_CHECK=0`으로 끔) | kiwipiepy |
+| `dbconnect` | `pip install -e ".[dbconnect]"` | "사내 DB 조회"로 PostgreSQL·MySQL을 연결할 때(SQLite는 추가 설치 없음) | psycopg[binary], pymysql |
 | `vectordb` | `pip install -e ".[vectordb]"` | 지식 베이스 검색을 벡터 DB(ChromaDB, 서버 없이 `<db>-vectors/` 폴더)로 한다 — 청크 1만 개에서 검색 1회 약 1.7초 → 약 40ms(실측, 결과 동일). crewai를 설치하면 보통 함께 깔린다. 없으면 예전 방식(SQLite 전체 비교)으로 그대로 동작 | chromadb |
 | `graph` | `pip install -e ".[graph]"` | LangGraph 실행엔진(팀 관리에서 "그래프 엔진"을 켤 때 — 체크포인트·사람 승인 중단/재개). 없이 켜면 설치 안내가 뜬다 | langgraph, langgraph-checkpoint-sqlite |
 | `dev` | `pip install -e ".[dev]"` | 테스트/린트를 돌릴 때 | pytest, ruff, black(선택 — CI에서는 쓰지 않음: 기존 코드가 black 형식이 아님) |
@@ -321,7 +322,7 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 
 | 구분 | 내용 |
 |------|------|
-| 지운다 | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)·Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |
+| 지운다 | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)·Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소 등록·사내 DB 연결, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |
 | 남긴다 | Agent(36종)·스킬·도구·파이프라인 템플릿, 조직 정책(사번 형식·결과물 언어·알림 웹훅·메일 수신자), 평가 기준, 플랫폼 공통 기본 LLM·보조 작업 모델·지식 검색 설정, "초기화 시 보호" 팀 |
 | 되돌린다 | Agent의 모델 지정·비용·성과점수·마지막 결과물은 비운다. 상태는 기본 Agent만 '활성'으로 되돌리고, 관리자가 만든 Agent는 그대로 둔다(온보딩 대기 Agent가 승인 없이 활성이 되지 않음) |
 
@@ -575,6 +576,7 @@ src/hair_platform/
   crew_history.py    # Crew 실행 이력(crew_runs) — 팀/즉석 실행의 진행상태·협업다이어그램·토큰사용량 영구 저장
   vectorstore.py     # 내부지식검색 Agent(VectorDB) — 임베딩(OpenAI/Ollama)·색인·검색(코사인+키워드 재순위화), 원본은 SQLite
   ai_budget.py       # AI 사용 한도 — 사용자별·조직 전체 월 한도(USD, 모델 레지스트리 단가 기준)·viewer AI 허용, AI 호출 직전에 확인
+  data_connectors.py # 사내 DB 조회(SQLite·PostgreSQL·MySQL, 읽기 전용 두 겹·행 수/시간 상한·조회 감사) — `database_query` 도구
   knowledge_access.py # 지식 베이스 문서별 공개 범위(전체·manager 이상·admin만·팀) — 요청자 기준으로 검색 결과를 거름
   vector_backends.py # 지식 검색 벡터 백엔드 — ChromaDB 임베디드(HNSW, `<db>-vectors/`) 또는 SQLite 전체 비교, SQLite 원본과 자동 동기화
   graphquery.py      # 조직배정관계조회 Agent(GraphDB) — 기존 관계형 데이터 그래프 질의

@@ -12316,7 +12316,7 @@ const MANUAL_MARKDOWN = [
 '',
 '| 유형 | 이런 사람에게 | 할 수 있는 일 | 할 수 없는 일 |',
 '|---|---|---|---|',
-'| **admin** (관리자) | 플랫폼 운영 책임자 | manager가 할 수 있는 모든 일 + **admin 전용**: 사용자 생성·유형 지정, Agent 온보딩 승인, 업무 요청·할 일·사람·Agent **삭제**, 모델 레지스트리·LLM 설정 최적화, 평가 기준, 조직 정책·기본 구성 점검, 외부 알림·메일 알림·코드 저장소 연결 | 자기가 올린 배정 요청을 자기가 승인(다른 admin·manager가 승인) |',
+'| **admin** (관리자) | 플랫폼 운영 책임자 | manager가 할 수 있는 모든 일 + **admin 전용**: 사용자 생성·유형 지정, Agent 온보딩 승인, 업무 요청·할 일·사람·Agent **삭제**, 모델 레지스트리·LLM 설정 최적화, 평가 기준, 조직 정책·기본 구성 점검, 외부 알림·메일 알림·코드 저장소·사내 DB 연결 | 자기가 올린 배정 요청을 자기가 승인(다른 admin·manager가 승인) |',
 '| **manager** (업무 관리자) | 팀장·PM처럼 일을 나누고 배정하는 사람 | 업무 요청을 할 일로 나누기, 배정 요청과 **결재 처리**, Agent 만들기·실행, 팀·파이프라인 실행, 사람 인력·팀·파이프라인·도구/스킬·지식 베이스 관리, 정기 실행·이벤트 트리거, 대시보드·비용·공정성 지표·활동 기록 보기 | 위 admin 전용 기능, 자기 요청 승인 |',
 '| **member** (실무자) | 업무를 요청하고 맡은 일을 하는 사람 | 대화(Agent 멘션 포함), **업무 요청 제출**, 배정 요청 올리기, 맡은 할 일의 협업 워크스페이스에서 결과물 작성·검토 요청·댓글, 내 API 키 발급, 성과 리뷰 보기 | **결재 처리**, 할 일로 나누기, Agent 만들기·실행, 파이프라인 실행, "설정" 메뉴 전체 |',
 '| **viewer** (열람자) | 내용을 보기만 하면 되는 사람(임원·외부 검토자 등) | 홈·인박스·내 업무·업무 요청·결재(목록)·갤러리·할 일 보드·인력 검색·조직도·이용 가이드 **열람**, **대화**(AI 답변 포함) | 업무 요청 제출, 배정 요청, 결재 처리, 결과물 작성, API 키, 홈의 "AI에게 일 맡기기", 성과 리뷰·연동 설정 탭, "설정" 메뉴 |',
@@ -12833,6 +12833,10 @@ const MANUAL_MARKDOWN = [
 '  - 환경변수가 없으면 메일은 보내지 않고 웹훅만 동작합니다. "테스트 전송"은 웹훅과 메일을 둘 다 시험합니다.',
 '- **내 API 키**(admin·manager·member) — 외부 시스템(cron·메일 규칙·지라 등)이 **내 계정 권한 그대로** HAIR API를 부를 때 씁니다. 키는 발급 직후 한 번만 보이니 바로 복사해 두고, 요청 헤더에 `Authorization: Bearer 키`로 넣습니다(예: `POST /api/briefs`로 업무 요청 올리기, `POST /api/tasks/{id}/execute-pipeline`으로 파이프라인 시작). 키가 권한을 넓히지는 않으며, 폐기하거나 계정이 비활성화되면 즉시 막힙니다.',
 '- **코드 저장소**(admin) — 서버 PC에 클론해 둔 Git 저장소의 이름·경로를 등록하면, 개발 Agent(코드베이스 분석가·백엔드/프론트엔드/풀스택/데이터·인프라 개발자·코드 검증가·AA — **코드저장소조회** 스킬)가 파일 목록·내용·코드 검색·최근 커밋을 직접 읽고 "경로:줄"을 근거로 답합니다.',
+'- **사내 DB**(admin) — 업무 DB(SQLite 파일·PostgreSQL·MySQL)를 등록하면 **사내DB조회** 스킬이 있는 Agent(데이터 분석가·재무 분석가·영업 분석가·실적 보고서 작성자)가 테이블 목록·열 구조를 확인하고 SELECT로 직접 조회해, 조회한 수치를 그대로 근거로 씁니다.',
+'  - **읽기 전용**: SQL 검사(한 문장, SELECT·WITH·EXPLAIN만, 쓰기·DDL 거부)와 읽기 전용 연결 두 겹으로 막습니다. 한 번에 돌려주는 행 수(연결별, 기본 200)와 실행 시간(10초)에 상한이 있습니다. 가능하면 **조회 전용 DB 계정**을 쓰세요.',
+'  - **비밀번호는 저장하지 않습니다** — 서버 PC 환경변수에 넣고 그 **이름**(예: `HAIR_DB_SALES_PASSWORD`)만 적습니다. PostgreSQL·MySQL은 서버에 `pip install "hair-platform[dbconnect]"`가 필요합니다. 등록 뒤 **"연결 확인"**으로 테이블이 보이는지 확인하세요.',
+'  - **기록**: 조회마다 요청한 사람·연결·SQL·행 수가 "활동 기록"의 `data_query_executed`로 남습니다. 다른 Agent에게도 쓰게 하려면 "AI 에이전트 관리"에서 **사내DB조회** 스킬을 붙이세요.',
 '  - **읽기 전용이고 커밋된 파일만** 봅니다 — 미커밋 변경, `.gitignore`로 빠진 파일, `.env`·키 같은 비밀 파일은 읽지 않습니다. 최신 코드를 보게 하려면 그 폴더에서 `git pull`을 해 두세요.',
 '  - 대화에서는 "@코드베이스 분석가 shop-api 저장소의 주문 취소 흐름을 설명해 줘"처럼 저장소 이름을 함께 적습니다.',
 '- **결과물을 저장소에 커밋**(admin) — 결재를 마친 결과물 카드의 **"저장소에 커밋"** → 저장소 선택 → **미리보기**를 누르면 쓸 파일(새 파일·수정)과 점검 결과가 나옵니다.',
@@ -13120,7 +13124,7 @@ const MANUAL_MARKDOWN = [
 '',
 '| 구분 | 내용 |',
 '|---|---|',
-'| **지움** | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)과 Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |',
+'| **지움** | 사용자·API 키, 사람 인력, 업무 요청·할 일·배정·결재, 대화, 결과물(댓글·버전·부분 수정 제안·저장소 커밋 기록 포함)과 Gate 평가·평가 리포트, 파이프라인·Crew·Agent 실행 이력, 지식 베이스(벡터 색인 포함), 정기 실행·이벤트 트리거·알림 발송 기록, 모델 레지스트리·성능 테스트 기록·임베딩 설정, 코드 저장소·사내 DB 연결 등록, Agent에 직접 붙인 도구 연결, 활동 기록, AI 사용량 기록, 팀("초기화 시 보호" 팀 제외) |',
 '| **남김** | Agent 36종·스킬·도구·파이프라인 템플릿(관리자가 만든 것 포함), 조직 정책(사번 형식·결과물 언어·알림 웹훅·메일 수신자), 평가 기준, 플랫폼 공통 기본 LLM·보조 작업 모델·지식 검색 설정, "초기화 시 보호" 팀과 멤버 |',
 '| **되돌림** | 모든 Agent의 모델 지정·비용·성과점수·마지막 결과물을 비움. 상태는 **기본 Agent만 "활성"으로** 되돌리고, 관리자가 만든 Agent는 지금 상태(온보딩 대기·비활성 등)를 그대로 둠 — 승인 전 Agent가 초기화로 활성이 되지 않음 |',
 '',
@@ -13144,14 +13148,23 @@ async function renderIntegrations(content) {
   const isAdmin = ME.role === "admin";
   const canSchedule = ["admin", "manager"].includes(ME.role);
   const fmt = v => v ? esc(String(v).replace("T", " ")) : "-";
-  const [keys, schedules, templates, notify, repos, trig] = await Promise.all([
+  const [keys, schedules, templates, notify, repos, trig, dataConns] = await Promise.all([
     api("GET", "/api/api-keys"),
     canSchedule ? api("GET", "/api/pipeline-schedules") : Promise.resolve([]),
     canSchedule ? api("GET", "/api/pipeline-templates") : Promise.resolve([]),
     isAdmin ? api("GET", "/api/integrations/notify") : Promise.resolve(null),
     isAdmin ? api("GET", "/api/code-repositories") : Promise.resolve([]),
     canSchedule ? api("GET", "/api/automation-triggers") : Promise.resolve({ triggers: [], events: {} }),
+    isAdmin ? api("GET", "/api/data-connections").catch(() => []) : Promise.resolve([]),  // 사내 DB(2026-11-26, P1-9)
   ]);
+  const dcRows = (dataConns || []).map(d =>
+    "<tr><td>" + esc(d.name) + "</td><td>" + esc(d.kind) + "</td><td><code>" + esc(d.target) + "</code>" +
+    (d.username ? " · " + esc(d.username) : "") + "</td><td>" + esc(String(d.row_limit)) + "행</td><td>" +
+    (d.password_env ? (d.password_set ? "✓ " : "⚠ 비어 있음 ") + "<code>" + esc(d.password_env) + "</code>" : "-") + "</td><td>" +
+    (d.is_active ? "켜짐" : "꺼짐") + "</td><td>" +
+    '<button class="small" data-test-dc="' + d.id + '">연결 확인</button> ' +
+    '<button class="small" data-toggle-dc="' + d.id + '" data-active="' + (d.is_active ? "0" : "1") + '">' + (d.is_active ? "끄기" : "켜기") + "</button></td></tr>"
+  ).join("");
   // 이벤트 트리거(2026-11-24, P1-5).
   const tplOptions = templates.filter(t => t.is_active !== 0).map(t => '<option value="' + t.id + '">' + esc(t.name) + "</option>").join("");
   const trigRows = trig.triggers.map(t =>
@@ -13262,7 +13275,23 @@ async function renderIntegrations(content) {
       '<input id="repo-desc" placeholder="설명(선택)" maxlength="500">' +
       '<button class="primary" type="submit">저장소 등록</button></form>' +
       (repos.length ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>경로</th><th>설명</th><th>상태</th><th></th></tr></thead><tbody>' + repoRows + "</tbody></table></div>"
-        : '<p class="muted">등록된 코드 저장소가 없습니다.</p>')
+        : '<p class="muted">등록된 코드 저장소가 없습니다.</p>') +
+      // 사내 DB 조회(2026-11-26, P1-9 — `data_connectors.py`).
+      "<h3>사내 DB(admin)</h3>" +
+      '<p class="muted">업무 DB를 등록하면 <b>사내DB조회</b> 스킬이 있는 Agent(데이터 분석가·재무 분석가·영업 분석가·실적 보고서 작성자)가 테이블 목록·열 구조를 확인하고 <b>SELECT로 직접 조회</b>합니다. ' +
+      '<b>읽기 전용</b>입니다 — SQL 검사(한 문장, SELECT·WITH·EXPLAIN만)와 읽기 전용 연결 두 겹으로 쓰기를 막고, 행 수 상한·10초 시간 제한을 둡니다. 조회마다 요청자·SQL·행 수가 활동 기록(<code>data_query_executed</code>)에 남습니다. ' +
+      '<b>비밀번호는 저장하지 않습니다</b> — 서버 PC의 환경변수에 넣고 그 <b>이름</b>만 적으세요. PostgreSQL·MySQL은 서버에 <code>pip install "hair-platform[dbconnect]"</code>가 필요합니다. 가능하면 <b>조회 전용 DB 계정</b>을 쓰세요.</p>' +
+      '<form id="dc-form" class="inline" style="flex-wrap:wrap">' +
+      '<input id="dc-name" placeholder="이름(예: sales_db)" required maxlength="60">' +
+      '<select id="dc-kind"><option value="sqlite">SQLite(파일)</option><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option></select>' +
+      '<input id="dc-target" placeholder="SQLite 파일 경로 또는 host:port/DB이름" required style="min-width:16rem">' +
+      '<input id="dc-user" placeholder="DB 계정(선택)" maxlength="100">' +
+      '<input id="dc-pwenv" placeholder="비밀번호 환경변수 이름(예: HAIR_DB_SALES_PASSWORD)" maxlength="64" style="min-width:14rem">' +
+      '<input id="dc-limit" type="number" min="1" max="2000" value="200" style="width:6rem" title="한 번에 돌려줄 최대 행 수">' +
+      '<input id="dc-desc" placeholder="설명(Agent가 어떤 DB인지 알 수 있게)" maxlength="500" style="min-width:14rem">' +
+      '<button class="primary" type="submit">DB 연결 등록</button></form>' +
+      (dcRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>종류</th><th>대상</th><th>행 수 상한</th><th>비밀번호</th><th>상태</th><th></th></tr></thead><tbody>' + dcRows + "</tbody></table></div>"
+        : '<p class="muted">등록된 DB 연결이 없습니다.</p>')
       : "");
 
   document.getElementById("apikey-form").addEventListener("submit", async ev => {
@@ -13376,6 +13405,30 @@ async function renderIntegrations(content) {
         renderIntegrations(content);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     });
+    document.getElementById("dc-form").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      const v = id => document.getElementById(id).value.trim();
+      try {
+        const r = await api("POST", "/api/data-connections", {
+          name: v("dc-name"), kind: v("dc-kind"), target: v("dc-target"), username: v("dc-user") || null,
+          password_env: v("dc-pwenv") || null, row_limit: Number(v("dc-limit") || 200), description: v("dc-desc"),
+        });
+        showMsg("global-msg", "DB 연결 '" + r.name + "'을(를) 등록했습니다 — '연결 확인'으로 테이블이 보이는지 확인하세요.", "ok");
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    });
+    content.querySelectorAll("[data-test-dc]").forEach(btn => btn.addEventListener("click", async () => {
+      try {
+        const r = await api("POST", "/api/data-connections/" + btn.dataset.testDc + "/test");
+        showMsg("global-msg", "연결 성공 — " + r.tables.split(String.fromCharCode(10)).length + "줄의 테이블 목록을 읽었습니다.", "ok");
+      } catch (e) { showMsg("global-msg", "연결 실패: " + e.message, "error"); }
+    }));
+    content.querySelectorAll("[data-toggle-dc]").forEach(btn => btn.addEventListener("click", async () => {
+      try {
+        await api("PATCH", "/api/data-connections/" + btn.dataset.toggleDc, { is_active: btn.dataset.active === "1" });
+        renderIntegrations(content);
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    }));
     content.querySelectorAll("[data-toggle-repo]").forEach(btn => btn.addEventListener("click", async () => {
       try {
         await api("PATCH", "/api/code-repositories/" + btn.dataset.toggleRepo, { is_active: btn.dataset.active === "1" });

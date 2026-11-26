@@ -106,13 +106,13 @@ def test_init_schema_assigns_codes_to_all_reference_rows():
     assert all(c.startswith("AGT-REF-") for c in agent_codes)  # 26종 전원 레퍼런스
     assert len(set(agent_codes)) == 36  # 전부 유일
 
-    assert len(tool_codes) == 19
+    assert len(tool_codes) == 20  # P1-9 사내 DB 조회(2026-11-26) +1
     assert all(c is not None for c in tool_codes)
-    assert len(set(tool_codes)) == 19
+    assert len(set(tool_codes)) == 20
 
-    assert len(skill_codes) == 78  # +1: 코드저장소조회(2026-11-24), +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21), +9: 업무 영역 템플릿(2026-11-24)
+    assert len(skill_codes) == 79  # +1: 사내DB조회(2026-11-26), +1: 코드저장소조회(2026-11-24), +1: 프레젠테이션작성(2026-11-20), +6: 우선순위 1 스킬(2026-11-21), +9: 업무 영역 템플릿(2026-11-24)
     assert all(c is not None for c in skill_codes)
-    assert len(set(skill_codes)) == 78
+    assert len(set(skill_codes)) == 79
 
 
 def test_init_schema_tool_codes_reflect_kind():
@@ -186,7 +186,7 @@ def test_reset_and_reassign_codes_wipes_then_reassigns_deterministically():
 
     counts = id_scheme.reset_and_reassign_codes(conn)
 
-    assert counts == {"agent_pool": 36, "tool_pool": 19, "skill_pool": 78}  # P0-3 코드 저장소 조회(2026-11-24): 도구 +1·스킬 +1, P2-12 업무 영역 템플릿(2026-11-24): 도구 +3·Agent +7·스킬 +9
+    assert counts == {"agent_pool": 36, "tool_pool": 20, "skill_pool": 79}  # P1-9 사내 DB 조회(2026-11-26): 도구 +1·스킬 +1, P0-3 코드 저장소 조회(2026-11-24): 도구 +1·스킬 +1, P2-12 업무 영역 템플릿(2026-11-24): 도구 +3·Agent +7·스킬 +9
     after = {
         table: [
             r["code"]

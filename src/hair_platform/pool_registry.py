@@ -31,6 +31,7 @@ from contextlib import ExitStack
 from hair_platform import (
     audit,
     code_repos,
+    data_connectors,
     graphquery,
     id_scheme,
     pool_catalog,
@@ -57,6 +58,8 @@ NATIVE_TOOL_FACTORIES = {
     pool_catalog.NATIVE_ID: pool_catalog.as_crewai_tool,
     # 코드 저장소 읽기(2026-11-24, P0-3 1단계 — `code_repos.py`).
     code_repos.NATIVE_ID: code_repos.as_crewai_tool,
+    # 사내 DB 조회(2026-11-26, P1-9 — `data_connectors.py`).
+    data_connectors.NATIVE_ID: data_connectors.as_crewai_tool,
 }
 
 

@@ -119,7 +119,7 @@ def test_every_seeded_skill_has_all_four_sections_on_fresh_db():
     rows = conn.execute(
         "SELECT name, description, output_format, examples, constraints FROM skill_pool"
     ).fetchall()
-    assert len(rows) == 78  # P0-3 코드 저장소 조회(2026-11-24): 도구 +1·스킬 +1, P2-12 업무 영역 템플릿(2026-11-24): 도구 +3·Agent +7·스킬 +9
+    assert len(rows) == 79  # P1-9 사내 DB 조회(2026-11-26): 스킬 +1, P0-3 코드 저장소 조회(2026-11-24): 도구 +1·스킬 +1, P2-12 업무 영역 템플릿(2026-11-24): 도구 +3·Agent +7·스킬 +9
     incomplete = [
         r["name"]
         for r in rows

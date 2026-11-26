@@ -97,6 +97,9 @@ korean = ["kiwipiepy>=0.24,<0.25"]
 # 임베디드(서버 없음, `<db>-vectors/` 폴더)로 한다(청크 1만 개 검색 약 1.7초 → 약 40ms 실측, 결과 동일). crewai가 이미
 # 의존해 함께 설치되는 경우가 많지만, crewai 없이 설치해도 쓰도록 명시한다. 없으면 예전 방식으로 그대로 동작한다.
 vectordb = ["chromadb>=1.0,<2.0"]
+# `data_connectors.py`가 지연 import한다(2026-11-26, P1-9) — 사내 DB 조회의 PostgreSQL·MySQL 드라이버. SQLite는 추가
+# 설치 없이 된다. 없으면 그 연결 종류만 "드라이버 설치 필요"로 알린다.
+dbconnect = ["psycopg[binary]>=3.1,<4.0", "pymysql>=1.1,<2.0"]
 # crew_runtime.py의 _mcp_tools()가 지연 import한다 — Agent에 mcp_servers를
 # 실제로 설정했을 때만 필요하다(ADR 결정 10, 2026-09-27). MCPServerAdapter는
 # 생성 시점에 실제로 MCP 서버에 접속을 시도한다 — 접속 가능한 서버가 없으면

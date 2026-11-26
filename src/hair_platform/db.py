@@ -1418,6 +1418,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import code_repos
 
     code_repos.ensure_schema(conn)
+    from hair_platform import data_connectors  # 사내 DB 조회 연동(2026-11-26, P1-9)
+
+    data_connectors.ensure_schema(conn)
     # 결과물 → 저장소 커밋 기록(2026-11-24, P0-3 2단계 — `repo_commit.py`).
     from hair_platform import repo_commit
 
@@ -3011,6 +3014,15 @@ def _seed_default_pools(conn: sqlite3.Connection) -> None:
                 "읽지 않는다(2026-11-24, P0-3 저장소 연동 1단계, `code_repos.py`)."
             ),
             "code_repository_read",
+        ),
+        (
+            "사내 DB 조회",
+            (
+                "관리자가 등록한 업무 DB(SQLite·PostgreSQL·MySQL)를 읽기 전용으로 조회하는 네이티브 Tool — 연결 목록·"
+                "테이블 목록·열 구조·SELECT 조회(행 수·시간 상한). 쓰기·DDL은 SQL 검사와 읽기 전용 연결 두 겹으로 막고, "
+                "조회마다 활동 기록을 남긴다(2026-11-26, P1-9, `data_connectors.py`)."
+            ),
+            "database_query",
         ),
     ]
     # 사용자 요청(2026-10-26, "도구/skill에서 동작하지 않는 검색은
