@@ -2,6 +2,18 @@
    가능한 ollama 모델 및 openai, anthropic 모델 등록하는 메뉴를 두고
    등록된 모델을 불러오는 방식으로 UI/UX를 개선") ---------- */
 
+// 등록 직후 추천 기본값 저장(2026-11-26) — "등록하면서 추천 기본값도 함께 저장"이 켜져 있을 때만. 실패해도 등록은 유지.
+async function _applyRecommendationAfterRegister(modelId, name) {
+  const box = document.getElementById("mr-apply-rec");
+  if (!box || !box.checked || !modelId) return "";
+  try {
+    const r = await api("POST", "/api/model-registry/" + modelId + "/apply-recommendation");
+    return name + ": 컨텍스트 " + Number(r.context_window).toLocaleString() + "토큰 등 추천값 저장.";
+  } catch (e) {
+    return name + ": 추천값 없음(" + e.message + ") — 표에서 직접 입력하세요.";
+  }
+}
+
 async function renderModelRegistry(content) {
   const isAdmin = ME.role === "admin";
   const models = await api("GET", "/api/model-registry");
@@ -55,7 +67,9 @@ async function renderModelRegistry(content) {
         '<input type="number" min="256" step="256" class="mr-max-out" data-model-id="' + m.id + '" placeholder="최대 출력" ' +
         'value="' + (o.max_output_tokens ?? "") + '" style="width:6.5rem" title="한 번 응답의 최대 출력 토큰(사고 토큰 포함) — ' +
         (m.provider === "ollama" ? "비우면 32768(사고 토큰 포함 — Ollama 기본은 무제한이라 반복 루프에 빠지면 끝나지 않음)" : "비우면 provider 기본값") + '">') +
-      '<button class="small" data-save-sampling-options="' + m.id + '">저장</button>';
+      '<button class="small" data-save-sampling-options="' + m.id + '">저장</button>' +
+      // 추천값(2026-11-26) — 컨텍스트 한도·생성 옵션 칸을 모델 정보로 채운다(저장은 각 "저장" 버튼으로).
+      ' <button class="small" data-recommend-model="' + m.id + '" title="모델 정보(Ollama: 학습 최대 컨텍스트·구조·제작자 권장값, 클라우드: 계열별 공개 한도)와 이 PC 메모리로 컨텍스트 한도·생성 옵션을 추천해 칸에 채웁니다 — 저장은 직접 누르세요.">추천값</button>';
   };
   // 사용자 요청(2026-11-12, "ollama, openai 등 프로바이더의 모델 성능
   // Test하고 결과 표시, 티어 추천 기능") — 고정 테스트 프롬프트 1건을
@@ -125,6 +139,9 @@ async function renderModelRegistry(content) {
     '<button type="submit" class="small">불러오기</button>' +
     "</form>" +
     '<div id="mr-fetch-result"></div>' +
+    // 등록하면서 추천 기본값 저장(2026-11-26) — 비워 두면 보수적 기본값(Ollama 8K 등)이라 긴 문서가 잘리기 쉽다.
+    '<label class="muted" style="display:block;margin:0.4rem 0" title="Ollama는 모델 정보와 이 PC 메모리로, 클라우드는 계열별 공개 한도로 컨텍스트 한도·최대 출력·제작자 권장 top_k/top_p를 정해 저장합니다. 나중에 표에서 바꿀 수 있습니다.">' +
+    '<input type="checkbox" id="mr-apply-rec" checked> 등록하면서 추천 기본값(컨텍스트 한도·생성 옵션)도 함께 저장</label>' +
     '<form class="inline" id="mr-manual-form">' +
     '<select id="mr-manual-provider">' + providerOptionsHtml + "</select>" +
     '<input id="mr-manual-name" placeholder="모델명 직접 입력(불러오기 없이 바로 등록)" style="flex:1;min-width:200px" required>' +
@@ -178,10 +195,12 @@ async function renderModelRegistry(content) {
         const names = Array.from(resultBox.querySelectorAll(".mr-candidate:checked:not(:disabled)")).map(cb => cb.value);
         if (!names.length) { showMsg("global-msg", "등록할 모델을 선택하세요.", "error"); return; }
         try {
+          const notes = [];
           for (const name of names) {
-            await api("POST", "/api/model-registry", { provider, name });
+            const created = await api("POST", "/api/model-registry", { provider, name });
+            notes.push(await _applyRecommendationAfterRegister(created.id, name));
           }
-          showMsg("global-msg", names.length + "개 모델을 등록했습니다.", "ok");
+          showMsg("global-msg", names.length + "개 모델을 등록했습니다." + notes.filter(Boolean).join(" "), "ok");
           refresh();
         } catch (e) { showMsg("global-msg", e.message, "error"); }
       };
@@ -191,11 +210,13 @@ async function renderModelRegistry(content) {
   document.getElementById("mr-manual-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     try {
-      await api("POST", "/api/model-registry", {
+      const manualName = document.getElementById("mr-manual-name").value;
+      const created = await api("POST", "/api/model-registry", {
         provider: document.getElementById("mr-manual-provider").value,
-        name: document.getElementById("mr-manual-name").value,
+        name: manualName,
       });
-      showMsg("global-msg", "모델을 등록했습니다.", "ok");
+      const note = await _applyRecommendationAfterRegister(created.id, manualName);
+      showMsg("global-msg", "모델을 등록했습니다." + (note ? " " + note : ""), "ok");
       refresh();
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
@@ -261,6 +282,24 @@ async function renderModelRegistry(content) {
         });
         showMsg("global-msg", "단가를 저장했습니다.", "ok");
         refresh();
+      } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  content.querySelectorAll("[data-recommend-model]").forEach(btn => {
+    btn.onclick = async () => {
+      const modelId = btn.dataset.recommendModel;
+      try {
+        const r = await api("GET", "/api/model-registry/" + modelId + "/recommendation");
+        if (!r.available) { showMsg("global-msg", (r.reasons || []).join(" "), "error"); return; }
+        const setv = (cls, v) => {
+          const el = content.querySelector("." + cls + '[data-model-id="' + modelId + '"]');
+          if (el && v !== null && v !== undefined) { el.value = v; el.classList.add("recommended"); }
+        };
+        setv("mr-context-window", r.context_window);
+        setv("mr-top-k", r.top_k);
+        setv("mr-top-p", r.top_p);
+        setv("mr-max-out", r.max_output_tokens);
+        showMsg("global-msg", "추천값을 채웠습니다(" + r.source + ") — 확인 후 각 \"저장\"을 누르세요. 근거: " + (r.reasons || []).join(" · "), "ok");
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });

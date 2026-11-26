@@ -204,6 +204,41 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": model_id, "sampling_options": saved}
 
+    # 컨텍스트 한도·생성 옵션 추천(2026-11-26 사용자 요청 — `model_recommend.py`). 조회는 채워 주기만 하고, 적용은 저장한다.
+    def _registry_row(model_id: int):
+        row = conn.execute("SELECT * FROM model_registry WHERE id = ?", (model_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다")
+        return row
+
+    @app.get("/api/model-registry/{model_id}/recommendation")
+    def get_model_registry_recommendation(model_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import model_recommend
+
+        row = _registry_row(model_id)
+        return model_recommend.recommend(row["provider"], row["name"])
+
+    @app.post("/api/model-registry/{model_id}/apply-recommendation")
+    def apply_model_registry_recommendation(model_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """추천값을 저장한다 — 컨텍스트 한도와, 생성 옵션 중 추천이 있는 항목만(기존 다른 값은 유지)."""
+        import json as _json
+
+        from hair_platform import model_recommend
+
+        row = _registry_row(model_id)
+        rec = model_recommend.recommend(row["provider"], row["name"])
+        if not rec.get("available"):
+            raise HTTPException(status_code=409, detail=" ".join(rec.get("reasons") or ["추천값이 없습니다"]))
+        if rec.get("context_window"):
+            model_registry.set_context_window(conn, user["id"], model_id, int(rec["context_window"]))
+        options = _json.loads(row["sampling_options"] or "{}")
+        for key in ("top_k", "top_p", "max_output_tokens"):
+            if rec.get(key) is not None:
+                options[key] = rec[key]
+        saved = model_registry.set_sampling_options(conn, user["id"], model_id, options)
+        return {"id": model_id, "context_window": rec.get("context_window"), "sampling_options": saved,
+                "reasons": rec.get("reasons") or []}
+
     @app.patch("/api/model-registry/{model_id}/pricing")
     def set_model_registry_pricing(
         model_id: int,
