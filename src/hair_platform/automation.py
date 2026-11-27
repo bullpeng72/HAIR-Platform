@@ -241,8 +241,10 @@ def tick(conn: sqlite3.Connection) -> None:
     # 이벤트 트리거(2026-11-24, P1-5)는 정기 실행 다음 — 같은 차례에 끝난 실행도 바로 이어 받는다.
     # 외부 입력 트리거(2026-11-27, 4단계 — 메일·일정 확인, 받은 웹훅 시작)는 그다음.
     # 자동 백업(2026-11-27, 개선 제안 5-1)은 마지막 — 하루에 한 번만 실제로 뜬다(`backup.run_scheduled_backup`).
+    from hair_platform import resource_lifecycle  # 결재 에스컬레이션(2026-11-27, Phase C — 기본 끔)
+
     for step in (run_due_schedules, triggers.run_triggers, inbound.run_inbound, integrations.run_notifications,
-                 backup.run_scheduled_backup):
+                 resource_lifecycle.escalate_overdue, backup.run_scheduled_backup):
         try:
             step(conn)
         except Exception:  # noqa: BLE001 — 한 단계의 실패가 루프를 멈추지 않는다

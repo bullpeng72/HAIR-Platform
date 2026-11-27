@@ -57,6 +57,8 @@ def create_approval_chain(
         )
         assert cur.lastrowid is not None
         approval_ids.append(cur.lastrowid)
+        if step == 1:
+            _mark_pending_since(conn, cur.lastrowid)
     return approval_ids
 
 
@@ -73,7 +75,16 @@ def activate_next_step(
     conn.execute(
         "UPDATE approvals SET status = 'pending' WHERE id = ?", (next_row["id"],)
     )
+    _mark_pending_since(conn, next_row["id"])
     return True
+
+
+def _mark_pending_since(conn: sqlite3.Connection, approval_id: int) -> None:
+    """그 단계가 지정 승인자 앞에 놓인 시각(2026-11-27, Resource Management Phase C — 에스컬레이션 기준)."""
+    try:
+        conn.execute("UPDATE approvals SET pending_since = datetime('now') WHERE id = ?", (approval_id,))
+    except sqlite3.OperationalError:  # 마이그레이션 전
+        pass
 
 
 def skip_remaining_steps(
@@ -258,13 +269,22 @@ def list_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
     elif role == "manager":
         # 지식베이스 등록 결재(`knowledge_submission`, 2026-11-20)는 admin
         # 전용이다 — approver_id가 비어 있어도 매니저에겐 안 보인다.
+        # 결재 위임(2026-11-27, Resource Management Phase C) — 오늘 나에게 결재를 맡긴 사람 몫도 보인다.
+        from hair_platform import resource_lifecycle
+
+        delegators = resource_lifecycle.delegators_for(conn, user_id)
+        marks = ",".join("?" * len(delegators)) or "NULL"
         rows = conn.execute(
             base_select
             + "WHERE a.status = 'pending' AND a.requested_by != ? "
-            "AND (a.approver_id IS NULL OR a.approver_id = ?) "
+            f"AND (a.approver_id IS NULL OR a.approver_id = ? OR a.approver_id IN ({marks})) "  # noqa: S608 — 자리표시자만
             "AND a.subject_type != 'knowledge_submission' ORDER BY a.id ASC",
-            (user_id, user_id),
+            (user_id, user_id, *delegators),
         ).fetchall()
     else:
         return []
-    return [dict(row) for row in rows]
+    out = [dict(row) for row in rows]
+    if role == "manager":
+        for r in out:
+            r["on_behalf_of"] = r["approver_username"] if r["approver_id"] not in (None, user_id) else None
+    return out

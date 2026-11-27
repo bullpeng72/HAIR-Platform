@@ -182,10 +182,20 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 status_code=403,
                 detail="본인이 요청한 건은 승인할 수 없습니다",
             )
+        # 결재 위임(2026-11-27, Resource Management Phase C) — 지정 승인자가 오늘 나에게 맡겼으면 대신 결정한다.
+        from hair_platform import resource_lifecycle
+
+        decided_on_behalf_of = (
+            approval["approver_id"]
+            if approval["approver_id"] is not None and approval["approver_id"] != user["id"]
+            and approval["approver_id"] in resource_lifecycle.delegators_for(conn, user["id"])
+            else None
+        )
         if (
             approval["approver_id"] is not None
             and approval["approver_id"] != user["id"]
             and user["role"] != Role.ADMIN.value
+            and decided_on_behalf_of is None
         ):
             raise HTTPException(
                 status_code=403, detail="지정된 승인자만 이 단계를 승인할 수 있습니다"
@@ -367,6 +377,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 after={
                     "next_step_pending": next_step_pending,
                     "reason": payload.reason,
+                    **({"on_behalf_of": decided_on_behalf_of} if decided_on_behalf_of else {}),
                 },
             )
             # 2026-10-07, 실사용 리뷰로 발견한 갭 — 결재 사유를 그

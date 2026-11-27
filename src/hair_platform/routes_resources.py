@@ -291,6 +291,109 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # ---------- 인계·결재 위임·에스컬레이션·비용(2026-11-27, Phase C — `resource_lifecycle`) ----------
+    def _rl_call(fn, *args):
+        from hair_platform import resource_lifecycle  # noqa: F401 — 호출부가 모듈 함수를 넘긴다
+
+        try:
+            return fn(*args)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/human-pool/{human_id}/handover")
+    def get_handover(human_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """인계 점검 — 끝나지 않은 배정(대신 맡을 후보 제안)·요청 중 배정·팀 소속·대기 결재·보고 대상·이름으로 도는 자동화."""
+        from hair_platform import resource_lifecycle
+
+        return _rl_call(resource_lifecycle.handover, conn, human_id)
+
+    @app.post("/api/users/{user_id}/transfer-approvals")
+    def post_transfer_approvals(user_id: int, payload: dict = Body(...),
+                                user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """`{"to_user_id": 5}`(없으면 admin·manager 누구나) — 그 사람이 지정 승인자인 대기 결재를 넘긴다."""
+        from hair_platform import resource_lifecycle
+
+        to = payload.get("to_user_id")
+        if to is not None and (isinstance(to, bool) or not isinstance(to, int)):
+            raise HTTPException(status_code=400, detail="to_user_id_must_be_integer")
+        return {"transferred": _rl_call(resource_lifecycle.transfer_approvals, conn, user["id"], user_id, to)}
+
+    @app.get("/api/approval-delegations")
+    def get_approval_delegations(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """오늘 이후 결재 위임 — admin은 전체, manager는 자기가 맡기거나 맡은 것. 에스컬레이션 설정도 함께."""
+        from hair_platform import resource_lifecycle
+
+        mine = None if user["role"] == Role.ADMIN.value else user["id"]
+        return {"delegations": resource_lifecycle.list_delegations(conn, mine),
+                "escalation_days": resource_lifecycle.escalation_days(conn),
+                "candidates": [dict(r) for r in conn.execute(
+                    "SELECT id, username, role FROM users WHERE is_active = 1 AND role IN ('admin', 'manager') ORDER BY username")]}
+
+    @app.post("/api/approval-delegations", status_code=201)
+    def post_approval_delegation(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """`{"delegate_id", "starts_on", "ends_on", "reason"?, "user_id"?(admin만 — 다른 사람 대신 설정)}`"""
+        from hair_platform import resource_lifecycle
+
+        requested_owner = payload.get("user_id")
+        owner: int = (requested_owner if user["role"] == Role.ADMIN.value and isinstance(requested_owner, int)
+                      and not isinstance(requested_owner, bool) else user["id"])
+        delegate = payload.get("delegate_id")
+        if not isinstance(delegate, int) or isinstance(delegate, bool):
+            raise HTTPException(status_code=400, detail="delegate_id_must_be_integer")
+        return _rl_call(resource_lifecycle.add_delegation, conn, user["id"], owner, delegate,
+                        str(payload.get("starts_on") or ""), str(payload.get("ends_on") or ""), str(payload.get("reason") or ""))
+
+    @app.delete("/api/approval-delegations/{delegation_id}")
+    def delete_approval_delegation(delegation_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        from hair_platform import resource_lifecycle
+
+        row = conn.execute("SELECT user_id FROM approval_delegations WHERE id = ?", (delegation_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="위임을 찾을 수 없습니다")
+        if user["role"] != Role.ADMIN.value and row["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="본인이 맡긴 위임만 지울 수 있습니다")
+        _rl_call(resource_lifecycle.delete_delegation, conn, user["id"], delegation_id)
+        return {"deleted": True}
+
+    @app.put("/api/approval-escalation")
+    def put_approval_escalation(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """`{"days": 3}` — 지정 승인자에게 그보다 오래 머문 결재를 상사(없으면 누구나)에게 넘긴다. null이면 끔."""
+        from hair_platform import resource_lifecycle
+
+        d = payload.get("days")
+        if d is not None and (isinstance(d, bool) or not isinstance(d, int)):
+            raise HTTPException(status_code=400, detail="days_must_be_integer")
+        return _rl_call(resource_lifecycle.set_escalation_days, conn, user["id"], d)
+
+    @app.put("/api/human-pool/{human_id}/hourly-rate")
+    def put_hourly_rate(human_id: int, payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """사람 시간당 단가(USD, admin) — `{"hourly_rate": 45}`, null이면 지움. 예상 시간과 곱해 인건비를 추정한다."""
+        from hair_platform import resource_lifecycle
+
+        v = payload.get("hourly_rate")
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int | float)):
+            raise HTTPException(status_code=400, detail="hourly_rate_must_be_number")
+        return _rl_call(resource_lifecycle.set_hourly_rate, conn, user["id"], human_id, v)
+
+    @app.put("/api/briefs/{brief_id}/budget")
+    def put_brief_budget(brief_id: int, payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """업무 요청 예산(USD) — `{"budget_usd": 500}`, null이면 지움."""
+        from hair_platform import resource_lifecycle
+
+        v = payload.get("budget_usd")
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int | float)):
+            raise HTTPException(status_code=400, detail="budget_must_be_number")
+        return _rl_call(resource_lifecycle.set_brief_budget, conn, user["id"], brief_id, v)
+
+    @app.get("/api/resource-costs")
+    def get_resource_costs(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """업무 요청별 비용(사람 추정 + AI 실측)·예산 대비, 팀별 비용."""
+        from hair_platform import resource_lifecycle
+
+        return resource_lifecycle.cost_overview(conn)
+
     @app.get("/api/resource-absences")
     def list_resource_absences(human_id: int | None = None, include_past: bool = False,
                                user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER))):

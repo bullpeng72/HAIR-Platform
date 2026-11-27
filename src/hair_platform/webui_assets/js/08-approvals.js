@@ -26,8 +26,10 @@ async function renderApprovals(content) {
     ) +
     approvalTable(mine, false, "approver") +
     (isDecider ? "" : '<div id="approval-content-detail" style="margin-top:0.75rem"></div>') +
-    "</section>";
+    "</section>" +
+    (isDecider ? '<div id="delegation-slot"></div>' : "");
   content.innerHTML = html;
+  if (isDecider) _renderDelegations(content.querySelector("#delegation-slot"));
   content.querySelectorAll("[data-decide]").forEach(btn => {
     btn.onclick = async () => {
       const reasonInput = content.querySelector('[data-decide-reason-for="' + btn.dataset.decide + '"]');
@@ -193,7 +195,7 @@ function approvalTable(rows, withActions, personColumn) {
         row.push('<span class="muted">미지정(Admin/매니저 누구나)</span>');
       }
     }
-    row.push(a.step, esc(label(a.status)), contentCell);
+    row.push(a.step, esc(label(a.status)) + (a.on_behalf_of ? '<div class="muted pm-note">' + esc(a.on_behalf_of) + " 님 대신(위임)</div>" : ""), contentCell);
     if (withActions) {
       row.push(a.status === "pending"
         ? '<div class="actions">' +
@@ -204,5 +206,51 @@ function approvalTable(rows, withActions, personColumn) {
     }
     return row;
   }));
+}
+
+/* ---------- 결재 위임·에스컬레이션(2026-11-27, Resource Management Phase C) ---------- */
+async function _renderDelegations(slot) {
+  if (!slot) return;
+  let d;
+  try { d = await api("GET", "/api/approval-delegations"); } catch (_) { return; }
+  const isAdmin = ME.role === "admin";
+  const today = new Date().toISOString().slice(0, 10);
+  const opts = d.candidates.filter(u => u.id !== ME.id).map(u => '<option value="' + u.id + '">' + esc(u.username) + " (" + esc(ROLE_NAMES[u.role] || u.role) + ")</option>").join("");
+  const ownerOpts = isAdmin ? '<label>누구의 결재 <select id="dg-owner"><option value="">나</option>' +
+    d.candidates.map(u => '<option value="' + u.id + '">' + esc(u.username) + "</option>").join("") + "</select></label> " : "";
+  slot.innerHTML = '<section class="card"><h2>결재 위임·에스컬레이션</h2>' +
+    '<p class="muted">휴가·출장 동안 내 결재를 다른 admin·manager에게 맡깁니다 — 기간 안에는 그 사람 결재함에 "○○ 님 대신"으로 보이고 대신 결정할 수 있으며, 활동 기록에 위임으로 남습니다.' +
+    (isAdmin ? " admin은 다른 사람의 위임도 설정합니다." : "") + "</p>" +
+    table(["결재 주인", "대결자", "기간", "사유", ""], d.delegations.map(x => [esc(x.user_name), esc(x.delegate_name),
+      esc(x.starts_on) + " ~ " + esc(x.ends_on), esc(x.reason || ""), '<button class="small danger" data-dg-del="' + x.id + '">지우기</button>']),
+      { empty: "설정된 위임이 없습니다." }) +
+    '<div class="inline" style="flex-wrap:wrap;margin-top:0.4rem">' + ownerOpts +
+    '<label>대결자 <select id="dg-delegate">' + opts + '</select></label> <input type="date" id="dg-from" value="' + today + '" aria-label="시작">' +
+    '<input type="date" id="dg-to" value="' + today + '" aria-label="끝"> <input id="dg-why" placeholder="사유(선택)" maxlength="200">' +
+    '<button class="small" id="dg-add">위임 추가</button> <span class="muted" id="dg-msg"></span></div>' +
+    (isAdmin ? '<h3>오래 머문 결재 넘기기</h3><p class="muted">지정 승인자에게 정한 날수보다 오래 머문 결재를 그 승인자의 상사(없으면 admin·manager 누구나)에게 자동으로 넘깁니다(활동 기록 <code>approval_escalated</code>). 비우면 끔.</p>' +
+      '<div class="inline"><input type="number" id="dg-esc" min="1" max="60" style="width:5rem" value="' + (d.escalation_days || "") + '" placeholder="끔"> 일 ' +
+      '<button class="small" id="dg-esc-save">저장</button> <span class="muted">지금: ' + (d.escalation_days ? d.escalation_days + "일" : "끔") + "</span></div>" : "") +
+    "</section>";
+  const msg = t => { slot.querySelector("#dg-msg").textContent = t; };
+  slot.querySelector("#dg-add").onclick = async () => {
+    const owner = slot.querySelector("#dg-owner");
+    try {
+      await api("POST", "/api/approval-delegations", { delegate_id: Number(slot.querySelector("#dg-delegate").value),
+        starts_on: slot.querySelector("#dg-from").value, ends_on: slot.querySelector("#dg-to").value,
+        reason: slot.querySelector("#dg-why").value, user_id: owner && owner.value ? Number(owner.value) : undefined });
+      _renderDelegations(slot);
+    } catch (e) { msg(e.message || String(e)); }
+  };
+  slot.querySelectorAll("[data-dg-del]").forEach(b => b.onclick = async () => {
+    try { await api("DELETE", "/api/approval-delegations/" + b.dataset.dgDel); _renderDelegations(slot); }
+    catch (e) { msg(e.message || String(e)); }
+  });
+  const esc_ = slot.querySelector("#dg-esc-save");
+  if (esc_) esc_.onclick = async () => {
+    const raw = slot.querySelector("#dg-esc").value.trim();
+    try { await api("PUT", "/api/approval-escalation", { days: raw === "" ? null : Number(raw) }); _renderDelegations(slot); }
+    catch (e) { msg(e.message || String(e)); }
+  };
 }
 

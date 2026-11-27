@@ -14,7 +14,7 @@ const MENU_HINTS = {
   board: { help: "진행 한눈에 보기", desc: "할 일을 상태별 칸으로 본다", words: "칸반 상태 진행 현황" },
   gallery: { help: "7단계 — 결과물 활용", desc: "여러 할 일의 결과물을 모아 본다", words: "결과물 산출물 미리보기 다운로드 내보내기 Word Excel PowerPoint" },
   briefs: { help: "진행 한눈에 보기", desc: "업무 요청을 올리고 할 일로 나눈다", words: "브리프 요청 할 일 나누기 분해 배정" },
-  approvals: { help: "4단계 — 결재 처리", desc: "배정·결과물·지식 등록 결재를 승인하거나 반려한다", words: "승인 반려 결재 대기 조건부 승인 결재 도우미 위험도 추천 이전 판 비교" },
+  approvals: { help: "4단계 — 결재 처리", desc: "배정·결과물·지식 등록 결재를 승인하거나 반려한다", words: "승인 반려 결재 대기 조건부 승인 결재 도우미 위험도 추천 이전 판 비교 위임 대결 대리 휴가 에스컬레이션" },
   performance: { help: "현황 화면", desc: "사람·Agent 성과와 Gate 점수 추이", words: "성과 점수 리뷰 평가" },
   search: { help: "3단계 — 사람·Agent·팀·파이프라인 붙이기", desc: "스킬·역할로 사람과 Agent를 찾는다", words: "인력 찾기 스킬 검색 Agent 목록" },
   orgchart: { help: "현황 화면", desc: "사람과 Agent가 함께 있는 조직도", words: "조직 팀 구성 매니저" },

@@ -154,7 +154,14 @@ async function renderHumanPool(content) {
   });
   content.querySelectorAll("[data-offboard]").forEach(btn => {
     btn.onclick = async () => {
-      if (!(await confirmModal("정말 오프보딩하시겠습니까?"))) return;
+      // 인계 점검(2026-11-27, Phase C) — 남은 일이 있으면 먼저 알려 준다.
+      let note = "";
+      try {
+        const h = await api("GET", "/api/human-pool/" + btn.dataset.offboard + "/handover");
+        if (h.open_count) note = " 아직 남은 일이 " + h.open_count + "건 있습니다(진행 중 배정 " + h.work.length + " · 팀 " + h.teams.length +
+          " · 대기 결재 " + h.approvals.length + " · 보고 대상 " + h.reports.length + " · 자동화 " + h.automations.length + "). 아래 '용량·부하·부재'의 \"인계 점검\"으로 먼저 넘기는 것을 권합니다.";
+      } catch (_) { /* 점검 실패해도 오프보딩 확인은 띄운다 */ }
+      if (!(await confirmModal("정말 오프보딩하시겠습니까?" + note))) return;
       try {
         await api("POST", "/api/human-pool/" + btn.dataset.offboard + "/offboard");
         refresh();
@@ -193,6 +200,9 @@ async function _renderResourceLoad(slot) {
       '<button class="small" data-rm-cap="' + r.id + '">용량 저장</button></span> ' +
       '<span class="pair"><input type="number" min="1" max="80" id="rm-wh-' + r.id + '" placeholder="40" style="width:4.5rem" aria-label="주당 시간">' +
       '<button class="small" data-rm-wh="' + r.id + '">주당 시간</button></span> ' +
+      (ME.role === "admin" ? '<span class="pair"><input type="number" min="0" step="1" id="rm-rate-' + r.id + '" placeholder="$/h" style="width:4.5rem" aria-label="시간당 단가(USD)">' +
+        '<button class="small" data-rm-rate="' + r.id + '">단가</button></span> ' : "") +
+      '<button class="small" data-rm-handover="' + r.id + '">인계 점검</button> ' +
       '<span class="pair"><input type="date" id="rm-from-' + r.id + '" value="' + today + '" aria-label="부재 시작"><input type="date" id="rm-to-' + r.id + '" value="' + today + '" aria-label="부재 끝">' +
       '<input id="rm-why-' + r.id + '" placeholder="사유" maxlength="200" style="width:6rem"><button class="small" data-rm-abs="' + r.id + '">부재 추가</button></span>',
   ]);
@@ -217,8 +227,14 @@ async function _renderResourceLoad(slot) {
       '<span class="muted">맡은 할 일 ' + agents.reduce((a, r) => a + (r.active_tasks || 0), 0) + "건 · 자동 적합도 근거 있음 " +
       agents.filter(r => r.performance_score !== null && r.performance_score !== undefined).length + "개</span></summary>" +
       '<div class="pm-wide-sm">' + table(["Agent", "맡은 할 일", "모델 대기", "적합도"], aRows, { empty: "온보딩된 Agent가 없습니다." }) + "</div></details>" +
-    '<p class="muted" id="rm-msg"></p></section>';
+    '<p class="muted" id="rm-msg"></p><div id="rm-handover"></div></section>';
   const msg = t => { slot.querySelector("#rm-msg").textContent = t; };
+  slot.querySelectorAll("[data-rm-rate]").forEach(b => b.onclick = async () => {
+    const raw = slot.querySelector("#rm-rate-" + b.dataset.rmRate).value.trim();
+    try { await api("PUT", "/api/human-pool/" + b.dataset.rmRate + "/hourly-rate", { hourly_rate: raw === "" ? null : Number(raw) }); msg("시간당 단가를 저장했습니다(자원 운용의 비용·예산에 반영)."); }
+    catch (e) { msg("저장하지 못했습니다: " + (e.message || e)); }
+  });
+  slot.querySelectorAll("[data-rm-handover]").forEach(b => b.onclick = () => _renderHandover(slot.querySelector("#rm-handover"), Number(b.dataset.rmHandover)));
   slot.querySelectorAll("[data-rm-cap]").forEach(b => b.onclick = async () => {
     const raw = slot.querySelector("#rm-cap-" + b.dataset.rmCap).value.trim();
     try { await api("PUT", "/api/human-pool/" + b.dataset.rmCap + "/capacity", { max_concurrent_tasks: raw === "" ? null : Number(raw) }); _renderResourceLoad(slot); }
@@ -293,11 +309,86 @@ async function renderResourcePlanning(content) {
       esc(r.role) + (r.no_supply ? ' <span class="gate-badge gate-warn">맡을 자원 없음</span>' : ""), String(r.open), r.unassigned ? "<b>" + r.unassigned + "</b>" : "0",
       r.open_hours ? r.open_hours + "h" : "-", r.recent_per_week ? r.recent_per_week.toFixed(1) : "0", String(r.scheduled_next), String(r.people), String(r.agents)]),
       { empty: "열린 할 일이 없습니다." }) + "</div>" +
+    '<div id="rp-cost-slot"></div>' +
     "</section>";
+  _renderResourceCosts(content.querySelector("#rp-cost-slot"));
+}
+
+/* ---------- 비용·예산(2026-11-27, Resource Management Phase C — 5번 시간 기반 비용) ---------- */
+async function _renderResourceCosts(slot) {
+  if (!slot) return;
+  const c = await api("GET", "/api/resource-costs");
+  const st = { over: '<span class="gate-badge gate-warn sys-error">초과</span>', warn: '<span class="gate-badge gate-warn">주의</span>', ok: '<span class="gate-badge gate-ok">여유</span>' };
+  const money = v => "$" + (v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2));
+  slot.innerHTML = "<h3>비용·예산</h3>" +
+    '<p class="muted">업무 요청마다 <b>사람 인건비(추정)</b> = 배정된 사람의 시간당 단가 × 그 사람 몫의 예상 시간(할 일 예상 시간 ÷ 배정 인원), <b>AI(실측)</b> = 그 할 일들로 쓴 실제 AI 사용 금액(모델 레지스트리 단가). 예산을 넣으면 ' +
+    Math.round(c.budget_warn * 100) + "% 이상 주의, 넘으면 초과로 표시합니다." +
+    (c.people_missing_rate ? " 시간당 단가가 없는 사람 " + c.people_missing_rate + "명 — '사람 인력 관리'에서 admin이 넣으면 인건비에 들어갑니다." : "") + "</p>" +
+    '<div class="pm-wide">' + table(["업무 요청", "할 일", "인건비(추정)", "AI(실측)", "합계", "예산", "상태", "설정"], c.briefs.map(b => [
+      "#" + b.brief_id + " " + esc(b.title), String(b.tasks),
+      money(b.labor_estimated) + (b.missing_rate || b.missing_estimate ? '<div class="muted pm-note">' + (b.missing_rate ? "단가 없음 " + b.missing_rate : "") +
+        (b.missing_rate && b.missing_estimate ? " · " : "") + (b.missing_estimate ? "예상 시간 없음 " + b.missing_estimate : "") + "</div>" : ""),
+      money(b.ai_cost) + (b.ai_partial ? '<div class="muted pm-note">단가 없는 모델 포함</div>' : ""),
+      "<b>" + money(b.total) + "</b>", b.budget_usd ? money(b.budget_usd) + '<div class="muted pm-note">' + Math.round(b.ratio * 100) + "%</div>" : '<span class="muted">-</span>',
+      b.status ? st[b.status] : "-",
+      '<span class="pair"><input type="number" min="1" step="1" id="rp-bud-' + b.brief_id + '" placeholder="USD" style="width:5.5rem" aria-label="예산(USD)"><button class="small" data-rp-bud="' + b.brief_id + '">예산</button></span>',
+    ]), { empty: "비용이 생긴 업무 요청이 없습니다." }) + "</div>" +
+    (c.teams.length ? "<h4>팀별 비용</h4>" + table(["팀", "할 일", "인건비(추정)", "AI(실측)"], c.teams.map(t => [esc(t.name), String(t.tasks), money(t.labor_estimated), money(t.ai_cost)])) : "") +
+    '<p class="muted" id="rp-cost-msg"></p>';
+  slot.querySelectorAll("[data-rp-bud]").forEach(b => b.onclick = async () => {
+    const raw = slot.querySelector("#rp-bud-" + b.dataset.rpBud).value.trim();
+    try { await api("PUT", "/api/briefs/" + b.dataset.rpBud + "/budget", { budget_usd: raw === "" ? null : Number(raw) }); _renderResourceCosts(slot); }
+    catch (e) { slot.querySelector("#rp-cost-msg").textContent = e.message || String(e); }
+  });
 }
 
 function _rpTile(label, value, sub) {
   return '<div class="pm-tile"><div class="pm-tile-label">' + esc(label) + '</div><div class="pm-tile-value">' + value +
     '</div><div class="pm-tile-sub muted">' + sub + "</div></div>";
+}
+
+/* ---------- 인계 점검(2026-11-27, Resource Management Phase C — 퇴사·장기 부재 전에) ---------- */
+async function _renderHandover(box, humanId) {
+  const h = await api("GET", "/api/human-pool/" + humanId + "/handover");
+  const users = await api("GET", "/api/approval-delegations").then(d => d.candidates).catch(() => []);
+  const workRows = h.work.map(w => [
+    "#" + w.task_id, esc(w.role_name), esc(label(w.status)) + (w.due_date ? '<div class="muted pm-note">기한 ' + esc(w.due_date) + "</div>" : ""),
+    w.suggestion ? esc(w.suggestion.name) + ' <span class="muted">(' + esc(label(w.suggestion.type)) + " · " + w.suggestion.score + ")</span>" +
+      ((w.suggestion.notes || []).length ? '<div class="muted pm-note">' + w.suggestion.notes.map(esc).join(" · ") + "</div>" : "")
+      : (w.status === "requested" ? '<span class="muted">요청 중 — 결재함에서 반려하면 끝납니다</span>' : '<span class="muted">맞는 후보 없음</span>'),
+    w.suggestion ? '<button class="small" data-ho-replace="' + w.assignment_id + '" data-task="' + w.task_id + '" data-type="' + w.suggestion.type + '" data-id="' + w.suggestion.id + '">이 후보로 교체 요청</button>' : "",
+  ]);
+  box.innerHTML = '<div class="card ab-box"><div class="ab-head"><b>인계 점검 — ' + esc(h.human.name) + "</b> " +
+    (h.open_count ? '<span class="gate-badge gate-warn">남은 일 ' + h.open_count + "건</span>" : '<span class="gate-badge gate-ok">남은 일 없음</span>') +
+    ' <button class="small" id="ho-close">닫기</button></div>' +
+    "<h4>맡고 있는 할 일</h4>" + table(["할 일", "역할", "상태", "대신 맡을 후보(매칭 1순위, 본인 제외)", ""], workRows, { empty: "끝나지 않은 배정이 없습니다." }) +
+    '<p class="muted">교체 요청은 평소 배정처럼 결재를 거치고, 확정되면 원래 배정을 대신합니다.</p>' +
+    "<h4>팀 소속</h4>" + (h.teams.length ? "<ul>" + h.teams.map(t => "<li>" + esc(t.name) + (t.role_label ? " — " + esc(t.role_label) : "") + "</li>").join("") + "</ul><p class=\"muted\">\"팀 관리\"에서 구성원을 바꾸세요.</p>" : '<p class="muted">없음</p>') +
+    "<h4>이 사람이 승인자인 대기 결재 " + h.approvals.length + "건</h4>" +
+    (h.approvals.length && h.human.user_id ? '<div class="inline"><select id="ho-to"><option value="">admin·manager 누구나</option>' +
+      users.filter(u => u.id !== h.human.user_id).map(u => '<option value="' + u.id + '">' + esc(u.username) + "</option>").join("") +
+      '</select> <button class="small" id="ho-transfer">모두 넘기기</button></div>' : '<p class="muted">없음</p>') +
+    "<h4>보고 대상(이 사람이 상사)</h4>" + (h.reports.length ? "<ul>" + h.reports.map(r => "<li>" + esc(r.name) + "</li>").join("") + "</ul><p class=\"muted\">새 상사는 \"사용자 관리\"·\"사람 인력 관리\"에서 지정하세요(결재 체인이 상사를 따릅니다).</p>" : '<p class="muted">없음</p>') +
+    "<h4>이 사람 이름으로 도는 자동화</h4>" + (h.automations.length ? "<ul>" + h.automations.map(a => "<li>" + esc(a.kind) + " — " + esc(a.name) + "</li>").join("") + "</ul><p class=\"muted\">\"내 설정(연동 설정)\"에서 끄거나 다른 사람이 다시 만드세요 — 그대로 두면 퇴사자 이름으로 계속 실행됩니다.</p>" : '<p class="muted">없음</p>') +
+    '<p class="muted" id="ho-msg"></p></div>';
+  box.querySelector("#ho-close").onclick = () => { box.innerHTML = ""; };
+  box.querySelectorAll("[data-ho-replace]").forEach(b => b.onclick = async () => {
+    try {
+      const r = await api("POST", "/api/tasks/" + b.dataset.task + "/assignments", { resource_type: b.dataset.type,
+        resource_id: Number(b.dataset.id), replaces_assignment_id: Number(b.dataset.hoReplace) });
+      box.querySelector("#ho-msg").textContent = "교체 요청을 보냈습니다" + (r.status === "confirmed" ? "(바로 확정)" : " — 결재함에서 처리하세요") + ".";
+      b.disabled = true;
+    } catch (e) { box.querySelector("#ho-msg").textContent = e.message || String(e); }
+  });
+  const tr = box.querySelector("#ho-transfer");
+  if (tr) tr.onclick = async () => {
+    const to = box.querySelector("#ho-to").value;
+    try {
+      const r = await api("POST", "/api/users/" + h.human.user_id + "/transfer-approvals", { to_user_id: to ? Number(to) : null });
+      box.querySelector("#ho-msg").textContent = "대기 결재 " + r.transferred + "건을 넘겼습니다.";
+      _renderHandover(box, humanId);
+    } catch (e) { box.querySelector("#ho-msg").textContent = e.message || String(e); }
+  };
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
