@@ -268,14 +268,17 @@ async function renderAgentPool(content) {
       // 채움) — 자주 쓰는 상태변경/실행 버튼만 바로 보이게 남기고,
       // 나머지(이름·비용·점수·모델·도구연결·파인튜닝)는 "⚙ 설정"
       // 하나로 접는다.
+      // 행에는 자주 쓰는 동작만(2026-11-27, 사용성 평가 6번) — 예전엔 행마다 빨간 [오프보딩][삭제]가 [실행] 바로 옆에 있어
+      // 39행 화면에 빨간 버튼이 78개였다. 되돌리기 어려운 두 동작은 ⚙ 설정 창 맨 아래 "위험 구역"으로 옮긴다(확인 창은 그대로).
       let actions = "";
+      let danger = "";
       if (isAdmin) {
-        if (a.status === "pending_onboarding") actions += '<button class="small" data-onboard="' + a.id + '">온보딩 승인</button>';
-        if (a.status === "active") actions += '<button class="small danger" data-deprecate="' + a.id + '">오프보딩</button>';
-        actions += '<button class="small danger" data-delete-agent="' + a.id + '">삭제</button>';
+        if (a.status === "pending_onboarding") actions += '<button class="small primary" data-onboard="' + a.id + '">온보딩 승인</button>';
+        if (a.status === "active") danger += '<button class="small danger" data-deprecate="' + a.id + '">오프보딩(사용 중지)</button> ';
+        danger += '<button class="small danger" data-delete-agent="' + a.id + '">완전히 삭제</button>';
       }
       if (canExecute && a.status === "active") {
-        actions += '<button class="small" data-execute="' + a.id + '">실행(일 시키기)</button>';
+        actions += '<button class="small primary" data-execute="' + a.id + '">실행(일 시키기)</button>';
         // 사용자 요청(2026-11-20, 지식베이스 등록 체계 개편) — 여기 있던
         // "지식베이스로 보내기"(Agent의 `last_output`을 결재 없이 즉시
         // 색인)는 삭제했다. 그 값은 어느 경로든 "마지막 출력 하나"라
@@ -330,6 +333,10 @@ async function renderAgentPool(content) {
         settings += _asSection("최적화 추천", "", "역할·스킬을 보고 등록된 모델 중 알맞은 모델과 파인튜닝 값을 추천합니다(규칙 기반, 비용 없음).",
           '<div><button class="small" data-recommend-optimize="' + a.id + '">⚡ 최적화 추천</button><div id="optimize-result-' + a.id + '"></div></div>');
       }
+      if (danger) {
+        settings += _asSection("위험 구역", "", "되돌리기 어려운 동작입니다. 오프보딩은 새 일에 배정·실행되지 않게 멈추고(기록은 남음), 삭제는 이 Agent 기록을 지웁니다.",
+          '<div class="as-danger">' + danger + "</div>");
+      }
       if (settings) {
         actions += '<button class="small" data-open-agent-settings="' + a.id + '" data-agent-title="' + escAttr(a.name || a.role_name || ("#" + a.id)) + '">⚙ 설정</button>' +
           '<div id="agent-settings-' + a.id + '" hidden>' + settings + '</div>';
@@ -367,7 +374,7 @@ async function renderAgentPool(content) {
       // 묶음 — 소속팀/비용/성과점수/자동평가/최근 산출물은 매번
       // 볼 필요는 없지만 완전히 없애면 안 되는 정보라 접어서 둔다.
       // LLM은 별도 열로 뺐으니 여기서는 중복 표시하지 않는다.
-      const detail = '<details><summary>▶ 상세</summary>' +
+      const detail = '<details><summary>상세</summary>' +
         '<div style="text-align:left;white-space:normal">' +
         '<div>소속팀: ' + teamNames + '</div>' +
         '<div>비용: ' + a.cost_estimate + '</div>' +
@@ -398,6 +405,7 @@ async function renderAgentPool(content) {
     // 어려운 동작인데도 한 번의 클릭만으로 실행됐다.
     btn.onclick = async () => {
       if (!(await confirmModal("이 Agent를 오프보딩합니다(active→deprecated, 이 화면엔 되돌리는 버튼이 없습니다). 계속할까요?"))) return;
+      closeAgentSettings();
       try {
         await api("POST", "/api/agent-pool/" + btn.dataset.deprecate + "/deprecate");
         refresh();
@@ -407,6 +415,7 @@ async function renderAgentPool(content) {
   content.querySelectorAll("[data-delete-agent]").forEach(btn => {
     btn.onclick = async () => {
       if (!(await confirmModal("이 AI 에이전트 레코드를 완전히 지웁니다(되돌릴 수 없음). 계속할까요?"))) return;
+      closeAgentSettings();
       try {
         await api("DELETE", "/api/agent-pool/" + btn.dataset.deleteAgent);
         showMsg("global-msg", "삭제했습니다.", "ok");

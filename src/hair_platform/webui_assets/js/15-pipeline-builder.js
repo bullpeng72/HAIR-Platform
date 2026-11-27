@@ -179,12 +179,24 @@ function pipelineAddStageFormHtml(templateId, activeAgents) {
     "</form>";
 }
 
+// 요약 한 줄 + 하나씩 펼침(2026-11-27, 사용성 평가 5번) — 예전엔 템플릿 8개의 모든 단계·설정이 한 페이지에 다 펼쳐져
+// 높이 14,895px·버튼 226개·입력칸 190개였다. 템플릿마다 요약(단계 수·사람 승인 단계·단계 흐름)만 보이고, [편집]을 누른
+// 하나만 펼친다. 펼친 템플릿은 저장 뒤 새로 그려도 그대로 열려 있다.
+let _plOpenTemplateId = null;
+
 function pipelineTemplateCardHtml(t, detail, activeAgents) {
   const stages = detail ? detail.stages : [];
-  return '<section class="card" data-pipeline-template-card="' + t.id + '">' +
-    '<h3>#' + t.id + " " + esc(t.name) +
-    (t.is_active ? "" : ' <span class="gate-badge gate-warn">비활성</span>') +
-    ' <span class="muted">(' + esc(t.domain) + ")</span></h3>" +
+  const open = String(_plOpenTemplateId) === String(t.id);
+  const approvals = stages.filter(s => s.requires_human_approval).length;
+  const flow = stages.map(s => s.name).join(" → ");
+  return '<section class="card pl-card' + (open ? " pl-open" : "") + '" data-pipeline-template-card="' + t.id + '">' +
+    '<div class="pl-summary">' +
+    '<div class="pl-title"><h3>' + esc(t.name) +
+    (t.is_active ? "" : ' <span class="gate-badge gate-warn">비활성</span>') + "</h3>" +
+    '<span class="muted">' + stages.length + "단계 · 사람 승인 " + approvals + "곳" + (t.domain && t.domain !== "general" ? " · " + esc(t.domain) : "") + "</span></div>" +
+    '<button class="small' + (open ? "" : " primary") + '" data-pl-toggle="' + t.id + '">' + (open ? "닫기" : "편집") + "</button></div>" +
+    (flow ? '<p class="pl-flow muted" title="' + escAttr(flow) + '">' + esc(flow) + "</p>" : "") +
+    '<div class="pl-body"' + (open ? "" : " hidden") + ">" +
     (t.description ? '<p class="muted">' + esc(t.description) + "</p>" : "") +
     (stages.length
       ? stages.map((s, i) => pipelineStageCardHtml(t.id, s, i, stages.length, stages)).join("")
@@ -194,7 +206,7 @@ function pipelineTemplateCardHtml(t, detail, activeAgents) {
     '<button class="small" data-toggle-pipeline-active="' + t.id + '" data-next-active="' + (t.is_active ? "0" : "1") + '">' +
     (t.is_active ? "비활성화" : "활성화") + "</button>" +
     (ME.role === "admin" ? '<button class="small danger" data-delete-pipeline-template="' + t.id + '">템플릿 삭제</button>' : "") +
-    "</div></section>";
+    "</div></div></section>";
 }
 
 async function renderPipelines(content) {
@@ -233,6 +245,22 @@ async function renderPipelines(content) {
     (templates.length
       ? templates.map(t => pipelineTemplateCardHtml(t, detailById[t.id], activeAgents)).join("")
       : '<p class="muted">등록된 파이프라인이 없습니다.</p>');
+
+  content.querySelectorAll("[data-pl-toggle]").forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.plToggle;
+      _plOpenTemplateId = String(_plOpenTemplateId) === id ? null : id;
+      content.querySelectorAll("[data-pipeline-template-card]").forEach(card => {
+        const open = card.dataset.pipelineTemplateCard === String(_plOpenTemplateId);
+        card.classList.toggle("pl-open", open);
+        card.querySelector(".pl-body").hidden = !open;
+        const tb = card.querySelector("[data-pl-toggle]");
+        tb.textContent = open ? "닫기" : "편집";
+        tb.classList.toggle("primary", !open);
+      });
+      if (_plOpenTemplateId) btn.closest(".pl-card").scrollIntoView({ block: "start", behavior: "smooth" });
+    };
+  });
 
   document.getElementById("pipeline-template-create-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();

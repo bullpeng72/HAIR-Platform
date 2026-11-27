@@ -214,7 +214,9 @@ function helpBox(innerHtml) {
   return '<details class="help-box"><summary class="help-summary">도움말</summary>' + innerHtml + '</details>';
 }
 
-function table(headers, rows) {
+// `opts.empty`(2026-11-27, 사용성 평가 3번) — 빈 목록일 때 보여 줄 안내(HTML). 공통 문구 "데이터가 없습니다"는 처음 쓰는
+// 사람에게 다음에 무엇을 할지 알려 주지 않았다 — 사람이 보는 주요 목록은 무엇이 여기 모이는지와 다음 행동을 적는다.
+function table(headers, rows, opts) {
   const tableId = "tbl-" + (++_tableSeq);
   const hasRows = rows.length > 0;
   let html = '<div class="table-wrap">';
@@ -241,7 +243,7 @@ function table(headers, rows) {
   });
   html += "</tr></thead><tbody>";
   if (!hasRows) {
-    html += '<tr><td colspan="' + headers.length + '" class="muted">데이터가 없습니다.</td></tr>';
+    html += '<tr class="table-empty"><td colspan="' + headers.length + '" class="muted">' + ((opts && opts.empty) || "아직 항목이 없습니다.") + "</td></tr>";
   }
   for (const r of rows) {
     html += "<tr>";
@@ -623,7 +625,7 @@ const TABS = [
   { id: "conversations", label: "대화", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderConversations },
   // 홈(2026-11-23, "P2 진행해줘" — P2-8 화면 복잡도·학습 곡선). 탭이 28개라 "무엇부터, 어디서"를
   // 몰라 이용 가이드를 읽어야 했다. 처리할 일과 "AI에게 일을 맡기는 방법"을 역할에 맞게 한 화면에
-  // 모은다. 로그인 첫 화면은 그대로 대화(첫 탭)다.
+  // 모은다. 로그인 첫 화면은 홈이다(2026-11-27, 사용성 평가 1번 — 예전엔 메뉴 첫 탭인 빈 "대화" 표였다).
   { id: "home", label: "홈", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderHome },
   { id: "inbox", label: "인박스", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderInbox },
   { id: "mywork", label: "내 업무", group: "user", roles: ["admin", "manager", "member", "viewer"], render: renderMyWork },
@@ -665,9 +667,12 @@ async function boot() {
     await loadOrgPolicy();
     document.getElementById("login-view").style.display = "none";
     document.getElementById("app-view").style.display = "block";
-    document.getElementById("whoami").textContent = ME.username + " (" + ME.role + ")";
+    document.getElementById("whoami").textContent = ME.username + " (" + (ROLE_NAMES[ME.role] || ME.role) + ")";
     buildNav();
-    selectTab(TABS.find(t => t.roles.includes(ME.role)).id);
+    // 첫 화면은 홈(2026-11-27, 사용성 평가 1번) — 이용 가이드·홈 안내가 "홈 → AI에게 일 맡기기"부터 시작하라고 하는데
+    // 예전엔 메뉴 첫 탭(빈 "대화" 표)에 떨어졌다.
+    const allowed = TABS.filter(t => t.roles.includes(ME.role));
+    selectTab((allowed.find(t => t.id === "home") || allowed[0]).id);
     startMentionNotificationPolling();
   } catch (e) {
     ME = null;
@@ -729,7 +734,7 @@ const SETTINGS_GROUPS = [
     ],
   },
   {
-    label: "그라운딩 관리",
+    label: "지식·데이터",  // 예전 "그라운딩 관리"(2026-11-27, 사용성 평가 7번 — 전문 용어라 뜻이 안 전해졌다)
     entries: ["pipelines", "poolregistry", "knowledgebase"],
     collapsible: true,
   },
@@ -740,38 +745,25 @@ const SETTINGS_GROUPS = [
   },
   {
     label: "운영 관리",
-    entries: ["dashboard", "cost", "fairness", "audit", "evalconfig", "admin"],
+    entries: ["evalconfig", "admin"],  // 대시보드·비용·공정성·활동 기록은 "현황"으로(2026-11-27)
     collapsible: true,
   },
 ];
 
-// 매일 쓰는 탭(2026-11-24, P2-8) — 그 밖의 "오늘 할 일" 탭(할 일 보드·성과 리뷰·인력 검색·조직도·연동 설정)은
-// "더 보기"로 접는다. 설정(admin/manager) 그룹은 기존처럼 그룹 단위로 접힌다.
-const ESSENTIAL_TABS = new Set(["home", "conversations", "inbox", "mywork", "briefs", "approvals", "gallery", "manual"]);
-
-function _navMorePref() {
-  try { return localStorage.getItem("hair_nav_more") === "1"; } catch (e) { return false; }
-}
-
-function _setNavMore(open, count) {
-  const wrap = document.getElementById("nav-extra-tabs");
-  const toggle = document.getElementById("nav-more-toggle");
-  if (!wrap || !toggle) return;
-  wrap.hidden = !open;
-  const n = count || wrap.children.length;
-  toggle.textContent = open ? "접기 ▴" : "더 보기(" + n + ") ▾";
-  try { localStorage.setItem("hair_nav_more", open ? "1" : "0"); } catch (e) { /* 저장 못 해도 동작 */ }
-}
+// 메뉴 구조(2026-11-27, 사용성 평가 7번) — 역할 구분("오늘 할 일"·"설정")이 아니라 업무 흐름으로 묶는다. 한 줄에
+// 일하기 · 검토·결재 · 현황(▾)을 두고, admin·manager에게만 설정(▾) 한 줄을 더 둔다(예전 요청대로 메뉴가 아래로 넓게
+// 퍼지지 않게 두 줄 유지). 이용 가이드는 헤더의 ❓ 도움말·🔍 메뉴 찾기로, 연동 설정(개인 API 키 포함)은 헤더 "내 설정"으로 옮겼다.
+const NAV_WORK = ["home", "conversations", "briefs", "mywork", "board"];
+const NAV_REVIEW = ["inbox", "approvals", "gallery"];
+const NAV_STATUS = ["dashboard", "performance", "cost", "fairness", "audit", "orgchart", "search"];
 
 function buildNav() {
   const nav = document.getElementById("tabs");
   nav.innerHTML = "";
 
-  const todayTabs = TABS.filter(
-    t => (t.group === "user" || t.group === "common") && t.roles.includes(ME.role)
-  );
   const byId = {};
   TABS.forEach(t => { byId[t.id] = t; });
+  const visible = (ids) => ids.map(id => byId[id]).filter(t => t && t.roles.includes(ME.role));
 
   const makeButton = (t) => {
     const btn = document.createElement("button");
@@ -784,11 +776,7 @@ function buildNav() {
       btn.title = "관리자 전용";
       btn.appendChild(badge);
     }
-    // 사용자 요청(2026-11-12, "업무를 요청하고, 협업공간에서 진행과정과
-    // 결과물 확인이 어려워") — "인박스" 탭 밖에 있으면 결재 대기/실행
-    // 실패/완료 소식을 전혀 알 길이 없었다. 기존 멘션 알림 폴링(20초)을
-    // `_pollInboxBadge()`로 확장해 이 탭 버튼에 미읽은 건수를 직접
-    // 띄운다 — 기본은 숨김(hidden), 폴링이 처음 돌면 바로 갱신된다.
+    // 인박스 탭 버튼에 미읽은 건수(2026-11-12) — 폴링(`_pollInboxBadge()`)이 갱신한다.
     if (t.id === "inbox") {
       const badge = document.createElement("span");
       badge.className = "badge-inbox-count";
@@ -801,36 +789,78 @@ function buildNav() {
     return btn;
   };
 
-  const addGroup = (label, tabs, cls) => {
-    if (!tabs.length) return;
-    const row = document.createElement("div");
-    row.className = "nav-group" + (cls ? " " + cls : "");
+  const label = (text) => {
     const tag = document.createElement("span");
     tag.className = "nav-label";
-    tag.textContent = label;
-    row.appendChild(tag);
-    for (const t of tabs) row.appendChild(makeButton(t));
-    nav.appendChild(row);
+    tag.textContent = text;
+    return tag;
   };
 
-  // 자주 쓰는 탭만 기본으로(2026-11-24, P2-8 "화면 복잡도") — 나머지 "오늘 할 일" 탭은 "더 보기"로 접는다.
-  // 펼침 여부는 이 브라우저에만 기억한다(개인 편의). 접힌 탭으로 이동하면(홈의 바로가기 등) 자동으로 펼친다.
-  const essential = todayTabs.filter(t => ESSENTIAL_TABS.has(t.id));
-  const extra = todayTabs.filter(t => !ESSENTIAL_TABS.has(t.id));
-  addGroup("오늘 할 일", essential, "");
-  const row = nav.lastElementChild;
-  if (row && extra.length) {
-    const extraWrap = document.createElement("span");
-    extraWrap.id = "nav-extra-tabs";
-    extraWrap.style.display = "contents";
-    extra.forEach(t => extraWrap.appendChild(makeButton(t)));
-    const toggle = document.createElement("button");
-    toggle.className = "small nav-more-toggle";
-    toggle.id = "nav-more-toggle";
-    toggle.onclick = () => _setNavMore(extraWrap.hidden);
-    row.appendChild(extraWrap);
-    row.appendChild(toggle);
-    _setNavMore(_navMorePref(), extra.length);
+  // 누르면 아래에 작은 메뉴가 뜨는 그룹 버튼(바깥을 누르거나 Esc로 닫힘, 한 번에 하나만 열림). 지금 화면이 속한 그룹
+  // 버튼에는 "그룹 · 화면 이름"이 보인다(`_syncNavDropdowns`).
+  const makeDropdown = (groupLabel, items) => {
+    const wrap = document.createElement("span");
+    wrap.className = "nav-dropdown";
+    wrap.dataset.groupLabel = groupLabel;
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "nav-dropdown-trigger";
+    trigger.setAttribute("aria-haspopup", "true");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.textContent = groupLabel + " ▾";
+    const menu = document.createElement("div");
+    menu.className = "nav-dropdown-menu";
+    menu.hidden = true;
+    for (const item of items) {
+      if (item === "__divider__") {
+        const divider = document.createElement("span");
+        divider.className = "nav-divider";
+        menu.appendChild(divider);
+      } else {
+        const btn = makeButton(item);
+        const go = btn.onclick;
+        btn.onclick = () => { _closeNavDropdowns(); go(); };
+        menu.appendChild(btn);
+      }
+    }
+    trigger.onclick = (ev) => {
+      ev.stopPropagation();
+      const willOpen = menu.hidden;
+      _closeNavDropdowns();
+      menu.hidden = !willOpen;
+      trigger.setAttribute("aria-expanded", String(willOpen));
+      // 폭 상한을 화면 너비로 넓혀 한 줄로 두고, 오른쪽 끝을 넘으면 그만큼 왼쪽으로 당긴다(좁은 화면에서만 줄바꿈).
+      if (willOpen) {
+        menu.style.left = "0px";
+        const overflow = menu.getBoundingClientRect().right - (window.innerWidth - 12);
+        if (overflow > 0) menu.style.left = -Math.min(overflow, wrap.getBoundingClientRect().left - 12) + "px";
+      }
+    };
+    wrap.appendChild(trigger);
+    wrap.appendChild(menu);
+    return wrap;
+  };
+
+  const mainRow = document.createElement("div");
+  mainRow.className = "nav-group nav-main";
+  const work = visible(NAV_WORK), review = visible(NAV_REVIEW), status = visible(NAV_STATUS);
+  if (work.length) { mainRow.appendChild(label("일하기")); work.forEach(t => mainRow.appendChild(makeButton(t))); }
+  if (review.length) {
+    const sep = document.createElement("span"); sep.className = "nav-divider"; mainRow.appendChild(sep);
+    mainRow.appendChild(label("검토·결재")); review.forEach(t => mainRow.appendChild(makeButton(t)));
+  }
+  if (status.length) {
+    const sep = document.createElement("span"); sep.className = "nav-divider"; mainRow.appendChild(sep);
+    mainRow.appendChild(makeDropdown("현황", status));
+  }
+  nav.appendChild(mainRow);
+
+  // 헤더 "내 설정"(연동 설정 — 개인 API 키·정기 실행·외부 알림). 볼 수 없는 역할(viewer)에는 숨긴다.
+  const mySettings = document.getElementById("my-settings-btn");
+  if (mySettings) {
+    const t = byId["integrations"];
+    mySettings.hidden = !(t && t.roles.includes(ME.role));
+    mySettings.onclick = () => selectTab("integrations");
   }
 
   // 설정 메뉴 한 줄(2026-11-25, 사용자 요청 "admin 메뉴가 아래로 넓게 펼쳐져 화면을 많이 차지" → A안) —
@@ -855,46 +885,7 @@ function buildNav() {
     }
     while (items.length && items[items.length - 1] === "__divider__") items.pop();
     if (!items.length) continue;
-    const wrap = document.createElement("span");
-    wrap.className = "nav-dropdown";
-    wrap.dataset.groupLabel = group.label;
-    const trigger = document.createElement("button");
-    trigger.type = "button";
-    trigger.className = "nav-dropdown-trigger";
-    trigger.setAttribute("aria-haspopup", "true");
-    trigger.setAttribute("aria-expanded", "false");
-    trigger.textContent = group.label + " ▾";
-    const menu = document.createElement("div");
-    menu.className = "nav-dropdown-menu";
-    menu.hidden = true;
-    for (const item of items) {
-      if (item === "__divider__") {
-        const divider = document.createElement("span");
-        divider.className = "nav-divider";
-        menu.appendChild(divider);
-      } else {
-        const btn = makeButton(item);
-        const go = btn.onclick;
-        btn.onclick = () => { _closeNavDropdowns(); go(); };
-        menu.appendChild(btn);
-      }
-    }
-    trigger.onclick = (ev) => {
-      ev.stopPropagation();
-      const willOpen = menu.hidden;
-      _closeNavDropdowns();
-      menu.hidden = !willOpen;
-      trigger.setAttribute("aria-expanded", String(willOpen));
-      // 2026-11-25(사용자 요청 — 하위 메뉴를 가능하면 한 줄로): 폭 상한을 화면 너비로 넓혀 한 줄로 두고,
-      // 오른쪽 끝을 넘으면 그만큼 왼쪽으로 당긴다(좁은 화면에서만 줄바꿈).
-      if (willOpen) {
-        menu.style.left = "0px";
-        const overflow = menu.getBoundingClientRect().right - (window.innerWidth - 12);
-        if (overflow > 0) menu.style.left = -Math.min(overflow, wrap.getBoundingClientRect().left - 12) + "px";
-      }
-    };
-    wrap.appendChild(trigger);
-    wrap.appendChild(menu);
+    const wrap = makeDropdown(group.label, items);
     settingsRow.appendChild(wrap);
   }
   if (settingsRow.querySelector(".nav-dropdown")) nav.appendChild(settingsRow);
@@ -942,30 +933,35 @@ async function selectTab(id, opts) {
   // 시작하는 게 맞지만 "같은 탭을 제자리에서 새로고침"할 때는 아니다 —
   // `refresh()`만 `preserveScroll: true`로 불러 이 둘을 구분한다.
   const isTabSwitch = currentTab !== id;
-  // 접힌 "더 보기" 탭으로 이동하면 펼쳐서 지금 위치가 보이게 한다(2026-11-24, P2-8).
-  if (!ESSENTIAL_TABS.has(id)) {
-    const extraBtn = document.querySelector('#nav-extra-tabs button[data-tab="' + id + '"]');
-    if (extraBtn && document.getElementById("nav-extra-tabs").hidden) _setNavMore(true);
-  }
   const scrollY = opts && opts.preserveScroll ? window.scrollY : 0;
   currentTab = id;
   for (const btn of document.querySelectorAll("#tabs button")) {
     btn.classList.toggle("active", btn.dataset.tab === id);
   }
+  const mySettings = document.getElementById("my-settings-btn");
+  if (mySettings) mySettings.classList.toggle("active", id === "integrations");
   _syncNavDropdowns();  // 설정 그룹 버튼에 지금 화면 표시(2026-11-25)
   // 다른 화면으로 옮길 때만 지운다(2026-11-27) — 저장 직후 `refresh()`가 "저장했습니다" 안내를 바로 지워 결과를 볼 수
   // 없었다(모델 레지스트리 화면 테스트에서 발견). 안내는 몇 초 뒤 스스로 사라진다(`showMsg`).
   if (isTabSwitch) showMsg("global-msg", "", "ok");
   const tab = TABS.find(t => t.id === id);
-  const content = document.getElementById("content");
+  let content = document.getElementById("content");
   if (isTabSwitch) {
-    content.innerHTML = "<p class=\"muted\">불러오는 중...</p>";
+    // 화면을 옮길 때는 본문 상자를 새것으로 바꾼다(2026-11-27). 화면 그리기는 서버 응답을 기다리는 비동기라, 앞 화면의
+    // 응답이 늦게 오면 이미 옮겨 간 새 화면을 앞 화면 내용으로 덮어썼다(첫 화면을 홈으로 바꾼 뒤 화면 테스트에서 드러남 —
+    // 홈을 그리는 중에 다른 메뉴를 누르면 그 메뉴 대신 홈이 보였다). 늦게 끝난 앞 화면은 떨어져 나간 옛 상자에만 쓴다.
+    const fresh = content.cloneNode(false);
+    fresh.innerHTML = "<p class=\"muted\">불러오는 중...</p>";
+    content.replaceWith(fresh);
+    content = fresh;
   }
   try {
     await tab.render(content);
   } catch (e) {
-    content.innerHTML = "";
-    showMsg("global-msg", e.message, "error");
+    if (content.isConnected) {  // 이미 다른 화면으로 옮겼으면 앞 화면의 오류는 보이지 않는다
+      content.innerHTML = "";
+      showMsg("global-msg", e.message, "error");
+    }
   }
   if (opts && opts.preserveScroll) {
     window.scrollTo(0, scrollY);

@@ -4,8 +4,15 @@ async function renderBriefs(content) {
   const canWrite = ["admin", "manager", "member"].includes(ME.role);
   const isAdmin = ME.role === "admin";
   const briefs = await api("GET", "/api/briefs");
-  let html = "<section class=\"card\"><h2>업무 요청 등록</h2>";
+  // 일 맡기는 입구는 홈 하나로(2026-11-27, 사용성 평가 2번) — 홈·대화·업무 요청 세 곳이 같은 일을 다른 방식으로 받아
+  // 무엇부터 할지 헷갈렸고, 여기 입력칸은 "한 줄에 역할 하나씩"처럼 시스템 구조를 먼저 알라고 했다. 새 일은 홈에서
+  // 방식(빠른 질문·정식 업무·여러 단계·정기)을 추천받아 시작하고, 이 화면은 목록·진행 확인 중심으로 둔다. 역할을 이미 아는
+  // 사람을 위한 직접 등록 폼은 "직접 등록(고급)"으로 접어 둔다.
+  let html = "<section class=\"card\"><h2>업무 요청</h2>";
   if (canWrite) {
+    html += '<div class="start-here"><p>새 일은 <b>홈</b>에서 맡기세요. 할 일을 한두 문장으로 적으면 빠른 질문·정식 업무·여러 단계 파이프라인·정기 실행 중 맞는 방식을 추천하고 바로 시작합니다.</p>' +
+      '<button class="primary" data-go-tab="home">홈에서 일 맡기기</button></div>' +
+      '<details class="brief-direct"><summary>직접 등록(고급) — 필요한 역할을 이미 알 때</summary>';
     html += helpBox(
       '<ul class="muted help-list">' +
       '<li>여기서 하는 일은 "제안된 역할" 칸을 채우는 것뿐입니다 — 짧은 줄로 역할을 나열하면 그 줄들이 그대로, 문장으로 업무를 적으면 업무 내용과 역할·스킬이 맞는 기존 Agent 역할이 제안됩니다(LLM을 쓰지 않는 규칙 기반이라 비용이 없고 즉시 끝납니다 — 맞는 역할이 없으면 줄 단위로 나눈 것이 뜹니다).</li>' +
@@ -14,8 +21,8 @@ async function renderBriefs(content) {
       '</ul>'
     ) +
       '<form class="inline" id="brief-form">' +
-      '<textarea id="brief-text" placeholder="업무 내용을 적거나, 한 줄에 역할 하나씩 나열하세요. 예:&#10;백엔드 개발자 1명&#10;UI/UX 디자이너 1명" rows="3" style="flex:1;min-width:240px"></textarea>' +
-      '<button class="primary" type="submit">제출</button></form>';
+      '<textarea id="brief-text" placeholder="맡길 일을 문장으로 적으세요. 예: 2027년 상반기 신입 개발자 채용 공고 2건 작성(백엔드·프론트엔드)&#10;필요한 역할을 이미 안다면 한 줄에 하나씩 적어도 됩니다(예: 백엔드 개발자 1명)." rows="3" style="flex:1;min-width:240px"></textarea>' +
+      '<button class="primary" type="submit">등록</button></form></details>';
   }
   html += "</section><section class=\"card\"><h2>업무 요청 목록</h2>" +
     helpBox(
@@ -32,7 +39,7 @@ async function renderBriefs(content) {
     }
     return [b.id, esc(b.submitted_by_username || ("#" + b.submitted_by)), esc(b.raw_text), esc(label(b.status)), esc(b.stub_roles.join(", ")),
       canWrite ? '<div class="actions">' + actions + "</div>" : ""];
-  }));
+  }), { empty: "아직 업무 요청이 없습니다. 위 칸에 맡길 일을 적어 제출하면 할 일로 나눠 사람·Agent에게 배정할 수 있습니다. 어떤 방식이 맞는지 모르겠으면 <button class=\"small\" data-go-tab=\"home\">홈에서 AI에게 일 맡기기</button>" });
   html += '<div id="brief-detail"></div></section>';
   content.innerHTML = html;
 

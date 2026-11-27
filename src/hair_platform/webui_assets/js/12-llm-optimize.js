@@ -104,7 +104,7 @@ async function renderAgentOptimization(content) {
     "</ul>"
     ) +
     '<button id="select-changed-optimize" class="small">변경 필요만 선택</button> ' +
-    '<button id="apply-selected-optimize" class="small">선택 적용</button> ' +
+    '<button id="apply-selected-optimize" class="small primary">선택 적용</button> ' +
     '<span class="muted">변경 필요 ' + changedCount + "/" + recs.length + "건</span>" +
     table(["적용", "역할", "분류", "현재 Provider/Model", "추천 Provider/Model", "tuning 변경 필드", "근거"], recs.map(r => {
       // 사용자 요청(2026-10-26, "모델 추천의 경우 모델 레지스트리에
@@ -136,7 +136,8 @@ async function renderAgentOptimization(content) {
               ? '<br><span class="gate-badge gate-warn">⚠ ' + esc(r.current_fitness.issues.join(", ")) + "</span>" : "")),
         modelCell,
         Object.keys(r.tuning_diff).length ? esc(Object.keys(r.tuning_diff).join(", ")) : "(없음)",
-        '<span class="muted">' + esc(r.rationale) + "</span>",
+        // 근거는 두 줄까지만, 전체는 마우스를 올리면(2026-11-27, 사용성 평가 5번 — 39행마다 긴 회색 글이 화면의 73%였다).
+        '<div class="muted clamp-2" title="' + escAttr(r.rationale) + '">' + esc(r.rationale) + "</div>",
       ];
     })) +
     "</section>";

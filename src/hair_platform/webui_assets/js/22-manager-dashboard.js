@@ -28,7 +28,7 @@ function _initGateRadarChart(gateAverages) {
   new Chart(canvas, {
     type: "radar",
     data: {
-      labels: gates,
+      labels: gates.map(g => GATE_SHORT_NAMES[g]),  // 축 이름은 뜻으로(2026-11-27, 사용성 평가 4번)
       datasets: [{
         data: plotValues,
         backgroundColor: "rgba(74,144,217,0.25)",
@@ -45,7 +45,7 @@ function _initGateRadarChart(gateAverages) {
           callbacks: {
             label: (ctx) => {
               const v = rawValues[ctx.dataIndex];
-              return "Gate " + gates[ctx.dataIndex] + ": " + (v === null ? "미측정" : v.toFixed(2));
+              return GATE_SHORT_NAMES[gates[ctx.dataIndex]] + "(Gate " + gates[ctx.dataIndex] + "): " + (v === null ? "미측정" : v.toFixed(2));
             },
           },
         },
@@ -121,7 +121,7 @@ async function renderDashboard(content) {
   const gs = d.team_gate_scores;
   const gateRow = ["A", "B", "C", "D", "E", "F", "G"].map(g => {
     const v = gs.gate_averages[g];
-    return '<div class="stat-row"><span>' + g + '</span><span>' + (v === null ? "-" : v.toFixed(2)) + '</span></div>';
+    return '<div class="stat-row"><span title="Gate ' + g + '">' + GATE_SHORT_NAMES[g] + '</span><span>' + (v === null ? "-" : v.toFixed(2)) + '</span></div>';
   }).join("");
 
   // 사용자 요청(2026-10-27, "다룬 테이블도 ID 표기되는 것이 남아
@@ -153,8 +153,8 @@ async function renderDashboard(content) {
   // "AI 에이전트 관리" 탭을 일일이 열어보지 않아도 여기서 바로 본다.
   const agentBottleneckRows = (d.agent_bottlenecks || []).map(a =>
     '<li>' + esc(a.agent_code || ("#" + a.agent_id)) + " " + esc(a.role_name) + " — 최근 " + a.recent_evaluation_count +
-    '건 연속 Gate 실패</li>'
-  ).join("") || '<p class="muted">최근 연속 Gate 실패가 있는 Agent가 없습니다.</p>';
+    '건 연속 품질 점검 미달</li>'
+  ).join("") || '<p class="muted">최근 품질 점검에서 연속으로 미달한 Agent가 없습니다.</p>';
 
   content.innerHTML =
     '<section class="card"><h2>매니저 대시보드</h2>' +

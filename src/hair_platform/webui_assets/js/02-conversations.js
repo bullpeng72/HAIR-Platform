@@ -307,7 +307,7 @@ function _inboxNotifyText(i) {
   if (i.type === "approval_pending") return ["🗳 결재 대기", (i.task_role_name || i.resource_name || "새 결재 요청")];
   if (i.type === "execution_failed") return ["⚠ AI 실행 실패", (i.role_name || "") + (i.error ? " — " + String(i.error).slice(0, 80) : "")];
   if (i.type === "pipeline_failed") return [i.interrupted ? "⏸ 파이프라인 중단(서버 재시작)" : "⚠ 파이프라인 실패", (i.template_name || "") + " · " + (i.role_name || "")];
-  if (i.type === "low_gate_score") return ["🟡 낮은 Gate 점수", i.role_name || ""];
+  if (i.type === "low_gate_score") return ["🟡 품질 점검 미달", i.role_name || ""];
   if (i.type === "completed") return ["✅ 업무 완료", i.role_name || ""];
   return ["HAIR 알림", i.role_name || ""];
 }
@@ -384,7 +384,7 @@ async function renderConversations(content) {
       (c.created_by === ME.id
         ? '<button class="small danger" data-delete-conversation="' + c.id + '">삭제</button>'
         : ''),
-    ])) +
+    ]), { empty: "아직 대화가 없습니다. 위에 제목(선택)을 적고 <b>새 대화 시작</b>을 누른 뒤 <b>@이름</b>으로 Agent·사람을 부르세요. <button class=\"small\" data-go-tab=\"home\">홈에서 AI에게 일 맡기기</button>" }) +
     '<div id="conversation-detail"></div>' +
     '</section>';
 
@@ -511,8 +511,8 @@ function _conversationGateBadge(m) {
   const passed = measured.filter(g => g.passed).length;
   const allPass = passed === measured.length;
   return ' <span class="gate-badge ' + (allPass ? "gate-ok" : "gate-warn") + '" ' +
-    'title="측정된 Gate A-G 중 통과한 비율(참고용 — Task 협업워크스페이스의 정식 Gate 기록과는 별개)">' +
-    (allPass ? "Gate " : "⚠ Gate ") + passed + "/" + measured.length + " 통과" +
+    'title="자동 품질 점검(Gate A-G) 중 통과한 수 — 참고용, 업무 워크스페이스의 정식 기록과는 별개">' +
+    (allPass ? "품질 점검 " : "⚠ 품질 점검 ") + passed + "/" + measured.length + " 통과" +
     "</span>";
 }
 

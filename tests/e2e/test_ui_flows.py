@@ -96,6 +96,9 @@ def test_pipeline_builder_required_tools_chip_add_and_remove(login, live_server)
     _tab(page, "pipelines")
     # 필수 도구로 이미 지정된 단계(공고·면접 설계) — 다른 단계의 "+ 필수 도구 추가" 목록에도 같은 이름이 있어 글자로 찾지 않는다
     card = page.locator('[data-required-tools*="채용 공고 점검기"]').first
+    # 템플릿은 요약 한 줄로 접혀 있다(2026-11-27, 사용성 평가 5번) — 그 템플릿을 [편집]으로 펼친다.
+    assert not card.is_visible()
+    page.locator('[data-pipeline-template-card]', has=card).locator("[data-pl-toggle]").click()
     assert card.is_visible()
     stage_id = int(card.get_attribute("data-stage-id"))
     card.locator("select[data-add-required-tool]").select_option("인사 지표 계산기")
@@ -266,3 +269,88 @@ def test_every_screen_fits_a_phone_and_keeps_one_look(login):
             if bad:
                 problems[tab_id] = bad
         assert problems == {}, (role, problems)
+
+
+def test_login_lands_on_home_and_empty_lists_say_what_to_do(login):
+    """사용성 평가(2026-11-27) 1·3번 — 로그인 첫 화면은 홈(예전엔 빈 "대화" 표), 빈 목록은 다음 행동을 안내한다."""
+    for role in ("admin", "member", "viewer"):
+        page = login(role)
+        assert page.evaluate("currentTab") == "home", role
+    page = login("member")
+    _tab(page, "mywork")
+    empty = page.locator("#content tr.table-empty")
+    assert "아직 맡은 일이 없습니다" in empty.inner_text()
+    empty.locator("[data-go-tab=home]").click()
+    page.wait_for_function("currentTab === 'home'")
+    _tab(page, "conversations")
+    assert "새 대화 시작" in page.locator("#content tr.table-empty").inner_text()
+    assert not page.errors  # type: ignore[attr-defined]
+
+
+def test_agent_rows_keep_destructive_actions_in_settings(login):
+    """사용성 평가 6번 — 행마다 빨간 [오프보딩][삭제]가 [실행] 옆에 있던 것을 ⚙ 설정 창의 위험 구역으로 옮겼다."""
+    page = login("admin")
+    _tab(page, "agentpool")
+    rows = page.locator("#content table tbody tr")
+    assert rows.count() > 5
+    assert page.locator("#content table [data-delete-agent]:visible, #content table [data-deprecate]:visible").count() == 0
+    first = rows.first
+    assert first.locator("[data-execute]").is_visible()
+    first.locator("[data-open-agent-settings]").click()
+    zone = page.locator("#agent-settings-overlay .as-danger")
+    assert zone.locator("[data-delete-agent]").is_visible() and zone.locator("[data-deprecate]").is_visible()
+    zone.locator("[data-deprecate]").click()
+    page.locator(".confirm-modal-box").last.get_by_role("button").last.wait_for()
+    assert page.locator(".confirm-modal-overlay").count() >= 2  # 설정 창 위에 확인 창
+    assert not page.errors  # type: ignore[attr-defined]
+
+
+def test_slow_screen_does_not_overwrite_the_screen_opened_after_it(login):
+    """첫 화면을 홈으로 바꾼 뒤 드러난 경쟁 상태(2026-11-27) — 홈이 서버 응답을 기다리는 사이 다른 메뉴를 누르면, 늦게 온
+    홈 응답이 새 화면을 홈으로 덮어썼다. 홈의 응답을 일부러 늦춰 재현한다."""
+    import time as _time
+
+    page = login("member")
+    page.route("**/api/inbox", lambda route: (_time.sleep(1.0), route.continue_()))
+    page.evaluate("selectTab('home')")  # 같은 탭이면 새로 그리기만 하므로 먼저 다른 화면으로
+    page.evaluate("selectTab('manual'); selectTab('home'); setTimeout(() => selectTab('approvals'), 50)")
+    page.wait_for_timeout(1800)
+    assert page.evaluate("currentTab") == "approvals"
+    text = page.locator("#content").inner_text()
+    assert "내가 요청한 건" in text and "AI에게 일 맡기기" not in text
+
+
+def test_pipeline_templates_are_summaries_opened_one_at_a_time(login):
+    """사용성 평가 5번 — 템플릿 8개의 모든 단계가 한 페이지에 펼쳐져 높이 14,895px·입력칸 190개였다."""
+    page = login("admin")
+    _tab(page, "pipelines")
+    cards = page.locator("[data-pipeline-template-card]")
+    assert cards.count() >= 5
+    assert page.locator(".pl-body:visible").count() == 0
+    assert page.evaluate("document.documentElement.scrollHeight") < 3000
+    assert "단계 · 사람 승인" in cards.first.inner_text()
+    cards.nth(0).locator("[data-pl-toggle]").click()
+    cards.nth(1).locator("[data-pl-toggle]").click()
+    assert page.locator(".pl-body:visible").count() == 1  # 하나씩만 열린다
+    assert cards.nth(1).locator(".pl-body").is_visible()
+    page.evaluate("refresh()")  # 저장 뒤 다시 그려도 연 템플릿은 그대로
+    page.wait_for_load_state("networkidle")
+    assert page.locator("[data-pipeline-template-card]").nth(1).locator(".pl-body").is_visible()
+    assert not page.errors  # type: ignore[attr-defined]
+
+
+def test_pool_shows_tools_or_skills_and_tucks_rare_actions_away(login):
+    """사용성 평가 5번 — 도구·스킬 목록과 등록 폼이 한 페이지에 다 있어 높이 11,010px·버튼 306개였다."""
+    page = login("admin")
+    _tab(page, "poolregistry")
+    assert page.locator('[data-pool-sec="tools"]').is_visible() and not page.locator('[data-pool-sec="skills"]').is_visible()
+    assert page.locator("[data-delete-tool]:visible").count() == 0  # 삭제는 ⋯ 안에
+    page.locator('[data-pool-view="skills"]').click()
+    assert page.locator('[data-pool-sec="skills"]').is_visible() and not page.locator('[data-pool-sec="tools"]').is_visible()
+    row = page.locator('[data-pool-sec="skills"] tbody tr').first
+    row.locator("details.row-more > summary").click()
+    assert row.locator("[data-export-skill]").is_visible() and row.locator("[data-delete-skill]").is_visible()
+    page.evaluate("refresh()")
+    page.wait_for_load_state("networkidle")
+    assert page.locator('[data-pool-sec="skills"]').is_visible()  # 새로 그려도 보던 목록 그대로
+    assert not page.errors  # type: ignore[attr-defined]

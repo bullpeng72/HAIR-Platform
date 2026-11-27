@@ -88,10 +88,15 @@ def test_gc73_html_shell_has_two_nav_groups_and_admin_badge_markup():
     클래스는 이제 `webui.py`에 실제로 존재하지 않으므로 마커 목록에서
     뺀다(남겨두면 주석 속 글자로만 우연히 통과하는 거짓양성 테스트가
     된다)."""
+    # **2026-11-27 갱신(사용성 평가 7번)** — 역할 구분("오늘 할 일")이 아니라 업무 흐름(일하기·검토·결재·현황▾)으로 묶고,
+    # "그라운딩 관리"는 뜻이 전해지지 않아 "지식·데이터"로 바꿨다. `TABS`의 `group` 값(RBAC 분류)은 그대로다.
     for marker in [
-        "오늘 할 일",
+        "NAV_WORK",
+        "\"일하기\"",
+        "\"검토·결재\"",
+        "\"현황\"",
         "리소스 관리",
-        "그라운딩 관리",
+        "지식·데이터",
         "모델 관리",
         "운영 관리",
         "SETTINGS_GROUPS",
@@ -104,7 +109,7 @@ def test_gc73_html_shell_has_two_nav_groups_and_admin_badge_markup():
     # 옛 3구역 라벨이 실제 렌더링 호출로 되살아나지 않았는지 회귀 방지.
     assert 'addGroup("관리자 도구"' not in INDEX_HTML
     assert 'addGroup("공용 조회"' not in INDEX_HTML
-    assert 'addGroup("오늘 할 일"' in INDEX_HTML
+    assert 'addGroup("오늘 할 일"' not in INDEX_HTML
     # "설정" 단일 그룹 호출은 4개 그룹으로 쪼개지며 사라졌다 — 되살아나지
     # 않았는지 회귀 방지.
     assert 'addGroup("설정"' not in INDEX_HTML

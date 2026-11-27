@@ -68,13 +68,24 @@ def test_wizard_api(client_and_conn):
     assert client.post("/api/wizard/recommend", json={"text": " "}).status_code == 400
 
 
-def test_essential_tabs_exist_and_rest_are_behind_more_toggle():
+def test_every_tab_is_reachable_from_the_workflow_menu():
+    """메뉴 구조(2026-11-27, 사용성 평가 7번) — 일하기·검토·결재·현황(▾)·설정(▾)과 헤더(❓ 도움말 → 이용 가이드, ⚙ 내 설정 →
+    연동 설정)로 바꾼 뒤에도 어느 화면도 메뉴에서 빠지지 않는다(예전 "더 보기" 접기는 없앴다)."""
     html = webui.INDEX_HTML
     tab_ids = set(re.findall(r'\{ id: "([a-z_]+)", label:', html))
-    essential = set(re.findall(r'"([a-z_]+)"', re.search(r"const ESSENTIAL_TABS = new Set\(\[([^\]]*)\]\)", html).group(1)))  # pyright: ignore[reportOptionalMemberAccess]
-    assert essential <= tab_ids  # 오타로 탭이 사라지지 않게
-    assert {"home", "conversations", "inbox", "mywork", "approvals"} <= essential
-    assert "board" not in essential and "orgchart" not in essential
+
+    def ids(const):
+        body = re.search(r"const " + const + r" = \[([^\]]*)\]", html).group(1)  # pyright: ignore[reportOptionalMemberAccess]
+        return re.findall(r'"([a-z_]+)"', body)
+
+    work, review, status = ids("NAV_WORK"), ids("NAV_REVIEW"), ids("NAV_STATUS")
+    settings = set(re.findall(r'"([a-z_]+)"', html[html.index("const SETTINGS_GROUPS"):html.index("const NAV_WORK")])) - {"__divider__"}
+    header = {"manual", "integrations"}  # ❓ 도움말·🔍 메뉴 찾기 / ⚙ 내 설정
+    reachable = set(work) | set(review) | set(status) | settings | header
+    assert tab_ids <= reachable, tab_ids - reachable
+    assert work[0] == "home" and "inbox" in review and "approvals" in review
+    assert not ({"manual", "integrations"} & (set(work) | set(review) | set(status)))
+    assert 'id="my-settings-btn"' in html and "ESSENTIAL_TABS" not in html
     assert 'id="wizard-text"' in html and "_runWizard" in html
 
 

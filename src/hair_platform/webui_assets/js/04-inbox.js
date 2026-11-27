@@ -6,7 +6,7 @@ async function renderInbox(content) {
     approval_pending: "결재 대기",
     execution_failed: "AI 에이전트 실행 실패",
     pipeline_failed: "파이프라인 실행 실패",
-    low_gate_score: "낮은 Gate 점수 경고",
+    low_gate_score: "품질 점검 미달 경고",
     completed: "✅ 완료됨",
   };
   const cards = items.map(item => {
@@ -54,7 +54,7 @@ async function renderInbox(content) {
     '<section class="card"><h2>내게 필요한 조치</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>결재 대기·AI 에이전트 실행 실패·파이프라인 실패(서버 재시작 중단 포함)·낮은 Gate 점수 경고(승인/반려 전인 것만)·✅ 완료됨(결재가 필요 없는 성공, 최근 24시간 이내만)을 한 곳에 모았습니다.</li>' +
+      '<li>결재 대기·AI 에이전트 실행 실패·파이프라인 실패(서버 재시작 중단 포함)·품질 점검 미달 경고(승인/반려 전인 것만)·✅ 완료됨(결재가 필요 없는 성공, 최근 24시간 이내만)을 한 곳에 모았습니다.</li>' +
       '<li>브라우저 알림을 허용하면 다른 탭·창에 있어도 새 항목이 생길 때 데스크톱 알림이 뜹니다(약 20초 간격으로 확인).</li>' +
       '<li>완전한 시간순 통합은 아니고 종류별로 묶여 있습니다 — 처리는 각 항목의 원래 화면(결재/내 업무)에서 합니다.</li>' +
       '</ul>'

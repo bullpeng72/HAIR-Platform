@@ -156,6 +156,20 @@ function _fixBoldMarkdown(raw) {
   return parts.map((part, i) => (i % 2 === 1 ? part : _fixBoldMarkdownSegment(part))).join("");
 }
 
+// 쉬운 말 우선(2026-11-27, 사용성 평가 4번) — 화면에는 내부 용어 대신 뜻을 먼저 보인다. "Gate A-G"는 결과물 품질 점검
+// 7가지(평가 도구 Agent-Evaluator의 식별자)라 사용자 화면에서는 "품질 점검"과 아래 이름으로 보이고, 글자는 툴팁에만 둔다.
+// 공식 이름(성능 계약·관측성 등)은 관리자가 기준을 정하는 "평가 기준" 화면(`_GATE_NAMES`)에 그대로 둔다.
+const GATE_SHORT_NAMES = { A: "목표 달성", B: "행동 무결성", C: "신뢰성", D: "응답 시간", E: "보안", F: "협업", G: "근거 제시" };
+const ROLE_NAMES = { admin: "관리자", manager: "매니저", member: "구성원", viewer: "열람자" };
+
+// 화면 이동 링크(2026-11-27, 사용성 평가 3번) — 빈 상태 안내 등에서 `<button data-go-tab="home">`으로 다른 화면을 연다.
+document.addEventListener("click", (ev) => {
+  const el = ev.target.closest && ev.target.closest("[data-go-tab]");
+  if (!el || typeof selectTab !== "function") return;
+  ev.preventDefault();
+  selectTab(el.getAttribute("data-go-tab"));
+});
+
 function _renderMarkdown(raw) {
   if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
     return "<p>" + esc(raw).replace(/\n/g, "<br>") + "</p>"; // CDN 미로드 폴백

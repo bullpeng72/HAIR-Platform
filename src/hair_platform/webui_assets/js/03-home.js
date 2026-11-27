@@ -15,14 +15,14 @@ async function renderHome(content) {
     ["approval_pending", "결재 대기", "approvals"],
     ["execution_failed", "AI 실행 실패", "inbox"],
     ["pipeline_failed", "파이프라인 실패·중단", "inbox"],
-    ["low_gate_score", "낮은 Gate 점수", "inbox"],
+    ["low_gate_score", "품질 점검 미달", "inbox"],
     ["completed", "최근 완료", "inbox"],
   ].map(([type, name, tab]) =>
     '<button class="home-stat" data-go="' + tab + '"><b>' + count(type) + "</b><span>" + name + "</span></button>"
   ).join("");
   const ways = [
     { title: "빠르게 묻거나 초안 받기", when: "결재 없이 바로 답이 필요할 때 — 질문·요약·초안·코드 리뷰", how: "대화에서 그냥 묻거나 @Agent이름으로 부르기", tab: "conversations", go: "대화 열기", show: true },
-    { title: "정식 업무로 맡기기", when: "결과를 결재받고 이력·Gate 점수를 남겨야 할 때", how: "업무 요청 → 할 일로 나누기 → 사람·Agent·팀 배정 → 결재(대화에서 「업무 요청으로 전환」도 가능)", tab: "briefs", go: "업무 요청 열기", show: role !== "viewer" },
+    { title: "정식 업무로 맡기기", when: "결과를 결재받고 이력·품질 점검 점수를 남겨야 할 때", how: "위 입력창에 적고 [추천 받기] — 정식 업무가 맞으면 업무 요청으로 등록돼 할 일·배정·결재로 이어집니다(대화에서 「업무 요청으로 전환」도 가능)", tab: "briefs", go: "진행 중인 업무 요청 보기", show: role !== "viewer" },
     { title: "여러 단계를 자동으로", when: "보고서·제안서·사업 기획·소프트웨어 개발처럼 조사→작성→검증이 필요한 일", how: "업무 요청 뒤 할 일의 협업 워크스페이스에서 기본 제공 파이프라인 실행 — 계획 단계에서 한 번만 승인", tab: "mywork", go: "내 업무 열기", show: role !== "viewer" },
     { title: "반복 업무 자동화", when: "매주 실적 보고처럼 정해진 때마다 도는 일, 외부 시스템에서 호출", how: "연동 설정 — 정기 실행(admin/manager)·API 키·외부 알림(admin)", tab: "integrations", go: "연동 설정 열기", show: role !== "viewer" },
   ].filter(w => w.show).map(w =>

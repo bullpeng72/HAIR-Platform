@@ -1,6 +1,7 @@
 /* ---------- 도구/스킬 Pool ---------- */
 
 let _poolCategoryFilter = "all";
+let _poolView = "tools";  // 도구/스킬 중 지금 보는 목록(2026-11-27, 사용성 평가 5번)
 
 // 사용자 요청(2026-11-11, "스킬과 도구를 SW개발업무와 일반업무로 구분하고
 // 필터링 되도록 개선") — 분류 값을 한글 배지로 통일해 표시한다(대화창
@@ -42,13 +43,19 @@ async function renderPoolRegistry(content) {
     // 구분하고 필터링 되도록 개선") — Tool/Skill 두 표 공용 필터
     // 하나(목록만 좁힌다 — 아래 도구 선택 체크박스들은 분류와 무관하게
     // 항상 전체를 보여준다).
-    '<section class="card" style="padding-bottom:0.6rem">' +
+    // 도구·스킬 중 하나씩 보기(2026-11-27, 사용성 평가 5번 — 두 목록과 등록 폼 셋이 한 페이지에 다 있어 높이 11,010px·
+    // 버튼 306개였다). 행에는 [수정]만 두고 내보내기·삭제는 "⋯"에 접는다.
+    '<section class="card" style="padding-bottom:0.6rem"><div class="pool-switch">' +
+    '<div class="seg" role="tablist">' +
+    '<button type="button" role="tab" data-pool-view="tools" class="small' + (_poolView === "tools" ? " active" : "") + '">도구 ' + tools.length + "</button>" +
+    '<button type="button" role="tab" data-pool-view="skills" class="small' + (_poolView === "skills" ? " active" : "") + '">스킬 ' + skills.length + "</button></div>" +
     '<label>분류 필터 <select id="pool-category-filter" style="margin-left:0.4rem">' +
     '<option value="all"' + (_poolCategoryFilter === "all" ? " selected" : "") + '>전체</option>' +
     '<option value="general"' + (_poolCategoryFilter === "general" ? " selected" : "") + '>일반업무</option>' +
     '<option value="sw_dev"' + (_poolCategoryFilter === "sw_dev" ? " selected" : "") + '>개발업무</option>' +
     '</select></label>' +
-    '</section>' +
+    '</div></section>' +
+    '<div data-pool-sec="tools"' + (_poolView === "tools" ? "" : " hidden") + '>' +
     '<section class="card"><h2>Tool Pool — 재사용 가능한 도구</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
@@ -65,15 +72,15 @@ async function renderPoolRegistry(content) {
     '</ul>'
     ) +
     table(["코드", "이름", "종류", "분류", "설명", "활성", "동작"], tools.map(t => [
-      esc(t.code || "-"), esc(t.name) + (t.side_effects ? ' <span class="gate-badge gate-warn" title="외부로 쓰거나 실행하는 도구 — 외부 데이터를 읽은 실행에서는 막고 사람 승인(2026-11-26)">쓰기</span>' : ""), esc(t.kind), esc(POOL_CATEGORY_LABEL[t.category] || t.category), esc(t.description), t.is_active ? "활성" : "비활성",
+      esc(t.code || "-"), esc(t.name) + (t.side_effects ? ' <span class="gate-badge gate-warn" title="외부로 쓰거나 실행하는 도구 — 외부 데이터를 읽은 실행에서는 막고 사람 승인(2026-11-26)">쓰기</span>' : ""), esc(t.kind), esc(POOL_CATEGORY_LABEL[t.category] || t.category), '<div class="clamp-2" title="' + escAttr(t.description || "") + '">' + esc(t.description) + "</div>", t.is_active ? "활성" : "비활성",
       (isAdmin || !["mcp_stdio", "mcp_remote", "custom_python"].includes(t.kind))
         ? '<div class="actions"><button class="small" data-edit-tool="' + t.id + '">수정</button>' +
-          (isAdmin ? '<button class="small danger" data-delete-tool="' + t.id + '">삭제</button>' : "") +
+          (isAdmin ? '<details class="row-more"><summary title="더 보기">⋯</summary><button class="small danger" data-delete-tool="' + t.id + '">삭제</button></details>' : "") +
           "</div>"
         : "",
     ])) +
     "</section>" +
-    '<section class="card"><h2>신규 도구 생성</h2>' +
+    '<section class="card"><details class="pool-create"><summary><h2>＋ 신규 도구 생성</h2></summary>' +
     // 사용자 보고(2026-10-27, 스크린샷 — 입력창·선택 옵션이 한쪽에
     // 치우치고 박스 전체 폭을 못 씀) — 원인은 `display:flex;flex-
     // direction:column`에 `max-width:560px`를 준 것: 플렉스 column의
@@ -100,7 +107,8 @@ async function renderPoolRegistry(content) {
     '<label style="display:block;margin-top:0.5rem">타임아웃(초) <input type="number" id="tp-custom-timeout" value="10" min="1" max="60" style="width:4rem"></label>' +
     '</div>' +
     '<button class="primary" type="submit" style="margin-top:0.6rem">도구 등록</button></form>' +
-    "</section>" +
+    "</details></section>" +
+    '</div><div data-pool-sec="skills"' + (_poolView === "skills" ? "" : " hidden") + '>' +
     '<section class="card"><h2>Skill Pool — skill_tags 정식 등록</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
@@ -119,7 +127,7 @@ async function renderPoolRegistry(content) {
     '</ul>'
     ) +
     table(["코드", "이름", "설명", "기본 도구", "모드", "분류", "대화창 표시", "동작"], skills.map(s => [
-      esc(s.code || "-"), esc(s.name), esc(s.description),
+      esc(s.code || "-"), esc(s.name), '<div class="clamp-2" title="' + escAttr(s.description || "") + '">' + esc(s.description) + "</div>",
       esc(s.default_tool_pool_ids.map(id => toolCodeById[id] || ("#" + id)).join(", ") || "-"),
       esc(s.augmentation_mode),
       esc(POOL_CATEGORY_LABEL[s.category] || s.category),
@@ -135,12 +143,13 @@ async function renderPoolRegistry(content) {
         ? "숨김"
         : (s.category === "sw_dev" ? "기본 숨김(개발업무)" : "표시"),
       '<div class="actions"><button class="small" data-edit-skill="' + s.id + '">수정</button>' +
+        '<details class="row-more"><summary title="더 보기">⋯</summary>' +
         '<button class="small" data-export-skill="' + s.id + '">내보내기</button>' +
-        (isAdmin ? '<button class="small danger" data-delete-skill="' + s.id + '">삭제</button>' : "") +
+        (isAdmin ? '<button class="small danger" data-delete-skill="' + s.id + '">삭제</button>' : "") + "</details>" +
         "</div>",
     ])) +
     "</section>" +
-    '<section class="card"><h2>신규 스킬 생성</h2>' +
+    '<section class="card"><details class="pool-create"><summary><h2>＋ 신규 스킬 생성</h2></summary>' +
     '<form id="skill-form">' +
     '<label style="display:block">스킬명(skill_tags와 일치)<br><input id="sp-name" required style="width:100%;box-sizing:border-box;margin-top:0.2rem"></label>' +
     '<label style="display:block;margin-top:0.5rem">지침(설명)<br><textarea id="sp-description" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;margin-top:0.2rem"></textarea></label>' +
@@ -165,8 +174,8 @@ async function renderPoolRegistry(content) {
     '</div>' +
     '<label style="display:block;margin-top:0.5rem"><input type="checkbox" id="sp-show-in-conv" checked> 대화창에 표시</label>' +
     '<button class="primary" type="submit" style="margin-top:0.6rem">스킬 등록</button></form>' +
-    "</section>" +
-    '<section class="card"><h2>마크다운으로 스킬 가져오기</h2>' +
+    "</details></section>" +
+    '<section class="card"><details class="pool-create"><summary><h2>＋ 마크다운으로 스킬 가져오기</h2></summary>' +
     helpBox(
       '<p class="muted">각 스킬 행의 "내보내기"가 내려주는 것과 같은 규격(frontmatter + ## 지침/## 출력 형식/## 예시/## 제약사항 섹션)의 .md 파일을 올리거나 아래에 직접 붙여넣으면 새 스킬로 등록됩니다. 이름이 이미 있으면 거부됩니다.</p>'
     ) +
@@ -185,7 +194,7 @@ async function renderPoolRegistry(content) {
     '<p id="sp-import-file-check" class="muted" style="margin:0.3rem 0 0"></p>' +
     '<textarea id="sp-import-markdown" rows="10" placeholder="---&#10;name: 예시스킬&#10;category: general&#10;augmentation_mode: none&#10;---&#10;&#10;## 지침&#10;&#10;..." style="width:100%;box-sizing:border-box;font-family:monospace;resize:vertical;margin-top:0.6rem"></textarea>' +
     '<button class="primary" type="submit" style="margin-top:0.6rem">등록하기</button></form>' +
-    "</section>";
+    "</details></section></div>";
 
   document.getElementById("pool-category-filter").addEventListener("change", (ev) => {
     _poolCategoryFilter = ev.target.value;
@@ -430,6 +439,13 @@ async function renderPoolRegistry(content) {
           refresh();
         } catch (e) { showMsg("global-msg", e.message, "error"); }
       });
+    };
+  });
+  content.querySelectorAll("[data-pool-view]").forEach(btn => {
+    btn.onclick = () => {
+      _poolView = btn.dataset.poolView;
+      content.querySelectorAll("[data-pool-view]").forEach(b => b.classList.toggle("active", b === btn));
+      content.querySelectorAll("[data-pool-sec]").forEach(sec => { sec.hidden = sec.dataset.poolSec !== _poolView; });
     };
   });
   content.querySelectorAll("[data-delete-tool]").forEach(btn => {

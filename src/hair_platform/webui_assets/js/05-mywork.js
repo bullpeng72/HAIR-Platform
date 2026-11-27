@@ -39,7 +39,7 @@ async function renderMyWork(content) {
       r.deliverable_count,
       r.latest_deliverable_at ? esc(fmtTime(r.latest_deliverable_at)) : "-",
       '<button class="small" data-open-workspace="' + r.task_id + '">열기</button>',
-    ])) +
+    ]), { empty: "아직 맡은 일이 없습니다. 내가 맡긴 일과 나·내 팀에 배정된 일이 여기에 모입니다. <button class=\"small\" data-go-tab=\"home\">홈에서 AI에게 일 맡기기</button>" }) +
     '<div id="mywork-detail"></div></section>';
 
   content.querySelectorAll("[data-open-workspace]").forEach(btn => {
@@ -561,7 +561,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
           const gates = Object.values(d.evaluation.gate_scores);
           const measured = gates.filter(g => !g.not_measured && !g.advisory);
           if (measured.length === 0) {
-            return '<span class="gate-badge gate-warn">Gate 측정 없음</span>';
+            return '<span class="gate-badge gate-warn" title="이 결과물에는 자동 품질 점검(Gate A-G) 결과가 없습니다">품질 점검 없음</span>';
           }
           const passed = measured.filter(g => g.passed).length;
           const cls = passed === measured.length ? "gate-ok" : "gate-warn";
@@ -570,8 +570,8 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
           const lexBadge = lex && lex.words && lex.words.length
             ? ' <span class="gate-badge gate-warn" title="' + escAttr("사전에 없는 낱말(참고용 — 지어낸 낱말일 수 있으니 확인): " + lex.words.map(w => w.word + " (…" + w.context + "…)").join(" / ")) + '">⚠ 낱말 확인 ' + lex.words.length + "</span>"
             : "";
-          return '<span class="gate-badge ' + cls + '">Gate ' + passed + "/" + measured.length +
-            " 통과" + (d.evaluation.tcr === null ? "" : " · TCR " + d.evaluation.tcr.toFixed(0) + "%") + '</span>' + lexBadge;
+          return '<span class="gate-badge ' + cls + '" title="자동 품질 점검(Gate A-G 등) 통과 수 · 완료율(TCR — 요청한 항목을 끝낸 비율)">품질 점검 ' + passed + "/" + measured.length +
+            " 통과" + (d.evaluation.tcr === null ? "" : " · 완료율 " + d.evaluation.tcr.toFixed(0) + "%") + '</span>' + lexBadge;
         })()
       : "";
     const side = d.author_type === "agent" ? "chat-agent" : "chat-human";
@@ -803,9 +803,9 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 항상 다 보여주되, 미평가는 중립(회색) 배지로 구분하고 범례를 덧붙인다.
   const GATE_LEGEND_HTML =
     '<p class="muted" style="margin:0.2rem 0 0.4rem">' +
-    '<span class="gate-badge gate-ok">A</span> 통과 · ' +
-    '<span class="gate-badge gate-warn">A</span> 미통과 · ' +
-    '<span class="gate-badge gate-na">A</span> 미평가(이 플랫폼이 측정하지 않는 항목) — 글자는 Gate A-G 식별자입니다.' +
+    '<span class="gate-badge gate-ok">목표 달성</span> 통과 · ' +
+    '<span class="gate-badge gate-warn">목표 달성</span> 미통과 · ' +
+    '<span class="gate-badge gate-na">목표 달성</span> 미평가(이 실행에서 재지 않은 항목) — 배지에 마우스를 올리면 점수와 이유가 보입니다.' +
     '</p>';
   // 사용자 요청(2026-10-21, "Layer 2 — 실행 가시성 강화") — 기존
   // 상세 목록(Gate 배지·시도 횟수·반려 이유)은 그대로 두고, 그 위에
@@ -847,13 +847,14 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
         ? Object.entries(sr.gate_scores)
             .filter(([gid]) => !gid.startsWith("_"))  // 내부 항목(평가 리포트 토큰 등, 2026-11-25)은 배지로 안 보임
             .map(([gid, g]) => {
-              const label = (gid === "review_verdict" && g.conditional) ? "조건부 승인" : (GATE_EXTRA_LABELS[gid] || gid);
+              const label = (gid === "review_verdict" && g.conditional) ? "조건부 승인" : (GATE_EXTRA_LABELS[gid] || GATE_SHORT_NAMES[gid] || gid);
+              const gname = GATE_SHORT_NAMES[gid] ? label + "(Gate " + gid + ")" : label;
               // 참고용 검사(advisory — 낱말확인)는 통과 여부와 별개로 찾은 게 있으면 노란색(2026-11-25).
               // 조건부 승인(2026-11-25, P0-4) — 검토자가 승인하면서 고칠 곳을 짚었다: 통과여도 노란색, 라벨도 바꾼다.
               const cls = g.not_measured ? "gate-na" : (g.advisory ? (g.status === "warn" ? "gate-warn" : "gate-ok") : (g.conditional ? "gate-warn" : (g.passed ? "gate-ok" : "gate-warn")));
               const title = g.not_measured
-                ? "Gate " + label + " — 미평가" + (g.reason ? " (" + g.reason + ")" : "")
-                : "Gate " + label + " — " + (g.passed ? "통과" : "미통과") +
+                ? gname + " — 미평가" + (g.reason ? " (" + g.reason + ")" : "")
+                : gname + " — " + (g.passed ? "통과" : "미통과") +
                   (typeof g.score === "number" ? " (점수 " + g.score + ")" : "") +
                   // 무엇이 걸렸는지 첫 몇 건(2026-11-24 — 수치근거·인용근거·용어확인).
                   (!g.passed && g.unsupported && g.unsupported.length ? " — 근거 없음: " + g.unsupported.slice(0, 3).map(u => u.text).join(" / ") : "") +
