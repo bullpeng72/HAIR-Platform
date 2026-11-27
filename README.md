@@ -300,7 +300,7 @@ hair check --db-path hair.db   # + 연동 설정에 등록된 비밀 환경변�
 | 서버 운영(작업 프로세스·시간대) | `HAIR_WORKER_MODE` | `embedded`(기본) 또는 `external` — 아래 "작업 프로세스로 실행 유지" 참고 |
 | | `HAIR_TIMEZONE` | 캘린더 일정을 보여 줄 시간대(IANA 이름, 예: `Asia/Seoul`, 비우면 서버 PC 시간대) |
 | | `HAIR_TLS_CA_FILE` | 사내 인증서(사내 CA·자체 서명) 파일 경로. 메일 수신함(IMAP)·메일 알림(SMTP)은 서버 인증서를 검증한다(2026-11-26부터 — 예전엔 검증하지 않았다). 사내 메일 서버 연결이 "인증서를 확인할 수 없습니다"로 실패할 때만 지정 |
-| 고급 옵션(기본값 권장) | 아래 표의 `HAIR_STAGE_RUNTIME`~`HAIR_ALLOW_LOCAL_CODE_RUN` 11개 | `hair init`은 "고급 옵션을 설정하시겠습니까?"에 y일 때만 묻는다. `hair check`는 값이 정해진 범위(선택지·0/1·숫자) 밖이면 경고 |
+| 고급 옵션(기본값 권장) | 아래 표의 `HAIR_STAGE_RUNTIME`~`HAIR_ALLOW_LOCAL_CODE_RUN` 12개 | `hair init`은 "고급 옵션을 설정하시겠습니까?"에 y일 때만 묻는다. `hair check`는 값이 정해진 범위(선택지·0/1·숫자) 밖이면 경고 |
 
 #### 작업 프로세스로 실행 유지 — `HAIR_WORKER_MODE`
 
@@ -344,6 +344,7 @@ hair check --db-path hair.db      # 작업 프로세스가 떠 있는지까지 �
 | `HAIR_EVAL_HTML_REPORT` | `1`(켬) | `0`이면 평가마다 만드는 Gate A-G HTML 리포트(결과물 카드 "평가 리포트")를 만들지 않음 |
 | `HAIR_OLLAMA_AGENT_PLANNING` | `0`(끔) | `1`이면 로컬(Ollama) 모델에서도 Agent 작업 전 계획(추론 모드)을 켬(기본은 속도를 위해 꺼짐) |
 | `HAIR_OLLAMA_MAX_OUTPUT_TOKENS` | 모델 레지스트리 설정값 | Ollama 모델의 최대 출력 토큰을 재정의 |
+| `HAIR_OLLAMA_MAX_CONCURRENT` | `1` | Ollama 모델에 한 번에 보내는 호출 수의 기본값. Ollama는 한 모델에 요청을 하나씩 처리하므로 1이면 처리량은 그대로이고, 넘는 호출은 플랫폼에서 기다리며 **대화 응답이 파이프라인·Crew보다 먼저** 다음 자리를 받는다(실측: 긴 생성 3개가 줄 서 있을 때 대화 응답 107~121초 → 39~42초). `OLLAMA_NUM_PARALLEL`을 올린 Ollama면 그 값, `0`이면 상한 없음(예전 동작). 모델별 값은 모델 레지스트리 "동시 실행 상한" |
 | `HAIR_LANGUAGE_QA` | `1`(켬) | `0`이면 한국어 결과물 자동 언어 교정(한자·외국 문자 교정)을 끔 |
 | `HAIR_LEXICON_CHECK` | `1`(켬) | `0`이면 사전에 없는 한국어 낱말 탐지("낱말확인" 배지)를 끔(분석기가 메모리 약 360MB를 씀, `korean` extra 필요) |
 | `HAIR_NUMERIC_CHECK` | `1`(켬) | `0`이면 결과물 퍼센트 수치가 근거 숫자로 재현되는지 검사("수치근거" 배지)를 끔 |

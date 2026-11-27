@@ -136,6 +136,10 @@ ENV_VARS: tuple[EnvVar, ...] = (
            "1이면 로컬(Ollama) 모델에서도 Agent 작업 전 계획을 켬(기본 0 — 속도 우선)", default="0"),
     EnvVar("HAIR_OLLAMA_MAX_OUTPUT_TOKENS", GROUP_ADVANCED,
            "Ollama 모델의 최대 출력 토큰 재정의(비우면 모델 레지스트리 설정값)"),
+    EnvVar("HAIR_OLLAMA_MAX_CONCURRENT", GROUP_ADVANCED,
+           "Ollama 모델에 한 번에 보내는 호출 수 기본값(기본 1 — Ollama는 하나씩 처리. OLLAMA_NUM_PARALLEL을 올렸다면 "
+           "그 값, 0이면 상한 없음). 넘는 호출은 기다리고 대화 응답이 파이프라인보다 먼저 들어간다. 모델별 값은 모델 "
+           "레지스트리 '동시 실행 상한'", default="1"),
     EnvVar("HAIR_ALLOW_LOCAL_CODE_RUN", GROUP_ADVANCED,
            "1이면 Docker 샌드박스 대신 로컬에서 코드 테스트 실행(격리 없음 — 운영 비권장, 기본 0)", default="0"),
 )
@@ -294,7 +298,7 @@ def cross_check(values: dict[str, str]) -> list[tuple[str, str]]:
                 "HAIR_OLLAMA_AGENT_PLANNING", "HAIR_ALLOW_LOCAL_CODE_RUN"):
         if _v(key) and _v(key) not in ("0", "1"):
             issues.append(("warn", f"{key}={_v(key)!r} — 0 또는 1로 적으세요"))
-    for key in ("HAIR_STAGE_STALL_SECONDS", "HAIR_OLLAMA_MAX_OUTPUT_TOKENS"):
+    for key in ("HAIR_STAGE_STALL_SECONDS", "HAIR_OLLAMA_MAX_OUTPUT_TOKENS", "HAIR_OLLAMA_MAX_CONCURRENT"):
         if _v(key) and not _v(key).isdigit():
             issues.append(("error", f"{key}={_v(key)!r}가 숫자가 아닙니다"))
     if _v("HAIR_TIMEZONE"):

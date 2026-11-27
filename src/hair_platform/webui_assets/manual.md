@@ -305,6 +305,7 @@ HAIR(Human-AI Resource Management)는 **사람과 AI Agent를 하나의 조직�
    - **컨텍스트 한도** — Ollama 모델은 이 값이 실제 컨텍스트 창(`num_ctx`)으로 전달됩니다. 크게 잡을수록 긴 결과물이 덜 잘리지만 메모리를 더 씁니다.
    - **추천값** — 설정 패널의 "추천값 채우기" 버튼은 컨텍스트 한도·최대 출력·top_k/top_p 칸을 추천값으로 채웁니다(노란 칸, 저장은 직접). Ollama는 모델 정보(학습 최대 컨텍스트, 층·KV 헤드 구조로 계산한 토큰당 메모리, 생각 기능, 제작자가 Modelfile에 정한 권장 샘플링 값)와 이 PC 메모리의 75%를 기준으로 8K·16K·32K·64K 중 들어가는 가장 큰 값을 고릅니다. Anthropic·OpenAI는 모델 계열별 공개 한도 표 기준이며, 표에 없는 모델은 추천하지 않습니다. 등록할 때 "등록하면서 추천 기본값도 함께 저장"(기본 켬)을 두면 등록과 동시에 저장됩니다.
    - **생성 옵션** — top_k·top_p·최대 출력 토큰(비우면 모델 기본값, Ollama는 최대 출력을 비우면 32,768). 요구사항 추적성 채점처럼 짧은 답만 필요한 내부 호출은 이 값과 별개로 더 작은 상한(4,096)을 씁니다.
+   - **동시 실행 상한** — 이 모델에 한 번에 보내는 호출 수. 넘는 호출은 플랫폼 안에서 기다리고, **대화 응답이 파이프라인·Crew·지식 등록보다 먼저** 다음 차례를 받습니다(이미 모델이 처리 중인 생성은 끊지 않음). 비우면 Ollama는 1(Ollama는 한 모델에 요청을 하나씩 처리하므로 처리량은 그대로 — 실측: 긴 생성 3개가 줄 서 있을 때 대화 응답 107~121초 → 39~42초), 클라우드는 상한 없음. Ollama를 `OLLAMA_NUM_PARALLEL`로 여러 개 동시 처리하게 했다면 그 값으로 올리세요(서버 기본값은 `HAIR_OLLAMA_MAX_CONCURRENT`). 기다리는 동안 진행 표시에 "모델 대기 — 앞에 N건"이 보입니다. 작업 프로세스(`hair worker`)를 쓰면 자리 하나는 늘 대화 응답용으로 남겨 둡니다. 바꾼 값은 작업 프로세스를 다시 시작해야 그쪽에 반영됩니다.
    - **단가**(100만 토큰당 입력·출력) — 입력한 모델만 금액이 계산됩니다. 같은 화면 아래 **"실제 사용량(최근 30일)"** 표에서 provider·모델별 호출 수·토큰·금액을 봅니다.
    - **최적화 Tier 매핑** — 모델마다 심층추론·정밀/신속·표준을 체크해 두면(여러 개 가능) ⚡ 최적화 추천이 이름 추정보다 이 매핑을 먼저 씁니다. 어느 tier가 맞을지 모르겠으면 성능 테스트를 돌리고 패널의 **"추천대로 체크"** → **저장**을 누르세요.
    - **성능 테스트** — 두 가지입니다. 모델을 메모리에 올리는 첫 호출(예열)은 측정에서 빼고 "첫 로드 N초"로 따로 보이며, 같은 질문 3회의 중앙값을 씁니다.
@@ -919,7 +920,7 @@ API 키·메일 서버·작업 방식처럼 **화면이 아니라 서버 PC에�
 | 서버 운영 | `HAIR_WORKER_MODE` | `external`이면 웹 서버를 재시작해도 AI 실행이 계속됨(아래) |
 | | `HAIR_TIMEZONE` | 캘린더 일정 시간대(예: `Asia/Seoul`, 비우면 서버 PC 시간대) |
 | | `HAIR_TLS_CA_FILE` | 메일 수신함·메일 알림은 서버 인증서를 검증합니다. 사내 메일 서버가 사내 인증서를 써서 "서버 인증서를 확인할 수 없습니다"가 나올 때만 그 인증서 파일 경로를 지정 |
-| 고급 옵션 | `HAIR_STAGE_RUNTIME`·`HAIR_STAGE_STALL_SECONDS`·`HAIR_VECTOR_BACKEND`·`HAIR_VECTOR_DIR`·`HAIR_EVAL_HTML_REPORT`·`HAIR_LANGUAGE_QA`·`HAIR_LEXICON_CHECK`·`HAIR_NUMERIC_CHECK`·`HAIR_OLLAMA_AGENT_PLANNING`·`HAIR_OLLAMA_MAX_OUTPUT_TOKENS`·`HAIR_ALLOW_LOCAL_CODE_RUN` | 보통은 기본값 그대로. 실행 방식·검색 엔진·자동 검사 끄기 등(설명은 `hair init --help`·README) |
+| 고급 옵션 | `HAIR_STAGE_RUNTIME`·`HAIR_STAGE_STALL_SECONDS`·`HAIR_VECTOR_BACKEND`·`HAIR_VECTOR_DIR`·`HAIR_EVAL_HTML_REPORT`·`HAIR_LANGUAGE_QA`·`HAIR_LEXICON_CHECK`·`HAIR_NUMERIC_CHECK`·`HAIR_OLLAMA_AGENT_PLANNING`·`HAIR_OLLAMA_MAX_OUTPUT_TOKENS`·`HAIR_OLLAMA_MAX_CONCURRENT`·`HAIR_ALLOW_LOCAL_CODE_RUN` | 보통은 기본값 그대로. 실행 방식·검색 엔진·자동 검사 끄기 등(설명은 `hair init --help`·README) |
 
 **웹 서버를 재시작해도 AI 실행이 멈추지 않게 — `HAIR_WORKER_MODE=external`**
 

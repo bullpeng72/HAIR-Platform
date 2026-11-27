@@ -104,6 +104,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         " finished_at TEXT)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status, id)")
+    # 우선순위(2026-11-27, 개선 계획 3-1 — `llm_gate.kind_priority`: 0 대화 응답, 1 기본, 2 파이프라인·Crew·지식 등록)
+    if not any(r[1] == "priority" for r in conn.execute("PRAGMA table_info(background_jobs)")):
+        conn.execute("ALTER TABLE background_jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 1")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS worker_heartbeats ("
         " worker TEXT PRIMARY KEY,"
@@ -133,7 +136,10 @@ def enqueue(conn: sqlite3.Connection, kind: str, *args: Any, background_tasks: A
         raise KeyError(f"등록되지 않은 작업 종류: {kind}")
     payload = json.dumps(list(args), ensure_ascii=False)  # JSON으로 못 바꾸는 인자면 여기서 TypeError
     kw = json.dumps(kwargs, ensure_ascii=False)
-    cur = conn.execute("INSERT INTO background_jobs (kind, args, kwargs) VALUES (?, ?, ?)", (kind, payload, kw))
+    from hair_platform import llm_gate
+
+    cur = conn.execute("INSERT INTO background_jobs (kind, args, kwargs, priority) VALUES (?, ?, ?, ?)",
+                       (kind, payload, kw, llm_gate.kind_priority(kind)))
     conn.commit()
     job_id = int(cur.lastrowid or 0)
     if mode() == "embedded":
@@ -177,11 +183,15 @@ def run_job(conn: sqlite3.Connection, job_id: int, worker: str, reraise: bool = 
     row = _claim(conn, job_id, worker)
     if row is None:
         return "skipped"
+    from hair_platform import llm_gate
+
     try:
         func = _resolve(row["kind"])
         args = json.loads(row["args"] or "[]")
         decode = _ARG_DECODERS.get(row["kind"])
-        func(conn, *(decode(args) if decode else args), **json.loads(row["kwargs"] or "{}"))
+        # 이 작업의 모델 호출 우선순위(2026-11-27, 3-1) — 대화 응답이 파이프라인 호출보다 먼저 모델 자리를 받는다.
+        with llm_gate.priority(llm_gate.kind_priority(row["kind"])):
+            func(conn, *(decode(args) if decode else args), **json.loads(row["kwargs"] or "{}"))
     except Exception as exc:  # noqa: BLE001 — 작업 함수가 자기 실패를 기록하지만, 큐 기록도 남긴다
         if not reraise:
             log.exception("background job %s (%s) failed", job_id, row["kind"])
@@ -235,7 +245,11 @@ def status(conn: sqlite3.Connection) -> dict:
     counts = {r["status"]: r["n"] for r in conn.execute("SELECT status, COUNT(*) AS n FROM background_jobs GROUP BY status")}
     oldest = conn.execute(
         "SELECT MIN(created_at) FROM background_jobs WHERE status = 'queued'").fetchone()[0]
-    return {"mode": mode(), "workers": live_workers(conn), "counts": counts, "oldest_queued_at": oldest}
+    from hair_platform import llm_gate
+
+    # models: 이 프로세스의 모델별 실행·대기 수(2026-11-27, 3-1) — external 모드면 작업 프로세스 쪽 값은 여기 안 보인다.
+    return {"mode": mode(), "workers": live_workers(conn), "counts": counts, "oldest_queued_at": oldest,
+            "models": llm_gate.snapshot()}
 
 
 def warnings(conn: sqlite3.Connection) -> list[str]:
@@ -271,6 +285,9 @@ def configure_runtime(conn: sqlite3.Connection) -> None:
     evaluation_config.configure(conn)  # 평가 기준 설정(2026-11-25) — 평가 경로가 읽을 연결
     ai_budget.configure(conn)  # AI 사용 한도(2026-11-25, P2-14)
     llm_usage.install_litellm_callback()
+    from hair_platform import llm_gate
+
+    llm_gate.install_litellm_gate()  # CrewAI 호출에도 모델별 동시 호출 상한·우선순위(2026-11-27, 3-1)
 
 
 # ------------------------------------------------------------------ 작업 프로세스(`hair worker`)
@@ -336,10 +353,25 @@ class Worker:
         started = 0
         if free <= 0:
             return 0
-        ids = [r[0] for r in self.conn.execute(
-            "SELECT id FROM background_jobs WHERE status = 'queued' ORDER BY id LIMIT ?", (free,))]
-        for job_id in ids:
+        # 우선순위 순(2026-11-27, 3-1). 오래 걸리는 작업(파이프라인·Crew·지식 등록)은 자리를 모두 차지하지 않게 하나를
+        # 대화 응답용으로 남긴다(자리가 하나뿐이면 그대로).
+        running_bg = sum(1 for t in self._threads if getattr(t, "hair_priority", 1) >= 2)
+        bg_cap = max(1, self.max_concurrent - 1) - running_bg
+        rows = self.conn.execute(
+            "SELECT id, priority FROM background_jobs WHERE status = 'queued' ORDER BY priority, id LIMIT ?",
+            (free + 50,)).fetchall()
+        ids = []
+        for job_id, prio in rows:
+            if len(ids) >= free:
+                break
+            if prio >= 2:
+                if bg_cap <= 0:
+                    continue
+                bg_cap -= 1
+            ids.append((job_id, prio))
+        for job_id, prio in ids:
             t = threading.Thread(target=run_job, args=(self.conn, job_id, self.name), name=f"hair-job-{job_id}", daemon=True)
+            t.hair_priority = prio  # type: ignore[attr-defined]
             t.start()
             self._threads.append(t)
             started += 1

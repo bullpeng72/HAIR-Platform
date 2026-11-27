@@ -32,6 +32,7 @@ from hair_platform.models import (
     EmbeddingConfigUpdate,
     ModelActiveUpdate,
     ModelContextWindowUpdate,
+    ModelMaxConcurrentUpdate,
     ModelOptimizationTiersUpdate,
     ModelPricingUpdate,
     ModelRegistryCreate,
@@ -183,6 +184,21 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 ) from exc
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": model_id, "context_window": payload.context_window}
+
+    @app.patch("/api/model-registry/{model_id}/max-concurrent")
+    def set_model_registry_max_concurrent(
+        model_id: int,
+        payload: ModelMaxConcurrentUpdate,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN)),
+    ):
+        """모델별 동시 실행 상한(2026-11-27, 개선 계획 3-1 — `llm_gate`)."""
+        try:
+            model_registry.set_max_concurrent(conn, user["id"], model_id, payload.max_concurrent)
+        except ValueError as exc:
+            if str(exc) == "model_not_found":
+                raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다") from exc
+            raise HTTPException(status_code=400, detail="동시 실행 상한은 1~64입니다") from exc
+        return {"id": model_id, "max_concurrent": payload.max_concurrent}
 
     @app.patch("/api/model-registry/{model_id}/sampling-options")
     def set_model_registry_sampling_options(

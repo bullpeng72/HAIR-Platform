@@ -117,6 +117,15 @@ def refresh(conn: sqlite3.Connection) -> None:
             ranked.append((0 if "standard" in json.loads(tiers_raw or "[]") else 1, name, provider))
     for _, name, provider in sorted(ranked):
         _ACTIVE_MODELS.setdefault(provider, []).append(name)
+    # 모델별 동시 실행 상한(2026-11-27, 개선 계획 3-1 — `llm_gate`)
+    from hair_platform import llm_gate
+
+    try:
+        limits = {(p, n): int(v) for p, n, v in conn.execute(
+            "SELECT provider, name, max_concurrent FROM model_registry WHERE max_concurrent IS NOT NULL")}
+    except sqlite3.OperationalError:  # 열이 생기기 전
+        limits = {}
+    llm_gate.set_limits(limits)
     try:
         row = conn.execute(
             "SELECT provider, model FROM platform_llm_config WHERE id = 1"

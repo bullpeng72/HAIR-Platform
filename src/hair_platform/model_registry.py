@@ -114,6 +114,7 @@ def list_models(conn: sqlite3.Connection, provider: str | None = None) -> list[d
             "sampling_options": json.loads(r["sampling_options"] or "{}"),
             "price_input_per_1m": r["price_input_per_1m"],
             "price_output_per_1m": r["price_output_per_1m"],
+            "max_concurrent": r["max_concurrent"],
             "latest_benchmark": latest_by_model.get(r["id"]),
         }
         for r in rows
@@ -191,6 +192,20 @@ def set_context_window(
         before={"context_window": row["context_window"]},
         after={"context_window": context_window},
     )
+    conn.commit()
+    _refresh_model_cache(conn)
+
+
+def set_max_concurrent(conn: sqlite3.Connection, actor_id: int, model_id: int, value: int | None) -> None:
+    """모델별 동시 실행 상한(2026-11-27, 개선 계획 3-1 — `llm_gate`). None이면 기본값(Ollama 1, 클라우드 상한 없음)."""
+    if value is not None and not 1 <= value <= 64:
+        raise ValueError("max_concurrent_out_of_range")
+    row = conn.execute("SELECT * FROM model_registry WHERE id = ?", (model_id,)).fetchone()
+    if row is None:
+        raise ValueError("model_not_found")
+    conn.execute("UPDATE model_registry SET max_concurrent = ? WHERE id = ?", (value, model_id))
+    audit.record(conn, actor_id, "model_registry_max_concurrent_changed", "model_registry", model_id,
+                 before={"max_concurrent": row["max_concurrent"]}, after={"max_concurrent": value})
     conn.commit()
     _refresh_model_cache(conn)
 

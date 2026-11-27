@@ -148,6 +148,11 @@ async function renderModelRegistry(content) {
           (m.provider === "anthropic" ? "" :
             field("최대 출력(토큰)", numInput(m, "max_output_tokens", o.max_output_tokens, 'min="256" step="256" placeholder="' + (m.provider === "ollama" ? "기본 32,768" : "provider 기본") + '"'),
               "한 번 응답의 상한(생각 토큰 포함)")) +
+          // 동시 실행 상한(2026-11-27, 개선 계획 3-1) — 넘는 호출은 기다리고, 대화 응답이 파이프라인보다 먼저 자리를 받는다.
+          field("동시 실행 상한", numInput(m, "max_concurrent", m.max_concurrent, 'min="1" max="64" step="1" placeholder="' + (m.provider === "ollama" ? "기본 1" : "상한 없음") + '"'),
+            m.provider === "ollama"
+              ? "이 모델에 한 번에 보내는 호출 수 — Ollama는 기본적으로 하나씩 처리하므로 1. OLLAMA_NUM_PARALLEL을 올렸다면 그 값으로"
+              : "비우면 상한 없음 — API 속도 제한(분당 호출)에 걸리면 낮추세요") +
         "</fieldset>" +
         '<fieldset><legend>샘플링</legend>' +
           (m.provider === "openai" ? "" : field("top_k", numInput(m, "top_k", o.top_k, 'min="1" step="1" placeholder="모델 기본"'), "후보 단어 수 — 비우면 모델 기본값")) +
@@ -369,6 +374,11 @@ async function renderModelRegistry(content) {
             Object.entries(next).forEach(([k, v]) => { body[k] = v === undefined ? (o[k] ?? null) : v; });
             await api("PATCH", "/api/model-registry/" + id + "/sampling-options", body);
             saved.push("생성 옵션");
+          }
+          const maxc = panelValue(id, "max_concurrent");
+          if (!same(maxc, m.max_concurrent)) {
+            await api("PATCH", "/api/model-registry/" + id + "/max-concurrent", { max_concurrent: maxc });
+            saved.push("동시 실행 상한");
           }
           const pin = panelValue(id, "price_input_per_1m"), pout = panelValue(id, "price_output_per_1m");
           if (!same(pin, m.price_input_per_1m) || !same(pout, m.price_output_per_1m)) {

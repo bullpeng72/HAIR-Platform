@@ -1673,6 +1673,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 성능 테스트 정교화(2026-11-27) — 빠른 측정/전체 점검 구분과 세부 측정값(JSON).
     _ensure_column(conn, "model_benchmarks", "mode", "TEXT NOT NULL DEFAULT 'quick'")
     _ensure_column(conn, "model_benchmarks", "details", "TEXT")
+    # 모델별 동시 실행 상한(2026-11-27, 개선 계획 3-1 — `llm_gate`). 비우면 Ollama 1, 클라우드 상한 없음.
+    _ensure_column(conn, "model_registry", "max_concurrent", "INTEGER")
     # 모델별 단가·실제 사용량(2026-11-22, 하드코딩·스텁 점검 3순위 — `llm_usage.py`).
     _ensure_column(conn, "model_registry", "price_input_per_1m", "REAL")
     _ensure_column(conn, "pipeline_stages", "is_requirements_source", "INTEGER NOT NULL DEFAULT 0")

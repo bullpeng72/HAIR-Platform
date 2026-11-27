@@ -30,7 +30,7 @@ import json
 import os
 import sqlite3
 
-from hair_platform import audit, llm_usage, model_options, tool_calling
+from hair_platform import audit, llm_gate, llm_usage, model_options, tool_calling
 
 DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-5",
@@ -247,8 +247,9 @@ def call_llm(
     if max_output_tokens is not None:
         extra["max_output_tokens"] = max_output_tokens
     if on_partial is not None and provider in ("anthropic", "openai", "ollama"):
-        return _STREAMERS[provider](model, system, prompt, timeout_seconds, on_partial, temperature)
-    with _waiting_heartbeat(model):  # 스트리밍이 아닌 호출 — 끝날 때까지 경과 시간 표시(2026-11-26, 1-5)
+        with llm_gate.slot(provider, model):  # 모델별 동시 호출 상한·우선순위(2026-11-27, 3-1)
+            return _STREAMERS[provider](model, system, prompt, timeout_seconds, on_partial, temperature)
+    with llm_gate.slot(provider, model), _waiting_heartbeat(model):  # 스트리밍이 아닌 호출 — 끝날 때까지 경과 시간 표시(2026-11-26, 1-5)
         if provider == "anthropic":
             return _call_anthropic(model, system, prompt, timeout_seconds, **extra)
         if provider == "openai":
@@ -352,7 +353,8 @@ def call_llm_with_tools(
         return call_llm(provider, model, system, prompt, timeout_seconds=timeout_seconds, **extra)
     # 도구 호출 루프는 스트리밍이 아니다 — 끝날 때까지 경과 시간 표시(2026-11-26, 1-5 — 인사 실측: 도구가 붙은 검토
     # 단계가 34분 동안 진행 표시 없이 "응답 생성 중"에 멈춰 보였다).
-    with _waiting_heartbeat(model):
+    # 모델별 동시 호출 상한·우선순위(2026-11-27, 개선 계획 3-1 — `llm_gate`). 도구 루프 전체가 한 자리를 쓴다.
+    with llm_gate.slot(provider, model), _waiting_heartbeat(model):
         if provider == "anthropic":
             return _call_anthropic_with_tools(
                 model, system, prompt, tools, timeout_seconds, max_iterations, **extra

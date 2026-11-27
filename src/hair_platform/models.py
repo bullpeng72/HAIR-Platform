@@ -1053,6 +1053,12 @@ class ModelPricingUpdate(BaseModel):
     price_output_per_1m: float | None = Field(default=None, ge=0)
 
 
+class ModelMaxConcurrentUpdate(BaseModel):
+    """모델별 동시 실행 상한(2026-11-27, 개선 계획 3-1). null이면 기본값(Ollama 1, 클라우드 상한 없음)."""
+
+    max_concurrent: int | None = None
+
+
 class ModelContextWindowUpdate(BaseModel):
     """사용자 요청(2026-11-18, "...엔터프라이즈 환경 적용이 가능한
     수준의 확실한 개선 방안을 도출해줘" 개선축 B) — 이 모델이 실제로

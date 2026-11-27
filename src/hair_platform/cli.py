@@ -209,6 +209,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "\"평가 리포트\") 끄기\n"
             "  HAIR_OLLAMA_AGENT_PLANNING=1  로컬(Ollama) 모델에서도 Agent 작업 전 계획 켜기"
             "(기본 꺼짐)\n"
+            "  HAIR_OLLAMA_MAX_CONCURRENT=1  Ollama 모델에 한 번에 보내는 호출 수(기본 1 — 넘으면 대화 응답이 먼저,\n"
+            "                                0이면 상한 없음, 모델별 값은 모델 레지스트리 '동시 실행 상한')\n"
             "  HAIR_WORKER_MODE=external        AI 실행을 별도 작업 프로세스(hair worker)로 — 웹 서버를\n"
             "                                   재시작해도 실행 유지. hair worker를 같은 --db-path로 함께 띄운다\n"
             "  HAIR_TIMEZONE=Asia/Seoul         캘린더 일정을 보여 줄 시간대(기본: 서버 PC 시간대)\n"
