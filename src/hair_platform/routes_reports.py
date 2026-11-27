@@ -213,6 +213,25 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         """단계 설정 변경 → 바꾸기 전 값, 배운 점 적용 → 끄기. 그 뒤 다시 바뀐 값이면 409."""
         return _learning_call(process_learning.revert_change, conn, user["id"], change_id)
 
+    # 위험 기반 결재(2026-11-27, AI Native 분석 3단계 — `approval_assist`).
+    @app.get("/api/process-metrics/templates/{template_id}/approval-policy")
+    def get_approval_policy(template_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """추천 대 사람 결정(위험도별 건수·승인율)·자동 승인 수·낮은 위험 자동 승인을 켤 수 있는지."""
+        from hair_platform import approval_assist
+
+        return approval_assist.agreement(conn, template_id)
+
+    @app.put("/api/process-metrics/templates/{template_id}/approval-policy")
+    def put_approval_policy(template_id: int, payload: dict = Body(...),
+                            user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """낮은 위험 자동 승인 켜기·끄기(admin). 검증 조건을 채우지 못했으면 켜지 않는다(400)."""
+        from hair_platform import approval_assist
+
+        enabled = payload.get("auto_approve_low_risk")
+        if not isinstance(enabled, bool):
+            raise HTTPException(status_code=400, detail="auto_approve_low_risk_must_be_boolean")
+        return _learning_call(approval_assist.set_policy, conn, user["id"], template_id, enabled)
+
     @app.get("/api/dashboard")
     def get_dashboard(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),

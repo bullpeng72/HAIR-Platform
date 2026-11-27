@@ -242,10 +242,12 @@ async function renderPipelines(content) {
     '<input id="pipeline-template-domain" placeholder="도메인(선택, 예: software_dev)" style="width:180px">' +
     '<button class="primary" type="submit">파이프라인 등록</button></form>' +
     "</section>" +
+    _plDraftCardHtml() +
     (templates.length
       ? templates.map(t => pipelineTemplateCardHtml(t, detailById[t.id], activeAgents)).join("")
       : '<p class="muted">등록된 파이프라인이 없습니다.</p>');
 
+  _plBindDraft(content);
   content.querySelectorAll("[data-pl-toggle]").forEach(btn => {
     btn.onclick = () => {
       const id = btn.dataset.plToggle;
@@ -422,5 +424,96 @@ async function renderPipelines(content) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
   });
+}
+
+/* ---------- 업무 설명으로 초안 만들기(2026-11-27, AI Native 분석 3단계 — 3번 자연어 프로세스 설계) ---------- */
+// 업무를 글로 설명하면 플랫폼 기본 AI가 단계 초안을 제안하고(등록된 Agent 역할·도구만), 사람이 고친 뒤 만든다.
+// AI를 못 쓰면 기본 초안(작성 → 검토 → 최종 확인). 초안 단계에서는 아무것도 저장되지 않는다.
+let _plDraft = null;
+
+function _plDraftCardHtml() {
+  return '<section class="card" id="pl-draft-card"><h2>업무 설명으로 초안 만들기</h2>' +
+    '<p class="muted">하는 일을 글로 적으면 AI가 단계·담당 Agent·검토 단계·사람 승인 위치를 제안합니다. 고친 뒤 <b>이대로 만들기</b>를 눌러야 저장됩니다(마지막 단계는 기본으로 사람 승인).</p>' +
+    '<label for="pl-draft-desc">업무 설명</label>' +
+    '<textarea id="pl-draft-desc" rows="4" placeholder="예: 거래처에서 계약서 초안을 받으면 위험 조항(위약금·해지·책임 제한)을 찾아 표로 정리하고, 수정 제안 문구와 함께 법무 담당자에게 검토 의견서를 보낸다."></textarea>' +
+    '<details><summary class="muted">예시 결과물 붙이기(선택)</summary><textarea id="pl-draft-example" rows="4" placeholder="이런 형태의 결과가 나와야 한다는 예시"></textarea></details>' +
+    '<p><button class="primary" id="pl-draft-btn">초안 만들기</button> <span class="muted" id="pl-draft-msg"></span></p>' +
+    '<div id="pl-draft-result"></div></section>';
+}
+
+function _plDraftResultHtml(res) {
+  const d = res.draft;
+  const roleOpts = (sel) => '<option value="">— 역할 고르기 —</option>' + res.available_roles.map(r =>
+    '<option' + (r === sel ? " selected" : "") + ">" + esc(r) + "</option>").join("");
+  const domains = ["general", "software_dev", "business_planning", "proposal_writing", "performance_reporting", "finance", "sales", "legal", "hr"];
+  let html = "";
+  if (res.note) html += '<p class="msg warn">' + esc(res.note) + "</p>";
+  if (res.similar.length) {
+    html += '<p class="muted">비슷한 기존 파이프라인: ' + res.similar.map(s => "<b>" + esc(s.name) + "</b>").join(", ") +
+      " — 새로 만들기 전에 이걸 써도 되는지 확인하세요.</p>";
+  }
+  html += '<div class="pl-draft-meta"><label>이름 <input id="pl-dr-name" value="' + escAttr(d.name) + '"></label> ' +
+    '<label>업무 영역 <select id="pl-dr-domain">' + domains.map(x => "<option" + (x === d.domain ? " selected" : "") + ">" + x + "</option>").join("") + "</select></label></div>";
+  html += '<ol class="pl-draft-stages">' + d.stages.map((s, i) =>
+    '<li class="pl-draft-stage" data-i="' + i + '"><div class="pl-draft-row"><input class="pl-dr-sname" value="' + escAttr(s.name) + '" aria-label="단계 이름"> ' +
+    s.roles.map((r, j) => '<select class="pl-dr-role" data-j="' + j + '" aria-label="담당 역할">' + roleOpts(r) + "</select>").join(" ") +
+    (s.mode === "sequential_relay" ? ' <span class="muted">(순서대로 이어받기)</span>' : "") +
+    (s.missing_roles && s.missing_roles.length ? ' <span class="gate-badge gate-warn">등록 안 된 역할 "' + esc(s.missing_roles.join(", ")) + '" — 골라 주세요</span>' : "") +
+    "</div>" +
+    '<textarea class="pl-dr-inst" rows="2" aria-label="지시문">' + esc(s.instructions) + "</textarea>" +
+    '<div class="pl-draft-row muted"><label><input type="checkbox" class="pl-dr-human"' + (s.requires_human_approval ? " checked" : "") + "> 사람 승인</label>" +
+    (s.why_human ? " — " + esc(s.why_human) : "") +
+    (s.return_to !== null && s.return_to !== undefined ? " · 검토 미달이면 " + (s.return_to + 1) + "단계로 되돌림" : "") +
+    (s.required_tools.length ? " · 필수 도구: " + esc(s.required_tools.join(", ")) : "") +
+    " · 결과 형식 " + esc(s.output_content_type) + "</div></li>").join("") + "</ol>";
+  html += '<p><button class="primary" id="pl-draft-create">이대로 만들기</button> <span class="muted" id="pl-draft-create-msg"></span></p>';
+  return html;
+}
+
+function _plBindDraft(content) {
+  const btn = content.querySelector("#pl-draft-btn");
+  if (!btn) return;
+  btn.onclick = async () => {
+    const desc = content.querySelector("#pl-draft-desc").value.trim();
+    const msg = content.querySelector("#pl-draft-msg");
+    if (desc.length < 10) { msg.textContent = "업무를 열 글자 이상으로 설명해 주세요."; return; }
+    btn.disabled = true;
+    msg.textContent = "AI가 초안을 만드는 중입니다(모델에 따라 1~2분)…";
+    try {
+      _plDraft = await api("POST", "/api/pipeline-templates/draft", { description: desc, example_output: content.querySelector("#pl-draft-example").value });
+      msg.textContent = _plDraft.source === "llm" ? "초안이 나왔습니다. 고친 뒤 만드세요." : "";
+      content.querySelector("#pl-draft-result").innerHTML = _plDraftResultHtml(_plDraft);
+      _plBindDraftCreate(content);
+    } catch (e) {
+      msg.textContent = "초안을 만들지 못했습니다: " + (e.message || e);
+    } finally { btn.disabled = false; }
+  };
+}
+
+function _plBindDraftCreate(content) {
+  const create = content.querySelector("#pl-draft-create");
+  if (!create) return;
+  create.onclick = async () => {
+    const d = JSON.parse(JSON.stringify(_plDraft.draft));
+    d.name = content.querySelector("#pl-dr-name").value.trim();
+    d.domain = content.querySelector("#pl-dr-domain").value;
+    content.querySelectorAll(".pl-draft-stage").forEach(li => {
+      const s = d.stages[Number(li.dataset.i)];
+      s.name = li.querySelector(".pl-dr-sname").value.trim();
+      s.roles = Array.from(li.querySelectorAll(".pl-dr-role")).map(x => x.value);
+      s.instructions = li.querySelector(".pl-dr-inst").value;
+      s.requires_human_approval = li.querySelector(".pl-dr-human").checked;
+    });
+    const msg = content.querySelector("#pl-draft-create-msg");
+    if (!d.name) { msg.textContent = "이름을 적어 주세요."; return; }
+    if (d.stages.some(s => !s.name || s.roles.some(r => !r))) { msg.textContent = "모든 단계에 이름과 담당 역할을 정해 주세요."; return; }
+    try {
+      const r = await api("POST", "/api/pipeline-templates/from-draft", d);
+      _plDraft = null;
+      _plOpenTemplateId = String(r.id);
+      showMsg("global-msg", "파이프라인을 만들었습니다 — 아래에서 단계를 더 다듬을 수 있습니다.", "ok");
+      refresh();
+    } catch (e) { msg.textContent = "만들지 못했습니다: " + (e.message || e); }
+  };
 }
 

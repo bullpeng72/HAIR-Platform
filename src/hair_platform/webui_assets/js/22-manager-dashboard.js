@@ -337,9 +337,10 @@ async function renderProcessMetricsDetail(content, templateId) {
   let d;
   try {
     d = await api("GET", "/api/process-metrics/templates/" + templateId + "?days=" + _pmDays);
-    [d.lessons, d.changes] = await Promise.all([
+    [d.lessons, d.changes, d.policy] = await Promise.all([
       api("GET", "/api/process-metrics/templates/" + templateId + "/lessons"),
       api("GET", "/api/process-metrics/templates/" + templateId + "/changes"),
+      api("GET", "/api/process-metrics/templates/" + templateId + "/approval-policy"),
     ]);
   } catch (e) {
     _pmTemplateId = null;
@@ -378,6 +379,7 @@ async function renderProcessMetricsDetail(content, templateId) {
 '<div class="pm-wide">' + table(["단계", "지나간 실행", "시도", "처음에 통과", "다시 작성", "사람 검토", "AI 작업(평균)", "사람 대기(평균)", "시간 비중", "지금"], flowRows,
       { empty: "단계가 없습니다." }) + "</div>" +
     _pmLessonsHtml(d) +
+    _pmPolicyHtml(d.policy) +
     _pmChangesHtml(d.changes) +
     "<h3>최근 실행</h3>" +
 '<div class="pm-wide">' + table(["실행", "상태", "시작", "완료까지", "시간 구성", "다시 작성", "사람 결정", "토큰"],
@@ -414,7 +416,40 @@ async function renderProcessMetricsDetail(content, templateId) {
   const clear = document.getElementById("pm-baseline-clear");
   if (clear) clear.onclick = () => save(null);
   _pmBindLearning(content);
+  _pmBindPolicy(content, templateId);
   _pmInitTrend(d.trend);
+}
+
+/* ---------- 결재 정책(2026-11-27, AI Native 분석 3단계 — 4번 위험 기반 결재) ---------- */
+function _pmPolicyHtml(p) {
+  if (!p) return "";
+  const names = { low: "낮음", medium: "보통", high: "높음" };
+  const rows = ["low", "medium", "high"].map(l => [names[l], String(p.by_level[l].decisions), String(p.by_level[l].approved), _pmPct(p.by_level[l].approval_rate)]);
+  const r = p.requirement;
+  const state = p.active ? '<span class="gate-badge gate-ok">자동 승인 중</span>'
+    : p.enabled ? '<span class="gate-badge gate-warn">켜져 있지만 검증 조건 미달 — 지금은 모두 사람이 결재</span>'
+    : '<span class="gate-badge">꺼짐 — 모두 사람이 결재</span>';
+  const isAdmin = ME.role === "admin";
+  const btn = !isAdmin ? '<span class="muted">(켜고 끄기는 admin)</span>'
+    : p.enabled ? '<button class="small" id="pm-policy-toggle" data-on="0">자동 승인 끄기</button>'
+    : '<button class="small" id="pm-policy-toggle" data-on="1"' + (p.eligible ? "" : " disabled") + ">낮은 위험 자동 승인 켜기</button>";
+  return "<h3>결재 정책</h3>" +
+    '<p class="muted">결재마다 위험도(낮음·보통·높음)와 추천을 계산해 결재 도우미에 보여 주고, 사람이 실제로 어떻게 결정했는지 함께 남깁니다(최근 ' + r.lookback_days + "일). " +
+    "'낮음' 추천을 사람이 " + r.min_decisions + "건 이상 결정했고 그중 " + Math.round(r.min_approval_rate * 100) + "% 이상 승인했으면 admin이 <b>낮은 위험 자동 승인</b>을 켤 수 있습니다. " +
+    "켜도 사람 판단 필수 업무·자동 재시도 실패·외부 데이터로 쓰기가 막힌 경우·점검기와 검토 판정이 다른 경우·위험 보통/높음은 항상 사람에게 가고, 낮음 " + r.sample_every + "건마다 1건은 표본으로 사람이 봅니다. 조건이 깨지면 저절로 멈춥니다.</p>" +
+    '<div class="pm-wide-sm">' + table(["추천 위험도", "사람 결정", "승인", "승인율"], rows) + "</div>" +
+    '<p class="pm-policy">' + state + " 자동 승인 " + p.auto_approved + "건 " + btn + ' <span class="muted" id="pm-policy-msg"></span></p>';
+}
+
+function _pmBindPolicy(content, templateId) {
+  const b = content.querySelector("#pm-policy-toggle");
+  if (!b) return;
+  b.onclick = async () => {
+    try {
+      await api("PUT", "/api/process-metrics/templates/" + templateId + "/approval-policy", { auto_approve_low_risk: b.dataset.on === "1" });
+      refresh();
+    } catch (e) { document.getElementById("pm-policy-msg").textContent = "바꾸지 못했습니다: " + (e.message || e); }
+  };
 }
 
 /* ---------- 배운 점·변경 기록(2026-11-27, AI Native 분석 2단계 — 2번 학습 루프·10번 변경 효과) ---------- */

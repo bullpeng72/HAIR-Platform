@@ -707,5 +707,28 @@
   .pm-lesson-add select { max-width: 100%; }
   .pm-note { font-size: 0.75rem; white-space: normal; min-width: 10rem; }
   .pm-wrap td { white-space: normal; }
+  /* 파이프라인 초안(2026-11-27, AI Native 분석 3단계) */
+  #pl-draft-card textarea { width: 100%; box-sizing: border-box; font: inherit; }
+  .pl-draft-meta { display: flex; gap: 0.6rem; flex-wrap: wrap; margin: 0.4rem 0; }
+  .pl-draft-meta input { min-width: 0; width: 20rem; max-width: 100%; }
+  .pl-draft-stages { padding-left: 1.4rem; }
+  .pl-draft-stage { margin: 0.5rem 0; }
+  .pl-draft-row { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; margin: 0.2rem 0; }
+  .pl-draft-row input.pl-dr-sname { flex: 1 1 12rem; min-width: 0; }
+  .pl-draft-row select { max-width: 100%; }
+  /* 결재 도우미(2026-11-27, AI Native 분석 3단계) */
+  .ab-box { border: 1px solid var(--color-border); border-left: 3px solid var(--pm-wait); border-radius: 6px; padding: 0.6rem 0.8rem; margin: 0.5rem 0 0.8rem; background: var(--color-surface); }
+  .ab-head { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+  .ab-ctx { margin: 0.3rem 0; font-size: 0.85rem; }
+  .ab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0.4rem 1rem; }
+  .ab-grid > div { min-width: 0; }
+  .ab-box h4 { margin: 0.5rem 0 0.2rem; font-size: 0.9rem; }
+  .ab-list, .ab-checks { margin: 0; padding-left: 1.1rem; }
+  .ab-checks { list-style: none; padding-left: 0; }
+  .ab-fail { color: var(--status-danger-fg, #991b1b); }
+  .ab-warn { color: var(--status-warn-fg); }
+  .ab-diff { max-height: 12rem; overflow: auto; font-size: 0.8rem; background: var(--color-bg); padding: 0.4rem; border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
+  .ab-add { color: var(--status-success-fg); }
+  .ab-del { color: var(--status-danger-fg, #991b1b); }
   .pm-wrap td:last-child { white-space: nowrap; }
 

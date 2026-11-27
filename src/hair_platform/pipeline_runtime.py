@@ -72,6 +72,7 @@ from hair_platform import (
     deliverables,
     evaluation_reports,  # 리포트 토큰을 저장·응답에서 뺀다(2026-11-25)
     llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
+    approval_assist,  # 위험 기반 결재(2026-11-27, AI Native 분석 3단계)
     presentation_deck,
     process_learning,  # 배운 점·변경 기록(2026-11-27, AI Native 분석 2단계)
     requirements_traceability_llm,
@@ -1659,6 +1660,14 @@ def _execute_stage_attempt(
         stage["requires_human_approval"] or task_row["requires_human_judgment"]
         or needs_human_for_gates(gate_scores)
     )
+    # 낮은 위험 자동 승인(2026-11-27, 3단계 — admin이 켠 검증된 파이프라인만, 5건마다 1건은 표본으로 사람에게).
+    auto_risk = None
+    if passed and stage_requires_human:
+        auto_risk = approval_assist.auto_approval_check(
+            conn, stage, bool(task_row["requires_human_judgment"]), gate_scores, needs_human_for_gates(gate_scores)
+        )
+        if auto_risk is not None and not auto_risk.get("sample"):
+            stage_requires_human = False
 
     cur = conn.execute(
         "INSERT INTO pipeline_run_stages (pipeline_run_id, stage_id, attempt, status, "
@@ -1676,6 +1685,11 @@ def _execute_stage_attempt(
     run_stage_id = cur.lastrowid
     record_stage_started_at(conn, run_id, run_stage_id)
     assert run_stage_id is not None
+    if auto_risk is not None:
+        if auto_risk.get("sample"):
+            approval_assist.mark_sampled(conn, stage, run_stage_id, auto_risk)
+        else:
+            approval_assist.record_auto_approval(conn, actor_id, stage, run_stage_id, auto_risk)
 
     if not passed:
         # 사용자 요청(2026-11-05, 로드맵 9번 "Task 레벨 비용/재시도

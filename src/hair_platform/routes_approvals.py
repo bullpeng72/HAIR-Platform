@@ -20,6 +20,7 @@ from hair_platform import (
     assignments,
     audit,
     deliverables,
+    approval_assist,
     knowledge_submissions,
     pipeline_runtime,
     process_learning,
@@ -101,6 +102,20 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             }
             for row in approvals_mod.list_inbox(conn, user["id"], user["role"])
         ]
+
+    @app.get("/api/approvals/{approval_id}/brief")
+    def get_approval_brief(approval_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        """결재 도우미(2026-11-27, AI Native 분석 3단계) — 품질 점검 요약·이전 판과의 차이·확인할 점·과거 반려 사유·
+        위험도와 추천. 결정할 수 있는 Admin·매니저와 요청자 본인만."""
+        row = conn.execute("SELECT requested_by FROM approvals WHERE id = ?", (approval_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="승인 요청을 찾을 수 없습니다")
+        if user["role"] not in (Role.ADMIN.value, Role.MANAGER.value) and row["requested_by"] != user["id"]:
+            raise HTTPException(status_code=403, detail="이 결재를 볼 권한이 없습니다")
+        try:
+            return approval_assist.brief_for_approval(conn, approval_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/approvals", status_code=201)
     def create_approval(
@@ -261,6 +276,8 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                     )
                     knowledge_submission_to_register = subject_id
                 elif not next_step_pending and subject_type == "pipeline_run_stage":
+                    # 추천 대 사람 결정(2026-11-27, 3단계 — 위험 기반 결재 검증용).
+                    approval_assist.record_decision(conn, subject_id, True)
                     # 사용자 요청(2026-10-18, "최소 HITL/HOTL") — 계획
                     # 확정 체크포인트 또는 반복 실패 에스컬레이션을 사람이
                     # 승인하면, 파이프라인이 다음 단계로 이어서 진행된다
@@ -312,6 +329,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                     # 배운 점 후보(2026-11-27, AI Native 분석 2단계) — 반려 사유는 이 실행의 재시도뿐 아니라
                     # 운영자가 적용하면 같은 단계의 다음 실행들에도 들어간다(`process_learning`).
                     process_learning.capture_rejection(conn, subject_id, payload.reason)
+                    approval_assist.record_decision(conn, subject_id, False)
                     # 반려 = "다시 해와"(승인루프 스킬 안내와
                     # 일치) — 재시도 여력이 남아 있으면 파이프라인은
                     # 'running'으로 돌아가 같은 단계를 재시도한다.

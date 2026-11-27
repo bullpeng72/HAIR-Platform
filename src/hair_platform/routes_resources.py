@@ -11,6 +11,7 @@ import urllib.parse
 
 from fastapi import (
     BackgroundTasks,
+    Body,
     Depends,
     FastAPI,
     HTTPException,
@@ -1178,6 +1179,29 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": template_id, "name": payload.name}
+
+    # 업무 설명으로 파이프라인 초안(2026-11-27, AI Native 분석 3단계 — `pipeline_drafting`).
+    @app.post("/api/pipeline-templates/draft")
+    def draft_pipeline_endpoint(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """`{"description", "example_output"?}` → 단계 초안·비슷한 기존 파이프라인. DB에 쓰지 않는다(LLM 호출 비용 발생,
+        실패하면 규칙 초안)."""
+        from hair_platform import pipeline_drafting
+
+        try:
+            return pipeline_drafting.draft(conn, str(payload.get("description") or ""), payload.get("example_output"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/pipeline-templates/from-draft", status_code=201)
+    def create_pipeline_from_draft_endpoint(payload: dict = Body(...),
+                                            user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """사람이 고친 초안으로 파이프라인을 만든다(역할은 모두 등록된 Agent 역할이어야 한다)."""
+        from hair_platform import pipeline_drafting
+
+        try:
+            return {"id": pipeline_drafting.create_from_draft(conn, user["id"], payload)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.patch("/api/pipeline-templates/{template_id}/active")
     def set_pipeline_template_active_endpoint(

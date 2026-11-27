@@ -433,7 +433,7 @@ def list_changes(conn: sqlite3.Connection, template_id: int, limit: int = 30) ->
             "before_value": json.loads(r["before_value"]) if r["before_value"] else None,
             "after_value": json.loads(r["after_value"]) if r["after_value"] else None,
             "reverted_by": r["reverted_by"],
-            "revertible": r["reverted_by"] is None and r["kind"] in ("stage_update", "lesson_on"),
+            "revertible": r["reverted_by"] is None and r["kind"] in ("stage_update", "lesson_on", "approval_policy"),
             "before": before, "after": after,
             "after_window_ends_at_next_change": r["id"] in next_at and next_at[r["id"]] < at + timedelta(days=EFFECT_WINDOW_DAYS),
             "verdict": _verdict(before, after, r["stage_id"]),
@@ -455,6 +455,15 @@ def revert_change(conn: sqlite3.Connection, actor_id: int, change_id: int) -> di
         if lesson is None or lesson["status"] != "active":
             raise ValueError("change_superseded")
         set_lesson_status(conn, actor_id, ch["lesson_id"], "retired")
+    elif ch["kind"] == "approval_policy":
+        from hair_platform import approval_assist
+
+        before = json.loads(ch["before_value"] or "{}").get("auto_approve_low_risk", False)
+        cur = conn.execute("SELECT auto_approve_low_risk FROM pipeline_templates WHERE id = ?",
+                           (ch["template_id"],)).fetchone()
+        if cur is None or bool(cur[0]) == bool(before):
+            raise ValueError("change_superseded")
+        approval_assist.set_policy(conn, actor_id, ch["template_id"], bool(before))
     elif ch["kind"] == "stage_update":
         row = conn.execute("SELECT * FROM pipeline_stages WHERE id = ?", (ch["stage_id"],)).fetchone()
         if row is None:

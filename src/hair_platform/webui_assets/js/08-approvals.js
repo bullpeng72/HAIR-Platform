@@ -48,7 +48,7 @@ async function renderApprovals(content) {
   [...inbox, ...mine].forEach(a => { contentById[a.id] = a; });
   const detailPanel = content.querySelector("#approval-content-detail");
   content.querySelectorAll("[data-approval-content-toggle]").forEach(btn => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       const a = contentById[Number(btn.dataset.approvalContentToggle)];
       if (!a || !detailPanel) return;
       detailPanel.innerHTML =
@@ -56,11 +56,48 @@ async function renderApprovals(content) {
         '<div class="actions" style="justify-content:space-between"><b>#' + a.id + " " +
         esc(a.resource_name || label(a.subject_type)) + '</b>' +
         '<button type="button" class="small" data-approval-content-close>닫기</button></div>' +
+        '<div class="ab-slot"></div>' +
         renderContent(a.content, a.content_type || "text") + "</div>";
       detailPanel.querySelector("[data-approval-content-close]").onclick = () => { detailPanel.innerHTML = ""; };
       detailPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      // 결재 도우미(2026-11-27, AI Native 분석 3단계) — 파이프라인 단계·결과물 결재만. 실패해도 본문은 그대로 보인다.
+      if (a.subject_type === "pipeline_run_stage" || a.subject_type === "deliverable") {
+        try {
+          const b = await api("GET", "/api/approvals/" + a.id + "/brief");
+          const slot = detailPanel.querySelector(".ab-slot");
+          if (slot && b.supported) slot.innerHTML = approvalBriefHtml(b);
+        } catch (_) { /* 도우미 없이 본문만 */ }
+      }
     };
   });
+}
+
+// 결재 도우미(2026-11-27, AI Native 분석 3단계 — 9번) — 품질 점검·이전 판과의 차이·확인할 점·과거 반려 사유·위험도 추천을
+// 결재 내용 위에 한 덩어리로. 숫자는 서버가 기록에서 계산한다(LLM 없음).
+function approvalBriefHtml(b) {
+  const lvl = { low: ["낮음", "gate-ok"], medium: ["보통", "gate-warn"], high: ["높음", "gate-warn sys-error"] }[b.risk.level];
+  const st = { ok: "✓", warn: "⚠", fail: "✗", not_measured: "–" };
+  const s = b.checks_summary;
+  const checks = b.checks.filter(c => c.status !== "not_measured");
+  let html = '<div class="ab-box" role="region" aria-label="결재 도우미"><div class="ab-head"><b>결재 도우미</b> ' +
+    '<span class="gate-badge ' + lvl[1] + '">위험 ' + lvl[0] + "</span> " + esc(b.risk.advice) + "</div>";
+  html += '<p class="muted ab-ctx">' + esc(b.title) +
+    (b.context.attempt ? " · " + b.context.attempt + "차 시도" + (b.context.max_retry ? "(최대 " + b.context.max_retry + ")" : "") : "") +
+    (b.context.waiting_since ? " · 대기 시작 " + esc(fmtTime(b.context.waiting_since)) : "") + "</p>";
+  html += '<div class="ab-grid"><div><h4>위험 근거</h4><ul class="ab-list">' + b.risk.factors.map(f => "<li>" + esc(f) + "</li>").join("") + "</ul></div>";
+  html += "<div><h4>품질 점검 " + (s.measured ? s.ok + "/" + s.measured + " 통과" + (s.fail ? " · 미달 " + s.fail : "") + (s.warn ? " · 확인 " + s.warn : "") : "기록 없음") + "</h4>" +
+    (checks.length ? '<ul class="ab-checks">' + checks.map(c => '<li class="ab-' + c.status + '"><span aria-hidden="true">' + st[c.status] + "</span> " +
+      esc(c.label) + (c.note ? ' <span class="muted">— ' + esc(c.note) + "</span>" : "") + "</li>").join("") + "</ul>" : "") + "</div></div>";
+  if (b.attention.length) html += "<h4>먼저 확인할 점</h4><ul class=\"ab-list\">" + b.attention.map(x => "<li>" + esc(x) + "</li>").join("") + "</ul>";
+  if (b.changes) {
+    html += "<h4>" + esc(b.changes.against) + "과 비교</h4><p>추가 " + (b.changes.added || 0) + "줄 · 삭제 " + (b.changes.removed || 0) + "줄" +
+      (b.changes.similarity !== undefined ? " · 비슷한 정도 " + Math.round(b.changes.similarity * 100) + "%" : "") + "</p>" +
+      (b.changes.previous_rejection_reason ? '<p class="muted">지난번 반려 사유: ' + esc(b.changes.previous_rejection_reason) + "</p>" : "") +
+      ((b.changes.sample || []).length ? '<pre class="ab-diff">' + b.changes.sample.map(l => '<span class="' + (l[0] === "+" ? "ab-add" : "ab-del") + '">' + esc(l) + "</span>").join("\n") + "</pre>" : "");
+  }
+  if (b.past_rejections.length) html += "<h4>이 단계의 최근 반려 사유</h4><ul class=\"ab-list\">" + b.past_rejections.map(x => "<li>" + esc(x) + "</li>").join("") + "</ul>";
+  if (b.active_lessons.length) html += '<p class="muted">이 단계에 적용 중인 배운 점 ' + b.active_lessons.length + "개가 지시문에 들어가 있습니다.</p>";
+  return html + "</div>";
 }
 
 // 사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나 에이전트명이

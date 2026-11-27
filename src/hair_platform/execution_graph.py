@@ -79,6 +79,7 @@ from langgraph.types import Command, interrupt
 
 from hair_platform import (
     agent_evaluation,
+    approval_assist,  # 위험 기반 결재(2026-11-27)
     approvals,
     audit,
     dashboard,
@@ -283,6 +284,15 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
         or (task_row is not None and task_row["requires_human_judgment"])
         or pr.needs_human_for_gates(gate_scores)  # 막힌 쓰기 도구·점검기와 검토 판정 불일치
     )
+    # 낮은 위험 자동 승인(2026-11-27, 3단계 — `pipeline_runtime`과 같은 판정).
+    auto_risk = None
+    if passed and needs_human_on_pass:
+        auto_risk = approval_assist.auto_approval_check(
+            conn, stage, bool(task_row is not None and task_row["requires_human_judgment"]), gate_scores,
+            pr.needs_human_for_gates(gate_scores),
+        )
+        if auto_risk is not None and not auto_risk.get("sample"):
+            needs_human_on_pass = False
 
     attempt = state["attempt"]
     if passed and not needs_human_on_pass:
@@ -311,6 +321,11 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
     stage_row_id = cur.lastrowid
     pr.record_stage_started_at(conn, run_id, stage_row_id)
     assert stage_row_id is not None
+    if auto_risk is not None:
+        if auto_risk.get("sample"):
+            approval_assist.mark_sampled(conn, stage, stage_row_id, auto_risk)
+        else:
+            approval_assist.record_auto_approval(conn, state["actor_id"], stage, stage_row_id, auto_risk)
 
     # 2단계 — Task 전체 재시도 예산(`pipeline_runtime.py`의 로드맵
     # 9번과 동일). `dashboard.task_retry_summary()`는 방금 위에서
