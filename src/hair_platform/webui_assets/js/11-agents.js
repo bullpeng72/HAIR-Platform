@@ -8,6 +8,18 @@
 // "명시적으로 false로 저장"과 구분이 안 돼, CrewAI 기본값이 true인
 // respect_context_window 같은 값을 의도치 않게 false로 덮어쓸 위험이
 // 있다(실제로 설계 중 발견한 함정이라 기록해둔다).
+// 추천 후보 한 줄(2026-11-27 — 성능 테스트 결과 반영). 이 Agent에 쓸 수 없는 모델(도구 호출 불가 등)은 고를 수 없게,
+// 점검에서 문제가 나온 모델은 ⚠, 단계 1회 예상 시간을 함께 보인다. 두 추천 화면(Agent 설정·LLM 설정 최적화)이 같이 쓴다.
+function _optimizeCandidateOption(c, i, selected) {
+  let label = (c.tier_mapped ? "★ " : "") + c.provider + " / " + c.model;
+  if (typeof c.estimated_stage_s === "number") label += " · 단계 " + Math.round(c.estimated_stage_s) + "초";
+  if (c.excluded) label = "✗ " + label + " — " + c.excluded_reason;
+  else if (c.issues && c.issues.length) label += " ⚠ " + c.issues.join(", ");
+  else if (c.checked) label += " ✓ 점검 통과";
+  return '<option value="' + i + '"' + (selected && !c.excluded ? " selected" : "") + (c.excluded ? " disabled" : "") +
+    ' title="' + escAttr(c.excluded ? c.excluded_reason : (c.issues || []).join(", ")) + '">' + esc(label) + "</option>";
+}
+
 function _tuneTriStateHtml(id, current) {
   const value = current === true ? "true" : current === false ? "false" : "";
   return '<select id="' + id + '">' +
@@ -56,12 +68,12 @@ function _renderOptimizeRecommendation(agentId, rec, source) {
   if (candidates.length) {
     html += '<div style="margin-top:0.3rem"><label>등록된 모델 중 선택: ' +
       '<select id="' + pickSelId + '" data-candidates="' + escAttr(JSON.stringify(candidates)) + '">' +
-      candidates.map((c, i) => {
-        const selected = (c.provider === target.provider && c.model === target.model) ? " selected" : "";
-        const label = (c.tier_mapped ? "★ " : "") + c.provider + " / " + c.model;
-        return '<option value="' + i + '"' + selected + '>' + esc(label) + '</option>';
-      }).join("") +
-      '</select> <span class="muted">(★ = 이 역할 tier에 관리자가 직접 매핑한 모델)</span></label></div>';
+      candidates.map((c, i) => _optimizeCandidateOption(c, i, c.provider === target.provider && c.model === target.model)).join("") +
+      '</select> <span class="muted">(★ = 관리자가 이 tier에 매핑 · ✗ = 이 Agent에 쓸 수 없음 · ⚠ = 성능 테스트에서 문제)</span></label></div>' +
+      (rec.needs && rec.needs.tools && rec.needs.tools.length
+        ? '<p class="muted">이 Agent가 쓰는 도구: ' + esc(rec.needs.tools.join(", ")) + " — 도구 호출을 못 하는 모델은 고를 수 없습니다.</p>" : "") +
+      (rec.current_fitness && rec.current_fitness.excluded
+        ? '<p class="gate-warn">⚠ 현재 모델은 이 Agent에 쓸 수 없습니다: ' + esc(rec.current_fitness.excluded_reason) + "</p>" : "");
   }
   html += '<button class="small" data-fill-optimize="' + agentId + '" data-optimize-payload="' +
     escAttr(JSON.stringify(target)) + '" data-optimize-pick-sel="' +

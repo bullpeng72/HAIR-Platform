@@ -246,11 +246,72 @@ def _provider_available(provider: str) -> bool:
     return True  # ollama — API 키 개념 없음
 
 
+# ---- 성능 테스트 결과 반영(2026-11-27, "LLM 설정 최적화에 개선된 모델 추천 결과를 반영 — 도구 호출 안 되는 모델 등") ----
+# 모델 레지스트리의 성능 테스트(`model_benchmark.py`)가 모델마다 능력(도구 호출·수치 보존·한국어·생각 끄기)과 단계 1회 예상
+# 시간을 남긴다. 추천할 때 Agent에게 필요한 것과 맞춰 본다.
+# - **제외(hard)**: Agent가 도구를 쓰는데(스킬 연결 도구·직접 연결 도구·파이프라인 단계의 필수 도구) 모델이 도구 호출을
+#   못 한다(능력 점검 실패, 또는 Ollama 모델 정보에 tools 없음). 그 모델로는 단계가 매번 실패한다(필수 도구 미호출).
+# - **감점(soft)**: 수치 보존·한국어 점검 실패, 추론을 끄는 Agent인데 생각 끄기를 무시하는 모델.
+# - 성능 테스트를 하지 않은 모델은 판단하지 않는다(표시만 "능력 점검 전").
+
+
+def agent_needs(conn: sqlite3.Connection, agent_row, tuning: dict | None = None) -> dict:
+    """Agent가 실행에 필요로 하는 것 — 쓰는 도구 이름과 추론(생각) 끔 여부."""
+    skills = set(json.loads(agent_row["skill_tags"] or "[]"))
+    tool_ids: set[int] = set()
+    for row in conn.execute("SELECT name, default_tool_pool_ids FROM skill_pool WHERE augmentation_mode = 'tool'"):
+        if row["name"] in skills:
+            tool_ids.update(json.loads(row["default_tool_pool_ids"] or "[]"))
+    tool_ids.update(r[0] for r in conn.execute("SELECT tool_pool_id FROM agent_tool_links WHERE agent_id = ?", (agent_row["id"],)))
+    names = {r[0] for r in conn.execute(
+        f"SELECT name FROM tool_pool WHERE is_active = 1 AND id IN ({','.join('?' * len(tool_ids)) or 'NULL'})", tuple(tool_ids))}
+    stage_required: set[str] = set()
+    for r in conn.execute(
+        "SELECT ps.required_tools FROM pipeline_stages ps JOIN pipeline_stage_agents psa ON psa.stage_id = ps.id "
+        "WHERE psa.role_name = ? AND ps.required_tools IS NOT NULL AND ps.required_tools != '[]'", (agent_row["role_name"],)):
+        try:
+            stage_required.update(n for n in json.loads(r[0]) if isinstance(n, str))
+        except ValueError:
+            pass
+    effective: dict = tuning if tuning is not None else json.loads(agent_row["tuning_config"] or "{}")
+    return {"tools": sorted(names | stage_required), "required_tools": sorted(stage_required),
+            "reasoning_off": effective.get("reasoning") is False}
+
+
+def model_fitness(m: dict, needs: dict | None) -> dict:
+    """모델 하나가 이 Agent에 맞는지 — 성능 테스트 결과로. `excluded`면 추천하지 않는다."""
+    bench = m.get("latest_benchmark") or {}
+    details = bench.get("details") or {}
+    full = details if details.get("checks") else ((bench.get("latest_full") or {}).get("details") or {})
+    checks = full.get("checks") or {}
+    caps = details.get("capabilities") or full.get("capabilities")
+    out: dict = {"checked": bool(checks), "excluded": False, "reason": "", "issues": [],
+                 "estimated_stage_s": full.get("estimated_stage_s", details.get("estimated_stage_s")),
+                 "recommended_tiers": full.get("recommended_tiers") or details.get("recommended_tiers")
+                 or ([bench["recommended_tier"]] if bench.get("recommended_tier") else [])}
+    needs = needs or {}
+    tool_check = checks.get("tools")
+    cannot_call_tools = (tool_check is not None and not tool_check.get("passed")) or (
+        isinstance(caps, list) and m.get("provider") == "ollama" and "tools" not in caps)
+    if needs.get("tools") and cannot_call_tools:
+        out["excluded"] = True
+        out["reason"] = "도구 호출 불가 — 이 Agent는 도구를 씀(" + ", ".join(needs["tools"][:3]) + \
+            (" 외" if len(needs["tools"]) > 3 else "") + ")"
+    if checks.get("numbers") and not checks["numbers"].get("passed"):
+        out["issues"].append("입력 수치를 바꿈")
+    if checks.get("korean") and not checks["korean"].get("passed"):
+        out["issues"].append("한국어에 영어·한자 섞임")
+    if needs.get("reasoning_off") and checks.get("think_off") and not checks["think_off"].get("passed"):
+        out["issues"].append("추론 끔 설정을 무시함")
+    return out
+
+
 def recommend_model(
     conn: sqlite3.Connection,
     tier: str,
     current_provider: str | None,
     current_model: str | None,
+    needs: dict | None = None,
 ) -> dict:
     active = [m for m in model_registry.list_models(conn) if m["is_active"]]
     if not active:
@@ -271,16 +332,21 @@ def recommend_model(
     # 포함) 이름 패턴 추정을 거치지 않고 항상 최우선 후보가 된다. 매핑된
     # 모델이 하나도 없으면(기존 동작 100% 유지) 이름 패턴 추정+tier
     # 선호 등급(`_pattern_sort_key`)으로 폴백한다.
-    def rank_key(m: dict) -> tuple[int, int, int, int]:
+    fitness = {m["id"]: model_fitness(m, needs) for m in active}
+
+    def rank_key(m: dict) -> tuple:
+        fit = fitness[m["id"]]
         is_unmapped = 0 if tier in (m.get("optimization_tiers") or []) else 1
         # 하드코딩 점검 2번(2026-11-21) — 이름 패턴 추정보다 실제 측정값을 먼저
         # 본다: 성능 테스트가 이 tier를 추천한 모델을 앞에 둔다(admin 매핑 다음 순위).
-        bench = m.get("latest_benchmark") or {}
-        benchmark_mismatch = 0 if bench.get("recommended_tier") == tier else 1
+        # 2026-11-27 — 새 성능 테스트는 추천 tier가 여러 개(`recommended_tiers`).
+        benchmark_mismatch = 0 if tier in (fit["recommended_tiers"] or []) else 1
         pattern_primary, pattern_secondary = _pattern_sort_key(
             m["provider"], m["name"], tier, preference
         )
-        return (is_unmapped, benchmark_mismatch, pattern_primary, pattern_secondary)
+        # 이 Agent에 쓸 수 없는 모델(도구 호출 불가)은 맨 뒤, 점검에서 문제가 나온 모델은 같은 순위 안에서 뒤로.
+        return (1 if fit["excluded"] else 0, is_unmapped, len(fit["issues"]), benchmark_mismatch,
+                pattern_primary, pattern_secondary)
 
     # 사용자 요청(2026-10-26, "모델 추천의 경우 모델 레지스트리에 등록된
     # 모델을 선택할 수 있도록 해줘") — "가장 적합한 모델 1개"만이 아니라
@@ -304,9 +370,26 @@ def recommend_model(
             "provider": m["provider"],
             "model": m["name"],
             "tier_mapped": tier in (m.get("optimization_tiers") or []),
+            "excluded": fitness[m["id"]]["excluded"],
+            "excluded_reason": fitness[m["id"]]["reason"],
+            "issues": fitness[m["id"]]["issues"],
+            "checked": fitness[m["id"]]["checked"],
+            "estimated_stage_s": fitness[m["id"]]["estimated_stage_s"],
         }
         for m in candidates
     ]
+    current_fit = next((c for c in candidate_list if c["provider"] == current_provider and c["model"] == current_model), None)
+    usable = [c for c in candidate_list if not c["excluded"]]
+    if candidate_list and not usable:
+        return {
+            "provider": current_provider,
+            "model": current_model,
+            "changed": False,
+            "note": "등록된 활성 모델이 모두 이 Agent에 맞지 않습니다(" + candidate_list[0]["excluded_reason"] +
+            ") — 도구 호출이 되는 모델을 모델 레지스트리에 등록하고 전체 점검을 돌리세요.",
+            "candidates": candidate_list,
+            "current_fitness": current_fit,
+        }
 
     if current_provider and current_model and candidates:
         top = candidates[0]
@@ -317,6 +400,7 @@ def recommend_model(
                 "changed": False,
                 "note": "현재 설정이 이미 이 역할의 특성에 적합합니다.",
                 "candidates": candidate_list,
+                "current_fitness": current_fit,
             }
 
     if not candidate_list:
@@ -332,16 +416,23 @@ def recommend_model(
     changed = best["provider"] != current_provider or best["model"] != current_model
     if not changed:
         note = "현재 설정을 유지합니다."
+    elif current_fit and current_fit["excluded"]:
+        note = f"현재 모델({current_model})은 이 Agent에 쓸 수 없어({current_fit['excluded_reason']}) 바꿔야 합니다."
     elif best["tier_mapped"]:
         note = f"관리자가 '{_TIER_LABELS[tier]}' tier에 직접 매핑한 모델로 전환을 추천합니다."
+    elif best["checked"]:
+        note = f"{tier} 역할 특성에 더 적합한 모델로 전환을 추천합니다(성능 테스트 결과 기준)."
     else:
         note = f"{tier} 역할 특성에 더 적합한 모델로 전환을 추천합니다(이름 패턴 기반 추정)."
+    if best["issues"]:
+        note += " ⚠ 추천 모델 점검 결과: " + ", ".join(best["issues"]) + "."
     return {
         "provider": best["provider"],
         "model": best["model"],
         "changed": changed,
         "note": note,
         "candidates": candidate_list,
+        "current_fitness": current_fit,
     }
 
 
@@ -376,16 +467,23 @@ def recommend_for_agent(conn: sqlite3.Connection, agent_id: int) -> dict:
     current_tuning = json.loads(row["tuning_config"])
 
     tier, recommended_tuning, source = classify_role(role_name, skill_tags)
-    model_rec = recommend_model(conn, tier, row["llm_provider"], row["llm_model"])
+    # 추론 끔 여부는 적용될 설정(현재 값 위에 추천 값)으로 본다.
+    needs = agent_needs(conn, row, {**current_tuning, **recommended_tuning})
+    model_rec = recommend_model(conn, tier, row["llm_provider"], row["llm_model"], needs)
 
     tuning_diff = _diff_tuning(current_tuning, recommended_tuning)
     changed = bool(tuning_diff) or model_rec["changed"]
 
+    checked = any(c.get("checked") for c in model_rec["candidates"])
     rationale = (
         f"'{role_name}' 역할 분류: {_TIER_LABELS[tier]} ({_SOURCE_LABELS[source]}). "
-        f"{model_rec['note']} ⚠ 모델 등급 추정은 모델명 패턴 기반이며 실제 벤치마크 "
-        "데이터가 아닙니다."
+        f"{model_rec['note']}"
+        + (f" 이 Agent가 쓰는 도구: {', '.join(needs['tools'])}." if needs["tools"] else "")
+        + ("" if checked else " ⚠ 성능 테스트(전체 점검)를 한 모델이 없어 모델명 패턴으로 추정했습니다.")
     )
+    current_fit = model_rec.get("current_fitness")
+    if current_fit and current_fit["excluded"]:
+        changed = True  # 쓸 수 없는 현재 모델은 "변경 필요"
 
     return {
         "agent_id": agent_id,
@@ -406,6 +504,8 @@ def recommend_for_agent(conn: sqlite3.Connection, agent_id: int) -> dict:
         "tuning_diff": tuning_diff,
         "changed": changed,
         "rationale": rationale,
+        "needs": needs,
+        "current_fitness": current_fit,
     }
 
 
@@ -439,9 +539,11 @@ def refine_with_llm(conn: sqlite3.Connection, agent_id: int) -> dict:
         ).fetchall():
             skill_descriptions.append(f"- {s['name']}: {s['description']}")
 
+    # 이 Agent에 쓸 수 없는 모델(도구 호출 불가 등, 2026-11-27)은 AI에게도 보여 주지 않는다.
+    excluded = {(c["provider"], c["model"]) for c in rule_based["recommended"]["candidates"] if c.get("excluded")}
     active_by_provider: dict[str, list[str]] = {}
     for m in model_registry.list_models(conn):
-        if m["is_active"]:
+        if m["is_active"] and (m["provider"], m["name"]) not in excluded:
             active_by_provider.setdefault(m["provider"], []).append(m["name"])
 
     system = (

@@ -90,7 +90,7 @@ async function renderAgentOptimization(content) {
   content.innerHTML = platformLlmHtml + auxLlmHtml + '<section class="card"><h2>LLM 설정 최적화 추천</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
-      '<li>모델 랭킹은 기본적으로 모델명 패턴 추정(실제 벤치마크 데이터 아님)이지만, "모델 레지스트리" 화면에서 모델별로 심층추론/정밀·신속/표준 tier를 직접 매핑해두면(★ 표시) 그 매핑이 패턴 추정보다 항상 우선합니다 — 새 모델 출시·provider 교체 시 여기 코드가 아니라 그 화면에서 매핑만 바꾸면 됩니다.</li>' +
+      '<li>모델 순위: ① 이 Agent에 <b>쓸 수 없는 모델은 제외</b>(✗ — Agent가 도구를 쓰는데 성능 테스트에서 도구 호출을 못 한 모델) → ② 관리자가 "모델 레지스트리"에서 그 tier에 매핑한 모델(★) → ③ 성능 테스트 점검에서 문제가 적은 모델(⚠ 수치 변형·한국어 혼입·추론 끔 무시) → ④ 성능 테스트가 그 tier를 추천한 모델 → ⑤ 모델 이름 추정. 성능 테스트(전체 점검)를 하지 않은 모델은 능력을 판단하지 않습니다.</li>' +
     '<li>이 화면은 <b>일괄 적용</b> 화면입니다 — 체크한 Agent는 "선택 적용"을 누르면 미리보기 없이 바로 모델/파인튜닝 설정이 저장됩니다. 하나씩 검토하려면 "AI 에이전트 관리" 화면의 "⚡ 최적화 추천" 버튼을 쓰세요(그쪽은 입력란에 채우기만 하고 저장은 admin이 직접 합니다).</li>' +
     // 사용자 요청(2026-10-26, "llm 설정 최적화에는 에이전트를 추천
     // 설정된 에이전트도 재선택하고 다시 추천 모델을 적용할 수 있도록
@@ -116,11 +116,7 @@ async function renderAgentOptimization(content) {
       const modelCell = candidates.length
         ? '<select class="optimize-model-pick" data-agent-id="' + r.agent_id +
           '" data-candidates="' + escAttr(JSON.stringify(candidates)) + '">' +
-          candidates.map((c, i) => {
-            const selected = (c.provider === r.recommended.provider && c.model === r.recommended.model) ? " selected" : "";
-            const label = (c.tier_mapped ? "★ " : "") + c.provider + " / " + c.model;
-            return '<option value="' + i + '"' + selected + '>' + esc(label) + '</option>';
-          }).join("") +
+          candidates.map((c, i) => _optimizeCandidateOption(c, i, c.provider === r.recommended.provider && c.model === r.recommended.model)).join("") +
           '</select>'
         : esc(r.recommended.provider || "(기본값)") + " / " + esc(r.recommended.model || "(기본값)");
       return [
@@ -132,7 +128,12 @@ async function renderAgentOptimization(content) {
           })) + '">',
         esc(r.role_name),
         esc(_OPTIMIZE_TIER_LABELS[r.tier] || r.tier),
-        esc(r.current.provider || "(기본값)") + " / " + esc(r.current.model || "(기본값)"),
+        esc(r.current.provider || "(기본값)") + " / " + esc(r.current.model || "(기본값)") +
+          // 현재 모델을 이 Agent에 쓸 수 없으면(도구 호출 불가 등, 2026-11-27) 바로 보이게
+          (r.current_fitness && r.current_fitness.excluded
+            ? '<br><span class="gate-badge gate-warn" title="' + escAttr(r.current_fitness.excluded_reason) + '">✗ 쓸 수 없음</span>'
+            : (r.current_fitness && r.current_fitness.issues && r.current_fitness.issues.length
+              ? '<br><span class="gate-badge gate-warn">⚠ ' + esc(r.current_fitness.issues.join(", ")) + "</span>" : "")),
         modelCell,
         Object.keys(r.tuning_diff).length ? esc(Object.keys(r.tuning_diff).join(", ")) : "(없음)",
         '<span class="muted">' + esc(r.rationale) + "</span>",

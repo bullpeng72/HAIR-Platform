@@ -207,3 +207,29 @@ def test_model_settings_panel_saves_only_changed_fields(login, live_server):
     assert "model_registry_sampling_options_changed" not in actions and "model_registry_context_window_changed" in actions
     page.wait_for_selector(f'[data-mr-panel="{mid}"]', state="visible")  # 다시 그려도 펼친 채로
     assert not page.errors  # type: ignore[attr-defined]
+
+
+def test_llm_optimize_marks_models_that_cannot_call_tools(login, live_server):
+    """LLM 설정 최적화(2026-11-27) — 도구를 쓰는 Agent에는 도구 호출을 못 하는 모델이 ✗로 고를 수 없게, 현재 모델이면 경고."""
+    import json
+
+    from hair_platform import model_registry
+
+    conn = live_server["conn"]
+    admin_id = conn.execute("SELECT id FROM users WHERE username = 'e2e_admin'").fetchone()[0]
+    no_tools = model_registry.create_model(conn, admin_id, "ollama", "e2e-no-tools")
+    details = {"mode": "full", "capabilities": ["completion"], "estimated_stage_s": 76,
+               "checks": {"tools": {"passed": False}, "numbers": {"passed": True}}, "recommended_tiers": ["precision_fast"]}
+    conn.execute("INSERT INTO model_benchmarks (model_registry_id, tested_by, status, latency_seconds, mode, details) "
+                 "VALUES (?, ?, 'success', 2.0, 'full', ?)", (no_tools, admin_id, json.dumps(details)))
+    agent = conn.execute("SELECT id FROM agent_pool WHERE role_name = '채용 담당자'").fetchone()[0]
+    conn.execute("UPDATE agent_pool SET llm_provider = 'ollama', llm_model = 'e2e-no-tools' WHERE id = ?", (agent,))
+    conn.commit()
+    page = login("admin")
+    _tab(page, "agentoptimize")
+    option = page.locator(f'.optimize-model-pick[data-agent-id="{agent}"] option', has_text="e2e-no-tools").first
+    assert option.is_disabled() and "도구 호출 불가" in option.inner_text()
+    row = page.locator("tr", has=page.locator(f'.optimize-apply-check[data-agent-id="{agent}"]')).first
+    assert "쓸 수 없음" in row.inner_text()
+    assert page.locator(f'.optimize-apply-check[data-agent-id="{agent}"]').get_attribute("data-changed") == "1"
+    assert not page.errors  # type: ignore[attr-defined]

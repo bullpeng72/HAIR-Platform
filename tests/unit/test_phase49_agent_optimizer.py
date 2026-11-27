@@ -235,11 +235,13 @@ def test_recommend_model_prioritizes_model_explicitly_mapped_to_tier_over_patter
 
     rec = opt.recommend_model(conn, opt.TIER_DEEP_REASONING, None, None)
     assert rec["model"] == "model-a:latest"
-    assert rec["candidates"][0] == {
+    first = rec["candidates"][0]
+    assert {k: first[k] for k in ("provider", "model", "tier_mapped")} == {
         "provider": "ollama",
         "model": "model-a:latest",
         "tier_mapped": True,
     }
+    assert first["excluded"] is False and first["checked"] is False  # 성능 테스트 전 — 판단하지 않음(2026-11-27)
     assert "직접 매핑" in rec["note"]
 
     # 다른 tier(precision_fast)엔 아직 아무도 매핑 안 됐으니 그 tier는
