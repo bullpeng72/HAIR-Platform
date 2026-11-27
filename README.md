@@ -685,10 +685,12 @@ src/hair_platform/
   documents.py       # 외부 자료(.md/.txt/.csv/.html/.pdf/.xlsx/.docx/.pptx) 업로드·텍스트 직접 입력 → 청크 분할 → VectorDB 색인
   pool_registry.py   # Skill Pool·Tool Pool — 스킬→도구 매핑 데이터화 + 개발업무/일반업무 category 분류, CrewAI Tool 조립
   data_admin.py      # brief/task/human/agent 하드 삭제(FK 연쇄 삭제 + confirmed 배정 보호) + 운영 데이터 공장 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 "초기화 시 보호" 팀만 유지, `hair reset-data`)
-  deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, Agent 비동기 실행+평가(agent_execution_jobs)
+  deliverables.py    # 협업 워크스페이스 — 결과물/댓글, "내 업무", 사람 LLM 보조, 할 일 설정·선행 관계·활동·버전 이력
+  deliverable_execution.py # 할 일에서 Agent·팀 Crew·즉석 Crew 실행(실행 가능 여부·시작·백그라운드 실행·재시도·평가)
   inbox.py           # 통합 인박스(결재 대기+Agent 실행 실패+낮은 Gate 점수 경고)
   dashboard.py       # 매니저 대시보드(팀 Gate 평균+대기 승인 건수+비용 추이) + Task 재시도 합산
-  conversations.py   # 대화 중심 작업공간 — Task 독립 대화, 기본 AI/Agent/Team 멘션 3경로, skill 그라운딩
+  conversations.py   # 대화 중심 작업공간 — Task 독립 대화·참가자·메시지·문맥 구성, skill 그라운딩
+  conversation_jobs.py # 대화 응답 실행 — 기본 AI/Agent/Team 멘션 3경로 작업, 작업 마감, 파이프라인 진행 알림
   pipeline_runtime.py # 단계형 업무 파이프라인 엔진(단독/순차 릴레이/병행 위임 단계, 단계별 Gate 목록 기준 자동 재시도·에스컬레이션, 검토 실패 시 작성 단계로 되돌림, Task 재시도 예산)
   reference_pipeline_seeds.py # 레퍼런스 Agent 39종 + Skill/Tool Pool + 파이프라인 템플릿 8종(소프트웨어 개발/사업·기획/제안서 작성/실적 보고 + domain_packs.py의 재무·영업·법무·인사) 기본 시드
   agent_optimizer.py # Agent별 LLM provider/model/tuning_config 최적화 추천(규칙 기반 + 선택적 LLM 보정, admin)
