@@ -273,6 +273,13 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             raise HTTPException(status_code=400, detail="days_must_be_1_7_30")
         return capacity.report(conn, days)
 
+    @app.get("/api/resource-insights")
+    def get_resource_insights(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """자원 분석(2026-11-27, Resource Management Phase D) — 역할별 사람 vs AI, 채워지지 않은 수요, 스킬 수요·공급, 팀, 업무 분배."""
+        from hair_platform import resource_insights
+
+        return resource_insights.overview(conn)
+
     @app.get("/api/dashboard")
     def get_dashboard(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),

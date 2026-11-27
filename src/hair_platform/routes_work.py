@@ -491,6 +491,10 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         candidates = pool.human_pool_candidates(conn) + pool.agent_pool_candidates(conn)
         result = match_candidates(task["role_name"], required_skills, candidates)
         match_mode = "deterministic"
+        if result.generate_new:  # 채워지지 않은 수요(2026-11-27, Phase D — 자원 분석)
+            from hair_platform import resource_insights
+
+            resource_insights.record_match_miss(conn, task_id, task["role_name"], required_skills)
 
         if result.generate_new and use_llm_judge:
             result = match_llm_judge.judge_candidates(conn, task, candidates)

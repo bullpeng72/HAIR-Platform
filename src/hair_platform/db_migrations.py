@@ -977,6 +977,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 인계·결재 위임·에스컬레이션·시간 기반 비용(2026-11-27, Phase C — `resource_lifecycle`).
     from hair_platform import resource_lifecycle
     resource_lifecycle.ensure_schema(conn)
+    # 자원 분석 — 매칭 실패 기록(2026-11-27, Phase D — `resource_insights`).
+    from hair_platform import resource_insights
+    resource_insights.ensure_schema(conn)
     inbound.ensure_schema(conn)
     stage_actions.ensure_schema(conn)
     _sync_dev_crew_pipeline_integration(conn)

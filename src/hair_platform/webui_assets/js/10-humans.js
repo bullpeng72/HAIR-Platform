@@ -392,3 +392,47 @@ async function _renderHandover(box, humanId) {
   box.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
+/* ---------- 자원 분석(2026-11-27, Resource Management Phase D — 6·8·9·10번) ---------- */
+async function renderResourceInsights(content) {
+  const d = await api("GET", "/api/resource-insights");
+  const pct = v => v === null || v === undefined ? "—" : Math.round(v * 100) + "%";
+  const hrs = v => v === null || v === undefined ? "—" : (v < 1 ? Math.round(v * 60) + "분" : v.toFixed(1) + "h");
+  const money = v => v === null || v === undefined ? "—" : "$" + (v >= 100 ? Math.round(v) : v.toFixed(2));
+  const side = s => !s ? '<span class="muted">없음</span>' :
+    "승인 " + pct(s.approval_rate) + " · 한 번에 " + pct(s.first_pass_rate) + '<div class="muted pm-note">결재 ' + s.decided + "건 · 첫 승인까지 " + hrs(s.hours_to_approval) + " · 할 일당 " + money(s.cost_per_task) + "</div>";
+  const lv = { ok: "gate-ok", warn: "gate-warn", info: "gate-info", muted: "" };
+  const hv = d.human_vs_ai;
+  const skillSt = { none: '<span class="gate-badge gate-warn sys-error">공급 없음</span>', thin: '<span class="gate-badge gate-warn">얇음</span>', ok: '<span class="gate-badge gate-ok">충분</span>' };
+  content.innerHTML = '<section class="card"><h2>자원 분석</h2>' +
+    helpBox('<ul class="muted help-list">' +
+      "<li><b>사람 vs AI</b>: 같은 역할을 사람에게 맡겼을 때와 Agent에게 맡겼을 때, <b>사람이 결재한 결과물만</b>(자동 승인 제외) 비교합니다 — 승인율, 처음 결정된 결과물이 승인된 비율(한 번에), 배정 확정부터 첫 승인까지 시간, 할 일당 비용(사람은 추정 인건비, Agent는 실제 AI 금액). 양쪽 모두 결재 " + hv.min_decisions + "건 이상일 때만 추천합니다.</li>" +
+      "<li><b>채워지지 않은 수요</b>: 최근 30일 매칭이 맞는 후보를 하나도 못 찾은 역할(같은 할 일은 하루 한 번만 셈).</li>" +
+      "<li><b>스킬 수요·공급</b>: 끝나지 않은 할 일의 필요 스킬 ↔ 가용 사람·활성 Agent가 가진 스킬. 공급 없음·얇음(1곳뿐인데 할 일 3건 이상)을 먼저.</li>" +
+      "<li><b>팀</b>: 사람 구성원의 부하 합(끝나지 않은 할 일/용량), 다른 팀과 겹치는 사람(3팀 이상이면 경고), 팀에 배정된 열린 할 일, 팀 Crew 실행 결과.</li>" +
+      "<li><b>업무 분배</b>: 같은 역할의 사람 2명 이상일 때, 끝나지 않은 할 일이 고르게 나뉘는지(지니 계수 0 = 고름, 1에 가까울수록 한쪽에 몰림)와 긴급·높음 일의 집중. 성과 점수는 쓰지 않습니다.</li>" +
+      "</ul>") +
+    "<h3>역할별 사람 vs AI</h3>" + '<div class="pm-wide">' + table(["역할", "사람", "Agent", "추천"], hv.roles.map(r => [
+      esc(r.role), side(r.human), side(r.agent),
+      '<span class="gate-badge ' + (lv[r.recommendation.level] || "") + '">' + esc(r.recommendation.label) + '</span><div class="muted pm-note">' + esc(r.recommendation.why) + "</div>"]),
+      { empty: "사람이 결재한 결과물이 아직 없습니다." }) + "</div>" +
+    "<h3>채워지지 않은 수요(최근 30일)</h3>" + '<div class="pm-wide-sm">' + table(["역할", "매칭 실패", "할 일", "자주 요구된 스킬", "제안"], hv.unmet.map(u => [
+      esc(u.role), String(u.misses), String(u.tasks), esc(u.skills.join(", ") || "-"), esc(u.suggestion)]),
+      { empty: "매칭이 후보를 못 찾은 기록이 없습니다." }) + "</div>" +
+    "<h3>스킬 수요·공급</h3>" + '<div class="pm-wide">' + table(["스킬", "상태", "열린 할 일", "예상 시간", "사람", "Agent", "제안"], d.skills.map(s => [
+      esc(s.skill), skillSt[s.status], String(s.open_tasks), s.hours ? s.hours + "h" : "-",
+      s.people.length ? esc(s.people.join(", ")) : '<span class="muted">-</span>', s.agents.length ? esc(s.agents.join(", ")) : '<span class="muted">-</span>',
+      s.suggestion ? esc(s.suggestion) : '<span class="muted">-</span>']), { empty: "열린 할 일에 필요 스킬이 적혀 있지 않습니다." }) + "</div>" +
+    "<h3>팀</h3>" + '<div class="pm-wide">' + table(["팀", "구성", "구성원 부하", "팀 열린 할 일", "Crew 실행", "겹침"], d.teams.map(t => [
+      esc(t.name) + '<div class="muted pm-note">' + esc(t.member_names.join(", ")) + "</div>", "사람 " + t.humans + " · Agent " + t.agents,
+      t.member_capacity ? t.member_active_tasks + "/" + t.member_capacity + " (" + pct(t.utilization) + ")" : '<span class="muted">-</span>',
+      String(t.open_team_tasks), t.crew_runs ? "완료 " + t.crew_completed + " · 실패 " + t.crew_failed + " / " + t.crew_runs : '<span class="muted">-</span>',
+      t.overlaps.length ? (t.overlap_warning ? '<span class="gate-badge gate-warn">3팀 이상</span> ' : "") + esc(t.overlaps.map(o => o.name + "(" + o.teams + "팀)").join(", ")) : '<span class="muted">-</span>']),
+      { empty: "활성 팀이 없습니다." }) + "</div>" +
+    "<h3>업무 분배(같은 역할의 사람들)</h3>" + '<div class="pm-wide">' + table(["역할", "사람", "끝나지 않은 할 일", "지니", "최다 몫", "사람별(진행·긴급·지연)", "주의"], d.distribution.map(g => [
+      esc(g.role), String(g.people), String(g.active_total), g.gini === null ? "—" : g.gini.toFixed(2), pct(g.top_share),
+      esc(g.members.map(m => m.name + " " + m.active + "·" + m.urgent + "·" + m.overdue).join(", ")),
+      g.flags.length ? g.flags.map(f => '<div class="gate-badge gate-warn pm-signal">' + esc(f) + "</div>").join("") : '<span class="muted">-</span>']),
+      { empty: "같은 역할의 사람이 2명 이상인 역할이 없습니다." }) + "</div>" +
+    "</section>";
+}
+
