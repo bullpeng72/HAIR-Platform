@@ -953,7 +953,9 @@ async function selectTab(id, opts) {
     btn.classList.toggle("active", btn.dataset.tab === id);
   }
   _syncNavDropdowns();  // 설정 그룹 버튼에 지금 화면 표시(2026-11-25)
-  showMsg("global-msg", "", "ok");
+  // 다른 화면으로 옮길 때만 지운다(2026-11-27) — 저장 직후 `refresh()`가 "저장했습니다" 안내를 바로 지워 결과를 볼 수
+  // 없었다(모델 레지스트리 화면 테스트에서 발견). 안내는 몇 초 뒤 스스로 사라진다(`showMsg`).
+  if (isTabSwitch) showMsg("global-msg", "", "ok");
   const tab = TABS.find(t => t.id === id);
   const content = document.getElementById("content");
   if (isTabSwitch) {
