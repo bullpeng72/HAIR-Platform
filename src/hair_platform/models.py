@@ -301,6 +301,13 @@ class ResourceCandidate(BaseModel):
     # 있는지 확인") — human은 human_pool.employee_id, agent는
     # agent_pool.code(화면에서 미입력이면 "#id"로 폴백).
     code: str | None = None
+    # 용량·부하·부재(2026-11-27, Resource Management Phase A — `resource_capacity`). 없으면(None) 매칭은 예전과 같다.
+    active_tasks: int | None = None          # 확정 배정 중 끝나지 않은 할 일 수
+    capacity: int | None = None              # 사람: 동시에 맡을 수 있는 할 일 수
+    absent_until: str | None = None          # 오늘 부재 중이면 종료일(YYYY-MM-DD)
+    absent_from: str | None = None           # 2주 안에 시작하는 부재의 시작일
+    queue_wait_seconds: float | None = None  # Agent: 로컬 모델 줄의 지금 예상 대기
+    performance_source: str | None = None    # 적합도 출처(관리자 입력 / 자동 — 근거)
 
 
 class AssignmentRequest(BaseModel):

@@ -490,6 +490,8 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 "breakdown": sc.breakdown,
                 "exact_match": sc.exact_match,
                 "rationale": sc.rationale,
+                "notes": sc.notes,
+                "over_capacity": sc.over_capacity,
             }
             for sc in result.top
         ]
@@ -542,8 +544,12 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 raise HTTPException(
                     status_code=403, detail="본인 배정 요청만 가능합니다"
                 )
+        # 용량·부재 경고(2026-11-27, Resource Management Phase A) — 막지 않고 알려 주고 활동 기록에 남긴다.
+        from hair_platform import resource_capacity
+
+        warnings = resource_capacity.assignment_warnings(conn, payload.resource_type, payload.resource_id)
         try:
-            return assignments.create_assignment_request(
+            result = assignments.create_assignment_request(
                 conn,
                 task_id,
                 payload.resource_type,
@@ -552,6 +558,14 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 team_leader_id=payload.team_leader_id,
                 replaces_assignment_id=payload.replaces_assignment_id,
             )
+            if warnings:
+                audit.record(conn, user["id"], "assignment_requested_with_warning", "task", task_id,
+                             after={"resource_type": payload.resource_type, "resource_id": payload.resource_id,
+                                    "warnings": warnings})
+                conn.commit()
+                if isinstance(result, dict):
+                    result = {**result, "warnings": warnings}
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -90,10 +90,12 @@ function _wireMatchAssignButtons(container, taskId, onAssigned) {
         // 사용자 요청(2026-11-05, 로드맵 7번 "셀프배정 결재 단순화") —
         // 본인 셀프배정은 결재 없이 즉시 confirmed로 돌아온다.
         showMsg("global-msg",
-          result.status === "confirmed"
+          (result.status === "confirmed"
             ? "셀프배정이 결재 없이 바로 확정됐습니다 — 바로 협업 워크스페이스에서 작업을 시작할 수 있습니다."
-            : "배정 요청을 보냈습니다 — \"결재\" 탭에서 처리하세요.",
-          "ok");
+            : "배정 요청을 보냈습니다 — \"결재\" 탭에서 처리하세요.") +
+            // 용량·부재 경고(2026-11-27, Phase A) — 막지 않고 알려 준다.
+            ((result.warnings || []).length ? " ⚠ " + result.warnings.join(" ") : ""),
+          (result.warnings || []).length ? "error" : "ok");
         // 사용자 요청(2026-11-12, "업무를 요청하고, 협업공간에서
         // 진행과정과 결과물 확인이 어려워") — 결과(특히 셀프배정
         // 즉시확정 여부)를 콜백에 넘겨, 호출부가 "방금 확정됐으면
@@ -167,14 +169,18 @@ function renderMatchResult(taskId, result, containerId = "match-result", onAssig
     ["순위", "타입", "코드", "이름", "역할", "가용", "비용", "점수", "근거", "계정", "동작"],
     result.top.map((sc, i) => [
       i + 1, esc(label(sc.candidate.type)), esc(sc.candidate.code || ("#" + sc.candidate.id)), esc(sc.candidate.name || sc.candidate.role), esc(sc.candidate.role),
-      sc.candidate.is_available ? "가능" : "불가",
+      // 부하·부재·모델 대기(2026-11-27, Resource Management Phase A)
+      (sc.candidate.is_available ? "가능" : "불가") +
+        (sc.over_capacity ? ' <span class="gate-badge gate-warn">용량 초과</span>' : "") +
+        ((sc.notes || []).length ? '<div class="muted pm-note">' + sc.notes.map(esc).join(" · ") + "</div>" : ""),
       sc.candidate.cost,
       sc.score.toFixed(3) + (sc.exact_match ? " (역할 일치)" : (sc.rationale ? " (AI 추천)" : "")),
       // 사용자 요청(2026-11-02, "LLM judge로 추천 인력을 찾도록 개선") —
       // LLM이 근거(rationale)를 줬으면 그걸 사람이 읽는 문장으로
       // 보여주고, 기존 결정론적 매칭(rationale 없음)은 그대로 점수
       // breakdown JSON을 보여준다.
-      esc(sc.rationale || JSON.stringify(sc.breakdown)),
+      esc(sc.rationale || JSON.stringify(sc.breakdown)) +
+        (sc.candidate.performance_source ? '<div class="muted pm-note">적합도: ' + esc(sc.candidate.performance_source) + "</div>" : ""),
       accountCell(sc.candidate),
       '<div class="actions">' +
       '<button class="small" data-assign-type="' + esc(sc.candidate.type) + '" data-assign-id="' + sc.candidate.id + '" data-unlinked="' + (sc.candidate.type === "human" && sc.candidate.user_id == null ? "1" : "0") + '">배정 요청</button>' +

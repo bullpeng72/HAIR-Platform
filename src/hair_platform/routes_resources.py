@@ -245,6 +245,90 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         conn.commit()
         return {"id": human_id, **updates}
 
+    # ---------- 용량·부재 기간·부하(2026-11-27, Resource Management Phase A — `resource_capacity`) ----------
+    def _can_edit_human(user: sqlite3.Row, human_id: int) -> bool:
+        if user["role"] in (Role.ADMIN.value, Role.MANAGER.value):
+            return True
+        own = conn.execute("SELECT 1 FROM human_pool WHERE id = ? AND user_id = ?", (human_id, user["id"])).fetchone()
+        return own is not None
+
+    @app.get("/api/human-pool/me")
+    def get_my_human_record(user: sqlite3.Row = Depends(get_current_user)):
+        """로그인한 사람의 사람 인력 레코드(내 부재 적기용) — 연결된 레코드가 없으면 `{"id": null}`."""
+        row = conn.execute("SELECT id, name, role, max_concurrent_tasks FROM human_pool WHERE user_id = ? "
+                           "AND availability != 'offboarded'", (user["id"],)).fetchone()
+        return dict(row) if row else {"id": None}
+
+    @app.put("/api/human-pool/{human_id}/capacity")
+    def put_human_capacity(human_id: int, payload: dict = Body(...),
+                           user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """동시에 맡을 수 있는 할 일 수 — `{"max_concurrent_tasks": 4}`, null이면 기본값(3)."""
+        from hair_platform import resource_capacity
+
+        v = payload.get("max_concurrent_tasks")
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int)):
+            raise HTTPException(status_code=400, detail="max_concurrent_tasks_must_be_integer")
+        try:
+            return resource_capacity.set_capacity(conn, user["id"], human_id, v)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="사람을 찾을 수 없습니다") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/resource-absences")
+    def list_resource_absences(human_id: int | None = None, include_past: bool = False,
+                               user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER))):
+        """부재 기간 — admin·manager는 전체, member는 본인 것만."""
+        from hair_platform import resource_capacity
+
+        if user["role"] == Role.MEMBER.value:
+            own = conn.execute("SELECT id FROM human_pool WHERE user_id = ?", (user["id"],)).fetchone()
+            if own is None:
+                return []
+            human_id = own["id"]
+        return resource_capacity.list_absences(conn, human_id, include_past)
+
+    @app.post("/api/human-pool/{human_id}/absences", status_code=201)
+    def add_resource_absence(human_id: int, payload: dict = Body(...),
+                             user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER))):
+        """부재 기간 추가 — `{"starts_on": "2026-12-01", "ends_on": "2026-12-05", "reason": "휴가"}`. 본인도 적을 수 있다."""
+        from hair_platform import resource_capacity
+
+        if not _can_edit_human(user, human_id):
+            raise HTTPException(status_code=403, detail="본인 부재만 적을 수 있습니다")
+        try:
+            return resource_capacity.add_absence(conn, user["id"], human_id, str(payload.get("starts_on") or ""),
+                                                 str(payload.get("ends_on") or ""), str(payload.get("reason") or ""))
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="사람을 찾을 수 없습니다") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/resource-absences/{absence_id}")
+    def delete_resource_absence(absence_id: int,
+                                user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER))):
+        from hair_platform import resource_capacity
+
+        row = conn.execute("SELECT resource_id FROM resource_absences WHERE id = ?", (absence_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="부재 기간을 찾을 수 없습니다")
+        if not _can_edit_human(user, row["resource_id"]):
+            raise HTTPException(status_code=403, detail="본인 부재만 지울 수 있습니다")
+        resource_capacity.delete_absence(conn, user["id"], absence_id)
+        return {"deleted": True}
+
+    @app.get("/api/resource-load")
+    def get_resource_load(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """사람·Agent별 지금 부하 — 끝나지 않은 할 일 수, 용량, 부재, 모델 대기, 적합도 출처(매칭과 같은 계산)."""
+        from hair_platform import pool, resource_capacity
+
+        out = []
+        for c in pool.human_pool_candidates(conn) + pool.agent_pool_candidates(conn):
+            factor, notes, over = resource_capacity.availability_factor(c)
+            out.append({**c.model_dump(), "availability_factor": factor, "notes": notes, "over_capacity": over,
+                        "utilization": (c.active_tasks or 0) / c.capacity if c.capacity else None})
+        return {"default_capacity": resource_capacity.DEFAULT_HUMAN_CAPACITY, "resources": out}
+
     @app.post("/api/human-pool/{human_id}/offboard")
     def offboard_human(
         human_id: int,

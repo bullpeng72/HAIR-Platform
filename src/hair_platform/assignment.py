@@ -35,6 +35,9 @@ class ScoredCandidate:
     # None이다. `match_llm_judge.judge_candidates()`가 이 dataclass를
     # 재사용하면서 LLM의 판단 근거를 채워 넣는다(기본값 있어 하위호환).
     rationale: str | None = None
+    # 부하·부재 설명과 용량 초과 여부(2026-11-27, Resource Management Phase A) — 화면에 그대로 보여 준다.
+    notes: list[str] = field(default_factory=list)
+    over_capacity: bool = False
 
 
 @dataclass
@@ -79,6 +82,28 @@ def _role_matches(candidate_role: str, required_role: str) -> bool:
     return a in b or b in a
 
 
+def _score(c: ResourceCandidate, pool: list[ResourceCandidate], exact_match: bool = False) -> ScoredCandidate:
+    """가중치 점수(ADR — 가용성40·적합도35·비용25, 적합도 없으면 가용성60·비용40). 가용성은 부하 정보가 있으면 남은 용량
+    비율·모델 대기를 반영한다(`resource_capacity.availability_factor`, 2026-11-27 Phase A)."""
+    from hair_platform import resource_capacity
+
+    availability, notes, over = resource_capacity.availability_factor(c)
+    cost_score = _cost_score(c.cost, pool)
+    if c.performance_score is None:
+        # null 예외: 적합도 제외, 가용성60·비용40으로 재조정
+        score = availability * 0.60 + cost_score * 0.40
+        breakdown = {"availability": availability * 0.60, "cost": cost_score * 0.40}
+    else:
+        score = availability * 0.40 + c.performance_score * 0.35 + cost_score * 0.25
+        breakdown = {
+            "availability": availability * 0.40,
+            "fit": c.performance_score * 0.35,
+            "cost": cost_score * 0.25,
+        }
+    return ScoredCandidate(candidate=c, score=score, breakdown=breakdown, exact_match=exact_match,
+                           notes=notes, over_capacity=over)
+
+
 def match_candidates(
     required_role: str,
     required_skills: list[str],
@@ -97,13 +122,11 @@ def match_candidates(
         and c.is_available
     ]
     if exact:
-        ranked = sorted(exact, key=lambda c: c.cost)
-        scored = [
-            ScoredCandidate(
-                candidate=c, score=1.0, breakdown={"exact_match": 1.0}, exact_match=True
-            )
-            for c in ranked
-        ]
+        # 역할·스킬 모두 맞는 후보끼리는 예전엔 비용만으로 줄 세웠다(2026-11-27, Resource Management Phase A) — 용량을 다
+        # 쓴 사람·성과 낮은 Agent가 싸다는 이유로 1등이 됐다. 같은 가중치 점수(가용성은 남은 용량)로 줄 세우고, 용량이
+        # 꽉 찬 후보는 뒤로 보낸다. 부하 정보가 없는 후보(예전 데이터)는 예전과 같은 점수다.
+        scored = [_score(c, exact, exact_match=True) for c in exact]
+        scored.sort(key=lambda s: (not s.over_capacity, s.score, -s.candidate.cost), reverse=True)
         return MatchResult(top=scored[:3], generate_new=False)
 
     # 코드 재점검(2026-09-26, R3)에서 발견한 버그 수정: 완전일치가 없으면 이전엔
@@ -126,26 +149,7 @@ def match_candidates(
     if not role_relevant:
         return MatchResult(top=[], generate_new=True)
 
-    scored: list[ScoredCandidate] = []
-    for c in role_relevant:
-        availability = 1.0 if c.is_available else 0.0
-        cost_score = _cost_score(c.cost, role_relevant)
-        if c.performance_score is None:
-            # null 예외: 적합도 제외, 가용성60·비용40으로 재조정
-            score = availability * 0.60 + cost_score * 0.40
-            breakdown = {"availability": availability * 0.60, "cost": cost_score * 0.40}
-        else:
-            score = availability * 0.40 + c.performance_score * 0.35 + cost_score * 0.25
-            breakdown = {
-                "availability": availability * 0.40,
-                "fit": c.performance_score * 0.35,
-                "cost": cost_score * 0.25,
-            }
-        scored.append(
-            ScoredCandidate(
-                candidate=c, score=score, breakdown=breakdown, exact_match=False
-            )
-        )
+    scored: list[ScoredCandidate] = [_score(c, role_relevant) for c in role_relevant]
 
     # 점수 가중치(ADR — 가용성·적합도·비용)는 그대로 두고, 같은 점수면 요구 스킬을 더 많이 갖춘
     # 후보를 앞에 둔다.

@@ -40,11 +40,12 @@ async function renderMyWork(content) {
       r.latest_deliverable_at ? esc(fmtTime(r.latest_deliverable_at)) : "-",
       '<button class="small" data-open-workspace="' + r.task_id + '">열기</button>',
     ]), { empty: "아직 맡은 일이 없습니다. 내가 맡긴 일과 나·내 팀에 배정된 일이 여기에 모입니다. <button class=\"small\" data-go-tab=\"home\">홈에서 AI에게 일 맡기기</button>" }) +
-    '<div id="mywork-detail"></div></section>';
+    '<div id="mywork-detail"></div></section>' + '<div id="myabs-slot"></div>';
 
   content.querySelectorAll("[data-open-workspace]").forEach(btn => {
     btn.onclick = () => renderCollabWorkspace(Number(btn.dataset.openWorkspace));
   });
+  if (ME.role !== "viewer") _renderMyAbsences(content.querySelector("#myabs-slot"));
 }
 
 // 사용자 요청(2026-11-10, "claude의 artifact 처럼... 최종 결과물을
@@ -2056,5 +2057,32 @@ async function loadDeliverableComments(deliverableId, taskId, containerId) {
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     });
   }
+}
+
+/* ---------- 내 부재(2026-11-27, Resource Management Phase A) — 휴가·출장을 직접 적으면 그 기간엔 매칭에서 빠진다 ---------- */
+async function _renderMyAbsences(slot) {
+  if (!slot) return;
+  let mine = [];
+  try { mine = await api("GET", "/api/resource-absences"); } catch (_) { return; }
+  const me = await api("GET", "/api/human-pool/me").catch(() => null);
+  if (!me || !me.id) return;  // 사람 인력에 연결되지 않은 계정
+  const today = new Date().toISOString().slice(0, 10);
+  slot.innerHTML = '<section class="card"><h3>내 부재 일정</h3><p class="muted">휴가·출장·교육처럼 일을 맡을 수 없는 기간을 적어 두면 그 기간에는 새 일이 배정 후보에서 빠지고, 2주 전부터 배정하는 사람에게 미리 알려 줍니다.</p>' +
+    table(["기간", "사유", ""], mine.map(a => [esc(a.starts_on) + " ~ " + esc(a.ends_on), esc(a.reason || ""),
+      '<button class="small danger" data-myabs-del="' + a.id + '">지우기</button>']), { empty: "적어 둔 부재가 없습니다." }) +
+    '<div class="inline" style="flex-wrap:wrap;margin-top:0.4rem"><input type="date" id="myabs-from" value="' + today + '" aria-label="시작">' +
+    '<input type="date" id="myabs-to" value="' + today + '" aria-label="끝"><input id="myabs-why" placeholder="사유(선택)" maxlength="200">' +
+    '<button class="small" id="myabs-add">부재 추가</button> <span class="muted" id="myabs-msg"></span></div></section>';
+  slot.querySelector("#myabs-add").onclick = async () => {
+    try {
+      await api("POST", "/api/human-pool/" + me.id + "/absences", { starts_on: slot.querySelector("#myabs-from").value,
+        ends_on: slot.querySelector("#myabs-to").value, reason: slot.querySelector("#myabs-why").value });
+      _renderMyAbsences(slot);
+    } catch (e) { slot.querySelector("#myabs-msg").textContent = e.message || String(e); }
+  };
+  slot.querySelectorAll("[data-myabs-del]").forEach(b => b.onclick = async () => {
+    try { await api("DELETE", "/api/resource-absences/" + b.dataset.myabsDel); _renderMyAbsences(slot); }
+    catch (e) { slot.querySelector("#myabs-msg").textContent = e.message || String(e); }
+  });
 }
 

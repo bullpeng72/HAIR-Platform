@@ -78,7 +78,8 @@ async function renderHumanPool(content) {
         p.performance_score === null ? "-" : p.performance_score,
         linkedAccount,
         '<div class="actions">' + middleActions + deleteAction + "</div>"];
-    })) + "</section>";
+    })) + "</section>" + '<div id="rm-load-slot"></div>';
+  _renderResourceLoad(content.querySelector("#rm-load-slot"));
 
   const skillPicker = initSkillPicker("hp-skills-picker", "hp-skills", []);
   document.getElementById("hp-user-id").addEventListener("change", (ev) => {
@@ -169,6 +170,69 @@ async function renderHumanPool(content) {
         refresh();
       } catch (e) { showMsg("global-msg", e.message, "error"); }
     };
+  });
+}
+
+/* ---------- 용량·부하·부재(2026-11-27, Resource Management Phase A — `resource_capacity`) ---------- */
+async function _renderResourceLoad(slot) {
+  if (!slot) return;
+  const [load, absences] = await Promise.all([api("GET", "/api/resource-load"), api("GET", "/api/resource-absences")]);
+  const humans = load.resources.filter(r => r.type === "human");
+  const agents = load.resources.filter(r => r.type === "agent");
+  const today = new Date().toISOString().slice(0, 10);
+  const bar = r => {
+    const u = r.utilization || 0;
+    const cls = u >= 1 ? "rm-over" : u >= 0.67 ? "rm-high" : "";
+    return '<span class="pm-share rm-bar ' + cls + '"><span style="width:' + Math.min(100, Math.round(u * 100)) + '%"></span></span> ' +
+      (r.active_tasks || 0) + "/" + r.capacity;
+  };
+  const hRows = humans.map(r => [
+    esc(r.name || r.role), esc(r.role), bar(r) + (r.over_capacity ? ' <span class="gate-badge gate-warn">' + ((r.active_tasks || 0) > r.capacity ? "용량 초과" : "꽉 참") + "</span>" : ""),
+    r.absent_until ? '<span class="gate-badge gate-warn">부재 ~' + esc(r.absent_until) + "</span>" : (r.absent_from ? esc(r.absent_from) + "부터 부재" : '<span class="muted">-</span>'),
+    '<span class="pair"><input type="number" min="1" max="50" id="rm-cap-' + r.id + '" placeholder="' + load.default_capacity + '" value="' + (r.capacity !== load.default_capacity ? r.capacity : "") + '" style="width:4.5rem" aria-label="동시 용량">' +
+      '<button class="small" data-rm-cap="' + r.id + '">용량 저장</button></span> ' +
+      '<span class="pair"><input type="date" id="rm-from-' + r.id + '" value="' + today + '" aria-label="부재 시작"><input type="date" id="rm-to-' + r.id + '" value="' + today + '" aria-label="부재 끝">' +
+      '<input id="rm-why-' + r.id + '" placeholder="사유" maxlength="200" style="width:6rem"><button class="small" data-rm-abs="' + r.id + '">부재 추가</button></span>',
+  ]);
+  const aRows = agents.map(r => [
+    esc(r.name && r.name !== r.role ? r.name + " (" + r.role + ")" : r.role), String(r.active_tasks || 0),
+    r.queue_wait_seconds ? "약 " + Math.max(1, Math.round(r.queue_wait_seconds / 60)) + "분" : '<span class="muted">-</span>',
+    r.performance_score === null || r.performance_score === undefined ? '<span class="muted">근거 부족</span>'
+      : r.performance_score.toFixed(2) + '<div class="muted pm-note">' + esc(r.performance_source || "") + "</div>",
+  ]);
+  const absRows = absences.map(a => [esc(a.human_name), esc(a.starts_on) + " ~ " + esc(a.ends_on), esc(a.reason || ""),
+    '<button class="small danger" data-rm-del="' + a.id + '">지우기</button>']);
+  slot.innerHTML = '<section class="card"><h2>용량·부하·부재</h2>' +
+    helpBox('<ul class="muted help-list">' +
+      "<li><b>진행 중/용량</b> = 확정 배정 중 아직 끝나지 않은 할 일 수 / 동시에 맡을 수 있는 할 일 수(비우면 기본 " + load.default_capacity + "). 매칭은 남은 용량이 많을수록 가용성 점수를 높게 주고, 꽉 찬 사람은 후보 뒤로 보내며 '용량 초과'로 표시합니다.</li>" +
+      "<li><b>부재</b>(휴가·출장·교육 등)를 적어 두면 그 기간에는 매칭에서 '불가'가 되고, 2주 안에 시작하는 부재는 후보 옆에 미리 알려 줍니다. 구성원은 \"내 업무\"에서 자기 부재를 직접 적을 수 있습니다.</li>" +
+      "<li>배정 요청은 막지 않습니다 — 용량을 넘기거나 부재 중인 사람에게 요청하면 경고가 뜨고 활동 기록(<code>assignment_requested_with_warning</code>)에 남습니다.</li>" +
+      "<li><b>Agent</b>는 맡은 할 일 수와, 로컬 모델(Ollama)을 쓰면 지금 맡길 때 예상 대기가 매칭에 반영됩니다. 적합도는 관리자 입력이 없으면 목표 달성 평균과 사람이 그 Agent 결과물을 승인한 비율로 자동 계산합니다(근거가 모자라면 비움).</li>" +
+      "</ul>") +
+    "<h3>사람</h3>" + '<div class="pm-wide">' + table(["이름", "역할", "진행 중/용량", "부재", "설정"], hRows, { empty: "등록된 사람이 없습니다." }) + "</div>" +
+    "<h3>예정된 부재</h3>" + table(["이름", "기간", "사유", ""], absRows, { empty: "예정된 부재가 없습니다." }) +
+    '<details class="rm-agents"><summary><h3 style="display:inline">Agent ' + agents.length + "개</h3> " +
+      '<span class="muted">맡은 할 일 ' + agents.reduce((a, r) => a + (r.active_tasks || 0), 0) + "건 · 자동 적합도 근거 있음 " +
+      agents.filter(r => r.performance_score !== null && r.performance_score !== undefined).length + "개</span></summary>" +
+      '<div class="pm-wide-sm">' + table(["Agent", "맡은 할 일", "모델 대기", "적합도"], aRows, { empty: "온보딩된 Agent가 없습니다." }) + "</div></details>" +
+    '<p class="muted" id="rm-msg"></p></section>';
+  const msg = t => { slot.querySelector("#rm-msg").textContent = t; };
+  slot.querySelectorAll("[data-rm-cap]").forEach(b => b.onclick = async () => {
+    const raw = slot.querySelector("#rm-cap-" + b.dataset.rmCap).value.trim();
+    try { await api("PUT", "/api/human-pool/" + b.dataset.rmCap + "/capacity", { max_concurrent_tasks: raw === "" ? null : Number(raw) }); _renderResourceLoad(slot); }
+    catch (e) { msg("저장하지 못했습니다: " + (e.message || e)); }
+  });
+  slot.querySelectorAll("[data-rm-abs]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.rmAbs;
+    try {
+      await api("POST", "/api/human-pool/" + id + "/absences", { starts_on: slot.querySelector("#rm-from-" + id).value,
+        ends_on: slot.querySelector("#rm-to-" + id).value, reason: slot.querySelector("#rm-why-" + id).value });
+      _renderResourceLoad(slot);
+    } catch (e) { msg("부재를 추가하지 못했습니다: " + (e.message || e)); }
+  });
+  slot.querySelectorAll("[data-rm-del]").forEach(b => b.onclick = async () => {
+    try { await api("DELETE", "/api/resource-absences/" + b.dataset.rmDel); _renderResourceLoad(slot); }
+    catch (e) { msg("지우지 못했습니다: " + (e.message || e)); }
   });
 }
 

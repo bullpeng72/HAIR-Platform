@@ -734,6 +734,10 @@
   .pm-example { border: 1px solid var(--color-border); border-radius: 6px; padding: 0.3rem 0.6rem; margin: 0.3rem 0; }
   .pm-example summary { cursor: pointer; }
   .pm-hourly input { width: 6rem; }
+  /* 용량·부하(2026-11-27, Resource Management Phase A) */
+  .rm-bar span { background: var(--pm-ai); }
+  .rm-bar.rm-high span { background: var(--pm-wait); }
+  .rm-bar.rm-over span { background: var(--status-danger-fg); }
   .ab-del { color: var(--status-danger-fg, #991b1b); }
   .pm-wrap td:last-child { white-space: nowrap; }
 

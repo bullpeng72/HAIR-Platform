@@ -29,7 +29,7 @@ const MENU_HINTS = {
   jobs: { help: "단일 Agent 만들기", desc: "새 AI 에이전트를 만들고 온보딩 승인을 받는다", words: "Agent 생성 만들기 역할 온보딩" },
   agentpool: { help: "AI 에이전트 관리", desc: "AI 에이전트의 스킬·도구·모델·파인튜닝 관리", words: "Agent 관리 스킬 도구 모델 파인튜닝 추론 모드 최적화 추천 비활성" },
   agentoptimize: { help: "기본 모델과 보조 작업 모델", desc: "Agent들의 모델 설정을 한꺼번에 바꾸고 플랫폼 공통 기본 LLM을 정한다", words: "LLM 설정 모델 일괄 변경 공통 기본 보조 작업 모델 임베딩" },
-  humanpool: { help: "사람 인력 관리", desc: "사람 인력 등록·스킬 관리", words: "사람 직원 인력 등록 스킬" },
+  humanpool: { help: "사람 인력 관리", desc: "사람 인력 등록·스킬·용량·부재 관리", words: "사람 직원 인력 등록 스킬 용량 부하 부재 휴가 출장 가용 업무량 과부하" },
   poolregistry: { help: "Skill 관리", desc: "도구·스킬 등록과 지침 관리, MCP 도구", words: "도구 스킬 MCP 지침 등록 Tool Skill" },
   teams: { help: "방법 A — 팀(Team) 등록", desc: "사람·Agent로 팀을 만들고 매니저·실행 방식을 정한다", words: "팀 구성 매니저 위임 초기화 시 보호" },
   pipelines: { help: "새 파이프라인 만들기", desc: "단계별 파이프라인 템플릿을 만들고 고친다", words: "파이프라인 단계 템플릿 Gate 판정 되돌림 승인 단계 초안 업무 설명 자동 설계 AI 설계" },

@@ -967,6 +967,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 외부 입력 트리거·결재 후 실행 동작(2026-11-27, 4단계 — `inbound`·`stage_actions`).
     from hair_platform import inbound, process_metrics, stage_actions
     process_metrics.ensure_schema(conn)  # 사람 1시간 비용(2026-11-27, 5단계)
+    # 자원 용량·부재 기간(2026-11-27, Resource Management Phase A — `resource_capacity`).
+    _ensure_column(conn, "human_pool", "max_concurrent_tasks", "INTEGER")
+    from hair_platform import resource_capacity
+    resource_capacity.ensure_schema(conn)
     inbound.ensure_schema(conn)
     stage_actions.ensure_schema(conn)
     _sync_dev_crew_pipeline_integration(conn)

@@ -43,17 +43,28 @@ def human_pool_candidates(
         params.append(availability)
 
     rows = conn.execute(query, params).fetchall()
+    from hair_platform import resource_capacity  # 용량·부하·부재(2026-11-27, Phase A)
+
+    load = resource_capacity.active_tasks(conn)
+    absences = resource_capacity.absence_status(conn)
     candidates = []
     for row in rows:
         skill_tags = json.loads(row["skill_tags"])
         if skill and skill not in skill_tags:
             continue
+        absent = absences.get(row["id"]) or {}
         candidates.append(
             ResourceCandidate(
                 id=row["id"],
                 type="human",
                 role=row["role"],
-                is_available=row["availability"] == "available",
+                # 오늘이 부재 기간 안이면 '가용'으로 표시돼 있어도 불가.
+                is_available=row["availability"] == "available" and not absent.get("absent_until"),
+                active_tasks=load.get(("human", row["id"]), 0),
+                capacity=resource_capacity.human_capacity(row),
+                absent_until=absent.get("absent_until"),
+                absent_from=absent.get("absent_from"),
+                performance_source=("관리자 입력(본인 동의)" if row["performance_consent"] and row["performance_score"] is not None else None),
                 cost=row["cost_estimate"],
                 skill_tags=skill_tags,
                 # 동의(performance_consent) 없이는 절대 노출하지 않는다.
@@ -87,11 +98,16 @@ def agent_pool_candidates(
         params.append(f"%{role}%")
 
     rows = conn.execute(query, params).fetchall()
+    from hair_platform import resource_capacity  # 부하·모델 대기(2026-11-27, Phase A)
+
+    load = resource_capacity.active_tasks(conn)
+    waits = resource_capacity.AgentWait(conn)
     candidates = []
     for row in rows:
         skill_tags = json.loads(row["skill_tags"])
         if skill and skill not in skill_tags:
             continue
+        auto = None if row["performance_score"] is not None else agent_evaluation.auto_fit_detail(conn, row["id"])
         candidates.append(
             ResourceCandidate(
                 id=row["id"],
@@ -100,12 +116,14 @@ def agent_pool_candidates(
                 is_available=True,
                 cost=row["cost_estimate"],
                 skill_tags=skill_tags,
-                # 관리자 입력값이 없으면 자동 적합도(Gate A 평균, 평가 3건 이상일 때만 — 2026-11-22).
+                # 관리자 입력값이 없으면 자동 적합도(Gate A 평균 + 사람 결재 승인율 — 2026-11-22, 2026-11-27 Phase A).
                 performance_score=(
-                    row["performance_score"]
-                    if row["performance_score"] is not None
-                    else agent_evaluation.auto_fit_score(conn, row["id"])
+                    row["performance_score"] if row["performance_score"] is not None else (auto or {}).get("score")
                 ),
+                performance_source=("관리자 입력" if row["performance_score"] is not None
+                                    else (auto or {}).get("source")),
+                active_tasks=load.get(("agent", row["id"]), 0),
+                queue_wait_seconds=waits.for_agent(row),
                 # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
                 # 지정 안 했으면 None(화면에서 role로 폴백, 데이터는
                 # 솔직하게 비워둔다).

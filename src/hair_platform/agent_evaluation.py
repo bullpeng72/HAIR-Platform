@@ -609,6 +609,42 @@ def compute_raw_html_syntax_check(content: str) -> dict:
 AUTO_FIT_MIN_SAMPLES = 3
 
 
+def auto_fit_detail(conn: sqlite3.Connection, agent_id: int) -> dict | None:
+    """자동 적합도와 근거(2026-11-27, Resource Management Phase A) — Gate A(목표 달성) 평균에, 그 Agent 결과물을
+    **사람이 결재한 기록**(최근 90일 승인·반려, 3건 이상일 때)을 더한다: 0.6 × Gate A + 0.4 × 사람 승인율. 자동 점검만으로는
+    사람이 실제로 받아들였는지 알 수 없었다. 근거가 모자라면 있는 쪽만, 둘 다 없으면 None(지어내지 않는다)."""
+    gate = auto_fit_score(conn, agent_id)
+    n_eval = (aggregate_agent_score(conn, agent_id) or {}).get("sample_count", 0)
+    try:
+        row = conn.execute(
+            "SELECT SUM(CASE WHEN d.status = 'approved' THEN 1 ELSE 0 END) AS ok, COUNT(*) AS n FROM deliverables d "
+            "WHERE d.author_type = 'agent' AND d.author_id = ? AND d.status IN ('approved', 'rejected') "
+            "AND d.created_at >= datetime('now', '-90 days') AND ("
+            " EXISTS (SELECT 1 FROM approvals a WHERE a.subject_type = 'deliverable' AND a.subject_id = d.id "
+            "         AND a.status IN ('approved', 'rejected'))"
+            " OR EXISTS (SELECT 1 FROM pipeline_run_stages rs JOIN approvals a ON a.subject_type = 'pipeline_run_stage' "
+            "         AND a.subject_id = rs.id AND a.status IN ('approved', 'rejected') WHERE rs.deliverable_id = d.id))",
+            (agent_id,)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    n_human = int(row["n"] or 0) if row else 0
+    rate = (int(row["ok"] or 0) / n_human) if row and n_human >= AUTO_FIT_MIN_SAMPLES else None
+    if gate is None and rate is None:
+        return None
+    if gate is not None and rate is not None:
+        score = 0.6 * gate + 0.4 * rate
+        source = f"자동 — 목표 달성 평균 {gate:.2f}(평가 {n_eval}건) · 사람 승인율 {round(rate * 100)}%({n_human}건)"
+    elif gate is not None:
+        score = gate
+        source = f"자동 — 목표 달성 평균 {gate:.2f}(평가 {n_eval}건)"
+    else:
+        assert rate is not None
+        score = rate
+        source = f"자동 — 사람 승인율 {round(rate * 100)}%({n_human}건)"
+    return {"score": max(0.0, min(1.0, score)), "source": source, "gate_a": gate, "human_approval_rate": rate,
+            "human_decisions": n_human, "evaluations": n_eval}
+
+
 def auto_fit_score(conn: sqlite3.Connection, agent_id: int) -> float | None:
     """매칭용 자동 적합도(2026-11-22, 하드코딩·스텁 점검 3순위) — 관리자가 `performance_score`를
     입력하지 않은 Agent에 쓴다. 그 Agent 산출물의 Gate A(목표 달성) 평균만 쓴다 — C(실행 안정성)·
