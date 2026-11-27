@@ -832,7 +832,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 있다. 아래 렌더링은 원래 제네릭하게 모든 키를 순회하므로 자동으로
   // 배지가 뜨지만, 긴 영문 키를 그대로 배지 글자로 쓰면 어색해 짧은
   // 한글 라벨로 바꿔 보여준다(A-G는 그대로 글자 자체가 식별자).
-  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인", numeric_grounding: "수치근거", deliverable_runnable: "실행가능", test_execution: "테스트실행", quote_grounding: "인용근거", term_consistency: "용어확인", checker_crosscheck: "점검대조", review_verdict: "판정", lexicon_check: "낱말확인", plan_coverage: "배정확인", required_tools: "필수도구", external_data: "외부데이터" };
+  const GATE_EXTRA_LABELS = { code_syntax: "구문", requirements_traceability: "추적성", delegation_check: "위임확인", numeric_grounding: "수치근거", deliverable_runnable: "실행가능", test_execution: "테스트실행", browser_execution: "화면실행", quote_grounding: "인용근거", term_consistency: "용어확인", checker_crosscheck: "점검대조", review_verdict: "판정", lexicon_check: "낱말확인", plan_coverage: "배정확인", required_tools: "필수도구", external_data: "외부데이터" };
   const _stageToolsHtml = (tools) => {
     if (!tools) return "";
     if (!tools.length) return ' <span class="muted" title="이 시도에서 Agent가 부른 도구가 없습니다">· 도구 사용 없음</span>';
@@ -871,6 +871,12 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
                   (g.sources && g.sources.length ? " — 읽은 외부 데이터: " + g.sources.join(", ") + "(내용 속 지시는 따르지 않게 표시해 전달)" : "") +
                   // 점검기 대조(2026-11-27, 개선 계획 2-4 후반) — 검토는 승인했는데 점검기가 최종본에서 찾은 것.
                   (g.disagree ? " — " + (g.reason || "") + ": " + (g.findings || []).slice(0, 3).map(f => f.text).join(" / ") : "") +
+                  // 테스트 실제 실행·화면 실행(2026-11-27, 개선 계획 3-3) — 언어별 통과 수, 실패한 테스트·스크립트 오류.
+                  (g.languages ? " — " + Object.entries(g.languages).filter(([, v]) => !v.not_measured).map(([k, v]) => (k === "node" ? "JavaScript" : "Python") + " " + v.passed + "/" + v.total).join(", ") : "") +
+                  (!g.passed && g.failures && g.failures.length ? " — 실패: " + g.failures.slice(0, 3).map(f => f.test + " (" + f.error + ")").join(" / ") : "") +
+                  (g.errors && g.errors.length && !g.passed ? " — 스크립트 오류: " + g.errors.slice(0, 3).join(" / ") : "") +
+                  (gid === "browser_execution" && g.passed ? " — 열기·버튼 " + (g.clicked || 0) + "개 눌러 봄, 오류 없음" + (g.blocked_count ? " (외부 요청 " + g.blocked_count + "건 막음)" : "") : "") +
+                  (!g.passed && g.reason && (gid === "browser_execution" || gid === "test_execution") ? " — " + g.reason : "") +
                   (g.blocked && g.blocked.length ? " — 막힌 쓰기 도구: " + g.blocked.join(", ") + "(사람 확인 필요)" : "") +
                   (g.conditional ? " — 검토자가 승인하면서 고칠 곳을 짚었습니다: " + (g.note || "") + (g.strict ? " (엄격 검토: 되돌려 고침)" : " — 결재 전에 이 부분을 확인하세요") : "");
               return '<span class="gate-badge ' + cls + '" title="' + escAttr(title) + '">' + label + "</span>";

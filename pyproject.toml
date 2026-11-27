@@ -63,6 +63,7 @@ dependencies = [
 dev = ["pytest>=7.0.0", "black>=23.0.0", "ruff>=0.5.0"]
 # 화면 자동 테스트(2026-11-26, 개선 계획 2-1 — tests/e2e). 개발용 선택 설치라 pip 설치·배포에는 영향이 없다.
 # 설치 뒤 브라우저도 받는다: python -m playwright install chromium (없으면 tests/e2e는 건너뛴다)
+# 서버에 설치하면 HTML 결과물 화면실행 점검(browser_check.py, 2026-11-27)도 켜진다.
 e2e = ["playwright>=1.48,<2.0"]
 # llm.py가 지연 import한다 — use_llm=True 경로를 실제로 쓸 때만 필요하다.
 # Ollama는 로컬 서버(기본 http://localhost:11434)가 별도로 떠 있어야 한다.

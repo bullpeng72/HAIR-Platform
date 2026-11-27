@@ -141,7 +141,8 @@ ENV_VARS: tuple[EnvVar, ...] = (
            "그 값, 0이면 상한 없음). 넘는 호출은 기다리고 대화 응답이 파이프라인보다 먼저 들어간다. 모델별 값은 모델 "
            "레지스트리 '동시 실행 상한'", default="1"),
     EnvVar("HAIR_ALLOW_LOCAL_CODE_RUN", GROUP_ADVANCED,
-           "1이면 Docker 샌드박스 대신 로컬에서 코드 테스트 실행(격리 없음 — 운영 비권장, 기본 0)", default="0"),
+           "1이면 Docker 샌드박스 대신 로컬에서 코드 테스트(Python·JavaScript) 실행, 브라우저 샌드박스 없이도 화면실행 "
+           "점검(격리 없음 — 운영 비권장, 기본 0)", default="0"),
 )
 
 _BY_KEY: dict[str, EnvVar] = {v.key: v for v in ENV_VARS}

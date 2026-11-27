@@ -54,6 +54,14 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 # (재시도·에스컬레이션·취소·승인)을 `crew_runtime.run_crew`를 가짜로 바꿔 검증한다 — 흐름은 실행 방식과 무관하므로
 # 그 테스트들은 crewai 경로로 고정한다. 기본값(direct) 자체는 test_phase130_stage_runner.py가 두 엔진 종단까지 검증한다.
 os.environ["HAIR_STAGE_RUNTIME"] = "crewai"
+# 코드 테스트를 격리 없이 로컬에서 돌리는 설정은 테스트가 스스로 켠다(셸에 켜 두었어도 지운다).
+os.environ.pop("HAIR_ALLOW_LOCAL_CODE_RUN", None)
+
+# 화면 결과물 브라우저 실행(2026-11-27, 개선 계획 3-3) — HTML을 내는 테스트마다 Chromium을 띄우지 않게 끈다.
+# 이 기능 자체는 test_phase153_deliverable_execution.py가 켜고 검증한다.
+from hair_platform import browser_check as _browser_check  # noqa: E402
+
+_browser_check.AUTO_RUN = False
 
 # 외부 네트워크 차단 — 테스트가 실제 외부 서비스(OpenAI·Tavily·PyPI 등)에 접속하면 PC·CI 네트워크 상태에 따라 결과가
 # 달라지고 비용이 들 수 있다. 같은 PC 안(localhost — 테스트용 HTTP 서버·로컬 Ollama 흉내)만 허용한다.

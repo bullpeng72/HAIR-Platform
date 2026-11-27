@@ -624,7 +624,8 @@ def auto_fit_score(conn: sqlite3.Connection, agent_id: int) -> float | None:
 def attach_quality_checks(gate_scores: dict, output: str, evidence: str | None = None) -> dict:
     """결정적 품질 검사 두 가지를 측정됐을 때만 점수에 붙인다(2026-11-23, P0-1·P0-3) —
     `numeric_grounding`(퍼센트가 근거 숫자로 재현되는지, `numeric_check.py`)과
-    `test_execution`(결과물의 Python 테스트를 격리 환경에서 실제로 실행, `code_tests.py`).
+    `test_execution`(결과물의 Python·JavaScript 테스트를 격리 환경에서 실제로 실행, `code_tests.py`),
+    `browser_execution`(HTML 문서를 Chromium으로 열어 본 결과, `browser_check.py`).
     단일 Agent 실행·Crew 실행·두 파이프라인 엔진이 같은 함수를 쓴다. 파이프라인 단계는
     `gate_ids`에 이 키를 넣었을 때만 통과 판정에 참여한다(기본은 기록·배지 표시)."""
     from hair_platform import code_tests, numeric_check, text_checks
@@ -650,4 +651,10 @@ def attach_quality_checks(gate_scores: dict, output: str, evidence: str | None =
     if not tests["not_measured"] or "Docker" in (tests.get("reason") or ""):
         # 테스트가 있는데 격리 환경이 없어 못 돌린 경우도 "미평가" 배지로 남겨 사람이 알게 한다.
         gate_scores["test_execution"] = tests
+    # 화면 결과물 실제 실행(2026-11-27, 개선 계획 3-3 — `browser_check.py`): 완전한 HTML 문서가 있으면 Chromium으로 열어
+    # 스크립트 오류·빈 화면·버튼 오류를 본다. 도구가 없어 못 돌렸으면 "미평가" 배지로 남긴다.
+    from hair_platform import browser_check
+
+    if browser_check.AUTO_RUN and browser_check.find_html_document(output or "") is not None:
+        gate_scores["browser_execution"] = browser_check.compute_browser_execution(output or "")
     return gate_scores

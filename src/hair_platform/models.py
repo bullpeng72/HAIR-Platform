@@ -721,6 +721,8 @@ PipelineStageMode = Literal["single", "sequential_relay", "plan_merge"]
 GateId = Literal[
     "A", "B", "C", "D", "E", "F", "G",
     "requirements_traceability", "deliverable_runnable", "code_syntax",
+    # 결과물 실제 실행(2026-11-27, 개선 계획 3-3) — 기본은 기록만, 단계 Gate에 넣으면 통과 판정에 참여한다.
+    "test_execution", "browser_execution",
 ]
 
 

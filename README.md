@@ -247,7 +247,7 @@ PyPI에 `hair-platform`으로 배포된다 — `pip install "hair-platform[...]"
 | `vectordb` | `pip install -e ".[vectordb]"` | 지식 베이스 검색을 벡터 DB(ChromaDB, 서버 없이 `<db>-vectors/` 폴더)로 한다 — 청크 1만 개에서 검색 1회 약 1.7초 → 약 40ms(실측, 결과 동일). crewai를 설치하면 보통 함께 깔린다. 없으면 예전 방식(SQLite 전체 비교)으로 그대로 동작 | chromadb |
 | `graph` | `pip install -e ".[graph]"` | LangGraph 실행엔진(팀 관리에서 "그래프 엔진"을 켤 때 — 체크포인트·사람 승인 중단/재개). 없이 켜면 설치 안내가 뜬다 | langgraph, langgraph-checkpoint-sqlite |
 | `dev` | `pip install -e ".[dev]"` | 테스트/린트를 돌릴 때 | pytest, ruff, black(선택 — CI에서는 쓰지 않음: 기존 코드가 black 형식이 아님) |
-| `e2e` | `pip install -e ".[e2e]"` + `python -m playwright install chromium` | 화면 자동 테스트(`tests/e2e`)를 돌릴 때 — 개발용, 서버 설치에는 필요 없음 | playwright |
+| `e2e` | `pip install -e ".[e2e]"` + `python -m playwright install chromium` | 화면 자동 테스트(`tests/e2e`)를 돌릴 때(개발용). 서버에 설치하면 HTML 결과물을 실제 브라우저로 열어 보는 "화면실행" 점검(`browser_execution`)도 켜진다(없으면 그 점검만 미평가) | playwright |
 | `all` | `pip install -e ".[dev,all]"` | 전체 골든셋을 오프라인으로 깨끗하게 통과시킬 때(= `llm`+`crewai`+`mcp`+`documents`+`graph`+`korean`+`vectordb` 전부) | 위 extras 전부(dev 제외) |
 
 > `mcp`는 `mcp>=1.10.1,<2.0`으로 상한을 고정해둔다 — `crewai-tools`가
@@ -348,7 +348,7 @@ hair check --db-path hair.db      # 작업 프로세스가 떠 있는지까지 �
 | `HAIR_LANGUAGE_QA` | `1`(켬) | `0`이면 한국어 결과물 자동 언어 교정(한자·외국 문자 교정)을 끔 |
 | `HAIR_LEXICON_CHECK` | `1`(켬) | `0`이면 사전에 없는 한국어 낱말 탐지("낱말확인" 배지)를 끔(분석기가 메모리 약 360MB를 씀, `korean` extra 필요) |
 | `HAIR_NUMERIC_CHECK` | `1`(켬) | `0`이면 결과물 퍼센트 수치가 근거 숫자로 재현되는지 검사("수치근거" 배지)를 끔 |
-| `HAIR_ALLOW_LOCAL_CODE_RUN` | `0`(끔) | `1`이면 Docker 샌드박스 대신 로컬에서 코드 테스트를 실행(Docker가 없는 개발 환경용 — 격리가 없어지므로 운영에는 권장하지 않음) |
+| `HAIR_ALLOW_LOCAL_CODE_RUN` | `0`(끔) | `1`이면 Docker 샌드박스 대신 로컬에서 코드 테스트(Python·JavaScript)를 실행하고, 브라우저 샌드박스를 켤 수 없는 환경에서도 화면실행 점검을 돌림(Docker가 없는 개발 환경용 — 격리가 없어지므로 운영에는 권장하지 않음) |
 | `HAIR_STAGE_RUNTIME` | `direct` | 파이프라인 단일·순차 릴레이 단계의 Agent 실행 방식. `direct`는 대화와 같은 직접 호출(실측: 품질·판정 동일, 영업 메일 −18% 시간·−29% 호출), `crewai`는 예전 CrewAI 방식. 병행 위임 단계·팀 멘션·Crew 빌더는 늘 CrewAI |
 | `HAIR_STAGE_STALL_SECONDS` | `2700`(45분) | 파이프라인 단계가 이 시간 동안 진행 표시·작성 중 미리보기 없이 멈추면 정리하고(모든 스레드 스택을 활동 기록에 남김) "이어서 실행"할 수 있게 함. `0`이면 끔 |
 | `HAIR_VECTOR_BACKEND` | `chroma` | 지식 베이스 검색 엔진. `sqlite`면 예전 방식(SQLite의 임베딩 전체와 비교 — 정확하지만 청크가 많으면 느림). chromadb가 없거나 메모리 DB면 자동으로 `sqlite` |
@@ -673,7 +673,8 @@ src/hair_platform/
   korean_lexicon.py  # 사전에 없는 한국어 낱말 탐지(lexicon_check, 참고용 — Kiwi 형태소 분석기, korean extra)
   evaluation_reports.py # 평가마다 Agent-Evaluator HTML 리포트 생성·압축 저장·결과물에서 열기(격리 출처)
   evaluation_config.py # 평가 기준 설정(Gate별 통과 기준·SLA·추론 표지·도구 범위 감점, .aoo/targets.json 호환)
-  code_tests.py      # 개발 결과물의 Python 코드+테스트를 네트워크 차단 Docker에서 실제 실행(test_execution)
+  code_tests.py      # 개발 결과물의 Python·JavaScript(Jest·node:test) 코드+테스트를 네트워크 차단 Docker에서 실제 실행(test_execution)
+  browser_check.py   # HTML 결과물을 Chromium(샌드박스·네트워크 차단)으로 열어 스크립트 오류·빈 화면·버튼 오류 기록(browser_execution)
   progress.py        # 실행 중 현재 단계·경과 시간 기록(대화·워크스페이스 진행 표시)
   integrations.py    # 개인 API 키(Bearer) + 외부 알림(Slack/Teams 웹훅·메일)
   automation.py      # 파이프라인 정기 실행(매일/평일/매주) 루프(hair serve)
