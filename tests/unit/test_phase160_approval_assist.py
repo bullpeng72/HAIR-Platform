@@ -72,7 +72,8 @@ def test_brief_summarizes_checks_changes_and_risk(tpl):
     assert b["checks"][0]["label"] == "숫자 근거" and b["checks"][0]["status"] == "fail"
     assert b["checks_summary"]["fail"] == 1
     assert b["changes"]["added"] >= 2 and b["changes"]["previous_rejection_reason"] == "위약금 근거 조항을 적어 주세요"
-    assert any("검토자 의견" in a for a in b["attention"]) and any("자동 재시도" in a for a in b["attention"])
+    assert sum("수용" in a or "관할" in a for a in b["attention"]) == 1  # 검토자 의견은 한 번만
+    assert any("3조 관할" in a for a in b["attention"]) and any("자동 재시도" in a for a in b["attention"])
     assert b["risk"]["level"] == "high" and b["risk"]["recommended"] == "review"
     assert any("법무" in f for f in b["risk"]["factors"])
     # 요청자가 아닌 구성원은 못 본다

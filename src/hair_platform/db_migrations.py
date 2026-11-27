@@ -964,6 +964,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "pipeline_templates", "auto_approve_low_risk", "INTEGER NOT NULL DEFAULT 0")
     from hair_platform import approval_assist
     approval_assist.ensure_schema(conn)
+    # 외부 입력 트리거·결재 후 실행 동작(2026-11-27, 4단계 — `inbound`·`stage_actions`).
+    from hair_platform import inbound, stage_actions
+    inbound.ensure_schema(conn)
+    stage_actions.ensure_schema(conn)
     _sync_dev_crew_pipeline_integration(conn)
     # 사용자 요청(2026-10-29, "TF팀을 teams의 확장으로, Team 온보딩
     # 라이프사이클 도입 — 기존 활성 팀은 전부 자동 active 처리") —

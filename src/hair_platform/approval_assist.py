@@ -244,7 +244,7 @@ def brief_for_run_stage(conn: sqlite3.Connection, run_stage_id: int) -> dict:
         if c["status"] in ("fail", "warn"):
             attention.append(f"{c['label']}: " + (c["note"] or ("미달" if c["status"] == "fail" else "확인 필요")))
     verdict = gate_scores.get("review_verdict") or {}
-    if isinstance(verdict, dict) and verdict.get("note"):
+    if isinstance(verdict, dict) and verdict.get("note") and not any(a.startswith("검토자 판정") for a in attention):
         attention.append("검토자 의견: " + str(verdict["note"])[:200])
     return {
         "supported": True,
@@ -266,7 +266,17 @@ def brief_for_run_stage(conn: sqlite3.Connection, run_stage_id: int) -> dict:
                     if prev is not None else None),
         "past_rejections": _past_rejections(conn, rs["stage_id"], rs["id"]),
         "active_lessons": _active_lessons(conn, rs["stage_id"]),
+        "action": _action_preview(conn, rs["id"]),
     }
+
+
+def _action_preview(conn: sqlite3.Connection, run_stage_id: int) -> dict | None:
+    from hair_platform import stage_actions
+
+    try:
+        return stage_actions.preview(conn, run_stage_id)
+    except sqlite3.OperationalError:
+        return None
 
 
 def brief_for_deliverable(conn: sqlite3.Connection, deliverable_id: int) -> dict:
@@ -299,7 +309,7 @@ def brief_for_deliverable(conn: sqlite3.Connection, deliverable_id: int) -> dict
         "risk": risk, "checks": checks, "checks_summary": _checks_summary(checks), "attention": attention,
         "changes": ({**(_diff(prev["content"], d["content"]) or {}), "against": f"이전 판 #{d['revises_id']}",
                      "previous_rejection_reason": None} if prev is not None else None),
-        "past_rejections": [], "active_lessons": [],
+        "past_rejections": [], "active_lessons": [], "action": None,
     }
 
 
@@ -402,6 +412,10 @@ def auto_approval_check(conn: sqlite3.Connection, stage, task_requires_judgment:
     사람 승인이 '단계 설정' 때문일 때만 대상이다(업무의 사람 판단 필수·Gate 사유는 항상 사람)."""
     if not stage["requires_human_approval"] or task_requires_judgment or needs_human_for_gates:
         return None
+    from hair_platform import stage_actions
+
+    if stage_actions.get_for_stage(conn, stage["id"], active_only=True) is not None:
+        return None  # 밖으로 나가는 실행 동작이 붙은 단계는 항상 사람이 승인(2026-11-27, 4단계)
     template_id = stage["pipeline_template_id"]
     if not _policy_on(conn, template_id):
         return None

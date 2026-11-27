@@ -130,8 +130,15 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         counts = process_learning.candidate_counts(conn)  # 아직 결정 안 한 개선 제안 수(2026-11-27, 2단계)
+        # 처리 용량·지금 맡기면(2026-11-27, 4단계 — `capacity`)
+        from hair_platform import capacity
+
+        cap = capacity.report(conn)
+        est = capacity.estimates(conn, [t["template_id"] for t in result["templates"] if t["is_active"]], cap)
         for t in result["templates"]:
             t["lesson_candidates"] = counts.get(t["template_id"], 0)
+            t["estimate"] = est.get(t["template_id"])
+        result["capacity"] = cap
         return result
 
     @app.get("/api/process-metrics/templates/{template_id}")
@@ -231,6 +238,15 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         if not isinstance(enabled, bool):
             raise HTTPException(status_code=400, detail="auto_approve_low_risk_must_be_boolean")
         return _learning_call(approval_assist.set_policy, conn, user["id"], template_id, enabled)
+
+    @app.get("/api/capacity")
+    def get_capacity(days: int = 7, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """처리 용량(2026-11-27, 4단계) — 줄별 대기·실행 시간, 바쁜 정도, 지금 대기·실행 중, 파이프라인 시작까지 예상."""
+        from hair_platform import capacity
+
+        if days not in (1, 7, 30):
+            raise HTTPException(status_code=400, detail="days_must_be_1_7_30")
+        return capacity.report(conn, days)
 
     @app.get("/api/dashboard")
     def get_dashboard(

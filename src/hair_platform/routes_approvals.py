@@ -22,6 +22,7 @@ from hair_platform import (
     deliverables,
     approval_assist,
     knowledge_submissions,
+    stage_actions,
     pipeline_runtime,
     process_learning,
 )
@@ -220,6 +221,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             # 방식이 완전히 다르다(DB 컬럼 직접 조작 대신 `interrupt()`
             # 재개) — 아래서 `pipeline_run_stage` 분기 진입 시 확정된다.
             pipeline_run_is_graph_engine = False
+            action_run_stage_id = None  # 결재 후 실행 동작(2026-11-27) — 최종 승인된 파이프라인 단계
             new_pipeline_run_id = None
             new_pipeline_run_actor_id = None
             next_step_pending = False
@@ -278,6 +280,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 elif not next_step_pending and subject_type == "pipeline_run_stage":
                     # 추천 대 사람 결정(2026-11-27, 3단계 — 위험 기반 결재 검증용).
                     approval_assist.record_decision(conn, subject_id, True)
+                    action_run_stage_id = subject_id
                     # 사용자 요청(2026-10-18, "최소 HITL/HOTL") — 계획
                     # 확정 체크포인트 또는 반복 실패 에스컬레이션을 사람이
                     # 승인하면, 파이프라인이 다음 단계로 이어서 진행된다
@@ -382,6 +385,9 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except Exception:
             conn.rollback()
             raise
+        # 결재 후 실행 동작(2026-11-27, 4단계) — 커밋 뒤, 결재자가 "승인하고 실행"을 골랐을 때만 보낸다.
+        action_result = (stage_actions.execute(conn, action_run_stage_id, user["id"], bool(payload.run_action))
+                         if action_run_stage_id is not None else None)
         if knowledge_submission_to_register is not None:
             # 승인된 지식 등록 — 임베딩은 오래 걸릴 수 있어 커밋 뒤
             # 백그라운드에서 색인한다(`knowledge_submissions` 모듈 설명).
@@ -460,4 +466,5 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             "deliverable": deliverable_result,
             "pipeline_run_id": pipeline_run_id,
             "new_pipeline_run_id": new_pipeline_run_id,
+            "action": action_result,
         }

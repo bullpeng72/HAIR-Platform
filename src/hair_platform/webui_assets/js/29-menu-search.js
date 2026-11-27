@@ -19,7 +19,7 @@ const MENU_HINTS = {
   search: { help: "3단계 — 사람·Agent·팀·파이프라인 붙이기", desc: "스킬·역할로 사람과 Agent를 찾는다", words: "인력 찾기 스킬 검색 Agent 목록" },
   orgchart: { help: "현황 화면", desc: "사람과 Agent가 함께 있는 조직도", words: "조직 팀 구성 매니저" },
   manual: { help: "#toc", desc: "이용 가이드 전체", words: "도움말 사용법 설명서 매뉴얼 가이드" },
-  integrations: { help: "사람이 누르지 않아도 돌게 하기", desc: "API 키·정기 실행·이벤트 트리거·외부 알림·저장소·사내 DB·메일·캘린더 연결", words: "API 키 정기 실행 스케줄 트리거 웹훅 Slack Teams 메일 알림 SMTP 저장소 Git 사내 DB 메일 수신함 캘린더 연동" },
+  integrations: { help: "사람이 누르지 않아도 돌게 하기", desc: "API 키·정기 실행·이벤트 트리거·외부 입력 트리거·외부 알림·결재 후 실행 동작·저장소·사내 DB·메일·캘린더 연결", words: "API 키 정기 실행 스케줄 트리거 웹훅 Slack Teams 메일 알림 SMTP 저장소 Git 사내 DB 메일 수신함 캘린더 연동 외부 입력 인바운드 메일 도착 티켓 일정 실행 동작 메일 보내기 회신 승인하고 실행" },
   dashboard: { help: "현황 화면", desc: "팀 현황 모니터링", words: "현황 모니터링 진행률" },
   processmetrics: { help: "프로세스 성과", desc: "파이프라인별 완료까지 걸린 시간·한 번에 완료·자동 처리율·병목 단계", words: "리드타임 소요 시간 병목 재작업 자동화 효과 절감 기준 시간 KPI 성과 측정 흐름 배운 점 개선 제안 학습 반려 사유 변경 기록 되돌리기 전후 비교" },
   cost: { help: "AI 사용 한도", desc: "AI 사용량과 비용, 사용 한도", words: "비용 토큰 사용량 예산 한도 단가" },

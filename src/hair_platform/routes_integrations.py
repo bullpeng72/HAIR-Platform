@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from fastapi import Body, Depends, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException, Request
 
 from hair_platform.auth import Role, require_role
 from hair_platform.models import (
@@ -426,6 +426,98 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             return triggers.set_active(conn, user["id"], trigger_id, payload.active)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="트리거를 찾을 수 없습니다") from exc
+
+    # ---------- 외부 입력 트리거(2026-11-27, AI Native 분석 4단계 — `inbound`) ----------
+    @app.get("/api/inbound-triggers")
+    def list_inbound_triggers(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        from hair_platform import inbound
+
+        return {"sources": inbound.SOURCES, "triggers": inbound.list_all(conn)}
+
+    @app.post("/api/inbound-triggers", status_code=201)
+    def create_inbound_trigger(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """메일·웹훅·일정으로 파이프라인을 시작하는 트리거. 웹훅이면 응답의 `token`은 이때 한 번만 보인다."""
+        from hair_platform import inbound
+
+        try:
+            return inbound.create(conn, user["id"], payload)
+        except (inbound.InboundError, ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/inbound-triggers/{trigger_id}/events")
+    def list_inbound_events(trigger_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        from hair_platform import inbound
+
+        return inbound.recent_events(conn, trigger_id)
+
+    @app.patch("/api/inbound-triggers/{trigger_id}")
+    def toggle_inbound_trigger(trigger_id: int, payload: ActiveToggle,
+                               user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        from hair_platform import inbound
+
+        try:
+            return inbound.set_active(conn, user["id"], trigger_id, payload.active)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="트리거를 찾을 수 없습니다") from exc
+
+    @app.delete("/api/inbound-triggers/{trigger_id}")
+    def delete_inbound_trigger(trigger_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        from hair_platform import inbound
+
+        try:
+            inbound.delete(conn, user["id"], trigger_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="트리거를 찾을 수 없습니다") from exc
+        return {"deleted": True}
+
+    @app.post("/api/inbound/{trigger_id}", status_code=202)
+    def receive_inbound_webhook(trigger_id: int, request: Request, payload: dict = Body(...)):
+        """외부 시스템이 보내는 일(로그인 없음 — 트리거 토큰: `X-HAIR-Token` 헤더). 받은 일은 곧바로 시작 대기열에 들어간다.
+        `{"id": 외부 식별자(중복 방지), "title": ..., "text": ...}` 권장 — 다른 JSON도 통째로 받는다(최대 2만 자)."""
+        from hair_platform import inbound
+
+        token = request.headers.get("x-hair-token", "")
+        try:
+            result = inbound.receive_webhook(conn, trigger_id, token, payload)
+        except PermissionError as exc:
+            raise HTTPException(status_code=401, detail="토큰이 맞지 않습니다") from exc
+        except inbound.InboundError as exc:
+            raise HTTPException(status_code=413 if str(exc) == "payload_too_large" else 409, detail=str(exc)) from exc
+        if result["accepted"]:
+            inbound.fire(conn, trigger_id=trigger_id)
+        return result
+
+    # ---------- 결재 후 실행 동작(2026-11-27, 4단계 — `stage_actions`, admin) ----------
+    @app.get("/api/stage-actions")
+    def list_stage_actions(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import integrations, stage_actions
+
+        return {"kinds": stage_actions.KINDS, "actions": stage_actions.list_all(conn),
+                "executions": stage_actions.recent_executions(conn),
+                "smtp_configured": integrations.smtp_settings() is not None}
+
+    @app.put("/api/pipeline-stages/{stage_id}/action")
+    def put_stage_action(stage_id: int, payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """`{"kind": "email"|"chat"|"json_webhook", "config": {...}, "is_active": true}`"""
+        from hair_platform import stage_actions
+
+        try:
+            return stage_actions.set_action(conn, user["id"], stage_id, str(payload.get("kind") or ""),
+                                            payload.get("config") or {}, bool(payload.get("is_active", True)))
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="단계를 찾을 수 없습니다") from exc
+        except stage_actions.ActionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/pipeline-stages/{stage_id}/action")
+    def delete_stage_action(stage_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import stage_actions
+
+        try:
+            stage_actions.remove_action(conn, user["id"], stage_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="실행 동작이 없습니다") from exc
+        return {"deleted": True}
 
     @app.delete("/api/automation-triggers/{trigger_id}")
     def delete_automation_trigger(

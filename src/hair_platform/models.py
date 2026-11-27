@@ -231,6 +231,8 @@ class ApprovalDecision(BaseModel):
 
     approve: bool
     reason: str | None = None
+    # 결재 후 실행 동작(2026-11-27, 4단계 — `stage_actions`): 참일 때만 승인과 함께 메일·웹훅을 실제로 보낸다.
+    run_action: bool = False
 
 
 class TaskItem(BaseModel):

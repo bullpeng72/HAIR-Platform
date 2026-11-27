@@ -97,8 +97,39 @@ function approvalBriefHtml(b) {
   }
   if (b.past_rejections.length) html += "<h4>이 단계의 최근 반려 사유</h4><ul class=\"ab-list\">" + b.past_rejections.map(x => "<li>" + esc(x) + "</li>").join("") + "</ul>";
   if (b.active_lessons.length) html += '<p class="muted">이 단계에 적용 중인 배운 점 ' + b.active_lessons.length + "개가 지시문에 들어가 있습니다.</p>";
+  if (b.action) html += approvalActionHtml(b);
   return html + "</div>";
 }
+
+// 결재 후 실행 동작(2026-11-27, AI Native 분석 4단계 — 5번) — 무엇을 어디로 보낼지 미리 보고, "승인하고 실행"을 눌러야 보낸다.
+function approvalActionHtml(b) {
+  const a = b.action;
+  let html = '<div class="ab-action"><h4>승인하면 실행할 동작 — ' + esc(a.kind_label) + "</h4>";
+  if (a.executed) {
+    const st = { sent: "보냄", failed: "실패", skipped: "승인만 함(보내지 않음)" }[a.executed.status] || a.executed.status;
+    return html + "<p>이미 처리했습니다: <b>" + esc(st) + "</b>" + (a.executed.error ? " — " + esc(a.executed.error) : "") + "</p></div>";
+  }
+  html += "<p>어디로: <b>" + esc(a.target || "(없음)") + "</b>" + (a.subject ? " · 제목: " + esc(a.subject) : "") + " · 본문 " + a.body_chars + "자(이 결과물 그대로)</p>" +
+    '<pre class="ab-diff">' + esc(a.body_excerpt) + (a.body_chars > a.body_excerpt.length ? "\n…" : "") + "</pre>";
+  if (!a.ready) return html + '<p class="msg warn">지금은 보낼 수 없습니다 — ' + esc(a.problem) + '. 승인만 할 수 있습니다.</p></div>';
+  return html + '<p><input placeholder="사유(선택)" id="ab-run-reason" style="width:14rem"> <button class="small primary" data-approve-run="' + b.approval_id + '">승인하고 실행</button> ' +
+    '<span class="muted">표의 "승인"은 승인만 하고 보내지 않습니다.</span></p></div>';
+}
+
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest && ev.target.closest("[data-approve-run]");
+  if (!btn) return;
+  if (btn.dataset.confirming !== "1") { btn.dataset.confirming = "1"; btn.textContent = "정말 보내기"; return; }
+  btn.disabled = true;
+  const reasonEl = document.getElementById("ab-run-reason");
+  try {
+    const r = await api("POST", "/api/approvals/" + btn.dataset.approveRun + "/decide", {
+      approve: true, reason: (reasonEl && reasonEl.value.trim()) || null, run_action: true });
+    const a = r.action || {};
+    showMsg("global-msg", a.status === "sent" ? "승인하고 보냈습니다(" + (a.target || "") + ")." : "승인했지만 보내지 못했습니다: " + (a.error || a.status), a.status === "sent" ? "ok" : "error");
+    refresh();
+  } catch (e) { btn.disabled = false; showMsg("global-msg", e.message, "error"); }
+});
 
 // 사용자 보고(2026-10-13, "에이전트 ID만 노출되고 사람이름이나 에이전트명이
 // 표시되지 않는 경우도 있어") — 원래는 "대상 종류"/"대상 ID"가

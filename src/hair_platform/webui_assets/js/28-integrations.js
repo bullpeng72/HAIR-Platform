@@ -210,7 +210,9 @@ async function renderIntegrations(content) {
       '<button class="primary" type="submit">캘린더 등록</button></form>' +
       (cfRows ? '<div class="table-wrap"><table><thead><tr><th>이름</th><th>출처</th><th>공개 범위</th><th>상태</th><th>마지막 확인</th><th></th></tr></thead><tbody>' + cfRows + "</tbody></table></div>"
         : '<p class="muted">등록된 캘린더가 없습니다.</p>')
-      : "");
+      : "") +
+    (canSchedule ? '<div id="ext-flow-slot"></div>' : "");
+  if (canSchedule) _renderExternalFlow(content.querySelector("#ext-flow-slot"), isAdmin, templates);
 
   document.getElementById("apikey-form").addEventListener("submit", async ev => {
     ev.preventDefault();
@@ -476,3 +478,140 @@ function _manualReveal(el) {
 }
 
 boot();
+
+/* ---------- 외부 입력 트리거·결재 후 실행 동작(2026-11-27, AI Native 분석 4단계 — 6번·5번) ---------- */
+// 연동 설정 맨 아래 — 자기 데이터를 따로 불러 그린다(다른 구역과 독립).
+async function _renderExternalFlow(slot, isAdmin, templates) {
+  if (!slot) return;
+  const [inb, acts, mbs, cals] = await Promise.all([
+    api("GET", "/api/inbound-triggers").catch(() => ({ triggers: [], sources: {} })),
+    isAdmin ? api("GET", "/api/stage-actions").catch(() => null) : Promise.resolve(null),
+    isAdmin ? api("GET", "/api/mail-inboxes").catch(() => []) : Promise.resolve([]),
+    isAdmin ? api("GET", "/api/calendar-feeds").catch(() => []) : Promise.resolve([]),
+  ]);
+  const tplOpts = (templates || []).filter(t => t.is_active !== 0 && t.is_active !== false)
+    .map(t => '<option value="' + t.id + '">' + esc(t.name) + "</option>").join("");
+  const cond = t => t.source === "mail" ? "메일함 " + esc(t.config.mailbox) + (t.config.query ? " · '" + esc(t.config.query) + "'" : "")
+    : t.source === "calendar" ? "캘린더 " + esc(t.config.calendar) + " · " + t.config.hours_before + "시간 전" + (t.config.query ? " · '" + esc(t.config.query) + "'" : "")
+    : '<code>POST /api/inbound/' + t.id + "</code>";
+  const inbRows = inb.triggers.map(t => [
+    esc(t.name), esc(t.source_label) + "<br>" + cond(t), esc(t.action_template_name || ""),
+    "시작 " + t.started_count + " · 대기 " + t.queued_count + (t.failed_count ? " · 실패 " + t.failed_count : "") + '<div class="muted pm-note">시간당 최대 ' + t.max_per_hour + "</div>",
+    (t.last_error ? '<span class="gate-badge gate-warn" title="' + escAttr(t.last_error) + '">오류</span> ' : "") + (t.last_fired_at ? esc(fmtTime(t.last_fired_at)) : '<span class="muted">-</span>'),
+    '<button class="small" data-inb-toggle="' + t.id + '" data-active="' + (t.is_active ? 0 : 1) + '">' + (t.is_active ? "끄기" : "켜기") + "</button> " +
+      '<button class="small" data-inb-events="' + t.id + '">최근</button> <button class="small danger" data-inb-del="' + t.id + '">삭제</button>',
+  ]);
+  let html = "<h3>외부 입력 트리거(admin/manager)</h3>" +
+    '<p class="muted">밖에서 일이 들어오면 파이프라인을 시작합니다 — <b>메일</b>(등록된 메일함에 조건에 맞는 새 메일, 2분마다 확인) · <b>웹훅</b>(티켓·폼 시스템이 JSON을 보냄, 비밀 토큰) · <b>일정</b>(등록된 캘린더 일정이 N시간 안으로 다가오면, 10분마다 확인). ' +
+    "들어온 내용은 <b>외부 데이터</b>로 표시돼 업무 요청에 붙고(그 안의 지시는 따르지 않음), 그 실행에서는 쓰기·실행 도구가 막힙니다. 만들 때 이미 있던 메일·일정으로는 실행하지 않고, 트리거마다 시간당 상한이 있습니다. 만든 사람 이름으로 실행됩니다.</p>" +
+    '<form id="inb-form" style="display:grid;gap:0.4rem"><div class="inline" style="flex-wrap:wrap">' +
+    '<input id="inb-name" placeholder="이름(예: 고객 문의 메일 → 회신 초안)" required maxlength="100">' +
+    '<select id="inb-source"><option value="mail">메일 도착</option><option value="webhook">외부 시스템 호출(웹훅)</option><option value="calendar">다가오는 일정</option></select>' +
+    '<span id="inb-mail-cfg"><input id="inb-mailbox" list="inb-mailboxes" placeholder="메일함 이름"><datalist id="inb-mailboxes">' + (mbs || []).map(m => '<option value="' + escAttr(m.name) + '">').join("") + "</datalist> " +
+    '<input id="inb-query" placeholder="보낸 사람·제목 낱말(선택)" maxlength="100"></span>' +
+    '<span id="inb-cal-cfg" hidden><input id="inb-calendar" list="inb-calendars" placeholder="캘린더 이름"><datalist id="inb-calendars">' + (cals || []).map(c => '<option value="' + escAttr(c.name) + '">').join("") + "</datalist> " +
+    '<input id="inb-hours" type="number" min="1" max="168" value="24" style="width:5rem"> 시간 전 <input id="inb-cquery" placeholder="일정 제목 낱말(선택)" maxlength="100"></span></div>' +
+    '<div class="inline" style="flex-wrap:wrap"><label class="muted">→ 시작할 파이프라인 <select id="inb-action" required>' + tplOpts + "</select></label>" +
+    '<input id="inb-role" placeholder="새 할 일 역할(예: 문의 회신)" required maxlength="100"> <label class="muted">시간당 최대 <input id="inb-mph" type="number" min="1" max="200" value="20" style="width:5rem"></label></div>' +
+    '<textarea id="inb-brief" rows="2" required placeholder="들어온 일로 할 업무(예: 아래 고객 문의에 제품 매뉴얼을 근거로 회신 초안을 써 줘. 환불·보상은 약속하지 마.)"></textarea>' +
+    '<div><button class="primary" type="submit">외부 입력 트리거 추가</button> <span class="muted" id="inb-msg"></span></div></form>' +
+    '<div id="inb-token"></div>' +
+    table(["이름", "들어오는 경로", "시작할 파이프라인", "처리", "마지막 시작", ""], inbRows, { empty: "등록된 외부 입력 트리거가 없습니다." }) +
+    '<div id="inb-events"></div>';
+  if (isAdmin && acts) {
+    const actRows = acts.actions.map(a => {
+      const c = a.config || {};
+      const target = a.kind === "email" ? (c.to_mode === "inbound_sender" ? "시작한 메일의 보낸 사람에게 회신" : esc((c.to || []).join(", "))) + (c.subject ? " · 제목 '" + esc(c.subject) + "'" : "")
+        : (c.url_env ? "환경변수 " + esc(c.url_env) : esc(c.url || "")) + (c.token_env ? " · 토큰 " + esc(c.token_env) : "");
+      return [esc(a.template_name) + " — " + a.seq_order + ". " + esc(a.stage_name), esc(a.kind_label), target,
+        a.is_active ? "켜짐" : '<span class="muted">꺼짐</span>', '<button class="small danger" data-act-del="' + a.stage_id + '">삭제</button>'];
+    });
+    const exRows = acts.executions.map(e => [esc(fmtTime(e.created_at)), esc(e.stage_name || ""), esc(e.kind), esc(e.target || ""),
+      ({ sent: '<span class="gate-badge gate-ok">보냄</span>', failed: '<span class="gate-badge gate-warn">실패</span>', skipped: '<span class="muted">승인만</span>' }[e.status] || esc(e.status)) +
+        (e.error ? '<div class="muted pm-note">' + esc(e.error) + "</div>" : ""), esc(e.decided_by_name || "")]);
+    html += "<h3>결재 후 실행 동작(admin)</h3>" +
+      '<p class="muted">파이프라인 단계에 동작을 붙이면, 그 단계 결과를 결재할 때 결재 도우미에 <b>무엇을 어디로 보낼지</b>가 보이고 <b>"승인하고 실행"</b>을 누를 때만 실제로 보냅니다(표의 "승인"은 승인만). 결과 하나당 한 번, 성공·실패 모두 활동 기록에 남습니다. ' +
+      "동작이 붙은 단계는 낮은 위험 자동 승인 대상에서 빠집니다. 메일은 서버 SMTP 설정(HAIR_SMTP_*)" + (acts.smtp_configured ? '이 있습니다.' : '이 <b>없어</b> 지금은 보낼 수 없습니다.') +
+      " 웹훅 주소·토큰은 환경변수 이름으로 주면 DB에 남지 않습니다.</p>" +
+      '<form id="act-form" style="display:grid;gap:0.4rem"><div class="inline" style="flex-wrap:wrap">' +
+      '<select id="act-tpl"><option value="">파이프라인 고르기</option>' + tplOpts + '</select> <select id="act-stage" required><option value="">단계</option></select>' +
+      '<select id="act-kind"><option value="email">메일 보내기</option><option value="chat">Slack·Teams에 올리기</option><option value="json_webhook">외부 시스템에 보내기(JSON)</option></select></div>' +
+      '<div class="inline" style="flex-wrap:wrap" id="act-email-cfg"><select id="act-tomode"><option value="fixed">정해 둔 주소로</option><option value="inbound_sender">시작한 메일의 보낸 사람에게 회신</option></select>' +
+      '<input id="act-to" placeholder="받는 사람(쉼표로)" style="min-width:16rem"> <input id="act-subject" placeholder="제목(비우면 Re: 원래 제목 또는 파이프라인 — 단계)" style="min-width:16rem"></div>' +
+      '<div class="inline" style="flex-wrap:wrap" id="act-hook-cfg" hidden><input id="act-url" placeholder="https://… (또는 오른쪽에 환경변수 이름)" style="min-width:16rem"> <input id="act-urlenv" placeholder="주소 환경변수(예: HAIR_TICKET_URL)"> <input id="act-tokenenv" placeholder="토큰 환경변수(JSON만, 선택)"></div>' +
+      '<div><button class="primary" type="submit">실행 동작 붙이기</button> <span class="muted" id="act-msg"></span></div></form>' +
+      table(["단계", "동작", "어디로", "상태", ""], actRows, { empty: "붙인 실행 동작이 없습니다." }) +
+      "<h4>최근 실행</h4>" + table(["시각", "단계", "종류", "어디로", "결과", "결재자"], exRows, { empty: "아직 실행한 동작이 없습니다." });
+  }
+  slot.innerHTML = html;
+  const $ = id => slot.querySelector("#" + id);
+  const src = $("inb-source");
+  src.onchange = () => { $("inb-mail-cfg").hidden = src.value !== "mail"; $("inb-cal-cfg").hidden = src.value !== "calendar"; };
+  $("inb-form").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const s = src.value;
+    const config = s === "mail" ? { mailbox: $("inb-mailbox").value.trim(), query: $("inb-query").value.trim() }
+      : s === "calendar" ? { calendar: $("inb-calendar").value.trim(), hours_before: Number($("inb-hours").value), query: $("inb-cquery").value.trim() } : {};
+    try {
+      const t = await api("POST", "/api/inbound-triggers", {
+        name: $("inb-name").value, source: s, config, action_template_id: Number($("inb-action").value),
+        role_name: $("inb-role").value, brief_text: $("inb-brief").value, max_per_hour: Number($("inb-mph").value),
+      });
+      if (t.token) {
+        const box = $("inb-token");
+        await _renderExternalFlow(slot, isAdmin, templates);
+        slot.querySelector("#inb-token").innerHTML = '<div class="msg warn"><b>웹훅 토큰 — 지금 한 번만 보입니다.</b> 외부 시스템 설정에 넣으세요.<br>' +
+          '주소: <code>' + esc(location.origin + t.webhook_path) + "</code><br>헤더: <code>X-HAIR-Token: " + esc(t.token) + "</code><br>" +
+          '본문 예: <code>{"id": "TICKET-123", "title": "환불 문의", "text": "…"}</code> <button class="small" id="inb-copy">토큰 복사</button></div>';
+        const copy = slot.querySelector("#inb-copy");
+        copy.onclick = () => navigator.clipboard.writeText(t.token).then(() => { copy.textContent = "복사됨"; }).catch(() => {});
+        void box;
+        return;
+      }
+      _renderExternalFlow(slot, isAdmin, templates);
+    } catch (e) { $("inb-msg").textContent = e.message || String(e); }
+  });
+  slot.querySelectorAll("[data-inb-toggle]").forEach(b => b.onclick = async () => {
+    try { await api("PATCH", "/api/inbound-triggers/" + b.dataset.inbToggle, { active: b.dataset.active === "1" }); _renderExternalFlow(slot, isAdmin, templates); }
+    catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+  slot.querySelectorAll("[data-inb-del]").forEach(b => b.onclick = async () => {
+    if (b.dataset.confirming !== "1") { b.dataset.confirming = "1"; b.textContent = "정말 삭제"; return; }
+    try { await api("DELETE", "/api/inbound-triggers/" + b.dataset.inbDel); _renderExternalFlow(slot, isAdmin, templates); }
+    catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+  slot.querySelectorAll("[data-inb-events]").forEach(b => b.onclick = async () => {
+    const evs = await api("GET", "/api/inbound-triggers/" + b.dataset.inbEvents + "/events");
+    const st = { queued: "대기", started: "시작함", failed: "실패", seeded: "기존 것" };
+    $("inb-events").innerHTML = "<h4>최근 들어온 일</h4>" + table(["받은 시각", "제목", "상태", "실행", "비고"], evs.map(e => [
+      esc(fmtTime(e.received_at)), esc(e.title || e.event_key), esc(st[e.status] || e.status), e.run_id ? "#" + e.run_id : "-", esc(e.note || "")]),
+      { empty: "아직 들어온 일이 없습니다." });
+  });
+  if (!(isAdmin && acts)) return;
+  const kind = $("act-kind");
+  kind.onchange = () => { $("act-email-cfg").hidden = kind.value !== "email"; $("act-hook-cfg").hidden = kind.value === "email"; };
+  $("act-tpl").onchange = async () => {
+    const id = $("act-tpl").value;
+    $("act-stage").innerHTML = '<option value="">단계</option>';
+    if (!id) return;
+    const d = await api("GET", "/api/pipeline-templates/" + id);
+    $("act-stage").innerHTML = (d.stages || []).map(s => '<option value="' + s.id + '">' + s.seq_order + ". " + esc(s.name) + (s.requires_human_approval ? " (사람 승인)" : "") + "</option>").join("");
+  };
+  $("act-form").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const k = kind.value;
+    const config = k === "email"
+      ? { to_mode: $("act-tomode").value, to: $("act-to").value.split(",").map(x => x.trim()).filter(Boolean), subject: $("act-subject").value.trim() }
+      : { url: $("act-url").value.trim(), url_env: $("act-urlenv").value.trim(), token_env: $("act-tokenenv").value.trim() };
+    try {
+      await api("PUT", "/api/pipeline-stages/" + $("act-stage").value + "/action", { kind: k, config, is_active: true });
+      _renderExternalFlow(slot, isAdmin, templates);
+    } catch (e) { $("act-msg").textContent = e.message || String(e); }
+  });
+  slot.querySelectorAll("[data-act-del]").forEach(b => b.onclick = async () => {
+    if (b.dataset.confirming !== "1") { b.dataset.confirming = "1"; b.textContent = "정말 삭제"; return; }
+    try { await api("DELETE", "/api/pipeline-stages/" + b.dataset.actDel + "/action"); _renderExternalFlow(slot, isAdmin, templates); }
+    catch (e) { showMsg("global-msg", e.message, "error"); }
+  });
+}
+

@@ -729,6 +729,7 @@
   .ab-warn { color: var(--status-warn-fg); }
   .ab-diff { max-height: 12rem; overflow: auto; font-size: 0.8rem; background: var(--color-bg); padding: 0.4rem; border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
   .ab-add { color: var(--status-success-fg); }
+  .ab-action { border-top: 1px dashed var(--color-border-strong); margin-top: 0.6rem; padding-top: 0.4rem; }
   .ab-del { color: var(--status-danger-fg, #991b1b); }
   .pm-wrap td:last-child { white-space: nowrap; }
 

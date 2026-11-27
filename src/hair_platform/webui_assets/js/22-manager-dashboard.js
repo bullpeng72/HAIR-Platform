@@ -300,7 +300,7 @@ async function renderProcessMetrics(content) {
     _pmTiles(t, true) +
     '<div class="pm-legend muted"><span class="pm-seg pm-ai"></span> AI 작업 <span class="pm-seg pm-wait"></span> 사람 대기 <span class="pm-seg pm-other"></span> 그 밖</div>' +
     "<h3>파이프라인별</h3>" +
-    '<div class="pm-wide">' + table(["파이프라인", "실행", "완료율", "완료까지", "시간 구성", "한 번에 완료", "재작업/건", "자동 처리율", "건당 비용", "기준 시간", "먼저 손볼 곳", "개선 제안", "동작"],
+    '<div class="pm-wide">' + table(["파이프라인", "실행", "완료율", "완료까지", "시간 구성", "한 번에 완료", "재작업/건", "자동 처리율", "건당 비용", "기준 시간", "지금 맡기면", "먼저 손볼 곳", "개선 제안", "동작"],
       d.templates.map(p => [
         esc(p.name) + (p.is_active ? "" : ' <span class="muted">(비활성)</span>'),
         String(p.runs), _pmPct(p.completion_rate), _pmDur(p.lead_median_seconds),
@@ -308,6 +308,7 @@ async function renderProcessMetrics(content) {
         _pmPct(p.first_pass_rate), p.rework_per_run === null ? "—" : p.rework_per_run.toFixed(1),
         _pmPct(p.automation_rate), p.tokens_per_run ? _pmCost(p.cost_per_run, p.cost_partial) : "—",
         p.baseline_minutes ? _pmDur(p.baseline_minutes * 60) : '<span class="muted">없음</span>',
+        _pmEstimate(p.estimate),
         _pmSignals(p.signals),
         p.lesson_candidates ? '<span class="gate-badge gate-info">' + p.lesson_candidates + "건</span>" : '<span class="muted">—</span>',
         '<button class="small" data-pm-open="' + p.template_id + '">자세히</button>',
@@ -323,10 +324,35 @@ async function renderProcessMetrics(content) {
       { empty: "결재를 기다리는 실행이 없습니다." }) + "</div>" +
     "<h3>주별 추이(최근 8주)</h3>" +
     '<div class="pm-chart"><canvas id="pm-trend-canvas"></canvas></div>' +
+    _pmCapacityHtml(d.capacity) +
     "</section>";
   _pmBindCommon(content);
   content.querySelectorAll("[data-pm-open]").forEach(b => b.onclick = () => { _pmTemplateId = Number(b.dataset.pmOpen); refresh(); });
   _pmInitTrend(d.trend);
+}
+
+/* ---------- 처리 용량(2026-11-27, AI Native 분석 4단계 — 7번) ---------- */
+function _pmEstimate(e) {
+  if (!e) return '<span class="muted">—</span>';
+  if (e.total_seconds === null || e.total_seconds === undefined) return '<span class="muted" title="완료 기록이 없어 추정할 수 없습니다">기록 없음</span>';
+  return "약 " + _pmDur(e.total_seconds) + (e.queue_wait_seconds ? '<div class="muted pm-note">대기 ' + _pmDur(e.queue_wait_seconds) + " + 실행 " + _pmDur(e.run_seconds) + "</div>" : "");
+}
+
+function _pmCapacityHtml(c) {
+  if (!c) return "";
+  const q = c.now.queued, r = c.now.running;
+  const rows = c.lanes.map(l => [esc(l.label), String(l.jobs), String(l.failed), _pmDur(l.wait_avg_seconds), _pmDur(l.wait_p90_seconds), _pmDur(l.run_avg_seconds), _pmDur(l.run_p90_seconds)]);
+  return "<h3>처리 용량(최근 " + c.window_days + "일)</h3>" +
+    '<p class="muted">작업 큐 기록으로 계산합니다. <b>지금 맡기면</b>(파이프라인 표) = 앞에 선 긴 작업이 끝나길 기다리는 시간 + 그 파이프라인의 최근 완료 실행에서 사람 결재 대기를 뺀 시간(중앙값). 사람이 결재하는 시간은 들어가지 않은 추정치입니다. 기본 모델 ' +
+    esc(c.default_model) + (c.slots ? " · 동시 처리 " + c.slots + "개" : " · 동시 처리 상한 없음(클라우드)") + ".</p>" +
+    (c.signals.length ? '<p class="pm-signals">' + _pmSignals(c.signals) + "</p>" : "") +
+    '<div class="pm-tiles">' +
+    _pmTile("바쁜 정도", _pmPct(c.busy_fraction), "작업이 하나라도 돌고 있던 시간 비율") +
+    _pmTile("지금 대기", String(Object.values(q).reduce((a, b) => a + b, 0)), Object.entries(q).map(([k, v]) => esc(k) + " " + v).join(" · ")) +
+    _pmTile("지금 실행 중", String(Object.values(r).reduce((a, b) => a + b, 0)), "작업 프로세스 " + c.now.workers + "개(" + esc(c.now.worker_mode) + ")") +
+    _pmTile("파이프라인 시작까지", c.pipeline_queue_wait_seconds === null ? "—" : _pmDur(c.pipeline_queue_wait_seconds), "앞에 " + c.pipeline_jobs_ahead + "건") +
+    "</div>" +
+    '<div class="pm-wide">' + table(["줄", "작업", "실패·중단", "시작까지(평균)", "시작까지(90%가 이 안)", "실행(평균)", "실행(90%)"], rows) + "</div>";
 }
 
 function _pmBindCommon(content) {
