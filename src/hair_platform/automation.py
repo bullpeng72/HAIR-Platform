@@ -206,6 +206,10 @@ def run_due_schedules(conn: sqlite3.Connection, now: dt.datetime | None = None,
         schedule = get_schedule(conn, schedule_id)
         if schedule is None:
             continue
+        from hair_platform import automation_owner  # 만든 사람이 꺼졌거나 권한이 내려가면 멈춘다(2026-11-28)
+
+        if not automation_owner.check_or_pause(conn, "pipeline_schedules", schedule):
+            continue
         nxt = next_run_after(now, schedule["interval"], schedule["time_hhmm"], schedule["weekday"])
         # 다음 실행 시각부터 먼저 옮긴다 — 시작이 실패해도 같은 시각에 매 차례 다시 시도하지 않는다.
         conn.execute("UPDATE pipeline_schedules SET next_run_at = ?, last_run_at = ? WHERE id = ?",

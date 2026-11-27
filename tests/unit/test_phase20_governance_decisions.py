@@ -222,7 +222,8 @@ def test_gc202_purge_expired_deletes_only_records_older_than_retention_days(
     conn.commit()
 
     result = retention.purge_expired(conn)
-    assert result == {"assignment_history_deleted": 1, "audit_log_deleted": 1}
+    assert result == {"assignment_history_deleted": 1, "audit_log_deleted": 1,
+                      "inbound_payloads_cleared": 0, "match_misses_deleted": 0}
 
     remaining_actions = {
         r["action"] for r in conn.execute("SELECT action FROM audit_log").fetchall()
@@ -253,7 +254,8 @@ def test_gc203_purge_expired_is_noop_when_nothing_is_old(client_and_conn):
     돼도 신선한 DB에서는 아무 흔적을 안 남긴다는 뜻이다."""
     _client, conn = client_and_conn
     result = retention.purge_expired(conn)
-    assert result == {"assignment_history_deleted": 0, "audit_log_deleted": 0}
+    assert result == {"assignment_history_deleted": 0, "audit_log_deleted": 0,
+                      "inbound_payloads_cleared": 0, "match_misses_deleted": 0}
     actions = {
         r["action"] for r in conn.execute("SELECT action FROM audit_log").fetchall()
     }

@@ -102,13 +102,9 @@ def handover(conn: sqlite3.Connection, human_id: int) -> dict:
             "SELECT id, username AS name, 'user' AS kind FROM users WHERE manager_id = ? AND is_active = 1 "
             "UNION ALL SELECT id, name, 'human' AS kind FROM human_pool WHERE manager_id = ? AND availability != 'offboarded'",
             (uid, uid))]
-        for table, label in (("pipeline_schedules", "정기 실행"), ("automation_triggers", "이벤트 트리거"),
-                             ("inbound_triggers", "외부 입력 트리거")):
-            try:
-                for r in conn.execute(f"SELECT id, name FROM {table} WHERE created_by = ? AND is_active = 1", (uid,)):  # noqa: S608
-                    out["automations"].append({"kind": label, "table": table, "id": r["id"], "name": r["name"]})
-            except sqlite3.OperationalError:
-                continue
+        from hair_platform import automation_owner
+
+        out["automations"] = automation_owner.owned(conn, uid)  # 켜진 것 + 만든 사람 때문에 멈춘 것(2026-11-28)
     out["open_count"] = (len(work) + len(teams) + len(out["approvals"]) + len(out["reports"]) + len(out["automations"]))
     return out
 

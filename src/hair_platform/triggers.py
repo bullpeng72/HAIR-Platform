@@ -216,7 +216,12 @@ def run_triggers(conn: sqlite3.Connection, run_stages=None) -> list[int]:
     """새 이벤트마다 트리거를 한 번씩 실행하고 시작한 run_id 목록을 돌려준다. `run_stages(run_id, actor_id)`가
     실제 단계 실행(기본: 별도 스레드에서 `pipeline_runtime.run_pipeline_stage_job`)."""
     started: list[int] = []
+    from hair_platform import automation_owner
+
     for trigger in conn.execute("SELECT * FROM automation_triggers WHERE is_active = 1").fetchall():
+        # 만든 사람이 꺼졌거나 권한이 내려가면 멈춘다(2026-11-28) — 이벤트를 읽기 전에
+        if not automation_owner.check_or_pause(conn, "automation_triggers", trigger):
+            continue
         for ev in _events(conn, trigger):
             if conn.execute("SELECT 1 FROM trigger_log WHERE trigger_id = ? AND event_key = ?",
                             (trigger["id"], ev["key"])).fetchone():

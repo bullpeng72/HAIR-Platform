@@ -134,6 +134,19 @@ def _delete_task_links(conn: sqlite3.Connection, task_ids: list[int]) -> None:
     conn.execute(f"DELETE FROM task_dependencies WHERE task_id IN ({ph}) OR depends_on_task_id IN ({ph})",
                  [*task_ids, *task_ids])
     conn.execute(f"DELETE FROM crew_runs WHERE task_id IN ({ph})", task_ids)
+    try:  # 매칭 실패 기록(2026-11-28)
+        conn.execute(f"DELETE FROM match_misses WHERE task_id IN ({ph})", task_ids)
+    except sqlite3.OperationalError:
+        pass
+
+
+def _delete_resource_rows(conn: sqlite3.Connection, resource_type: str, resource_id: int) -> None:
+    """사람·Agent를 지울 때 그 자원에 딸린 2026-11-27~28 기록(부재 기간·스킬 숙련도)."""
+    for table in ("resource_absences", "resource_skill_levels"):
+        try:
+            conn.execute(f"DELETE FROM {table} WHERE resource_type = ? AND resource_id = ?", (resource_type, resource_id))
+        except sqlite3.OperationalError:  # 마이그레이션 전
+            pass
 
 
 def confirmed_assignment_exists(
@@ -253,10 +266,21 @@ def _delete_pipeline_runs_for_tasks(
             f"AND subject_id IN ({s_placeholders})",
             stage_ids,
         )
+        # 단계 기록에 딸린 2026-11-27~28 기록(2026-11-28) — 특히 예시는 결과물 발췌라 함께 지운다.
+        for _table in ("stage_examples", "approval_recommendations", "action_executions"):
+            try:
+                conn.execute(f"DELETE FROM {_table} WHERE run_stage_id IN ({s_placeholders})", stage_ids)
+            except sqlite3.OperationalError:  # 마이그레이션 전
+                pass
         conn.execute(
             f"DELETE FROM pipeline_run_stages WHERE id IN ({s_placeholders})",
             stage_ids,
         )
+    # 그 실행을 시작한 외부 입력은 중복 방지 키만 남기고 본문(고객 메일 등)·실행 연결을 지운다(2026-11-28).
+    try:
+        conn.execute(f"UPDATE inbound_events SET payload = NULL, run_id = NULL WHERE run_id IN ({r_placeholders})", run_ids)
+    except sqlite3.OperationalError:
+        pass
     conn.execute(f"DELETE FROM pipeline_runs WHERE id IN ({r_placeholders})", run_ids)
     return len(run_ids)
 
@@ -427,6 +451,7 @@ def delete_human(conn: sqlite3.Connection, actor_id: int, human_id: int) -> None
     if confirmed_assignment_exists(conn, resource_type="human", resource_id=human_id):
         raise ConfirmedAssignmentError(_confirmed_detail(conn, resource_type="human", resource_id=human_id))
 
+    _delete_resource_rows(conn, "human", human_id)  # 부재·숙련도(2026-11-28)
     conn.execute("DELETE FROM human_pool WHERE id = ?", (human_id,))
     audit.record(
         conn,
@@ -452,6 +477,7 @@ def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None
 
     conn.execute("DELETE FROM knowledge_chunks WHERE source_agent_id = ?", (agent_id,))
     conn.execute("DELETE FROM agent_tool_links WHERE agent_id = ?", (agent_id,))
+    _delete_resource_rows(conn, "agent", agent_id)  # 숙련도(2026-11-28)
     conn.execute("DELETE FROM agent_pool WHERE id = ?", (agent_id,))
     audit.record(
         conn,
@@ -507,6 +533,22 @@ def delete_agent(conn: sqlite3.Connection, actor_id: int, agent_id: int) -> None
 # `teams.protect_on_reset` 표시(팀 관리 화면에서 admin이 켜고 끔)를 본다.
 
 _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
+    # 2026-11-27~28 추가 표(2026-11-28 정리 — 초기화 목록에 빠져 있었다: 사람이 지워져도 부재·숙련도가, 실행이 지워져도
+    # 배운 점·예시(결과물 발췌)·추천 기록이, 사용자가 지워져도 그 이름의 외부 입력 트리거·고객 메일 본문이 남았다).
+    # 조직 설정(사람 1시간 비용 `process_value_settings`, 결재 에스컬레이션 날수 `resource_settings`)은 평가 기준·AI 사용
+    # 한도처럼 남긴다.
+    "stage_examples",       # 좋은 결과 예시(결과물 발췌)
+    "stage_lessons",        # 배운 점
+    "process_changes",      # 변경 기록
+    "approval_recommendations",  # 위험도 추천 대 사람 결정
+    "action_executions",    # 결재 후 실행 동작 실행 기록
+    "stage_actions",        # 실행 동작 설정(코드 저장소·사내 DB 연결처럼 운영 연결 설정)
+    "inbound_events",       # 외부 입력(고객 메일·웹훅 본문)
+    "inbound_triggers",     # 외부 입력 트리거(만든 사람 명의로 실행 — 정기 실행·이벤트 트리거와 같이)
+    "approval_delegations",
+    "resource_absences",
+    "resource_skill_levels",
+    "match_misses",
     # 실제 LLM 토큰 사용량 기록(2026-11-22 `llm_usage.py`) — 실행 이력과 같은 운영 데이터.
     "llm_usage",
     "knowledge_chunks",

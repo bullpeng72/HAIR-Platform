@@ -113,6 +113,9 @@ NOTIFY_EVENTS: dict[str, str] = {
     "pipeline_completed": "파이프라인 완료",
     "pipeline_failed": "파이프라인 실패",
     "agent_job_failed": "Agent 실행 실패",
+    # 자동화 멈춤(2026-11-28) — 만든 사람의 계정이 꺼지거나 권한이 내려가 스스로 멈춘 정기 실행·트리거. 만든 사람은 이미
+    # 없을 수 있어, 알리지 않으면 "매일 보고가 왜 안 오지"가 될 때까지 아무도 모른다.
+    "automation_paused": "자동화 멈춤(만든 사람 점검)",
 }
 _SUBJECT_LABELS = {
     "assignment": "배정 요청",
@@ -230,6 +233,20 @@ def collect_events(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
         stage = f" {r['current_stage_seq']}단계" if r["status"] == "paused_for_approval" else ""
         events.append((f"pipeline:{r['id']}:{r['status']}:{r['current_stage_seq']}", kind,
                        f"[HAIR] {NOTIFY_EVENTS[kind]}: 「{r['tpl']}」 실행 #{r['id']}(할 일 #{r['task_id']}){stage}"))
+    from hair_platform import automation_owner
+
+    for table, label in (("pipeline_schedules", "정기 실행"), ("automation_triggers", "이벤트 트리거"),
+                         ("inbound_triggers", "외부 입력 트리거")):
+        try:
+            rows = conn.execute(f"SELECT id, name, created_by, last_error FROM {table} "  # noqa: S608 — 고정 표
+                                "WHERE is_active = 0 AND last_error LIKE ?",
+                                (automation_owner.OWNER_PAUSED_PREFIX + "%",)).fetchall()
+        except sqlite3.OperationalError:
+            continue
+        for r in rows:  # 키에 만든 사람을 넣는다 — 넘긴 뒤 다시 멈추면 새로 알린다
+            events.append((f"automation_paused:{table}:{r['id']}:{r['created_by']}", "automation_paused",
+                           f"[HAIR] {label} 「{r['name']}」 멈춤 — "
+                           f"{r['last_error'][len(automation_owner.OWNER_PAUSED_PREFIX):].strip()[:200]}"))
     for j in conn.execute(
         "SELECT id, task_id, error FROM agent_execution_jobs WHERE status = 'failed'"
     ).fetchall():

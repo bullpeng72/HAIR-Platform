@@ -983,6 +983,21 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 스킬 숙련도(2026-11-28 — `skill_levels`).
     from hair_platform import skill_levels
     skill_levels.ensure_schema(conn)
+    # 조회 색인(2026-11-28 — 대량 데이터 실측: 실행 3만·단계 기록 20만·할 일 2만에서 자원 운용 7.5초·비용 8.9초·자원 분석 4.6초.
+    # 배정·배정 이력·할 일·단계 기록을 행마다 찾는 질의가 전부 표 전체를 훑었다).
+    for _idx, _table, _cols in (
+        ("idx_assignments_task", "assignments", "task_id, status"),
+        ("idx_assignments_resource", "assignments", "resource_type, resource_id, status"),
+        ("idx_assignment_history_assignment", "assignment_history", "assignment_id"),
+        ("idx_tasks_brief", "tasks", "brief_id"),
+        ("idx_tasks_status", "tasks", "status"),
+        ("idx_pipeline_run_stages_deliverable", "pipeline_run_stages", "deliverable_id"),
+        ("idx_pipeline_run_stages_stage", "pipeline_run_stages", "stage_id, created_at"),
+        ("idx_deliverables_author", "deliverables", "author_type, author_id, status"),
+        ("idx_audit_log_action", "audit_log", "action"),  # 활동 기록 동작 필터·목록(2026-11-28)
+        ("idx_audit_log_actor", "audit_log", "actor_id"),
+    ):
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {_idx} ON {_table}({_cols})")
     inbound.ensure_schema(conn)
     stage_actions.ensure_schema(conn)
     _sync_dev_crew_pipeline_integration(conn)

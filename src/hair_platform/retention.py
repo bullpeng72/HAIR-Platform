@@ -20,6 +20,9 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 
 RETENTION_DAYS = 365
+# 외부 입력 본문(고객 메일·웹훅, 2026-11-28) — 실행을 시작한 뒤에는 업무 요청에 이미 옮겨져 있어 원본은 필요 없다.
+# 30일 지나면 본문만 비우고 중복 방지 키·상태는 남긴다(대기 중인 것은 건드리지 않는다).
+INBOUND_PAYLOAD_DAYS = 30
 
 
 def purge_expired(
@@ -37,6 +40,14 @@ def purge_expired(
     history_deleted = conn.execute(
         "DELETE FROM assignment_history WHERE changed_at < ?", (cutoff,)
     ).rowcount
+    inbound_cut = ((now or datetime.now(UTC)) - timedelta(days=INBOUND_PAYLOAD_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        inbound_cleared = conn.execute(
+            "UPDATE inbound_events SET payload = NULL WHERE payload IS NOT NULL AND status != 'queued' "
+            "AND received_at < ?", (inbound_cut,)).rowcount
+        misses_deleted = conn.execute("DELETE FROM match_misses WHERE created_at < ?", (cutoff,)).rowcount
+    except sqlite3.OperationalError:  # 마이그레이션 전
+        inbound_cleared = misses_deleted = 0
 
     # audit_log만 append-only 트리거가 걸려 있다 — 이 함수 안에서만, 반드시
     # 다시 세운다는 전제로 잠깐 내린다.
@@ -52,7 +63,7 @@ def purge_expired(
             "SELECT RAISE(ABORT, 'audit_log is append-only'); END"
         )
 
-    if history_deleted or audit_deleted:
+    if history_deleted or audit_deleted or inbound_cleared or misses_deleted:
         admin = conn.execute(
             "SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1"
         ).fetchone()
@@ -70,6 +81,8 @@ def purge_expired(
                     "retention_days": RETENTION_DAYS,
                     "assignment_history_deleted": history_deleted,
                     "audit_log_deleted": audit_deleted,
+                    "inbound_payloads_cleared": inbound_cleared,
+                    "match_misses_deleted": misses_deleted,
                 },
             )
     # 항상 커밋한다(2026-11-25 버그 수정) — 예전엔 지운 게 있을 때만 커밋해, 지울 게 없는 평소(가장 흔한 경우)에도 위
@@ -81,4 +94,6 @@ def purge_expired(
     return {
         "assignment_history_deleted": history_deleted,
         "audit_log_deleted": audit_deleted,
+        "inbound_payloads_cleared": inbound_cleared,
+        "match_misses_deleted": misses_deleted,
     }

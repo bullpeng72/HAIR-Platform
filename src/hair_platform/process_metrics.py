@@ -165,20 +165,28 @@ def _attach_usage(conn: sqlite3.Connection, runs: list[dict]) -> None:
     if not _has_column(conn, "llm_usage", "task_id"):
         return
     now = _now().strftime("%Y-%m-%d %H:%M:%S")
+    # 실행마다 질의하지 않고(대량 실측: 실행 3만 건에 질의 3만 번) 할 일 묶음으로 한 번에 읽어 실행 기간에 맞춰 나눈다.
+    by_task: dict[int, list[dict]] = {}
     for r in runs:
-        rows = conn.execute(
-            "SELECT u.prompt_tokens, u.completion_tokens, m.price_input_per_1m, m.price_output_per_1m "
+        by_task.setdefault(r["task_id"], []).append(r)
+    task_ids = list(by_task)
+    for i in range(0, len(task_ids), 500):
+        chunk = task_ids[i:i + 500]
+        marks = ",".join("?" * len(chunk))
+        for u in conn.execute(
+            "SELECT u.task_id, u.created_at, u.prompt_tokens, u.completion_tokens, m.price_input_per_1m, m.price_output_per_1m "
             "FROM llm_usage u LEFT JOIN model_registry m ON m.provider = u.provider AND m.name = u.model "
-            "WHERE u.task_id = ? AND u.created_at >= ? AND u.created_at <= ?",
-            (r["task_id"], r["created_at"], r["finished_at"] or now),
-        ).fetchall()
-        for u in rows:
-            r["tokens"] += u["prompt_tokens"] + u["completion_tokens"]
-            c = _cost_of(u)
-            if c is None:
-                r["cost_partial"] = True
-            else:
-                r["cost"] += c
+            f"WHERE u.task_id IN ({marks})", chunk,  # noqa: S608 — 자리표시자만
+        ).fetchall():
+            for r in by_task.get(u["task_id"], []):
+                if not (r["created_at"] <= u["created_at"] <= (r["finished_at"] or now)):
+                    continue
+                r["tokens"] += u["prompt_tokens"] + u["completion_tokens"]
+                c = _cost_of(u)
+                if c is None:
+                    r["cost_partial"] = True
+                else:
+                    r["cost"] += c
 
 
 def _run_metrics(run: dict, now: datetime) -> dict:
@@ -423,6 +431,10 @@ def overview(conn: sqlite3.Connection, days: int | None = None) -> dict:
         if not t_runs and not t["is_active"]:
             continue
         summary = _summarize(t_runs, t["baseline_minutes"], hc)
+        # '지금 맡기면'(capacity.estimates)이 다시 읽지 않게 — 최근 완료 실행의 사람 대기를 뺀 시간(중앙값).
+        own = [r for r in runs if r["pipeline_template_id"] == t["id"] and r["status"] == "completed"
+               and r["m"]["lead_seconds"] is not None]
+        summary["run_seconds_median"] = _median([max(0.0, r["m"]["lead_seconds"] - r["m"]["wait_seconds"]) for r in own])
         templates.append({"template_id": t["id"], "name": t["name"], "domain": t["domain"],
                           "is_active": bool(t["is_active"]), **summary})
     templates.sort(key=lambda t: (-t["runs"], t["template_id"]))

@@ -96,7 +96,24 @@ def test_webhook_trigger_starts_tainted_run_once(tpl):
                          "WHERE r.id = ?", (run_id,)).fetchone()[0]
     assert tool_audit.EXTERNAL_OPEN in brief and "환불 문의" in brief and brief.startswith("티켓에 회신 초안을 쓰세요")
     assert conn.execute("SELECT external FROM tool_calls WHERE pipeline_run_id = ?", (run_id,)).fetchone()[0] == 1
-    assert client.post(url, data="x" * 30000, headers={"X-HAIR-Token": t["token"], "Content-Type": "application/json"}).status_code in (413, 422)
+    h = {"X-HAIR-Token": t["token"], "Content-Type": "application/json"}
+    assert client.post(url, content='{"text": "' + "가" * 30000 + '"}', headers=h).status_code == 413  # 64KB 넘음 — 읽기 전에
+    assert client.post(url, content='{"text": "' + "a" * 25000 + '"}', headers=h).status_code == 413  # 2만 자 넘음
+    assert client.post(url, content="not json", headers=h).status_code == 400
+    assert client.post(url, content="[1, 2]", headers=h).status_code == 400
+
+
+def test_webhook_receive_is_rate_limited_per_hour(tpl):
+    client, conn, _admin, tid, _s1 = tpl
+    from hair_platform import inbound as _inb
+
+    t = _webhook(client, tid, max_per_hour=1)
+    h = {"X-HAIR-Token": t["token"]}
+    with patch("hair_platform.job_queue.enqueue"):
+        codes = [client.post(t["webhook_path"], json={"id": f"r{i}"}, headers=h).status_code for i in range(_inb.RECEIVE_FACTOR + 1)]
+    assert codes[: _inb.RECEIVE_FACTOR] == [202] * _inb.RECEIVE_FACTOR and codes[-1] == 429
+    # 틀린 토큰은 상한과 무관하게 401(트리거 상태를 알려 주지 않는다)
+    assert client.post(t["webhook_path"], json={"id": "z"}, headers={"X-HAIR-Token": "nope"}).status_code == 401
 
 
 def test_webhook_rate_limit_and_inactive(tpl):

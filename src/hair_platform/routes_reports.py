@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 
 from fastapi import (
     Body,
@@ -29,14 +30,49 @@ from hair_platform.auth import (
 )
 
 
+AUDIT_EXPORT_MAX = 50000  # 활동 기록 CSV 한 번에 내보내는 최대 행
+
+
+def _csv_safe(value: str | None) -> str:
+    """엑셀이 수식으로 실행하지 않게(CSV 수식 주입) =,+,-,@로 시작하는 값 앞에 '를 붙인다."""
+    v = value or ""
+    return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+
 def register(app: FastAPI, conn: sqlite3.Connection) -> None:
     """운영 리포트 API 라우트를 `app`에 등록한다(`create_app()`이 부른다)."""
+    def _audit_where(actor_id, subject_type, action, since, until) -> tuple[str, list[object]]:
+        """활동 기록 필터 → WHERE 절(목록·CSV 내보내기가 같이 쓴다)."""
+        where = " WHERE 1=1"
+        params: list[object] = []
+        if actor_id is not None:
+            where += " AND actor_id = ?"
+            params.append(actor_id)
+        if subject_type:
+            where += " AND subject_type = ?"
+            params.append(subject_type)
+        if action:  # 동작(2026-11-28)
+            where += " AND action = ?"
+            params.append(action)
+        # 기간(2026-11-28) — 날짜(YYYY-MM-DD). `until`은 그날 끝까지.
+        for value, cond in ((since, " AND created_at >= ?"), (until, " AND created_at < date(?, '+1 day')")):
+            if value:
+                try:
+                    date.fromisoformat(value)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail="date_must_be_yyyy_mm_dd") from exc
+                where += cond
+                params.append(value)
+        return where, params
+
     @app.get("/api/audit-log")
     def get_audit_log(
         limit: int = 50,
         offset: int = 0,
         actor_id: int | None = None,
         subject_type: str | None = None,
+        action: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
     ):
         """감사로그 조회(Admin·매니저 전용). append-only는 DB 트리거가 강제.
@@ -45,19 +81,15 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         반환하던 것을 고쳤다 — append-only라 무한정 커지는 테이블을 무제한
         반환하면 응답 크기·지연 문제로 이어진다.
         """
+        from hair_platform import audit_labels
+
         limit = max(1, min(limit, 200))
-        query = "SELECT * FROM audit_log WHERE 1=1"
-        params: list[object] = []
-        if actor_id is not None:
-            query += " AND actor_id = ?"
-            params.append(actor_id)
-        if subject_type is not None:
-            query += " AND subject_type = ?"
-            params.append(subject_type)
-        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        rows = conn.execute(query, params).fetchall()
-        total = conn.execute("SELECT COUNT(*) AS c FROM audit_log").fetchone()["c"]
+        offset = max(0, offset)
+        where, params = _audit_where(actor_id, subject_type, action, since, until)
+        rows = conn.execute(f"SELECT * FROM audit_log{where} ORDER BY id DESC LIMIT ? OFFSET ?",  # noqa: S608 — 고정 조건만
+                            [*params, limit, offset]).fetchall()
+        # 전체 건수는 필터를 따른다(2026-11-28 수정 — 예전엔 필터와 무관하게 표 전체를 세어 "전체 N건"이 틀렸다).
+        total = conn.execute(f"SELECT COUNT(*) AS c FROM audit_log{where}", params).fetchone()["c"]  # noqa: S608
         # 사용자 요청(2026-10-27, "활동 기록의 경우 처리자 ID, 대상 ID
         # 표기됨 처리자 ID는 아이디로 대상 ID는 agent code로 변경") —
         # 조회 전용·admin/manager만 보는 최대 200행 페이지라 행마다
@@ -65,6 +97,8 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         items = []
         for row in rows:
             item = dict(row)
+            item["action_label"] = audit_labels.action_label(row["action"])
+            item["subject_label"] = audit_labels.subject_label(row["subject_type"])
             actor = conn.execute(
                 "SELECT username FROM users WHERE id = ?", (row["actor_id"],)
             ).fetchone()
@@ -82,6 +116,58 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             "limit": limit,
             "offset": offset,
         }
+
+    @app.get("/api/audit-log/export.csv")
+    def export_audit_log(
+        actor_id: int | None = None,
+        subject_type: str | None = None,
+        action: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """활동 기록 CSV(2026-11-28) — 화면과 같은 필터, 최신순 최대 `AUDIT_EXPORT_MAX`행. 엑셀에서 한글이 깨지지 않게
+        UTF-8 BOM을 붙인다. 내보낸 사실도 활동 기록에 남긴다(누가 어떤 조건으로 몇 건을 가져갔는지)."""
+        import csv
+        import io
+
+        from fastapi.responses import Response
+
+        from hair_platform import audit, audit_labels
+
+        where, params = _audit_where(actor_id, subject_type, action, since, until)
+        rows = conn.execute(
+            "SELECT a.*, u.username FROM audit_log a LEFT JOIN users u ON u.id = a.actor_id"
+            + where.replace("actor_id", "a.actor_id").replace("created_at", "a.created_at")
+            + " ORDER BY a.id DESC LIMIT ?", [*params, AUDIT_EXPORT_MAX]).fetchall()  # noqa: S608 — 고정 조건만
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["번호", "시각(UTC)", "처리자", "한 일", "동작 코드", "대상 종류", "대상 ID", "바뀌기 전", "바뀐 뒤"])
+        for r in rows:
+            w.writerow([r["id"], r["created_at"], r["username"] or f"#{r['actor_id']}",
+                        audit_labels.action_label(r["action"]), r["action"], audit_labels.subject_label(r["subject_type"]),
+                        "" if r["subject_id"] is None else r["subject_id"],
+                        _csv_safe(r["before_value"]), _csv_safe(r["after_value"])])
+        filters = {k: v for k, v in {"actor_id": actor_id, "subject_type": subject_type, "action": action,
+                                     "since": since, "until": until}.items() if v not in (None, "")}
+        audit.record(conn, user["id"], "audit_log_exported", "system", None,
+                     after={"rows": len(rows), "filters": filters, "truncated": len(rows) >= AUDIT_EXPORT_MAX})
+        conn.commit()
+        name = f"hair-activity-{date.today().isoformat()}.csv"
+        return Response(content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @app.get("/api/audit-log/facets")
+    def get_audit_log_facets(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """활동 기록 필터 목록(2026-11-28) — 실제로 기록된 대상 종류·동작만, 한국어 이름과 건수."""
+        from hair_platform import audit_labels
+
+        subjects = [{"value": r[0], "label": audit_labels.subject_label(r[0]), "count": r[1]}
+                    for r in conn.execute("SELECT subject_type, COUNT(*) FROM audit_log GROUP BY subject_type")]
+        actions = [{"value": r[0], "label": audit_labels.action_label(r[0]), "count": r[1]}
+                   for r in conn.execute("SELECT action, COUNT(*) FROM audit_log GROUP BY action")]
+        return {"subject_types": sorted(subjects, key=lambda x: x["label"]),
+                "actions": sorted(actions, key=lambda x: x["label"])}
 
     @app.get("/api/performance-review")
     def get_performance_review(
@@ -134,7 +220,9 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         from hair_platform import capacity
 
         cap = capacity.report(conn)
-        est = capacity.estimates(conn, [t["template_id"] for t in result["templates"] if t["is_active"]], cap)
+        active = [t for t in result["templates"] if t["is_active"]]
+        est = capacity.estimates(conn, [t["template_id"] for t in active], cap,
+                                 {t["template_id"]: t.get("run_seconds_median") for t in active})
         for t in result["templates"]:
             t["lesson_candidates"] = counts.get(t["template_id"], 0)
             t["estimate"] = est.get(t["template_id"])

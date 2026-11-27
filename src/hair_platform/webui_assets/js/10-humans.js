@@ -375,7 +375,13 @@ async function _renderHandover(box, humanId) {
       users.filter(u => u.id !== h.human.user_id).map(u => '<option value="' + u.id + '">' + esc(u.username) + "</option>").join("") +
       '</select> <button class="small" id="ho-transfer">모두 넘기기</button></div>' : '<p class="muted">없음</p>') +
     "<h4>보고 대상(이 사람이 상사)</h4>" + (h.reports.length ? "<ul>" + h.reports.map(r => "<li>" + esc(r.name) + "</li>").join("") + "</ul><p class=\"muted\">새 상사는 \"사용자 관리\"·\"사람 인력 관리\"에서 지정하세요(결재 체인이 상사를 따릅니다).</p>" : '<p class="muted">없음</p>') +
-    "<h4>이 사람 이름으로 도는 자동화</h4>" + (h.automations.length ? "<ul>" + h.automations.map(a => "<li>" + esc(a.kind) + " — " + esc(a.name) + "</li>").join("") + "</ul><p class=\"muted\">\"내 설정(연동 설정)\"에서 끄거나 다른 사람이 다시 만드세요 — 그대로 두면 퇴사자 이름으로 계속 실행됩니다.</p>" : '<p class="muted">없음</p>') +
+    // 자동화 넘기기(2026-11-28) — 만든 사람이 꺼지거나 권한이 내려가면 자동화가 스스로 멈추고, 여기서 넘기면 다시 켜진다.
+    "<h4>이 사람 이름으로 도는 자동화</h4>" + (h.automations.length ? "<ul>" + h.automations.map(a => "<li>" + esc(a.kind) + " — " + esc(a.name) +
+      (a.paused ? ' <span class="gate-badge gate-warn" title="' + esc(a.note || "") + '">멈춤</span>' : "") + "</li>").join("") + "</ul>" +
+      (h.human.user_id ? '<div class="inline"><select id="ho-auto-to" aria-label="넘겨받을 사람"><option value="">넘겨받을 admin·manager</option>' +
+        users.filter(u => u.id !== h.human.user_id).map(u => '<option value="' + u.id + '">' + esc(u.username) + "</option>").join("") +
+        '</select> <button class="small" id="ho-auto-transfer">자동화 넘기기</button></div>' : "") +
+      '<p class="muted">만든 사람의 계정이 꺼지거나 admin·manager가 아니게 되면 자동화는 다음 실행 때 스스로 멈춥니다. 넘기면 새 사람 이름으로 돌고, 그 이유로 멈춘 것은 다시 켜집니다.</p>' : '<p class="muted">없음</p>') +
     '<p class="muted" id="ho-msg"></p></div>';
   box.querySelector("#ho-close").onclick = () => { box.innerHTML = ""; };
   box.querySelectorAll("[data-ho-replace]").forEach(b => b.onclick = async () => {
@@ -392,6 +398,16 @@ async function _renderHandover(box, humanId) {
     try {
       const r = await api("POST", "/api/users/" + h.human.user_id + "/transfer-approvals", { to_user_id: to ? Number(to) : null });
       box.querySelector("#ho-msg").textContent = "대기 결재 " + r.transferred + "건을 넘겼습니다.";
+      _renderHandover(box, humanId);
+    } catch (e) { box.querySelector("#ho-msg").textContent = e.message || String(e); }
+  };
+  const at = box.querySelector("#ho-auto-transfer");
+  if (at) at.onclick = async () => {
+    const to = box.querySelector("#ho-auto-to").value;
+    if (!to) { box.querySelector("#ho-msg").textContent = "넘겨받을 사람을 고르세요."; return; }
+    try {
+      const r = await api("POST", "/api/users/" + h.human.user_id + "/transfer-automations", { to_user_id: Number(to) });
+      box.querySelector("#ho-msg").textContent = "자동화 " + r.transferred + "개를 넘겼습니다.";
       _renderHandover(box, humanId);
     } catch (e) { box.querySelector("#ho-msg").textContent = e.message || String(e); }
   };

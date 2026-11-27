@@ -155,13 +155,15 @@ def template_run_seconds(conn: sqlite3.Connection, template_id: int) -> float | 
     return statistics.median(vals) if vals else None
 
 
-def estimates(conn: sqlite3.Connection, template_ids: list[int], cap: dict | None = None) -> dict[int, dict]:
-    """파이프라인별 '지금 맡기면' — 시작까지 + 실행 시간(사람 결재 대기 제외)."""
+def estimates(conn: sqlite3.Connection, template_ids: list[int], cap: dict | None = None,
+              run_seconds: dict[int, float | None] | None = None) -> dict[int, dict]:
+    """파이프라인별 '지금 맡기면' — 시작까지 + 실행 시간(사람 결재 대기 제외). `run_seconds`를 주면(프로세스 성과 요약이 이미
+    계산한 값) 다시 읽지 않는다."""
     cap = cap or report(conn)
     wait = cap["pipeline_queue_wait_seconds"]
     out = {}
     for tid in template_ids:
-        run = template_run_seconds(conn, tid)
+        run = run_seconds[tid] if run_seconds is not None and tid in run_seconds else template_run_seconds(conn, tid)
         out[tid] = {"queue_wait_seconds": wait, "run_seconds": run,
                     "total_seconds": (wait or 0) + run if run is not None else None}
     return out

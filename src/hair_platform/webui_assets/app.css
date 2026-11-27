@@ -750,3 +750,6 @@
   .ab-del { color: var(--status-danger-fg, #991b1b); }
   .pm-wrap td:last-child { white-space: nowrap; }
 
+
+/* 활동 기록 자세히(2026-11-28) */
+.audit-detail pre { white-space: pre-wrap; word-break: break-word; max-height: 16rem; overflow: auto; margin: 0.2rem 0 0.4rem; font-size: 0.85em; }

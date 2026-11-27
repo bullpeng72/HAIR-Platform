@@ -471,21 +471,47 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         return {"deleted": True}
 
     @app.post("/api/inbound/{trigger_id}", status_code=202)
-    def receive_inbound_webhook(trigger_id: int, request: Request, payload: dict = Body(...)):
+    async def receive_inbound_webhook(trigger_id: int, request: Request):
         """외부 시스템이 보내는 일(로그인 없음 — 트리거 토큰: `X-HAIR-Token` 헤더). 받은 일은 곧바로 시작 대기열에 들어간다.
-        `{"id": 외부 식별자(중복 방지), "title": ..., "text": ...}` 권장 — 다른 JSON도 통째로 받는다(최대 2만 자)."""
+        `{"id": 외부 식별자(중복 방지), "title": ..., "text": ...}` 권장 — 다른 JSON도 통째로 받는다(최대 2만 자).
+        본문은 64KB를 넘으면 읽기 전에(선언 길이) 또는 읽는 도중에 거절한다(413) — 큰 본문을 메모리에 다 올리지 않는다.
+        시간당 받기 상한(실행 상한 × 5)을 넘으면 429."""
+        import json as _json
+
+        from starlette.concurrency import run_in_threadpool
+
         from hair_platform import inbound
 
-        token = request.headers.get("x-hair-token", "")
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > inbound.MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="payload_too_large")
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > inbound.MAX_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="payload_too_large")
+            chunks.append(chunk)
         try:
+            payload = _json.loads(b"".join(chunks) or b"null")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="body_must_be_json") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="body_must_be_json_object")
+        token = request.headers.get("x-hair-token", "")
+
+        def _receive():
             result = inbound.receive_webhook(conn, trigger_id, token, payload)
+            if result["accepted"]:
+                inbound.fire(conn, trigger_id=trigger_id)
+            return result
+
+        try:
+            return await run_in_threadpool(_receive)  # DB 작업은 다른 라우트처럼 스레드에서
         except PermissionError as exc:
             raise HTTPException(status_code=401, detail="토큰이 맞지 않습니다") from exc
         except inbound.InboundError as exc:
-            raise HTTPException(status_code=413 if str(exc) == "payload_too_large" else 409, detail=str(exc)) from exc
-        if result["accepted"]:
-            inbound.fire(conn, trigger_id=trigger_id)
-        return result
+            code = {"payload_too_large": 413, "rate_limited": 429}.get(str(exc), 409)
+            raise HTTPException(status_code=code, detail=str(exc)) from exc
 
     # ---------- 결재 후 실행 동작(2026-11-27, 4단계 — `stage_actions`, admin) ----------
     @app.get("/api/stage-actions")

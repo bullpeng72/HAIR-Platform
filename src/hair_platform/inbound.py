@@ -32,6 +32,8 @@ SOURCES = {"mail": "메일 도착", "webhook": "외부 시스템 호출(웹훅)"
 POLL_SECONDS = {"mail": 120, "calendar": 600}
 DEFAULT_MAX_PER_HOUR = 20
 MAX_PAYLOAD_CHARS = 20000
+MAX_BODY_BYTES = 64 * 1024        # 요청 본문 상한 — JSON을 읽기 전에 자른다(2만 자 한글 UTF-8 ≈ 60KB)
+RECEIVE_FACTOR = 5                # 한 시간에 받을 수 있는 웹훅 = 시간당 실행 상한 × 5(그 이상은 429)
 BRIEF_PAYLOAD_CHARS = 8000
 
 SCHEMA = """
@@ -200,6 +202,12 @@ def receive_webhook(conn: sqlite3.Connection, trigger_id: int, token: str, paylo
         raise PermissionError("invalid_token")
     if not row["is_active"]:
         raise InboundError("trigger_inactive")
+    # 받기 상한(2026-11-28 — RBAC 감사 후속): 실행 시작은 시간당 상한이 있었지만 받기는 무제한이라, 토큰을 가진 쪽이 대기열을
+    # 끝없이 쌓을 수 있었다. 토큰이 맞은 뒤에만 센다(틀린 토큰으로는 트리거가 있는지·바쁜지 알 수 없다).
+    received = conn.execute("SELECT COUNT(*) FROM inbound_events WHERE trigger_id = ? AND status != 'seeded' "
+                            "AND received_at >= datetime('now', '-1 hour')", (trigger_id,)).fetchone()[0]
+    if received >= row["max_per_hour"] * RECEIVE_FACTOR:
+        raise InboundError("rate_limited")
     text = json.dumps(payload, ensure_ascii=False) if not isinstance(payload, str) else payload
     if len(text) > MAX_PAYLOAD_CHARS:
         raise InboundError("payload_too_large")
@@ -264,7 +272,11 @@ def poll(conn: sqlite3.Connection, force: bool = False) -> int:
     from hair_platform import process_metrics
 
     now = process_metrics._now()
+    from hair_platform import automation_owner
+
     for t in conn.execute("SELECT * FROM inbound_triggers WHERE is_active = 1 AND source IN ('mail', 'calendar')").fetchall():
+        if not automation_owner.check_or_pause(conn, "inbound_triggers", t):
+            continue
         last = datetime.fromisoformat(t["last_polled_at"]) if t["last_polled_at"] else None
         if not force and last is not None and (now - last).total_seconds() < POLL_SECONDS[t["source"]]:
             continue
@@ -328,7 +340,11 @@ def fire(conn: sqlite3.Connection, run_stages=None, trigger_id: int | None = Non
 
     started: list[int] = []
     sql = "SELECT * FROM inbound_triggers WHERE is_active = 1" + (" AND id = ?" if trigger_id else "")
+    from hair_platform import automation_owner
+
     for t in conn.execute(sql, (trigger_id,) if trigger_id else ()).fetchall():
+        if not automation_owner.check_or_pause(conn, "inbound_triggers", t):  # 만든 사람 점검(2026-11-28)
+            continue
         used = conn.execute("SELECT COUNT(*) FROM inbound_events WHERE trigger_id = ? AND status = 'started' "
                             "AND started_at >= datetime('now', '-1 hour')", (t["id"],)).fetchone()[0]
         room = max(0, t["max_per_hour"] - used)

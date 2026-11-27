@@ -320,6 +320,18 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             raise HTTPException(status_code=400, detail="to_user_id_must_be_integer")
         return {"transferred": _rl_call(resource_lifecycle.transfer_approvals, conn, user["id"], user_id, to)}
 
+    @app.post("/api/users/{user_id}/transfer-automations")
+    def post_transfer_automations(user_id: int, payload: dict = Body(...),
+                                  user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """`{"to_user_id": 5}`(켜진 admin·manager) — 그 사람 이름의 정기 실행·이벤트 트리거·외부 입력 트리거를 넘긴다.
+        만든 사람 때문에 멈춘 것은 다시 켠다(2026-11-28)."""
+        from hair_platform import automation_owner
+
+        to = payload.get("to_user_id")
+        if isinstance(to, bool) or not isinstance(to, int):
+            raise HTTPException(status_code=400, detail="to_user_id_must_be_integer")
+        return {"transferred": _rl_call(automation_owner.transfer, conn, user["id"], user_id, to)}
+
     @app.get("/api/approval-delegations")
     def get_approval_delegations(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
         """오늘 이후 결재 위임 — admin은 전체, manager는 자기가 맡기거나 맡은 것. 에스컬레이션 설정도 함께."""

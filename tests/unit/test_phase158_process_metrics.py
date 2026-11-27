@@ -124,6 +124,8 @@ def test_overview_lists_waiting_runs_longest_first_and_trend(seeded):
     o = process_metrics.overview(conn, 30)
     t = next(x for x in o["templates"] if x["template_id"] == tid)
     assert t["runs"] == 4
+    # '지금 맡기면'이 다시 읽지 않고 쓰는 값 — 완료 실행의 (완료까지 − 사람 대기) 중앙값: 70−30=40분, 60−10=50분
+    assert t["run_seconds_median"] == pytest.approx(45 * 60, abs=5)
     assert o["waiting"][0]["run_id"] == r4 and o["waiting"][0]["stage_name"] == "최종 승인"
     assert o["waiting"][0]["waiting_seconds"] == pytest.approx(20 * 60, abs=5)
     assert len(o["trend"]) == process_metrics.TREND_WEEKS and sum(w["completed"] for w in o["trend"]) == 2
