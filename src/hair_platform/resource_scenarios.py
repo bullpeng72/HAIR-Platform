@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import sqlite3
 
 from hair_platform import audit
@@ -220,3 +221,85 @@ def import_absences(conn: sqlite3.Connection, actor_id: int, text: str, apply: b
         conn.commit()
     return {"applied": apply, "created": added, "updated": 0, "rows": out,
             "errors": sum(1 for o in out if o["action"] == "error")}
+
+
+# ================================================================== 캘린더에서 부재(2026-11-28, Resource Management 12번)
+
+LEAVE_WORDS_KO = ("휴가", "연차", "병가", "부재", "휴무", "출산", "육아")  # 한국어는 조사가 붙으니 포함 여부로
+LEAVE_RE_EN = re.compile(r"\b(vacation|leave|pto|ooo|out of office)\b", re.I)  # 영어는 단어 단위(crypto의 pto 등 오탐 방지)
+HALF_DAY_RE = re.compile(r"반반?차|\bhalf[ -]day\b", re.I)  # 부재는 하루 단위라 반나절을 하루로 세지 않는다
+CALENDAR_IMPORT_MAX_DAYS = 92
+
+
+def _match_person(event: dict, people: list[sqlite3.Row]) -> tuple[list[sqlite3.Row], str]:
+    """일정 → 사람. 제목에 이름이 들어 있거나 주최자 표시 이름이 같거나, 주최자 메일 앞부분이 연결된 계정 아이디."""
+    title = event.get("summary", "")
+    org = (event.get("organizer") or "").strip()
+    by_title = [p for p in people if p["name"] and p["name"] in title]
+    if by_title:
+        return by_title, "제목의 이름"
+    by_org = [p for p in people if org and (p["name"] == org or (p["username"] and org.lower().split("@")[0] == p["username"].lower()))]
+    return by_org, "주최자"
+
+
+def import_calendar_absences(conn: sqlite3.Connection, actor_id: int, feed_id: int, apply: bool, days: int = 60) -> dict:
+    """등록된 캘린더의 휴가·연차 같은 일정을 사람 부재로 — CSV 가져오기처럼 미리 보기 → 적용. 오늘부터 `days`일 안."""
+    from datetime import datetime, timedelta
+
+    from hair_platform import calendar_feeds
+
+    row = conn.execute("SELECT * FROM calendar_feeds WHERE id = ? AND is_active = 1", (feed_id,)).fetchone()
+    if row is None:
+        raise ValueError("calendar_not_found_or_inactive")
+    days = max(1, min(int(days), CALENDAR_IMPORT_MAX_DAYS))
+    tz = calendar_feeds.local_tz()
+    today = datetime.now(tz).date()
+    t0 = datetime(today.year, today.month, today.day, tzinfo=tz)
+    try:
+        events, _ = calendar_feeds.expand(calendar_feeds.parse_events(calendar_feeds._fetch_checked(conn, row), tz),
+                                          t0, t0 + timedelta(days=days))
+    except calendar_feeds.CalendarError as exc:
+        raise ValueError(f"calendar_fetch_failed: {exc}") from exc
+    people = conn.execute("SELECT h.id, h.name, h.employee_id, u.username FROM human_pool h LEFT JOIN users u ON u.id = h.user_id "
+                          "WHERE h.availability != 'offboarded'").fetchall()
+    out, added = [], 0
+    for i, e in enumerate(events, start=1):
+        title = (e.get("summary") or "").strip()
+        when = e["start"].date().isoformat()
+        base = {"line": i, "employee_id": "", "event": f"{when} {title}"[:120]}
+        half = bool(HALF_DAY_RE.search(title))
+        if not (half or any(w in title for w in LEAVE_WORDS_KO) or LEAVE_RE_EN.search(title)):
+            continue  # 휴가 일정이 아니면 줄에도 넣지 않는다(회의 등)
+        if half:
+            out.append({**base, "action": "skip", "detail": "반나절 일정 — 부재는 하루 단위라 넣지 않음"})
+            continue
+        matched, how = _match_person(e, people)
+        if len(matched) != 1:
+            out.append({**base, "action": "error", "detail": "사람을 찾지 못함" if not matched else
+                        "여러 사람과 맞음(" + ", ".join(p["name"] for p in matched[:4]) + ") — 확인 필요"})
+            continue
+        p = matched[0]
+        s = e["start"].date()
+        end_dt = e["end"]
+        en = (end_dt - timedelta(days=1)).date() if e.get("all_day") else (end_dt - timedelta(seconds=1)).date()
+        en = max(s, en)
+        if (en - s).days > 366:
+            out.append({**base, "employee_id": p["employee_id"] or "", "action": "error", "detail": "기간이 1년을 넘음"})
+            continue
+        if conn.execute("SELECT 1 FROM resource_absences WHERE resource_type = 'human' AND resource_id = ? "
+                        "AND starts_on <= ? AND ends_on >= ?", (p["id"], en.isoformat(), s.isoformat())).fetchone():
+            out.append({**base, "employee_id": p["employee_id"] or "", "action": "skip", "detail": f"{p['name']} — 겹치는 부재가 이미 있음"})
+            continue
+        if apply:
+            conn.execute("INSERT INTO resource_absences (resource_type, resource_id, starts_on, ends_on, reason, created_by) "
+                         "VALUES ('human', ?, ?, ?, ?, ?)",
+                         (p["id"], s.isoformat(), en.isoformat(), f"캘린더 {row['name']}: {title}"[:200], actor_id))
+        added += 1
+        out.append({**base, "employee_id": p["employee_id"] or "", "action": "create",
+                    "detail": f"{p['name']} {s.isoformat()}~{en.isoformat()} ({how}으로 찾음)"})
+    if apply and added:
+        audit.record(conn, actor_id, "resource_absences_imported", "calendar_feeds", feed_id,
+                     after={"added": added, "calendar": row["name"], "days": days})
+        conn.commit()
+    return {"applied": apply, "created": added, "updated": 0, "rows": out,
+            "errors": sum(1 for o in out if o["action"] == "error"), "calendar": row["name"], "days": days}

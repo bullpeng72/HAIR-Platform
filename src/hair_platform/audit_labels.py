@@ -34,7 +34,7 @@ WORDS: dict[str, str] = {
     "defaults": "기본값", "decision": "결정", "content": "내용", "consent": "동의", "concurrent": "동시 실행",
     "chunk": "조각", "change": "변경", "capacity": "처리 용량", "cancel": "취소", "baseline": "기준선",
     "auxiliary": "보조", "approver": "결재자", "adhoc": "즉석", "active": "사용 여부", "employee": "사번", "id": "",
-    "edit": "수정", "first": "처음", "dependency": "선행 관계",
+    "edit": "수정", "first": "처음", "dependency": "선행 관계", "time": "작업 시간", "entry": "항목", "logged": "기록",
     # 동작
     "updated": "수정", "deleted": "삭제", "changed": "변경", "created": "생성", "set": "설정", "started": "시작",
     "removed": "제거", "failed": "실패", "completed": "완료", "added": "추가", "registered": "등록",

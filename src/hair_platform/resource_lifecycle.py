@@ -265,16 +265,20 @@ def _ai_cost_by_task(conn: sqlite3.Connection) -> dict[int, dict]:
 
 def task_costs(conn: sqlite3.Connection) -> dict[int, dict]:
     """할 일별 {labor_estimated, labor_missing_rate, labor_missing_estimate, ai_cost, ai_partial, total}."""
+    from hair_platform import time_entries
+
     ai = _ai_cost_by_task(conn)
+    logged = time_entries.logged_by_task_human(conn)  # 기록한 시간이 있는 (할 일, 사람)은 예상 대신 기록(2026-11-28)
     out: dict[int, dict] = {}
     rows = conn.execute(
-        "SELECT t.id AS task_id, t.estimate_hours, h.hourly_rate, "
+        "SELECT t.id AS task_id, t.estimate_hours, h.id AS human_id, h.hourly_rate, "
         "(SELECT COUNT(*) FROM assignments a2 WHERE a2.task_id = t.id AND a2.status = 'confirmed' AND a2.resource_type = 'human') AS people "
         "FROM tasks t LEFT JOIN assignments a ON a.task_id = t.id AND a.status = 'confirmed' AND a.resource_type = 'human' "
         "LEFT JOIN human_pool h ON h.id = a.resource_id").fetchall()
     for r in rows:
-        b = out.setdefault(r["task_id"], {"labor_estimated": 0.0, "labor_missing_rate": 0, "labor_missing_estimate": False})
-        if not r["people"]:
+        b = out.setdefault(r["task_id"], {"labor_estimated": 0.0, "labor_logged": 0.0, "logged_hours": 0.0,
+                                          "labor_missing_rate": 0, "labor_missing_estimate": False})
+        if not r["people"] or (r["task_id"], r["human_id"]) in logged:
             continue
         if r["estimate_hours"] is None:
             b["labor_missing_estimate"] = True
@@ -283,10 +287,19 @@ def task_costs(conn: sqlite3.Connection) -> dict[int, dict]:
             b["labor_missing_rate"] += 1
             continue
         b["labor_estimated"] += float(r["hourly_rate"]) * float(r["estimate_hours"]) / r["people"]
+    rates = {r["id"]: r["hourly_rate"] for r in conn.execute("SELECT id, hourly_rate FROM human_pool")}
+    for (tid, hid), hours in logged.items():  # 배정이 끝난 뒤 남은 기록도 실제 든 시간이라 센다
+        b = out.setdefault(tid, {"labor_estimated": 0.0, "labor_logged": 0.0, "logged_hours": 0.0,
+                                 "labor_missing_rate": 0, "labor_missing_estimate": False})
+        b["logged_hours"] += hours
+        if rates.get(hid) is None:
+            b["labor_missing_rate"] += 1
+            continue
+        b["labor_logged"] += float(rates[hid]) * hours
     for tid, b in out.items():
         a = ai.get(tid, {"ai_cost": 0.0, "ai_partial": False, "tokens": 0})
         b.update(a)
-        b["total"] = b["labor_estimated"] + b["ai_cost"]
+        b["total"] = b["labor_estimated"] + b["labor_logged"] + b["ai_cost"]
     return out
 
 
@@ -323,12 +336,14 @@ def cost_overview(conn: sqlite3.Connection) -> dict:
         tids = [r[0] for r in conn.execute("SELECT id FROM tasks WHERE brief_id = ?", (b["id"],))]
         cs = [costs[t] for t in tids if t in costs]
         labor = sum(c["labor_estimated"] for c in cs)
+        labor_logged = sum(c["labor_logged"] for c in cs)
         ai = sum(c["ai_cost"] for c in cs)
-        total = labor + ai
+        total = labor + labor_logged + ai
         if not tids or (total == 0 and b["budget_usd"] is None):
             continue
         ratio = (total / b["budget_usd"]) if b["budget_usd"] else None
         briefs.append({"brief_id": b["id"], "title": b["title"], "tasks": len(tids), "labor_estimated": round(labor, 2),
+                       "labor_logged": round(labor_logged, 2), "logged_hours": round(sum(c["logged_hours"] for c in cs), 1),
                        "ai_cost": round(ai, 4), "total": round(total, 2), "budget_usd": b["budget_usd"], "ratio": ratio,
                        "status": None if ratio is None else ("over" if ratio > 1 else "warn" if ratio >= BUDGET_WARN else "ok"),
                        "ai_partial": any(c["ai_partial"] for c in cs),
@@ -344,7 +359,8 @@ def cost_overview(conn: sqlite3.Connection) -> dict:
             continue
         teams.append({"team_id": t["id"], "name": t["name"], "tasks": len(tids),
                       "ai_cost": round(sum(c["ai_cost"] for c in cs), 4),
-                      "labor_estimated": round(sum(c["labor_estimated"] for c in cs), 2)})
+                      "labor_estimated": round(sum(c["labor_estimated"] for c in cs), 2),
+                      "labor_logged": round(sum(c["labor_logged"] for c in cs), 2)})
     people_missing_rate = conn.execute("SELECT COUNT(*) FROM human_pool WHERE availability != 'offboarded' "
                                        "AND hourly_rate IS NULL").fetchone()[0]
     return {"briefs": briefs, "teams": teams, "people_missing_rate": people_missing_rate, "budget_warn": BUDGET_WARN}

@@ -134,14 +134,20 @@ def _delete_task_links(conn: sqlite3.Connection, task_ids: list[int]) -> None:
     conn.execute(f"DELETE FROM task_dependencies WHERE task_id IN ({ph}) OR depends_on_task_id IN ({ph})",
                  [*task_ids, *task_ids])
     conn.execute(f"DELETE FROM crew_runs WHERE task_id IN ({ph})", task_ids)
-    try:  # 매칭 실패 기록(2026-11-28)
-        conn.execute(f"DELETE FROM match_misses WHERE task_id IN ({ph})", task_ids)
-    except sqlite3.OperationalError:
-        pass
+    for _table in ("match_misses", "task_time_entries"):  # 매칭 실패·작업 시간 기록(2026-11-28)
+        try:
+            conn.execute(f"DELETE FROM {_table} WHERE task_id IN ({ph})", task_ids)
+        except sqlite3.OperationalError:
+            pass
 
 
 def _delete_resource_rows(conn: sqlite3.Connection, resource_type: str, resource_id: int) -> None:
-    """사람·Agent를 지울 때 그 자원에 딸린 2026-11-27~28 기록(부재 기간·스킬 숙련도)."""
+    """사람·Agent를 지울 때 그 자원에 딸린 2026-11-27~28 기록(부재 기간·스킬 숙련도·작업 시간)."""
+    if resource_type == "human":
+        try:
+            conn.execute("DELETE FROM task_time_entries WHERE human_id = ?", (resource_id,))
+        except sqlite3.OperationalError:
+            pass
     for table in ("resource_absences", "resource_skill_levels"):
         try:
             conn.execute(f"DELETE FROM {table} WHERE resource_type = ? AND resource_id = ?", (resource_type, resource_id))
@@ -549,6 +555,7 @@ _FACTORY_RESET_WIPE_TABLES: tuple[str, ...] = (
     "resource_absences",
     "resource_skill_levels",
     "match_misses",
+    "task_time_entries",    # 작업 시간 기록(2026-11-28)
     # 실제 LLM 토큰 사용량 기록(2026-11-22 `llm_usage.py`) — 실행 이력과 같은 운영 데이터.
     "llm_usage",
     "knowledge_chunks",

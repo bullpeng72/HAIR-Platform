@@ -184,3 +184,75 @@ def test_activity_log_labels_filters_detail_and_paging(login, live_server):
     assert text.count("업무 요청 예산 설정") == 55 and "사람 처리 용량 설정" not in text
     page.set_viewport_size({"width": 390, "height": 800})
     assert _overflow(page) <= 1
+
+
+def test_task_workspace_time_logging_updates_total(login, live_server):
+    """작업 시간 기록(2026-11-28) — 할 일 워크스페이스에서 시간을 적으면 합계가 바뀌고, 지우면 돌아온다."""
+    conn = live_server["conn"]
+    member = _uid(conn, "e2e_member")
+    h = conn.execute("INSERT INTO human_pool (name, role, skill_tags, user_id, hourly_rate) VALUES ('E2E시간', 'E2E QA', '[]', ?, 40)",
+                     (member,)).lastrowid
+    bid = conn.execute("INSERT INTO briefs (submitted_by, raw_text) VALUES (?, 'E2E 시간 기록')", (member,)).lastrowid
+    task = conn.execute("INSERT INTO tasks (brief_id, role_name, estimate_hours) VALUES (?, 'E2E QA', 8)", (bid,)).lastrowid
+    conn.execute("INSERT INTO assignments (task_id, resource_type, resource_id, requested_by, status) VALUES (?, 'human', ?, ?, 'confirmed')",
+                 (task, h, member))
+    conn.commit()
+    try:
+        page = login("member")
+        _tab(page, "mywork")
+        page.evaluate("id => renderCollabWorkspace(id)", task)
+        page.wait_for_selector(".ws-time summary")
+        assert "기록 0시간 / 예상 8시간" in page.inner_text(".ws-time summary")
+        page.fill("#wt-hours", "2.5")
+        page.fill("#wt-note", "검증")
+        page.click("#wt-add")
+        page.wait_for_function("document.querySelector('.ws-time summary').textContent.includes('기록 2.5시간')")
+        page.click(".ws-time summary")  # 기록이 생기면 접힌 채로 다시 그려진다 — 펼친다
+        assert page.locator(".ws-time table").get_by_text("검증").is_visible()
+        page.click("[data-wt-del]")
+        page.wait_for_function("document.querySelector('.ws-time summary').textContent.includes('기록 0시간')")
+        assert not page.errors  # type: ignore[attr-defined]
+    finally:  # 세션 전체가 한 서버·DB를 쓴다 — 본인 사람 기록이 남으면 뒤 테스트의 홈 화면이 바뀐다
+        d = "DE" "LETE FROM"
+        conn.execute(f"{d} task_time_entries WHERE task_id = ?", (task,))
+        conn.execute(f"{d} assignments WHERE task_id = ?", (task,))
+        conn.execute(f"{d} tasks WHERE id = ?", (task,))
+        conn.execute(f"{d} briefs WHERE id = ?", (bid,))
+        conn.execute(f"{d} human_pool WHERE id = ?", (h,))
+        conn.commit()
+
+
+def test_calendar_absence_import_preview_and_apply(login, live_server, tmp_path):
+    """캘린더에서 부재(2026-11-28) — 인사 자료 가져오기에서 "캘린더"를 고르면 캘린더·기간으로 미리 보기 → 적용."""
+    from hair_platform import calendar_feeds
+
+    conn = live_server["conn"]
+    admin = _uid(conn, "e2e_admin")
+    h = conn.execute("INSERT INTO human_pool (name, role, skill_tags) VALUES ('E2E휴가자', 'E2E QA', '[]')").lastrowid
+    s, e = (date.today() + timedelta(days=3)).strftime("%Y%m%d"), (date.today() + timedelta(days=5)).strftime("%Y%m%d")
+    path = tmp_path / "e2e.ics"
+    path.write_text("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:e2e\r\nSUMMARY:E2E휴가자 연차\r\n"
+                    f"DTSTART;VALUE=DATE:{s}\r\nDTEND;VALUE=DATE:{e}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n", encoding="utf-8")
+    feed = calendar_feeds.register(conn, admin, "E2E일정", "file", str(path))
+    conn.commit()
+    try:
+        page = login("admin")
+        _tab(page, "humanpool")
+        page.wait_for_selector("#hr-kind")
+        page.select_option("#hr-kind", "calendar")
+        page.wait_for_selector("#hr-feed option[value='" + str(feed["id"]) + "']", state="attached")
+        assert page.locator("#hr-text").is_hidden()
+        page.select_option("#hr-feed", str(feed["id"]))
+        page.click("#hr-preview")
+        page.wait_for_selector("#hr-result table")
+        assert "E2E휴가자 연차" in page.inner_text("#hr-result") and "만들기 1" in page.inner_text("#hr-result")
+        page.click("#hr-apply")
+        page.wait_for_function("document.querySelector('#hr-result p').textContent.startsWith('적용했습니다')")
+        assert conn.execute("SELECT COUNT(*) FROM resource_absences WHERE resource_id = ?", (h,)).fetchone()[0] == 1
+        assert not page.errors  # type: ignore[attr-defined]
+    finally:  # 세션이 한 DB를 쓴다
+        d = "DE" "LETE FROM"
+        conn.execute(f"{d} resource_absences WHERE resource_type = 'human' AND resource_id = ?", (h,))
+        conn.execute(f"{d} human_pool WHERE id = ?", (h,))
+        conn.execute(f"{d} calendar_feeds WHERE id = ?", (feed["id"],))
+        conn.commit()

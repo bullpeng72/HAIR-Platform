@@ -827,6 +827,49 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # ---------- 작업 시간 기록(2026-11-28, Resource Management 5번) ----------
+    def _time_call(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/tasks/{task_id}/time")
+    def get_task_time(task_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        """그 할 일의 작업 시간 기록·사람별 합계 — 참가자·admin·manager(일정과 같은 범위)."""
+        from hair_platform import time_entries
+
+        if user["role"] not in (Role.ADMIN.value, Role.MANAGER.value) and \
+                deliverables.task_participant_relationship(conn, task_id, user["id"]) is None:
+            raise HTTPException(status_code=403, detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다")
+        if conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="task_not_found")
+        return time_entries.for_task(conn, task_id, user)
+
+    @app.post("/api/tasks/{task_id}/time", status_code=201)
+    def post_task_time(task_id: int, payload: dict = Body(...), user: sqlite3.Row = Depends(get_current_user)):
+        """`{"hours": 2.5, "work_date": "2026-11-28", "human_id": 3(admin·manager만, 없으면 본인), "note": ""}`."""
+        from hair_platform import time_entries
+
+        hid = payload.get("human_id")
+        if hid is not None and (isinstance(hid, bool) or not isinstance(hid, int)):
+            raise HTTPException(status_code=400, detail="human_id_must_be_integer")
+        hours = payload.get("hours")
+        if isinstance(hours, bool) or not isinstance(hours, int | float):
+            raise HTTPException(status_code=400, detail="hours_must_be_number")
+        return _time_call(time_entries.add_entry, conn, user, task_id, hours, payload.get("work_date"),
+                          human_id=hid, note=str(payload.get("note") or ""))
+
+    @app.delete("/api/time-entries/{entry_id}")
+    def delete_time_entry(entry_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        from hair_platform import time_entries
+
+        return _time_call(time_entries.delete_entry, conn, user, entry_id)
+
     @app.get("/api/resource-planning")
     def get_resource_planning(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
         """자원 운용 — 앞으로 4주 사람별 배분 시간/용량, 지연·임박, 인원 부족, 역할별 수요와 공급."""

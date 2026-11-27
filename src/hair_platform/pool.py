@@ -33,13 +33,16 @@ def human_pool_candidates(
     제외하는 별개 상태다(퇴사자는 애초에 검색 후보가 아니다)."""
     # 코드 재점검(R3)에서 추가한 오프보딩 상태 — 퇴사한 사람은 검색/매칭에서
     # 완전히 배제한다(단순 unavailable과 달리 아예 후보군에서 제외).
-    query = "SELECT * FROM human_pool WHERE availability != 'offboarded'"
+    # 연결된 로그인 계정이 꺼진 사람(2026-11-28) — 오프보딩 전이라도 퇴사·정지로 계정을 끈 사람은 새 일을 받을 수
+    # 없다. 예전엔 '가용'으로 남아 매칭 1순위로 올라왔다. 목록에는 남기고 불가로 표시한다.
+    query = ("SELECT h.*, u.is_active AS account_active FROM human_pool h LEFT JOIN users u ON u.id = h.user_id "
+             "WHERE h.availability != 'offboarded'")
     params: list[object] = []
     if role:
-        query += " AND role LIKE ?"
+        query += " AND h.role LIKE ?"
         params.append(f"%{role}%")
     if availability in ("available", "unavailable"):
-        query += " AND availability = ?"
+        query += " AND h.availability = ?"
         params.append(availability)
 
     rows = conn.execute(query, params).fetchall()
@@ -62,7 +65,8 @@ def human_pool_candidates(
                 type="human",
                 role=row["role"],
                 # 오늘이 부재 기간 안이면 '가용'으로 표시돼 있어도 불가.
-                is_available=row["availability"] == "available" and not absent.get("absent_until"),
+                is_available=(row["availability"] == "available" and not absent.get("absent_until")
+                              and row["account_active"] != 0),  # 계정 없음(NULL)은 그대로 — 꺼진 계정만 불가
                 active_tasks=load.get(("human", row["id"]), 0),
                 capacity=resource_capacity.human_capacity(row),
                 absent_until=absent.get("absent_until"),

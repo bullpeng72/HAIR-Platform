@@ -33,11 +33,21 @@ def build_manager_chain(
     return chain
 
 
+def can_decide(conn: sqlite3.Connection, user_id: int) -> bool:
+    """켜진 admin·manager인가(결재를 결정할 수 있는 사람)."""
+    r = conn.execute("SELECT role, is_active FROM users WHERE id = ?", (user_id,)).fetchone()
+    return r is not None and bool(r["is_active"]) and r["role"] in ("admin", "manager")
+
+
 def create_approval_chain(
     conn: sqlite3.Connection, requested_by: int, subject_type: str, subject_id: int
 ) -> list[int]:
-    """승인 단계 행을 생성한다. 1단계만 즉시 `pending`, 나머지는 `waiting`."""
-    chain = build_manager_chain(conn, requested_by)
+    """승인 단계 행을 생성한다. 1단계만 즉시 `pending`, 나머지는 `waiting`.
+
+    결정할 수 없는 상사는 건너뛴다(2026-11-28) — 계정이 꺼졌거나 admin·manager가 아닌 상사(`decide`는 admin·manager만)를
+    지정 승인자로 넣으면 그 단계는 아무도 처리하지 못하고(admin 대리 결정 외) 멈춰 있었다. 건너뛴 사람의 상사는 그대로
+    체인에 남고, 남는 사람이 없으면 다른 요청처럼 admin·manager 누구나 단계 하나가 된다."""
+    chain = [m for m in build_manager_chain(conn, requested_by) if can_decide(conn, m)]
     approver_ids: list[int | None] = list(chain) if chain else [None]
 
     approval_ids: list[int] = []

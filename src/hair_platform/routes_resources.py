@@ -472,6 +472,22 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/human-pool/import-calendar")
+    def post_calendar_absence_import(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """등록된 캘린더의 휴가·연차 일정 → 사람 부재(2026-11-28) — `{"feed_id": 1, "days": 60, "apply": false}`.
+        apply가 거짓이면 미리 보기만."""
+        from hair_platform import resource_scenarios
+
+        fid, days = payload.get("feed_id"), payload.get("days", 60)
+        if isinstance(fid, bool) or not isinstance(fid, int):
+            raise HTTPException(status_code=400, detail="feed_id_must_be_integer")
+        if isinstance(days, bool) or not isinstance(days, int):
+            raise HTTPException(status_code=400, detail="days_must_be_integer")
+        try:
+            return resource_scenarios.import_calendar_absences(conn, user["id"], fid, bool(payload.get("apply")), days)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/resource-absences")
     def list_resource_absences(human_id: int | None = None, include_past: bool = False,
                                user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER))):

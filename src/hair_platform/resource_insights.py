@@ -106,7 +106,8 @@ def human_vs_ai(conn: sqlite3.Connection) -> dict:
                 continue
             # 비용이 기록되지 않은 할 일(단가·예상 시간·AI 사용 없음)은 0이 아니라 '모름'이다 — 빼고 평균.
             task_costs = [cost_v for t in b["tasks"] if t in costs
-                          and (cost_v := costs[t]["labor_estimated" if side == "human" else "ai_cost"]) > 0]
+                          and (cost_v := (costs[t]["labor_estimated"] + costs[t].get("labor_logged", 0.0)  # 기록 시간 포함(2026-11-28)
+                                          if side == "human" else costs[t]["ai_cost"])) > 0]
             item[side] = {"decided": b["decided"], "tasks": len(b["tasks"]),
                           "approval_rate": b["approved"] / b["decided"],
                           "first_pass_rate": b["first_pass"] / len(b["tasks"]) if b["tasks"] else None,

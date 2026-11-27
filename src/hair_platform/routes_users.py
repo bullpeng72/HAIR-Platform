@@ -236,8 +236,15 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             before={"is_active": bool(target["is_active"])},
             after={"is_active": payload.is_active},
         )
+        released = 0
+        if not payload.is_active and target["is_active"]:
+            # 꺼진 계정이 지정 승인자인 결재(대기·다음 차례)를 admin·manager 누구나로 푼다(2026-11-28) — 그대로 두면
+            # 아무도 결정하지 못한다. 한 건씩 활동 기록("결재 넘김")에 남는다.
+            from hair_platform import resource_lifecycle
+
+            released = resource_lifecycle.transfer_approvals(conn, user["id"], user_id, None)
         conn.commit()
-        return {"id": user_id, "is_active": payload.is_active}
+        return {"id": user_id, "is_active": payload.is_active, "approvals_released": released}
 
     @app.get("/api/users")
     def list_users(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):

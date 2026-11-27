@@ -129,11 +129,14 @@ def utilization(conn: sqlite3.Connection, weeks: int = WEEKS) -> dict:
     week_starts = [_monday(today) + timedelta(weeks=i) for i in range(weeks)]
     horizon_end = week_starts[-1] + timedelta(days=6)
     absent = _absent_days(conn, week_starts[0], horizon_end)
-    people_rows = conn.execute("SELECT id, name, role, weekly_hours FROM human_pool WHERE availability != 'offboarded' "
-                               "ORDER BY name").fetchall()
+    # 계정이 꺼진 사람(2026-11-28)은 공급 시간 0 — 맡은 일(할당)은 그대로 보여 인계가 필요함을 드러낸다.
+    people_rows = conn.execute(
+        "SELECT h.id, h.name, h.role, h.weekly_hours, COALESCE(u.is_active, 1) AS account_active "
+        "FROM human_pool h LEFT JOIN users u ON u.id = h.user_id WHERE h.availability != 'offboarded' "
+        "ORDER BY h.name").fetchall()
     people = {}
     for p in people_rows:
-        wh = float(p["weekly_hours"] or DEFAULT_WEEKLY_HOURS)
+        wh = float(p["weekly_hours"] or DEFAULT_WEEKLY_HOURS) if p["account_active"] else 0.0  # (`0 or 40`이 되지 않게)
         cells = []
         for ws in week_starts:
             off = len([d for d in _workdays(ws, ws + timedelta(days=4)) if d in absent.get(p["id"], set())])
@@ -247,6 +250,23 @@ def _scheduled_runs(conn: sqlite3.Connection, weeks: int) -> dict[str, int]:
     return out
 
 
+def _inbound_expected(conn: sqlite3.Connection, weeks: int) -> dict[str, float]:
+    """앞으로 몇 주 동안 외부 입력 트리거(메일·웹훅·일정)가 만들 할 일 수(역할별, 2026-11-28) — 켜진 트리거마다 최근 4주에
+    받은 일(처음 확인 때 이미 있던 것 `seeded` 제외)의 주당 비율 × 주 수. 시간당 실행 상한으로 자르지 않는다(상한은 하루
+    안의 몰림을 막는 것이라 4주 합에는 거의 닿지 않는다)."""
+    try:
+        rows = conn.execute(
+            "SELECT t.role_name, COUNT(e.id) AS n FROM inbound_triggers t "
+            "LEFT JOIN inbound_events e ON e.trigger_id = t.id AND e.status != 'seeded' "
+            "AND e.received_at >= datetime('now', '-28 days') WHERE t.is_active = 1 GROUP BY t.id").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    out: dict[str, float] = {}
+    for r in rows:
+        out[r["role_name"]] = out.get(r["role_name"], 0.0) + r["n"] / 4 * weeks
+    return out
+
+
 def demand_by_role(conn: sqlite3.Connection, weeks: int = WEEKS) -> list[dict]:
     from hair_platform.assignment import _role_matches
 
@@ -254,7 +274,7 @@ def demand_by_role(conn: sqlite3.Connection, weeks: int = WEEKS) -> list[dict]:
 
     def bucket(role: str) -> dict:
         return roles.setdefault(role, {"role": role, "open": 0, "unassigned": 0, "open_hours": 0.0, "recent_per_week": 0.0,
-                                       "scheduled_next": 0})
+                                       "scheduled_next": 0, "inbound_next": 0})
     for r in conn.execute(
             "SELECT t.role_name, t.estimate_hours, (SELECT COUNT(*) FROM assignments a WHERE a.task_id = t.id "
             "AND a.status = 'confirmed') AS assigned, EXISTS (SELECT 1 FROM pipeline_runs r WHERE r.task_id = t.id) AS by_pipeline "
@@ -275,7 +295,12 @@ def demand_by_role(conn: sqlite3.Connection, weeks: int = WEEKS) -> list[dict]:
         bucket(r["role_name"])["recent_per_week"] = r["n"] / 4
     for role, n in _scheduled_runs(conn, weeks).items():
         bucket(role)["scheduled_next"] += n
-    humans = conn.execute("SELECT role, availability FROM human_pool WHERE availability != 'offboarded'").fetchall()
+    for role, n in _inbound_expected(conn, weeks).items():
+        if n >= 0.5:  # 4주에 한 건도 안 될 트리거로 역할 줄을 만들지 않는다
+            bucket(role)["inbound_next"] = round(bucket(role)["inbound_next"] + n)
+    humans = conn.execute(  # 계정이 꺼진 사람은 불가로 센다(2026-11-28)
+        "SELECT h.role, CASE WHEN u.is_active = 0 THEN 'unavailable' ELSE h.availability END AS availability "
+        "FROM human_pool h LEFT JOIN users u ON u.id = h.user_id WHERE h.availability != 'offboarded'").fetchall()
     agents = conn.execute("SELECT role_name FROM agent_pool WHERE status = 'active'").fetchall()
     out = []
     for b in roles.values():

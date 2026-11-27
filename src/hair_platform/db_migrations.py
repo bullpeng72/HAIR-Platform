@@ -983,6 +983,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 스킬 숙련도(2026-11-28 — `skill_levels`).
     from hair_platform import skill_levels
     skill_levels.ensure_schema(conn)
+    from hair_platform import time_entries  # 할 일 작업 시간 기록(2026-11-28)
+
+    time_entries.ensure_schema(conn)
     # 조회 색인(2026-11-28 — 대량 데이터 실측: 실행 3만·단계 기록 20만·할 일 2만에서 자원 운용 7.5초·비용 8.9초·자원 분석 4.6초.
     # 배정·배정 이력·할 일·단계 기록을 행마다 찾는 질의가 전부 표 전체를 훑었다).
     for _idx, _table, _cols in (

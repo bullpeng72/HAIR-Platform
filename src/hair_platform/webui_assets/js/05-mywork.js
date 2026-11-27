@@ -2118,7 +2118,8 @@ async function _renderTaskSchedule(slot, taskId) {
     (canEdit ? '<button class="small" id="ws-sched-save">저장</button>' : "") +
     (s.overdue ? ' <span class="gate-badge gate-warn">기한 ' + (-s.days_left) + "일 지남</span>" : "") +
     ' <span class="muted">인원 ' + s.assigned + "/" + s.headcount + (s.short ? ' — <b>' + s.short + "명 부족</b>" : "") + "</span>" +
-    ' <span class="muted" id="ws-sched-msg"></span></div>';
+    ' <span class="muted" id="ws-sched-msg"></span></div><div id="ws-time-slot"></div>';
+  _renderTaskTime(slot.querySelector("#ws-time-slot"), taskId);
   const btn = slot.querySelector("#ws-sched-save");
   if (btn) btn.onclick = async () => {
     const est = slot.querySelector("#ws-est").value.trim();
@@ -2128,6 +2129,41 @@ async function _renderTaskSchedule(slot, taskId) {
       _renderTaskSchedule(slot, taskId);
     } catch (e) { slot.querySelector("#ws-sched-msg").textContent = e.message || String(e); }
   };
+}
+
+/* ---------- 작업 시간 기록(2026-11-28, Resource Management 5번) — 인건비는 기록한 시간이 있으면 그것으로 ---------- */
+async function _renderTaskTime(box, taskId) {
+  if (!box) return;
+  let d;
+  try { d = await api("GET", "/api/tasks/" + taskId + "/time"); } catch (_) { box.innerHTML = ""; return; }
+  const today = new Date().toISOString().slice(0, 10);
+  const summary = "기록 " + d.logged_hours + "시간" + (d.estimate_hours ? " / 예상 " + d.estimate_hours + "시간" : "") +
+    (d.totals.length > 1 ? " (" + d.totals.map(t => esc(t.name) + " " + t.hours + "h").join(", ") + ")" : "");
+  const form = d.loggable.length ? '<div class="inline" style="flex-wrap:wrap">' +
+    (d.loggable.length > 1 ? '<select id="wt-human" aria-label="누구의 시간">' + d.loggable.map(h => '<option value="' + h.id + '">' + esc(h.name) + "</option>").join("") + "</select>" : "") +
+    '<input type="date" id="wt-date" value="' + today + '" max="' + today + '" aria-label="날짜">' +
+    '<input type="number" id="wt-hours" min="0.25" max="24" step="0.25" style="width:5rem" placeholder="시간" aria-label="시간">' +
+    '<input id="wt-note" maxlength="200" placeholder="메모(선택)" aria-label="메모">' +
+    '<button class="small" id="wt-add">시간 기록</button> <span class="muted" id="wt-msg"></span></div>' : "";
+  const rows = d.entries.map(e => [esc(e.work_date), esc(e.human_name), e.hours + "h", e.note ? esc(e.note) : '<span class="muted">-</span>',
+    e.can_delete ? '<button class="small danger" data-wt-del="' + e.id + '">지우기</button>' : ""]);
+  box.innerHTML = '<details class="ws-time"' + (d.entries.length ? "" : " open") + '><summary>작업 시간 — ' + summary + "</summary>" + form +
+    (d.entries.length ? table(["날짜", "사람", "시간", "메모", ""], rows) : '<p class="muted">아직 기록이 없습니다. 기록하면 인건비가 예상 시간 대신 기록한 시간으로 계산됩니다.</p>') +
+    "</details>";
+  const add = box.querySelector("#wt-add");
+  if (add) add.onclick = async () => {
+    const hours = Number(box.querySelector("#wt-hours").value);
+    const sel = box.querySelector("#wt-human");
+    try {
+      await api("POST", "/api/tasks/" + taskId + "/time", { hours, work_date: box.querySelector("#wt-date").value,
+        note: box.querySelector("#wt-note").value, ...(sel ? { human_id: Number(sel.value) } : {}) });
+      _renderTaskTime(box, taskId);
+    } catch (e) { box.querySelector("#wt-msg").textContent = e.message || String(e); }
+  };
+  box.querySelectorAll("[data-wt-del]").forEach(b => b.onclick = async () => {
+    try { await api("DELETE", "/api/time-entries/" + b.dataset.wtDel); _renderTaskTime(box, taskId); }
+    catch (e) { b.textContent = e.message || String(e); }
+  });
 }
 
 /* ---------- 스킬 숙련도(2026-11-28 — `skill_levels`) — 사람 인력 관리(확인)·내 업무(본인 기재)가 함께 쓴다 ---------- */

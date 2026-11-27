@@ -309,9 +309,9 @@ async function renderResourcePlanning(content) {
     "<h3>인원 부족</h3>" + '<div class="pm-wide-sm">' + table(["할 일", "역할", "필요", "확정", "요청 중", "부족", "기한"], d.headcount_gaps.map(g => [
       "#" + g.id, esc(g.role_name), String(g.headcount || 1), String(g.assigned), String(g.requested), "<b>" + g.short + "</b>", g.due_date ? esc(g.due_date) : "-"]),
       { empty: "인원이 모자란 할 일이 없습니다." }) + "</div>" +
-    "<h3>역할별 수요와 공급</h3>" + '<div class="pm-wide-sm">' + table(["역할", "열린 할 일", "배정 안 됨", "예상 시간 합", "최근 4주 시작(주당)", "정기 실행 예정(4주)", "가용 사람", "Agent"], d.demand.map(r => [
+    "<h3>역할별 수요와 공급</h3>" + '<div class="pm-wide-sm">' + table(["역할", "열린 할 일", "배정 안 됨", "예상 시간 합", "최근 4주 시작(주당)", "정기 실행 예정(4주)", "외부 입력 예상(4주)", "가용 사람", "Agent"], d.demand.map(r => [
       esc(r.role) + (r.no_supply ? ' <span class="gate-badge gate-warn">맡을 자원 없음</span>' : ""), String(r.open), r.unassigned ? "<b>" + r.unassigned + "</b>" : "0",
-      r.open_hours ? r.open_hours + "h" : "-", r.recent_per_week ? r.recent_per_week.toFixed(1) : "0", String(r.scheduled_next), String(r.people), String(r.agents)]),
+      r.open_hours ? r.open_hours + "h" : "-", r.recent_per_week ? r.recent_per_week.toFixed(1) : "0", String(r.scheduled_next), String(r.inbound_next || 0), String(r.people), String(r.agents)]),
       { empty: "열린 할 일이 없습니다." }) + "</div>" +
     '<div id="rp-cost-slot"></div>' +
     '<div id="rp-whatif-slot"></div>' +
@@ -327,11 +327,12 @@ async function _renderResourceCosts(slot) {
   const st = { over: '<span class="gate-badge gate-warn sys-error">초과</span>', warn: '<span class="gate-badge gate-warn">주의</span>', ok: '<span class="gate-badge gate-ok">여유</span>' };
   const money = v => "$" + (v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2));
   slot.innerHTML = "<h3>비용·예산</h3>" +
-    '<p class="muted">업무 요청마다 <b>사람 인건비(추정)</b> = 배정된 사람의 시간당 단가 × 그 사람 몫의 예상 시간(할 일 예상 시간 ÷ 배정 인원), <b>AI(실측)</b> = 그 할 일들로 쓴 실제 AI 사용 금액(모델 레지스트리 단가). 예산을 넣으면 ' +
+    '<p class="muted">업무 요청마다 <b>인건비(기록)</b> = 할 일에 기록한 작업 시간 × 시간당 단가, <b>인건비(추정)</b> = 시간을 기록하지 않은 사람의 시간당 단가 × 그 사람 몫의 예상 시간(할 일 예상 시간 ÷ 배정 인원), <b>AI(실측)</b> = 그 할 일들로 쓴 실제 AI 사용 금액(모델 레지스트리 단가). 예산을 넣으면 ' +
     Math.round(c.budget_warn * 100) + "% 이상 주의, 넘으면 초과로 표시합니다." +
     (c.people_missing_rate ? " 시간당 단가가 없는 사람 " + c.people_missing_rate + "명 — '사람 인력 관리'에서 admin이 넣으면 인건비에 들어갑니다." : "") + "</p>" +
-    '<div class="pm-wide">' + table(["업무 요청", "할 일", "인건비(추정)", "AI(실측)", "합계", "예산", "상태", "설정"], c.briefs.map(b => [
+    '<div class="pm-wide">' + table(["업무 요청", "할 일", "인건비(기록)", "인건비(추정)", "AI(실측)", "합계", "예산", "상태", "설정"], c.briefs.map(b => [
       "#" + b.brief_id + " " + esc(b.title), String(b.tasks),
+      b.logged_hours ? money(b.labor_logged) + '<div class="muted pm-note">' + b.logged_hours + "시간</div>" : '<span class="muted">-</span>',
       money(b.labor_estimated) + (b.missing_rate || b.missing_estimate ? '<div class="muted pm-note">' + (b.missing_rate ? "단가 없음 " + b.missing_rate : "") +
         (b.missing_rate && b.missing_estimate ? " · " : "") + (b.missing_estimate ? "예상 시간 없음 " + b.missing_estimate : "") + "</div>" : ""),
       money(b.ai_cost) + (b.ai_partial ? '<div class="muted pm-note">단가 없는 모델 포함</div>' : ""),
@@ -339,7 +340,7 @@ async function _renderResourceCosts(slot) {
       b.status ? st[b.status] : "-",
       '<span class="pair"><input type="number" min="1" step="1" id="rp-bud-' + b.brief_id + '" placeholder="USD" style="width:5.5rem" aria-label="예산(USD)"><button class="small" data-rp-bud="' + b.brief_id + '">예산</button></span>',
     ]), { empty: "비용이 생긴 업무 요청이 없습니다." }) + "</div>" +
-    (c.teams.length ? "<h4>팀별 비용</h4>" + table(["팀", "할 일", "인건비(추정)", "AI(실측)"], c.teams.map(t => [esc(t.name), String(t.tasks), money(t.labor_estimated), money(t.ai_cost)])) : "") +
+    (c.teams.length ? "<h4>팀별 비용</h4>" + table(["팀", "할 일", "인건비(기록)", "인건비(추정)", "AI(실측)"], c.teams.map(t => [esc(t.name), String(t.tasks), money(t.labor_logged || 0), money(t.labor_estimated), money(t.ai_cost)])) : "") +
     '<p class="muted" id="rp-cost-msg"></p>';
   slot.querySelectorAll("[data-rp-bud]").forEach(b => b.onclick = async () => {
     const raw = slot.querySelector("#rp-bud-" + b.dataset.rpBud).value.trim();
@@ -509,7 +510,9 @@ function _renderHrImport(slot) {
   slot.innerHTML = '<section class="card"><h2>인사 자료 가져오기</h2>' +
     '<p class="muted">인사 시스템에서 내보낸 <b>CSV</b>로 사람·부재를 한꺼번에 넣습니다. 먼저 <b>미리 보기</b>로 줄마다 만들기·고치기·건너뜀·오류를 확인하고, <b>적용</b>을 눌러야 저장됩니다. 사람은 사번으로 찾아 있으면 고치고 없으면 만듭니다(오프보딩된 사람은 건너뜀).</p>' +
     '<p class="muted">사람 열: <code>employee_id,name,role,skills,weekly_hours,hourly_rate,max_concurrent_tasks,availability</code>(스킬은 ;로 구분, 빈 칸은 그대로 둠) · 부재 열: <code>employee_id,starts_on,ends_on,reason</code>(날짜 YYYY-MM-DD)</p>' +
-    '<div class="inline" style="flex-wrap:wrap"><select id="hr-kind"><option value="people">사람</option><option value="absences">부재</option></select>' +
+    '<p class="muted"><b>캘린더</b>: "연동 설정"에 등록한 캘린더에서 앞으로 N일 안의 휴가·연차·병가·부재 일정을 부재로 넣습니다. 제목에 들어 있는 이름(또는 주최자)으로 사람을 찾고, 여러 사람과 맞거나 못 찾으면 넣지 않습니다. 반차는 부재가 하루 단위라 건너뛰고, 이미 겹치는 부재가 있으면 건너뜁니다.</p>' +
+    '<div class="inline" style="flex-wrap:wrap"><select id="hr-kind" aria-label="가져올 것"><option value="people">사람</option><option value="absences">부재</option><option value="calendar">캘린더</option></select>' +
+    '<span id="hr-cal" hidden><select id="hr-feed" aria-label="캘린더"></select> 앞으로 <input type="number" id="hr-days" min="1" max="92" value="60" style="width:4rem" aria-label="일 수">일</span>' +
     '<input type="file" id="hr-file" accept=".csv,text/csv"> <button class="small" id="hr-preview">미리 보기</button> <button class="small primary" id="hr-apply" disabled>적용</button>' +
     ' <span class="muted" id="hr-msg"></span></div><textarea id="hr-text" rows="4" style="width:100%;box-sizing:border-box;margin-top:0.4rem" placeholder="또는 CSV 내용을 붙여 넣으세요"></textarea>' +
     '<div id="hr-result"></div></section>';
@@ -521,12 +524,29 @@ function _renderHrImport(slot) {
     rd.onload = () => { $("hr-text").value = String(rd.result || ""); $("hr-apply").disabled = true; };
     rd.readAsText(f, "utf-8");
   };
+  // 캘린더에서 부재(2026-11-28) — 고르면 CSV 입력 대신 캘린더·기간
+  $("hr-kind").onchange = async () => {
+    const cal = $("hr-kind").value === "calendar";
+    $("hr-cal").hidden = !cal; $("hr-file").hidden = cal; $("hr-text").hidden = cal; $("hr-apply").disabled = true;
+    if (cal && !$("hr-feed").options.length) {
+      const feeds = await api("GET", "/api/calendar-feeds").catch(() => []);
+      const list = (Array.isArray(feeds) ? feeds : (feeds.items || [])).filter(f => f.is_active !== false);
+      $("hr-feed").innerHTML = list.length ? list.map(f => '<option value="' + f.id + '">' + esc(f.name) + "</option>").join("")
+        : '<option value="">등록된 캘린더 없음</option>';
+    }
+  };
+  $("hr-feed").onchange = () => { $("hr-apply").disabled = true; };
+  $("hr-days").oninput = () => { $("hr-apply").disabled = true; };
   const run = async (apply) => {
     try {
-      const r = await api("POST", "/api/human-pool/import", { kind: $("hr-kind").value, csv: $("hr-text").value, apply });
+      const cal = $("hr-kind").value === "calendar";
+      if (cal && !$("hr-feed").value) { $("hr-msg").textContent = "먼저 '연동 설정'에서 캘린더를 등록하세요."; return; }
+      const r = cal
+        ? await api("POST", "/api/human-pool/import-calendar", { feed_id: Number($("hr-feed").value), days: Number($("hr-days").value) || 60, apply })
+        : await api("POST", "/api/human-pool/import", { kind: $("hr-kind").value, csv: $("hr-text").value, apply });
       const act = { create: "만들기", update: "고치기", skip: "건너뜀", error: "오류" };
       $("hr-result").innerHTML = '<p>' + (apply ? "적용했습니다 — " : "미리 보기 — ") + "만들기 " + r.created + " · 고치기 " + r.updated + " · 오류 " + r.errors + "</p>" +
-        table(["줄", "사번", "처리", "내용"], r.rows.map(x => [String(x.line), esc(x.employee_id || ""),
+        table(r.calendar ? ["일정", "사번", "처리", "내용"] : ["줄", "사번", "처리", "내용"], r.rows.map(x => [r.calendar ? esc(x.event || "") : String(x.line), esc(x.employee_id || ""),
           x.action === "error" ? '<span class="gate-badge gate-warn">오류</span>' : esc(act[x.action] || x.action), esc(x.detail || "")]));
       $("hr-apply").disabled = apply || !(r.created + r.updated);
       if (apply) $("hr-msg").textContent = "사람 목록은 새로 고치면 반영됩니다.";
