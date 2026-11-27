@@ -45,6 +45,10 @@ def find_html_document(content: str) -> str | None:
     return max(docs, key=len) if docs else None
 
 
+def playwright_installed() -> bool:
+    return importlib.util.find_spec("playwright") is not None
+
+
 def _not_measured(reason: str) -> dict:
     return {"score": None, "status": "not_measured", "passed": True, "not_measured": True, "reason": reason}
 
@@ -54,7 +58,7 @@ def compute_browser_execution(content: str) -> dict:
     doc = find_html_document(content)
     if doc is None:
         return _not_measured("실행할 HTML 문서가 없음")
-    if importlib.util.find_spec("playwright") is None:
+    if not playwright_installed():
         return _not_measured("브라우저 실행 도구(Playwright)가 설치되지 않음 — " + _INSTALL_HINT)
     report = run_in_browser(doc)
     if report.get("unavailable"):

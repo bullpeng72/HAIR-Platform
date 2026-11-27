@@ -244,7 +244,14 @@ def test_hanging_page_is_stopped(monkeypatch):
     assert g["passed"] is False and "넘겨 중단" in g["reason"]
 
 
+def test_missing_playwright_is_not_measured_with_install_hint(monkeypatch):
+    monkeypatch.setattr(browser_check, "playwright_installed", lambda: False)
+    g = browser_check.compute_browser_execution(GOOD_PAGE)
+    assert g["not_measured"] is True and "playwright install chromium" in g["reason"]
+
+
 def test_unavailable_browser_is_not_measured(monkeypatch):
+    monkeypatch.setattr(browser_check, "playwright_installed", lambda: True)  # CI에는 Playwright가 없다
     monkeypatch.setattr(browser_check, "run_in_browser", lambda html: {"unavailable": "샌드박스를 켤 수 없어 실행하지 않음"})
     g = browser_check.compute_browser_execution(GOOD_PAGE)
     assert g["not_measured"] is True and "샌드박스" in g["reason"]
@@ -255,6 +262,7 @@ def test_attach_quality_checks_records_browser_execution_only_for_html(monkeypat
     monkeypatch.setattr(browser_check, "run_in_browser", lambda html: {
         "page_errors": [], "click_errors": [], "console_errors": [], "blocked_requests": [], "clicked": 1,
         "text_chars": 10, "blank": False, "sandbox": True})
+    monkeypatch.setattr(browser_check, "playwright_installed", lambda: True)
     monkeypatch.setattr(browser_check, "AUTO_RUN", True)
     scores = agent_evaluation.attach_quality_checks({}, GOOD_PAGE)
     assert scores["browser_execution"]["status"] == "pass" and scores["browser_execution"]["isolation"] == "chromium-sandbox"
