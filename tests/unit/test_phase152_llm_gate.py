@@ -209,6 +209,7 @@ def test_concurrent_commit_race_does_not_kill_the_job(file_db, monkeypatch):
     "cannot commit - no transaction is active"로 실패했다 — 작업이 '실행 중'으로 남고 스레드가 죽었다."""
     import sqlite3
 
+    monkeypatch.setenv("HAIR_WORKER_MODE", "external")  # 넣자마자 실행되지 않게(웹 서버 안 모드면 바로 시작한다)
     path, conn = file_db
     job_id = job_queue.enqueue(conn, "pipeline.stage", 1)
 

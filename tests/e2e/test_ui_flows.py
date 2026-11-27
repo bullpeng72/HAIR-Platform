@@ -354,3 +354,87 @@ def test_pool_shows_tools_or_skills_and_tucks_rare_actions_away(login):
     page.wait_for_load_state("networkidle")
     assert page.locator('[data-pool-sec="skills"]').is_visible()  # 새로 그려도 보던 목록 그대로
     assert not page.errors  # type: ignore[attr-defined]
+
+
+def test_change_my_password_from_header(login, live_server, browser):
+    """사용성 평가 13번 — 헤더의 내 계정 이름을 눌러 비밀번호를 바꾼다(e2e 전용 계정을 만들어 다른 테스트에 영향 없게)."""
+    from hair_platform.auth import Role, create_user
+
+    create_user(live_server["conn"], "e2e_pw_user", "old-pass-123", Role("member"))
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900}, locale="ko-KR")
+    try:
+        page = ctx.new_page()
+        page.errors = []  # type: ignore[attr-defined]
+        page.on("pageerror", lambda exc: page.errors.append(str(exc)))  # type: ignore[attr-defined]
+        page.goto(live_server["url"])
+        page.fill("#login-username", "e2e_pw_user")
+        page.fill("#login-password", "old-pass-123")
+        page.click("#login-form button[type=submit]")
+        page.wait_for_selector("#app-view", state="visible")
+        assert "(구성원)" in page.locator("#whoami").inner_text()  # 역할도 한국어로
+        page.click("#whoami")
+        page.fill("#mp-current", "old-pass-123")
+        page.fill("#mp-new", "new-pass-456")
+        page.fill("#mp-new2", "new-pass-45X")
+        page.click("#my-password-form button[type=submit]")
+        assert "다릅니다" in page.locator("#mp-msg").inner_text()
+        page.fill("#mp-new2", "new-pass-456")
+        page.click("#my-password-form button[type=submit]")
+        page.wait_for_selector("#my-password-overlay", state="detached")
+        assert "비밀번호를 바꿨습니다" in page.locator("#global-msg").inner_text()
+        page.evaluate("selectTab('inbox')")  # 새 토큰으로 계속 쓸 수 있다
+        page.wait_for_function("currentTab === 'inbox'")
+        page.wait_for_load_state("networkidle")
+        assert not page.locator("#global-msg.error").count() or not page.locator("#global-msg.error").inner_text().strip()
+        assert not page.errors  # type: ignore[attr-defined]
+    finally:
+        ctx.close()
+
+
+def test_manual_shows_one_chapter_and_help_opens_the_right_one(login):
+    """사용성 평가 10번 — 이용 가이드가 56,000자·높이 34,000px 한 페이지였다. 절 하나씩 보이고, ❓ 도움말은 그 절을 연다."""
+    page = login("admin")
+    _tab(page, "manual")
+    visible = page.locator(".manual-chapter:visible")
+    assert visible.count() == 1 and page.evaluate("document.documentElement.scrollHeight") < 12000
+    page.locator('.manual-toc [data-manual-ch="trouble"]').click()
+    assert page.locator('.manual-chapter[data-ch="trouble"]').is_visible()
+    page.locator(".manual-pager button").first.click()  # ← 이전 절
+    assert page.locator('.manual-chapter[data-ch="menu"]').is_visible()
+    _tab(page, "evalconfig")
+    page.click("#screen-help-btn")  # 평가 기준 화면의 도움말 → 6절 안의 "평가 기준 설정"
+    page.wait_for_function("() => currentTab === 'manual'")
+    target = page.locator(".manual-content .manual-target")
+    target.wait_for()
+    assert target.is_visible() and page.locator('.manual-chapter[data-ch="pipeline"]').is_visible()
+    page.check("#manual-all")
+    assert page.locator(".manual-chapter:visible").count() >= 9
+    page.uncheck("#manual-all")
+    assert not page.errors  # type: ignore[attr-defined]
+
+
+def test_brief_progress_shows_steps_and_next_action(login, live_server):
+    """사용성 평가 8번 — 업무 한 건의 요청 → 할 일 → 배정 → 결과물 → 결재를 한 화면에, 할 일마다 다음에 할 일."""
+    conn = live_server["conn"]
+    page = login("admin")
+    ids = page.evaluate("""async () => {
+      const post = (u, b) => fetch(u, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b)}).then(r => r.json());
+      const brief = await post('/api/briefs', {raw_text: 'E2E 진행 보기 업무'});
+      const t = await post('/api/briefs/' + brief.id + '/tasks', {tasks: [{role_name: '실적 보고서 작성자', required_skills: []}, {role_name: '재무 분석가', required_skills: []}]});
+      return {brief: brief.id, tasks: t.tasks.map(x => x.id)};
+    }""")
+    admin = conn.execute("SELECT id FROM users WHERE username = 'e2e_admin'").fetchone()[0]
+    conn.execute("INSERT INTO assignments (task_id, resource_type, resource_id, requested_by, status) VALUES (?, 'agent', 1, ?, 'confirmed')",
+                 (ids["tasks"][0], admin))
+    conn.commit()
+    _tab(page, "briefs")
+    page.click(f'[data-viewtasks="{ids["brief"]}"]')
+    stepper = page.locator(".brief-stepper")
+    stepper.wait_for()
+    steps = " ".join(stepper.inner_text().split())
+    assert "배정 1/2" in steps and "결재 0/2" in steps
+    rows = page.locator("#brief-detail table tbody tr")
+    assert "작업 시작(실행)" in rows.nth(0).inner_text() and "배정하기" in rows.nth(1).inner_text()
+    rows.nth(0).locator("[data-task-workspace]").click()
+    page.locator("#task-detail").get_by_text("협업 워크스페이스").first.wait_for()
+    assert not page.errors  # type: ignore[attr-defined]

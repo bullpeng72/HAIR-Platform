@@ -647,7 +647,7 @@ Gate A-G를 채점할 때 쓰는 기준을 화면에서 바꿉니다. **저장�
 | 리소스 관리 | 리소스 매칭/배정 · 사람 인력 관리 · AI 에이전트 생성 · AI 에이전트 관리 · Crew 빌더 · 팀 관리 |
 | 지식·데이터 | 파이프라인 관리 · 도구/스킬 Pool · 지식 베이스 |
 | 모델 관리 | LLM 설정 최적화 🔒 · 모델 레지스트리 🔒(컨텍스트 한도·생성 옵션·단가·실제 사용량) |
-| 운영 관리 | 평가 기준 🔒(Gate별 통과 기준·응답 시간 SLA·추론 표지·도구 범위 감점) · 사용자 관리 🔒(사용자 생성·조직 정책(사번 형식·결과물 언어)·기본 구성 점검) |
+| 운영 관리 | 시스템 상태 🔒(서버·DB·디스크 여유·작업 큐·AI 모델 연결·외부 연결·기본 구성 — 바깥 감시 도구는 로그인 없이 `/health`) · 평가 기준 🔒(Gate별 통과 기준·응답 시간 SLA·추론 표지·도구 범위 감점) · 사용자 관리 🔒(사용자 생성·조직 정책(사번 형식·결과물 언어)·기본 구성 점검) |
 
 ### 계정 유형별로 보이는 메뉴
 
@@ -666,7 +666,7 @@ Gate A-G를 채점할 때 쓰는 기준을 화면에서 바꿉니다. **저장�
 | 설정 → 리소스 관리 · 지식·데이터 | ✓ | ✓ | — | — |
 | 설정 → 모델 관리(LLM 설정 최적화 · 모델 레지스트리) | ✓ | — | — | — |
 | 현황 → 대시보드 · 비용 · 공정성 지표 · 활동 기록 | ✓ | ✓ | — | — |
-| 설정 → 운영 관리(평가 기준 · 사용자 관리) | ✓ | — | — | — |
+| 설정 → 운영 관리(시스템 상태 · 평가 기준 · 사용자 관리) | ✓ | — | — | — |
 
 <h2 id="trouble">9. 자주 겪는 문제</h2>
 
@@ -842,6 +842,11 @@ Gate A-G를 채점할 때 쓰는 기준을 화면에서 바꿉니다. **저장�
 
 ### 비용·권한
 
+**로그인하면 "로그인 시도가 너무 많아 잠시 막았습니다"가 뜬다**
+
+- **원인**: 같은 아이디로 비밀번호를 5번 틀렸거나, 같은 PC(접속 주소)에서 여러 아이디로 20번 틀렸습니다. 비밀번호를 맞혀 보는 공격을 막기 위해 15분 동안 막습니다(막힌 동안은 맞는 비밀번호도 거절).
+- **해결**: 15분 뒤 다시 시도하거나, admin에게 비밀번호 재설정을 부탁하세요(사용자 관리 → 비밀번호 재설정 — 재설정하면 잠금도 풀립니다). 로그인한 뒤에는 헤더의 **내 계정 이름**을 눌러 비밀번호를 바꿀 수 있습니다.
+
 **지식 베이스에 등록한 자료가 어떤 사람의 요청에서는 검색되지 않는다**
 
 - **원인**: 그 문서의 **공개 범위** 밖에 있는 사람의 요청입니다. 검색은 요청한 사람 기준으로 거릅니다.
@@ -880,9 +885,17 @@ Gate A-G를 채점할 때 쓰는 기준을 화면에서 바꿉니다. **저장�
 - **다른 사람·Agent·팀을 배정 요청한 경우**: 요청자는 승인할 수 없습니다(자기 승인 금지). 다른 admin·manager가 승인해야 합니다.
 - **본인을 배정하는 셀프배정인 경우**: 처음부터 결재 없이 확정되므로 승인할 것이 없습니다.
 
+### 백업과 복원(`hair backup`·`hair restore`)
+
+- **자동 백업**: `hair serve`가 켜져 있으면 하루에 한 번 백업을 뜨고 최근 7개(`HAIR_BACKUP_KEEP`)만 남깁니다. 저장 위치는 `HAIR_BACKUP_DIR`(비우면 DB 파일 옆 `backups/` 폴더) — 디스크 고장에 대비해 다른 디스크나 NAS를 권장합니다.
+- **확인**: 설정 → 운영 관리 → **시스템 상태** 🔒의 "백업" 줄에 마지막 백업 시각이 보이고, 이틀 넘게 새 백업이 없으면 ⚠로 알립니다.
+- **직접 뜨기**: 서버 PC에서 `hair backup`(서버가 켜져 있어도 됨). 목록은 `hair backup --list`.
+- **되돌리기**: `hair serve`·`hair worker`를 끄고 `hair restore <백업 파일>`. 지금 데이터는 지우지 않고 `hair.db.before-restore-<시각>`으로 옆에 남겨 둡니다.
+- 백업 하나에는 DB 전체(업무·대화·결과물·업로드 문서·평가 리포트)와 지식 베이스 검색 색인이 들어 있습니다. DB 파일을 그냥 복사하면 최근 변경이 빠질 수 있으니 이 명령을 쓰세요.
+
 ### 데이터 초기화(`hair reset-data`)
 
-`hair reset-data`는 서버 PC에서 실행하는 명령이며 **되돌릴 수 없습니다**.
+`hair reset-data`는 서버 PC에서 실행하는 명령입니다. 지우기 전에 **백업을 먼저 자동으로 뜨므로**(위 "백업과 복원"), 잘못 실행했으면 `hair restore`로 되돌릴 수 있습니다.
 
 **무엇을 지우고 무엇을 남기나**
 
@@ -925,7 +938,7 @@ API 키·메일 서버·작업 방식처럼 **화면이 아니라 서버 PC에�
 | 서버 운영 | `HAIR_WORKER_MODE` | `external`이면 웹 서버를 재시작해도 AI 실행이 계속됨(아래) |
 | | `HAIR_TIMEZONE` | 캘린더 일정 시간대(예: `Asia/Seoul`, 비우면 서버 PC 시간대) |
 | | `HAIR_TLS_CA_FILE` | 메일 수신함·메일 알림은 서버 인증서를 검증합니다. 사내 메일 서버가 사내 인증서를 써서 "서버 인증서를 확인할 수 없습니다"가 나올 때만 그 인증서 파일 경로를 지정 |
-| 고급 옵션 | `HAIR_STAGE_RUNTIME`·`HAIR_STAGE_STALL_SECONDS`·`HAIR_VECTOR_BACKEND`·`HAIR_VECTOR_DIR`·`HAIR_EVAL_HTML_REPORT`·`HAIR_LANGUAGE_QA`·`HAIR_LEXICON_CHECK`·`HAIR_NUMERIC_CHECK`·`HAIR_OLLAMA_AGENT_PLANNING`·`HAIR_OLLAMA_MAX_OUTPUT_TOKENS`·`HAIR_OLLAMA_MAX_CONCURRENT`·`HAIR_ALLOW_LOCAL_CODE_RUN` | 보통은 기본값 그대로. 실행 방식·검색 엔진·자동 검사 끄기 등(설명은 `hair init --help`·README) |
+| 고급 옵션 | `HAIR_STAGE_RUNTIME`·`HAIR_STAGE_STALL_SECONDS`·`HAIR_VECTOR_BACKEND`·`HAIR_VECTOR_DIR`·`HAIR_EVAL_HTML_REPORT`·`HAIR_LANGUAGE_QA`·`HAIR_LEXICON_CHECK`·`HAIR_NUMERIC_CHECK`·`HAIR_OLLAMA_AGENT_PLANNING`·`HAIR_OLLAMA_MAX_OUTPUT_TOKENS`·`HAIR_OLLAMA_MAX_CONCURRENT`·`HAIR_BACKUP_DIR`·`HAIR_BACKUP_KEEP`·`HAIR_ALLOW_LOCAL_CODE_RUN` | 보통은 기본값 그대로. 실행 방식·검색 엔진·자동 검사 끄기 등(설명은 `hair init --help`·README) |
 
 **웹 서버를 재시작해도 AI 실행이 멈추지 않게 — `HAIR_WORKER_MODE=external`**
 

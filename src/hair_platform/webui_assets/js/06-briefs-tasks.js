@@ -33,7 +33,7 @@ async function renderBriefs(content) {
     );
   html += table(["ID", "요청자", "내용", "상태", "제안된 역할", "동작"], briefs.map(b => {
     let actions = '<button class="small" data-decompose="' + b.id + '">할 일로 나누기</button>' +
-      '<button class="small" data-viewtasks="' + b.id + '">할 일 보기</button>';
+      '<button class="small" data-viewtasks="' + b.id + '">진행 보기</button>';
     if (isAdmin) {
       actions += '<button class="small danger" data-delete-brief="' + b.id + '">삭제</button>';
     }
@@ -222,17 +222,51 @@ async function renderDecomposeForm(briefId, stubRoles) {
   });
 }
 
+// 업무 한 건의 흐름 한눈에(2026-11-27, 사용성 평가 8번) — 요청 → 할 일 → 배정 → 결과물 → 결재 단계를 한 줄로 보이고,
+// 할 일마다 "다음에 할 일" 버튼을 둔다. 예전엔 진행을 보려면 업무 요청·리소스 매칭/배정·내 업무·결재 화면을 오가야 했다.
+function _briefStepperHtml(tasks) {
+  const n = tasks.length;
+  const assigned = tasks.filter(t => t.assigned_count > 0).length;
+  const produced = tasks.filter(t => t.deliverable_count > 0 || t.active_job).length;
+  const approved = tasks.filter(t => t.has_final_result).length;
+  const step = (label, done, total) => {
+    const state = total === null ? "done" : (total > 0 && done === total ? "done" : (done > 0 ? "part" : "todo"));
+    return '<li class="step step-' + state + '"><span class="step-dot"></span>' + label +
+      (total === null ? "" : " <b>" + done + "/" + total + "</b>") + "</li>";
+  };
+  return '<ol class="brief-stepper" aria-label="업무 진행 단계">' +
+    step("요청", 0, null) +
+    '<li class="step step-' + (n ? "done" : "todo") + '"><span class="step-dot"></span>할 일 <b>' + n + "</b></li>" +
+    step("배정", assigned, n) + step("결과물", produced, n) + step("결재", approved, n) + "</ol>";
+}
+
+function _taskNextAction(t) {
+  const canAssign = ["admin", "manager"].includes(ME.role);
+  const ws = (label, primary) => '<button class="small' + (primary ? " primary" : "") + '" data-task-workspace="' + t.id + '">' + label + "</button>";
+  if (t.has_final_result) return '<span class="gate-badge gate-ok">✓ 완료</span> ' + ws("결과 보기");
+  if (t.active_job === "paused_for_approval") return ws("승인할 단계 보기", true);
+  if (t.active_job) return ws("진행 보기");
+  if (t.latest_status === "pending_review") return ws("결과물 검토·결재", true);
+  if (t.deliverable_count > 0) return ws("결과물 보기");
+  if (t.assigned_count > 0) return ws("작업 시작(실행)", true);
+  if (t.assignment_pending_count > 0) return '<button class="small" data-go-tab="approvals">배정 결재 대기</button>';
+  return canAssign ? '<button class="small primary" data-task-detail="' + t.id + '">배정하기</button>'
+    : '<span class="muted">배정 전 — 매니저가 배정합니다</span>';
+}
+
 async function renderTaskList(briefId) {
   const detail = document.getElementById("brief-detail");
   const isAdmin = ME.role === "admin";
   const tasks = await api("GET", "/api/briefs/" + briefId + "/tasks");
-  detail.innerHTML = "<h3>업무 요청 #" + esc(briefId) + " — 할 일 목록</h3>" +
+  detail.innerHTML = "<h3>업무 요청 #" + esc(briefId) + " — 진행</h3>" + _briefStepperHtml(tasks) +
     // 사용자 요청(2026-09-29, "각 업무의 결과물을 어떻게 확인하는지...
     // 분석하고 부족한 기능을 개선해줘") — 이전엔 이 화면에서 할 일의
     // 결과물 진행 상태를 전혀 알 수 없어(id/역할/스킬/인원뿐), 확인하려면
     // "내 업무"에서 찾거나 배정·워크스페이스를 따로 추적해야 했다.
-    table(["할 일 ID", "역할", "필요 스킬", "인원", "상태", "최종 결과물", "동작"], tasks.map(t => [
-      t.id, esc(t.role_name), esc(t.required_skills.join(", ")), t.headcount,
+    table(["역할", "배정", "상태", "최종 결과물", "다음에 할 일", "동작"], tasks.map(t => [
+      '<b>' + esc(t.role_name) + '</b><div class="muted">할 일 #' + t.id + (t.required_skills.length ? " · " + esc(t.required_skills.join(", ")) : "") +
+        (t.headcount > 1 ? " · " + t.headcount + "명" : "") + "</div>",
+      t.assigned_count > 0 ? "✓ " + t.assigned_count + "명 확정" : (t.assignment_pending_count > 0 ? '<span class="gate-badge gate-warn">결재 대기</span>' : '<span class="muted">배정 안 됨</span>'),
       // 사용자 요청(2026-11-12) — 요청을 막 제출한 바로 이 화면에서도
       // "실행 중"을 바로 볼 수 있어야 "내 업무" 탭까지 따로 찾아가지
       // 않아도 된다(renderMyWork()의 같은 로직, 백엔드 집계도 공유).
@@ -240,6 +274,7 @@ async function renderTaskList(briefId) {
         : t.active_job === "paused_for_approval" ? '<span class="gate-badge gate-warn">🕐 승인 대기 중</span>'
         : t.latest_status ? esc(label(t.latest_status)) : '<span class="muted">아직 없음</span>',
       t.has_final_result ? '<span class="gate-badge gate-ok">✓ 승인됨</span>' : '<span class="muted">-</span>',
+      _taskNextAction(t),
       '<div class="actions"><button class="small" data-task-detail="' + t.id + '">상세</button>' +
         (isAdmin ? '<button class="small danger" data-delete-task="' + t.id + '">삭제</button>' : "") +
         "</div>",
@@ -265,6 +300,12 @@ async function renderTaskList(briefId) {
         showMsg("global-msg", "할 일을 삭제했습니다.", "ok");
         renderTaskList(briefId);
       } catch (e) { showMsg("global-msg", e.message, "error"); }
+    };
+  });
+  detail.querySelectorAll("[data-task-workspace]").forEach(btn => {
+    btn.onclick = () => {
+      renderCollabWorkspace(Number(btn.dataset.taskWorkspace), "task-detail");
+      document.getElementById("task-detail").scrollIntoView({ block: "start", behavior: "smooth" });
     };
   });
   detail.querySelectorAll("[data-task-detail]").forEach(btn => {

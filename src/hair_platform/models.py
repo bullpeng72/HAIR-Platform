@@ -66,6 +66,13 @@ class ManagerUpdate(BaseModel):
     manager_id: int | None = None
 
 
+class MyPasswordChange(BaseModel):
+    """내 비밀번호 바꾸기(2026-11-27, 사용성 평가 13번) — 지금 비밀번호를 확인한 뒤 바꾼다."""
+
+    current_password: str
+    new_password: str
+
+
 class UserPasswordReset(BaseModel):
     """사용자 요청(2026-09-29, "비밀번호 조회/초기화 기능 추가 필요") —
     비밀번호는 bcrypt 해시라 "조회"는 원리상 불가능하다(평문을 저장하지

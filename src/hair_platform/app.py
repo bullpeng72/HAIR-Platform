@@ -53,6 +53,7 @@ from hair_platform.auth import (
     authenticate,
     create_session_token,
     get_current_user,
+    password_version,
 )
 from hair_platform.models import (
     LoginRequest,
@@ -169,25 +170,55 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/login")
     def login(payload: LoginRequest, request: Request):
+        # 로그인 시도 제한(2026-11-27, 개선 제안 5-2 — `login_guard.py`): 아이디별 5회·접속 주소별 20회 틀리면 15분 막는다.
+        from hair_platform import audit, login_guard
+
+        ip = request.client.host if request.client else None
+        wait = login_guard.retry_after(payload.username, ip)
+        if wait:
+            raise HTTPException(
+                status_code=429,
+                detail=f"로그인 시도가 너무 많아 잠시 막았습니다 — {max(1, (wait + 59) // 60)}분 뒤에 다시 시도하세요",
+                headers={"Retry-After": str(wait)},
+            )
         user = authenticate(conn, payload.username, payload.password)
         if user is None:
+            if login_guard.record_failure(payload.username, ip):
+                target = conn.execute("SELECT id FROM users WHERE username = ?", (payload.username,)).fetchone()
+                if target is not None:
+                    audit.record(conn, target["id"], "login_locked", "user", target["id"],
+                                 after={"ip": ip, "minutes": login_guard.LOCK_SECONDS // 60})
+                    conn.commit()
             raise HTTPException(
                 status_code=401, detail="아이디 또는 비밀번호가 올바르지 않습니다"
             )
+        login_guard.record_success(payload.username)
+        pv = password_version(user["password_hash"])  # 비밀번호가 바뀌면 이 로그인은 끊긴다(2026-11-27)
         request.session["user"] = {
             "id": user["id"],
             "username": user["username"],
             "role": user["role"],
+            "pv": pv,
         }
         # 탭별 다계정 로그인(auth.py 주석 참고) — Web UI는 이 토큰을
         # sessionStorage(탭마다 독립)에 저장해 쿠키 세션과 별도로 쓴다.
-        token = create_session_token(secret_key, user["id"])
+        token = create_session_token(secret_key, user["id"], pv)
         return {
             "id": user["id"],
             "username": user["username"],
             "role": user["role"],
             "token": token,
         }
+
+    @app.get("/health")
+    def health():
+        """감시 도구용 상태 확인(2026-11-27, 개선 제안 5-4) — 로그인 없이 DB·작업 큐 상태만(내부 정보 없음)."""
+        from fastapi.responses import JSONResponse
+
+        from hair_platform import system_status
+
+        code, body = system_status.health(conn)
+        return JSONResponse(body, status_code=code)
 
     @app.post("/logout")
     def logout(request: Request):

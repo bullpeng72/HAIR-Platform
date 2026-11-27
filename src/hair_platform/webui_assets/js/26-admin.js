@@ -354,3 +354,30 @@ async function renderAdmin(content) {
   });
 }
 
+
+
+// 시스템 상태 한눈에(2026-11-27, 사용성 평가 11번 — `system_status.py`, admin). 30초마다 이 화면에 있는 동안만 다시 읽는다.
+let _sysStatusTimer = null;
+async function renderSystemStatus(content) {
+  clearTimeout(_sysStatusTimer);
+  const st = await api("GET", "/api/admin/system-status");
+  const icon = { ok: "✓", warn: "⚠", error: "✗" };
+  const cls = { ok: "gate-ok", warn: "gate-warn", error: "gate-warn sys-error" };
+  const overall = { ok: "모두 정상", warn: "확인할 것이 있습니다", error: "문제가 있습니다" }[st.status];
+  content.innerHTML =
+    '<section class="card"><h2>시스템 상태</h2>' +
+    helpBox('<ul class="muted help-list">' +
+      "<li>서버·데이터베이스·디스크 여유·작업 큐·AI 모델 연결·외부 연결·기본 구성을 한 화면에 모았습니다. 이 화면에 있는 동안 30초마다 다시 확인합니다.</li>" +
+      "<li>바깥 감시 도구(가동 모니터링)는 로그인 없이 <code>/health</code> 주소로 상태를 확인할 수 있습니다(DB를 읽을 수 없으면 503).</li>" +
+      "</ul>") +
+    '<p class="sys-overall"><span class="gate-badge ' + cls[st.status] + '">' + icon[st.status] + " " + overall + "</span> " +
+    '<span class="muted">확인 ' + esc(st.checked_at) + '</span> <button class="small" id="sys-refresh">다시 확인</button></p>' +
+    st.sections.map(sec =>
+      "<h3>" + esc(sec.title) + '</h3><ul class="sys-list">' +
+      sec.items.map(it => '<li class="sys-item sys-' + it.status + '"><span class="gate-badge ' + cls[it.status] + '">' + icon[it.status] + "</span> " +
+        "<b>" + esc(it.label) + "</b> — " + esc(it.detail) + "</li>").join("") + "</ul>"
+    ).join("") +
+    "</section>";
+  document.getElementById("sys-refresh").onclick = () => refresh();
+  _sysStatusTimer = setTimeout(() => { if (currentTab === "systemstatus") refresh(); }, 30000);
+}

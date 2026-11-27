@@ -658,6 +658,8 @@ const TABS = [
   { id: "crew", label: "Crew 빌더", group: "admin", roles: ["admin", "manager"], render: renderCrewBuilder },
   { id: "admin", label: "사용자 관리", group: "admin", roles: ["admin"], adminOnly: true, render: renderAdmin },
   // 평가 기준 설정(2026-11-25, 사용자 요청) — Agent-Evaluator 채점 기준(Gate별 통과 기준·SLA·추론 표지·도구 범위 감점).
+  // 시스템 상태(2026-11-27, 사용성 평가 11번 — `system_status.py`) — 서버·DB·디스크·작업 큐·모델·연결·구성을 한 화면에.
+  { id: "systemstatus", label: "시스템 상태", group: "admin", roles: ["admin"], adminOnly: true, render: renderSystemStatus },
   { id: "evalconfig", label: "평가 기준", group: "admin", roles: ["admin"], adminOnly: true, render: renderEvaluationConfig },
 ];
 
@@ -668,6 +670,7 @@ async function boot() {
     document.getElementById("login-view").style.display = "none";
     document.getElementById("app-view").style.display = "block";
     document.getElementById("whoami").textContent = ME.username + " (" + (ROLE_NAMES[ME.role] || ME.role) + ")";
+    document.getElementById("whoami").onclick = openMyPasswordDialog;
     buildNav();
     // 첫 화면은 홈(2026-11-27, 사용성 평가 1번) — 이용 가이드·홈 안내가 "홈 → AI에게 일 맡기기"부터 시작하라고 하는데
     // 예전엔 메뉴 첫 탭(빈 "대화" 표)에 떨어졌다.
@@ -745,7 +748,7 @@ const SETTINGS_GROUPS = [
   },
   {
     label: "운영 관리",
-    entries: ["evalconfig", "admin"],  // 대시보드·비용·공정성·활동 기록은 "현황"으로(2026-11-27)
+    entries: ["systemstatus", "evalconfig", "admin"],  // 대시보드·비용·공정성·활동 기록은 "현황"으로(2026-11-27)
     collapsible: true,
   },
 ];

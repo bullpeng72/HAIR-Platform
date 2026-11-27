@@ -7,11 +7,31 @@ on:
     branches: [main]
 
 jobs:
-  quality:
-    name: Tests + lint (pytest, ruff)
+  # 검사 규칙은 pyproject.toml `[tool.ruff.lint] select`에 명시(ruff 버전마다 기본값이 달라지지 않게). black은 쓰지 않는다
+  # (2026-11-25 결정 — 기존 코드가 black 형식이 아니고 일괄 재포맷은 이력 비교를 끊는다).
+  lint:
+    name: Lint (ruff)
     runs-on: ubuntu-latest
-    # 멈춘 테스트가 기본 6시간 동안 러너를 잡지 않게(2026-11-25 — 평소 약 20분)
-    timeout-minutes: 45
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff -c constraints.txt  # 개발 PC와 같은 버전(새 버전의 규칙 변화로 갑자기 실패하지 않게)
+      - run: ruff check src tests
+
+  # 단위·통합 테스트를 4묶음으로 나눠 동시에 돈다(2026-11-27, 개선 제안 6-1 — 한 작업으로 약 27분 걸렸다).
+  # 묶음은 `scripts/ci_shard.py`가 파일별 실행 시간 기록(tests/test_durations.json)으로 시간이 고르게 나눈다.
+  quality:
+    name: Tests (pytest ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    # 멈춘 테스트가 기본 6시간 동안 러너를 잡지 않게(2026-11-25)
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,11 +53,9 @@ jobs:
       - name: Warm tiktoken cache
         run: python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
       # 테스트는 `.env`·셸 API 키에 기대지 않는다(tests/conftest.py가 격리) — 키 없는 CI에서도 개발 PC와 같은 결과.
-      - run: pytest tests/ -q -p no:cacheprovider
-      # 검사 규칙은 pyproject.toml `[tool.ruff.lint] select`에 명시(ruff 버전마다 기본값이 달라지지 않게).
-      - run: ruff check src tests
-      # black은 쓰지 않는다(2026-11-25 결정) — 기존 코드 전체(171개 파일·약 11,700줄)가 black 형식이 아니고, 일괄
-      # 재포맷은 이력 비교를 끊는다. 형식 대신 ruff로 실제 오류·버그 패턴만 검사한다.
+      - name: Show this shard's test files
+        run: python scripts/ci_shard.py 4 --summary
+      - run: pytest $(python scripts/ci_shard.py 4 ${{ matrix.shard }}) -q -p no:cacheprovider
 
   # 화면 자동 테스트(2026-11-26, 개선 계획 2-1) — 실제 서버 + Chromium(Playwright). 본 테스트와 따로 돈다.
   e2e:

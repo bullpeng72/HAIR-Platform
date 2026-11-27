@@ -270,6 +270,13 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
 
         return {"items": connection_health.summary(conn), "warnings": connection_health.warnings(conn)}
 
+    # ---------- 시스템 상태 한눈에(2026-11-27, 사용성 평가 11번 — `system_status.py`, admin) ----------
+    @app.get("/api/admin/system-status")
+    def system_status_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        from hair_platform import system_status
+
+        return system_status.summary(conn)
+
     # ---------- 작업 프로세스 상태(2026-11-26, P1-6 2단계 — `job_queue.py`, admin) ----------
     @app.get("/api/admin/worker-status")
     def worker_status_endpoint(user: sqlite3.Row = Depends(require_role(Role.ADMIN))):

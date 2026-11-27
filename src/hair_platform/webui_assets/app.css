@@ -19,7 +19,9 @@
     --color-bg: #f5f6f8;
     --color-surface: #fff;
     --color-text: #1b1f24;
-    --color-muted: #777;
+    /* 설명 글자(2026-11-27, 사용성 평가 12번) — #777은 흰 바탕 대비 4.48:1로 작은 글씨 기준(WCAG AA 4.5:1)에 조금
+       모자랐다. #6b6b6b는 흰 바탕 5.3:1, 회색 바탕(#f5f6f8) 4.9:1. */
+    --color-muted: #6b6b6b;
     --color-border: #e2e4e8;
     --color-border-strong: #ccc;
     --color-primary: #14213d;
@@ -54,7 +56,7 @@
   .nav-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; padding: 0.4rem 0.5rem; }
   .nav-group + .nav-group { border-top: 1px dashed var(--color-border); }
   .nav-group.admin-group { background: var(--color-admin-bg); }
-  .nav-label { font-size: 0.72rem; font-weight: 600; color: #888; margin-right: 0.4rem; min-width: 72px; }
+  .nav-label { font-size: 0.72rem; font-weight: 600; color: var(--color-muted); margin-right: 0.4rem; min-width: 72px; }
   .nav-group.admin-group .nav-label { color: var(--color-admin); }
   nav button { background: none; border: 1px solid var(--color-border-strong); padding: 0.35rem 0.7rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
   nav button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
@@ -186,7 +188,7 @@
   #conv-message-highlight .mention-inline-agent { font-weight: 600; color: #6d28d9; }
   #conv-message-highlight .mention-inline-human { font-weight: 600; color: #1d4ed8; }
   #conv-message-input { position: relative; z-index: 1; background: transparent; color: transparent; caret-color: #111; }
-  #conv-message-input::placeholder { color: #888; }
+  #conv-message-input::placeholder { color: var(--color-muted); }
   .mention-dropdown { position: absolute; z-index: 20; top: 100%; left: 0; width: 100%; max-height: 10rem; overflow-y: auto; margin: 2px 0 0; padding: 0.2rem 0; list-style: none; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
   .mention-dropdown li { padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
   .mention-dropdown li:hover, .mention-dropdown li.active { background: #eef6ff; }
@@ -505,6 +507,8 @@
   .stage-tools { font-size: 0.85rem; color: #475569; }
   /* 메뉴 찾기·이 화면 도움말(2026-11-26, P2-12 — js/29-menu-search.js) */
   header button.header-tool { background: rgba(255,255,255,0.14); color: #fff; border: 1px solid rgba(255,255,255,0.35); }
+  header button.whoami { background: none; border-color: transparent; color: #cbd5e1; font-size: 0.8rem; }
+  header button.whoami:hover { border-color: rgba(255,255,255,0.35); color: #fff; }
   header button.header-tool.active { background: rgba(255,255,255,0.3); border-color: #fff; }
   .nav-group .nav-label + button { margin-left: 0; }
   header button.header-tool kbd { font-size: 0.7rem; opacity: 0.75; margin-left: 0.25rem; font-family: inherit; }
@@ -594,6 +598,31 @@
   details.row-more > summary { list-style: none; cursor: pointer; padding: 0.15rem 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 4px; font-size: 0.8rem; }
   details.row-more > summary::-webkit-details-marker { display: none; }
   details.row-more[open] { display: inline-flex; gap: 0.3rem; align-items: center; }
+  /* 시스템 상태(2026-11-27). */
+  .sys-list { list-style: none; padding: 0; margin: 0 0 0.8rem; }
+  .sys-item { padding: 0.45rem 0; border-bottom: 1px solid var(--color-border); overflow-wrap: anywhere; }
+  .gate-badge.sys-error { background: var(--status-danger-bg); color: var(--status-danger-fg); }
+  /* 이용 가이드 절 하나씩(2026-11-27, 사용성 평가 10번). */
+  .manual-layout { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 1.2rem; align-items: start; }
+  .manual-toc { position: sticky; top: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem; }
+  .manual-toc button.small { text-align: left; white-space: normal; border-color: transparent; background: none; }
+  .manual-toc button.small.active { background: var(--color-primary); color: #fff; }
+  .manual-all { font-size: 0.8rem; color: var(--color-muted); margin-top: 0.5rem; }
+  .manual-pager { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 1.2rem; padding-top: 0.8rem; border-top: 1px solid var(--color-border); flex-wrap: wrap; }
+  @media (max-width: 800px) {
+    .manual-layout { grid-template-columns: minmax(0, 1fr); }
+    .manual-toc { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 0.3rem; }
+    .manual-toc button.small { white-space: nowrap; flex: 0 0 auto; }
+  }
+  /* 업무 요청 진행 단계(2026-11-27, 사용성 평가 8번). */
+  .brief-stepper { display: flex; flex-wrap: wrap; gap: 0.2rem 0; list-style: none; padding: 0; margin: 0.4rem 0 0.9rem; }
+  .brief-stepper .step { display: flex; align-items: center; gap: 0.35rem; font-size: 0.88rem; color: var(--color-muted); }
+  .brief-stepper .step + .step::before { content: ""; width: 1.6rem; height: 2px; background: var(--color-border-strong); margin: 0 0.45rem; }
+  .brief-stepper .step-dot { width: 0.75rem; height: 0.75rem; border-radius: 50%; border: 2px solid var(--color-border-strong); background: var(--color-surface); box-sizing: border-box; }
+  .brief-stepper .step-done { color: var(--color-text); }
+  .brief-stepper .step-done .step-dot { background: var(--status-success-fg); border-color: var(--status-success-fg); }
+  .brief-stepper .step-part { color: var(--color-text); }
+  .brief-stepper .step-part .step-dot { background: linear-gradient(90deg, var(--status-warn-fg) 50%, var(--color-surface) 50%); border-color: var(--status-warn-fg); }
   .as-danger { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.6rem; border: 1px solid var(--status-danger-bg); border-radius: 6px; background: #fffafa; }
   .as-section h4 { margin: 0 0 0.25rem; font-size: 0.95rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
   .as-section > p.muted { margin: 0 0 0.6rem; }

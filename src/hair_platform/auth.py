@@ -6,6 +6,7 @@ manager_id(직속상사)와 RBAC role은 별개 개념이다 — 이 모듈은 r
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from enum import Enum
 
@@ -26,16 +27,30 @@ def _serializer(secret_key: str) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(secret_key, salt="hair-platform-session-token")
 
 
-def create_session_token(secret_key: str, user_id: int) -> str:
-    return _serializer(secret_key).dumps({"id": user_id})
+def password_version(password_hash: str) -> str:
+    """비밀번호가 바뀌면 달라지는 짧은 표지(2026-11-27, 사용성 평가 13번·개선 제안 5-3). 로그인 토큰·세션에 넣어 두고
+    요청마다 비교한다 — 비밀번호를 바꾸거나 관리자가 재설정하면 그 전에 발급된 로그인이 모두 끊긴다(예전엔 14일 동안 유효)."""
+    return hashlib.sha256((password_hash or "").encode()).hexdigest()[:16]
 
 
-def decode_session_token(secret_key: str, token: str) -> int | None:
+def create_session_token(secret_key: str, user_id: int, pv: str | None = None) -> str:
+    payload: dict = {"id": user_id}
+    if pv:
+        payload["pv"] = pv
+    return _serializer(secret_key).dumps(payload)
+
+
+def _decode_session_payload(secret_key: str, token: str) -> dict | None:
     try:
         payload = _serializer(secret_key).loads(token, max_age=TOKEN_MAX_AGE_SECONDS)
     except (BadSignature, SignatureExpired):
         return None
-    return payload.get("id")
+    return payload if isinstance(payload, dict) else None
+
+
+def decode_session_token(secret_key: str, token: str) -> int | None:
+    payload = _decode_session_payload(secret_key, token)
+    return payload.get("id") if payload else None
 
 
 class Role(str, Enum):
@@ -87,6 +102,7 @@ def authenticate(
 
 def get_current_user(request: Request) -> sqlite3.Row:
     user_id = None
+    pv: str | None = None  # 비밀번호 표지(API 키는 비밀번호와 무관 — 키를 폐기해 끊는다)
     auth_header = request.headers.get("authorization")
     if auth_header and auth_header.lower().startswith("bearer "):
         token = auth_header[len("Bearer ") :].strip()
@@ -101,18 +117,22 @@ def get_current_user(request: Request) -> sqlite3.Row:
         else:
             # 탭별 토큰(위 주석) — 있으면 쿠키 세션보다 우선한다. 같은 브라우저의
             # 다른 탭이 로그인/로그아웃해도 이 탭의 계정에는 영향이 없어야 한다.
-            user_id = decode_session_token(request.app.state.secret_key, token)
-            if user_id is None:
+            payload = _decode_session_payload(request.app.state.secret_key, token)
+            if payload is None or payload.get("id") is None:
                 raise HTTPException(status_code=401, detail="세션이 유효하지 않습니다")
+            user_id, pv = payload["id"], payload.get("pv")
     else:
         session_user = request.session.get("user")
         if session_user is None:
             raise HTTPException(status_code=401, detail="로그인이 필요합니다")
-        user_id = session_user["id"]
+        user_id, pv = session_user["id"], session_user.get("pv")
     conn: sqlite3.Connection = request.app.state.db
     row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=401, detail="세션이 유효하지 않습니다")
+    if pv is not None and pv != password_version(row["password_hash"]):
+        # 비밀번호가 바뀐 뒤의 옛 로그인(2026-11-27). 표지가 없는 옛 토큰(이 기능 전 발급)은 만료(14일)까지 그대로 둔다.
+        raise HTTPException(status_code=401, detail="비밀번호가 바뀌어 다시 로그인해야 합니다")
     if not row["is_active"]:
         # 로그인 시점만 막으면 이미 로그인한 세션이 비활성화 이후에도
         # 계속 유효해 버린다 — 매 요청마다 다시 확인해 즉시 차단한다.

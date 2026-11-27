@@ -140,6 +140,11 @@ ENV_VARS: tuple[EnvVar, ...] = (
            "Ollama 모델에 한 번에 보내는 호출 수 기본값(기본 1 — Ollama는 하나씩 처리. OLLAMA_NUM_PARALLEL을 올렸다면 "
            "그 값, 0이면 상한 없음). 넘는 호출은 기다리고 대화 응답이 파이프라인보다 먼저 들어간다. 모델별 값은 모델 "
            "레지스트리 '동시 실행 상한'", default="1"),
+    EnvVar("HAIR_BACKUP_DIR", GROUP_ADVANCED,
+           "백업 저장 폴더(hair backup·자동 백업·초기화 전 백업, 비우면 DB 파일 옆 backups/) — 다른 디스크·NAS를 권장",
+           default=""),
+    EnvVar("HAIR_BACKUP_KEEP", GROUP_ADVANCED,
+           "hair serve가 하루 한 번 뜨는 자동 백업을 최근 몇 개 남길지(기본 7, 0이면 자동 백업 끔)", default="7"),
     EnvVar("HAIR_ALLOW_LOCAL_CODE_RUN", GROUP_ADVANCED,
            "1이면 Docker 샌드박스 대신 로컬에서 코드 테스트(Python·JavaScript) 실행, 브라우저 샌드박스 없이도 화면실행 "
            "점검(격리 없음 — 운영 비권장, 기본 0)", default="0"),
@@ -299,7 +304,8 @@ def cross_check(values: dict[str, str]) -> list[tuple[str, str]]:
                 "HAIR_OLLAMA_AGENT_PLANNING", "HAIR_ALLOW_LOCAL_CODE_RUN"):
         if _v(key) and _v(key) not in ("0", "1"):
             issues.append(("warn", f"{key}={_v(key)!r} — 0 또는 1로 적으세요"))
-    for key in ("HAIR_STAGE_STALL_SECONDS", "HAIR_OLLAMA_MAX_OUTPUT_TOKENS", "HAIR_OLLAMA_MAX_CONCURRENT"):
+    for key in ("HAIR_STAGE_STALL_SECONDS", "HAIR_OLLAMA_MAX_OUTPUT_TOKENS", "HAIR_OLLAMA_MAX_CONCURRENT",
+                "HAIR_BACKUP_KEEP"):
         if _v(key) and not _v(key).isdigit():
             issues.append(("error", f"{key}={_v(key)!r}가 숫자가 아닙니다"))
     if _v("HAIR_TIMEZONE"):
@@ -312,6 +318,13 @@ def cross_check(values: dict[str, str]) -> list[tuple[str, str]]:
                                    "서버 PC 시간대로 동작합니다"))
     if _v("HAIR_TLS_CA_FILE") and not os.path.isfile(os.path.expanduser(_v("HAIR_TLS_CA_FILE"))):
         issues.append(("error", f"HAIR_TLS_CA_FILE={_v('HAIR_TLS_CA_FILE')!r} 파일이 없습니다 — 메일 서버 연결이 실패합니다"))
+    if _v("HAIR_BACKUP_DIR"):
+        bdir = os.path.expanduser(_v("HAIR_BACKUP_DIR"))
+        parent = bdir if os.path.isdir(bdir) else os.path.dirname(os.path.abspath(bdir))
+        if not os.path.isdir(parent) or not os.access(parent, os.W_OK):
+            issues.append(("error", f"HAIR_BACKUP_DIR={_v('HAIR_BACKUP_DIR')!r}에 쓸 수 없습니다 — 백업이 실패합니다"))
+    if _v("HAIR_BACKUP_KEEP") == "0":
+        issues.append(("warn", "HAIR_BACKUP_KEEP=0 — 자동 백업이 꺼져 있습니다(hair backup으로 직접 뜨세요)"))
     if _v("HAIR_ALLOW_LOCAL_CODE_RUN") == "1":
         issues.append(("warn", "HAIR_ALLOW_LOCAL_CODE_RUN=1 — 코드 테스트가 격리 없이 서버 PC에서 실행됩니다(운영 비권장)"))
 

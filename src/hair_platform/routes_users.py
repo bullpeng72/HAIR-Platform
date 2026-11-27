@@ -11,6 +11,7 @@ from fastapi import (
     Depends,
     FastAPI,
     HTTPException,
+    Request,
 )
 
 from hair_platform import (
@@ -18,17 +19,24 @@ from hair_platform import (
 )
 from hair_platform.auth import (
     Role,
+    create_session_token,
     create_user,
+    get_current_user,
     hash_password,
+    password_version,
     require_role,
+    verify_password,
 )
 from hair_platform.models import (
     ManagerUpdate,
     UserCreate,
     UserEmployeeIdUpdate,
+    MyPasswordChange,
     UserPasswordReset,
     UserStatusUpdate,
 )
+
+MIN_PASSWORD_LENGTH = 8  # 내 비밀번호 바꾸기(2026-11-27)
 
 
 def register(app: FastAPI, conn: sqlite3.Connection) -> None:
@@ -143,6 +151,30 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         conn.commit()
         return {"id": user_id, "employee_id": payload.employee_id}
 
+    @app.post("/api/me/password")
+    def change_my_password(
+        payload: MyPasswordChange,
+        request: Request,
+        user: sqlite3.Row = Depends(get_current_user),
+    ):
+        """내 비밀번호 바꾸기(2026-11-27, 사용성 평가 13번) — 예전엔 관리자 재설정밖에 없었다. 바꾸면 다른 곳(다른 브라우저·
+        탭)의 로그인은 모두 끊기고, 지금 이 탭은 새 토큰으로 이어진다(`auth.password_version`)."""
+        if not verify_password(payload.current_password, user["password_hash"]):
+            raise HTTPException(status_code=400, detail="지금 비밀번호가 맞지 않습니다")
+        new = payload.new_password or ""
+        if len(new) < MIN_PASSWORD_LENGTH:
+            raise HTTPException(status_code=400, detail=f"새 비밀번호는 {MIN_PASSWORD_LENGTH}자 이상이어야 합니다")
+        if new == payload.current_password:
+            raise HTTPException(status_code=400, detail="지금 비밀번호와 다른 비밀번호를 쓰세요")
+        new_hash = hash_password(new)
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"]))
+        audit.record(conn, user["id"], "user_password_changed", "user", user["id"])
+        conn.commit()
+        pv = password_version(new_hash)
+        if request.session.get("user"):
+            request.session["user"] = {**request.session["user"], "pv": pv}
+        return {"status": "password_changed", "token": create_session_token(request.app.state.secret_key, user["id"], pv)}
+
     @app.patch("/api/users/{user_id}/password")
     def reset_user_password(
         user_id: int,
@@ -164,6 +196,11 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             (hash_password(payload.password), user_id),
         )
         audit.record(conn, user["id"], "user_password_reset", "user", user_id)
+        from hair_platform import login_guard  # 재설정하면 그 계정의 로그인 잠금도 푼다(2026-11-27, 5-2)
+
+        name = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+        if name is not None:
+            login_guard.unlock(name["username"])
         conn.commit()
         return {"id": user_id, "status": "password_reset"}
 

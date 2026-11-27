@@ -96,3 +96,36 @@ def _guarded_connect(self, address):
 
 
 socket.socket.connect = _guarded_connect  # type: ignore[method-assign]
+
+
+# 로그인 시도 제한(2026-11-27, 개선 제안 5-2)은 프로세스 메모리에 실패 수를 센다 — 테스트들이 같은 주소("testclient")로
+# 틀린 비밀번호를 여러 번 넣어 보므로, 테스트마다 비운다(앞 테스트의 실패가 뒤 테스트의 로그인을 막지 않게).
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_guard():
+    from hair_platform import login_guard
+
+    login_guard.reset_all()
+    yield
+
+
+# 파일별 실행 시간 기록(2026-11-27, 개선 제안 6-1 — CI 병렬 묶음 나누기 `scripts/ci_shard.py`). PYTEST_DURATIONS_OUT에
+# 경로를 주면 테스트 파일마다 걸린 시간(준비·실행·정리 합)을 모아 끝날 때 JSON으로 쓴다.
+_DURATIONS: dict[str, float] = {}
+
+
+def pytest_runtest_logreport(report):
+    if os.environ.get("PYTEST_DURATIONS_OUT"):
+        path = report.nodeid.split("::", 1)[0]
+        _DURATIONS[path] = _DURATIONS.get(path, 0.0) + float(getattr(report, "duration", 0.0) or 0.0)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    out = os.environ.get("PYTEST_DURATIONS_OUT")
+    if out and _DURATIONS:
+        import json
+
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump({k: round(v, 2) for k, v in sorted(_DURATIONS.items())}, f, ensure_ascii=False, indent=0)

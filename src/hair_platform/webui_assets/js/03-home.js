@@ -125,5 +125,6 @@ async function _startWizardPick(r, text) {
   const brief = await api("POST", "/api/briefs", { raw_text: text + "\n\n[추천 실행 방식] " + r.template_name });
   showMsg("global-msg", "업무 요청 #" + brief.id + "를 올렸습니다(추천: " + r.template_name + ") — manager가 할 일로 나눠 실행합니다.", "ok");
   await selectTab("briefs");
+  renderTaskList(brief.id);  // 방금 올린 업무의 진행 단계를 바로 보인다(2026-11-27, 사용성 평가 8번)
 }
 

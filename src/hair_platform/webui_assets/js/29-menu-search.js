@@ -36,6 +36,7 @@ const MENU_HINTS = {
   knowledgebase: { help: "#menu", desc: "지식 베이스 자료 등록·검색·공개 범위", words: "지식 문서 RAG 벡터 검색 공개 범위 업로드" },
   crew: { help: "방법 B — Crew 빌더", desc: "등록 없이 Agent를 즉석으로 묶어 실행", words: "Crew 즉석 협업 조합" },
   admin: { help: "계정 유형 4가지", desc: "사용자 계정·유형·조직 정책·기본 구성 점검", words: "사용자 계정 권한 역할 비밀번호 조직 정책 사번 결과물 언어 기본 구성 점검" },
+  systemstatus: { help: "#menu", desc: "서버·DB·디스크·작업 큐·AI 모델 연결 상태를 한 화면에", words: "시스템 상태 서버 DB 디스크 용량 작업 큐 Ollama 연결 헬스 health 장애 점검" },
   evalconfig: { help: "평가 기준 설정", desc: "Gate별 통과 기준·응답 시간 SLA", words: "평가 기준 Gate 통과 기준 SLA 임계" },
 };
 
@@ -109,9 +110,7 @@ async function openManualAt(target) {
       [...root.querySelectorAll("h2, h3")].find(h => _norm(h.textContent).includes(want));
   }
   if (!el) return;
-  el.scrollIntoView({ block: "start" });
-  el.classList.add("manual-target");
-  setTimeout(() => el.classList.remove("manual-target"), 2500);
+  _manualReveal(el);  // 절 하나씩 보기에서도 그 절을 열고 간다(2026-11-27)
 }
 
 function openHelpForCurrentScreen() {

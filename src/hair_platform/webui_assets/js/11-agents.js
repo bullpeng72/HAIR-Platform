@@ -262,7 +262,9 @@ async function renderAgentPool(content) {
     // 사용자 요청(2026-10-27, "노출되지 않도록 개선") — 정수 PK는
     // 화면에서 숨기고 코드만 보여준다(수정/삭제 등 동작은 a.id를 그대로
     // 쓰므로 기능은 안 바뀜).
-    table(["코드", "이름", "역할", "스킬", "상태", "생성방식", "LLM", "상세정보", "동작"], agents.map(a => {
+    // 표 구성(2026-11-27, 사용성 평가 9번) — 맨 앞을 사람이 알아보는 역할(이름이 있으면 함께)로, 코드는 그 아래 작은 글씨로.
+    // 예전엔 "이름" 열이 기본 Agent 39개 모두 "(미지정)"이고 "LLM" 열이 모두 "-"였다(전역 기본값을 쓴다는 뜻).
+    table(["역할", "스킬", "상태", "생성방식", "LLM", "상세정보", "동작"], agents.map(a => {
       // 사용자 보고(2026-10-14, 스크린샷 — "동작" 칸 하나에 10개 넘는
       // 버튼/입력이 전부 세로로 풀폭 스택돼 행 하나가 화면을 가득
       // 채움) — 자주 쓰는 상태변경/실행 버튼만 바로 보이게 남기고,
@@ -355,7 +357,7 @@ async function renderAgentPool(content) {
       const output = a.last_output
         ? renderContent(a.last_output, _looksLikeFullHtmlDocument(a.last_output) ? "html" : undefined)
         : '<span class="muted">-</span>';
-      const llmInfo = a.llm_provider ? esc(a.llm_provider) + "/" + esc(a.llm_model || "") : "-";
+      const llmInfo = a.llm_provider ? esc(a.llm_provider) + "/" + esc(a.llm_model || "") : '<span class="muted" title="Agent별 모델을 정하지 않아 플랫폼 기본 모델(모델 관리 → LLM 설정 최적화)을 씁니다">기본 모델</span>';
       // Phase 3 aggregate_agent_score() — 관리자 수동 점수와 별도로,
       // 이 Agent가 만든 산출물들의 실측 Gate A-G/TCR 평균을 보여준다
       // (사용자 요청, 2026-09-28, "Phase1~4까지... 분석하고 개선해줘"
@@ -383,7 +385,9 @@ async function renderAgentPool(content) {
         '<div>최근 산출물:' + (a.last_output ? "" : " " + output) + '</div>' +
         (a.last_output ? output : "") +
         '</div></details>';
-      return [esc(a.code || "-"), a.name ? esc(a.name) : '<span class="muted">(미지정)</span>', esc(a.role_name), esc(a.skill_tags.join(", ")),
+      const who = '<b>' + esc(a.role_name) + '</b>' + (a.name && a.name !== a.role_name ? " · " + esc(a.name) : "") +
+        '<div class="muted">' + esc(a.code || "") + "</div>";
+      return [who, esc(a.skill_tags.join(", ")),
         esc(label(a.status)), esc(label(a.framework)), llmInfo, detail, '<div class="actions">' + actions + "</div>"];
     })) + '<div id="execute-result"></div></section>';
 

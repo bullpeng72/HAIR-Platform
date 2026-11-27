@@ -300,7 +300,7 @@ hair check --db-path hair.db   # + 연동 설정에 등록된 비밀 환경변�
 | 서버 운영(작업 프로세스·시간대) | `HAIR_WORKER_MODE` | `embedded`(기본) 또는 `external` — 아래 "작업 프로세스로 실행 유지" 참고 |
 | | `HAIR_TIMEZONE` | 캘린더 일정을 보여 줄 시간대(IANA 이름, 예: `Asia/Seoul`, 비우면 서버 PC 시간대) |
 | | `HAIR_TLS_CA_FILE` | 사내 인증서(사내 CA·자체 서명) 파일 경로. 메일 수신함(IMAP)·메일 알림(SMTP)은 서버 인증서를 검증한다(2026-11-26부터 — 예전엔 검증하지 않았다). 사내 메일 서버 연결이 "인증서를 확인할 수 없습니다"로 실패할 때만 지정 |
-| 고급 옵션(기본값 권장) | 아래 표의 `HAIR_STAGE_RUNTIME`~`HAIR_ALLOW_LOCAL_CODE_RUN` 12개 | `hair init`은 "고급 옵션을 설정하시겠습니까?"에 y일 때만 묻는다. `hair check`는 값이 정해진 범위(선택지·0/1·숫자) 밖이면 경고 |
+| 고급 옵션(기본값 권장) | 아래 표의 `HAIR_STAGE_RUNTIME`~`HAIR_ALLOW_LOCAL_CODE_RUN` 14개 | `hair init`은 "고급 옵션을 설정하시겠습니까?"에 y일 때만 묻는다. `hair check`는 값이 정해진 범위(선택지·0/1·숫자) 밖이면 경고 |
 
 #### 작업 프로세스로 실행 유지 — `HAIR_WORKER_MODE`
 
@@ -348,6 +348,8 @@ hair check --db-path hair.db      # 작업 프로세스가 떠 있는지까지 �
 | `HAIR_LANGUAGE_QA` | `1`(켬) | `0`이면 한국어 결과물 자동 언어 교정(한자·외국 문자 교정)을 끔 |
 | `HAIR_LEXICON_CHECK` | `1`(켬) | `0`이면 사전에 없는 한국어 낱말 탐지("낱말확인" 배지)를 끔(분석기가 메모리 약 360MB를 씀, `korean` extra 필요) |
 | `HAIR_NUMERIC_CHECK` | `1`(켬) | `0`이면 결과물 퍼센트 수치가 근거 숫자로 재현되는지 검사("수치근거" 배지)를 끔 |
+| `HAIR_BACKUP_DIR` | (비어 있음 = DB 파일 옆 `backups/`) | 백업 저장 폴더 — `hair backup`·자동 백업·`hair reset-data` 전 백업이 여기에 `.tar.gz`로 쌓인다. 디스크 고장에 대비해 다른 디스크·NAS를 권장 |
+| `HAIR_BACKUP_KEEP` | `7` | `hair serve`가 하루 한 번 뜨는 자동 백업을 최근 몇 개 남길지. `0`이면 자동 백업 끔(수동 `hair backup`은 그대로) |
 | `HAIR_ALLOW_LOCAL_CODE_RUN` | `0`(끔) | `1`이면 Docker 샌드박스 대신 로컬에서 코드 테스트(Python·JavaScript)를 실행하고, 브라우저 샌드박스를 켤 수 없는 환경에서도 화면실행 점검을 돌림(Docker가 없는 개발 환경용 — 격리가 없어지므로 운영에는 권장하지 않음) |
 | `HAIR_STAGE_RUNTIME` | `direct` | 파이프라인 단일·순차 릴레이 단계의 Agent 실행 방식. `direct`는 대화와 같은 직접 호출(실측: 품질·판정 동일, 영업 메일 −18% 시간·−29% 호출), `crewai`는 예전 CrewAI 방식. 병행 위임 단계·팀 멘션·Crew 빌더는 늘 CrewAI |
 | `HAIR_STAGE_STALL_SECONDS` | `2700`(45분) | 파이프라인 단계가 이 시간 동안 진행 표시·작성 중 미리보기 없이 멈추면 정리하고(모든 스레드 스택을 활동 기록에 남김) "이어서 실행"할 수 있게 함. `0`이면 끔 |
@@ -379,10 +381,27 @@ hair bootstrap-admin -u admin -p '...'       # --db-path 생략 시 기본 hair.
 
 
 ```bash
-hair reset-data                              # 확인 프롬프트 뜸(되돌릴 수 없음)
+hair reset-data                              # 확인 프롬프트 뜸 — 지우기 전에 백업을 먼저 뜬다(--no-backup으로 생략)
 hair reset-data --yes                        # 확인 없이 바로 실행
 # 보통 바로 이어서: hair bootstrap-admin -u admin -p '...'
 ```
+
+#### 백업·복원
+
+백업 하나는 `.tar.gz` 파일 하나다 — DB(SQLite 온라인 백업이라 서버가 켜져 있어도 일관된 사본, 업로드 문서·평가 리포트 포함)와
+지식 베이스 벡터 폴더. 저장 위치는 `HAIR_BACKUP_DIR`(비우면 DB 파일 옆 `backups/`). `hair serve`가 켜져 있으면 하루에 한 번
+자동으로 뜨고 최근 `HAIR_BACKUP_KEEP`개(기본 7)만 남긴다. 시스템 상태 화면(설정 → 운영 관리)에 마지막 백업 시각이 보이고,
+이틀 넘게 새 백업이 없으면 경고한다. DB 파일을 그냥 복사하면 WAL 모드라 최근 변경이 빠질 수 있으니 이 명령을 쓴다.
+
+```bash
+hair backup                                  # 지금 백업(서버가 켜져 있어도 됨)
+hair backup --dest /mnt/nas/hair-backups     # 다른 디스크·NAS에
+hair backup --list                           # 목록
+hair restore backups/hair-backup-20261127-030000-auto.tar.gz   # 서버(hair serve·hair worker)를 끄고 실행
+```
+
+복원은 지금 데이터를 지우지 않고 `hair.db.before-restore-<시각>`(벡터 폴더도 같은 방식)으로 옮겨 둔 뒤 바꾼다. 백업 파일 안의
+경로(바깥 경로·링크 거부)와 DB 무결성을 확인한 뒤에만 진행한다.
 
 지식 베이스 벡터 색인(`vectordb` extra)을 SQLite 원본에 맞춰 다시 만들 때(색인 폴더를 지웠거나 옮겼을 때 —
 평소에는 검색할 때 자동으로 맞춰진다. 저장된 임베딩을 그대로 써서 임베딩 API를 다시 부르지 않는다):
@@ -514,6 +533,10 @@ hair worker               # 작업 프로세스(같은 폴더·같은 --db-path,
 
 ### 사내망에서 여러 명이 함께 쓰기
 
+> **계정 보호**(2026-11-27): 같은 아이디로 비밀번호를 5번 틀리면 그 아이디를 15분, 한 접속 주소에서 여러 아이디로 20번
+> 틀리면 그 주소를 15분 막는다(막힌 동안은 맞는 비밀번호도 거절, 활동 기록 `login_locked`). 관리자가 비밀번호를 재설정하면
+> 잠금이 풀린다. 사용자는 헤더의 내 계정 이름을 눌러 비밀번호를 바꿀 수 있고, 비밀번호가 바뀌면 다른 곳의 로그인은 끊긴다.
+
 같은 네트워크(사내망)의 팀원 여러 명이 한 서버에 각자 PC 브라우저로
 접속해 쓰려면 아래 순서를 따른다. 서버를 띄우는 PC(관리자 PC) 1대만
 있으면 되고, 나머지는 브라우저만 열면 된다 — 팀원 PC에 따로 설치할
@@ -618,7 +641,7 @@ src/hair_platform/
   requirements_traceability_llm.py # 요구사항 추적성 LLM judge 채점(요구사항 정의 단계 산출물 대비 — 단계 Gate 목록에 넣으면 통과 판정에 참여)
   brief_decompose_llm.py # 업무 분해 LLM 제안(역할·필요 스킬·선행 업무 의존관계)
   bootstrap.py       # 콜드스타트 — 최초 ADMIN 계정 생성(`hair bootstrap-admin`이 호출)
-  cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — init/check/serve/bootstrap-admin/reset-data/eval
+  cli.py             # 통합 CLI(`hair` 콘솔 스크립트) — init/check/serve/worker/bootstrap-admin/reset-data/backup/restore/eval
   env_setup.py       # `.env` 환경변수 정의·파싱·점검(`hair init`/`hair check`가 공유)
   webui.py           # Web UI 셸(단일 페이지 바닐라 JS, GET / 에서 서빙, 30개 탭) — 아래 webui_assets/를 기동 때 조립
   webui_assets/      # 화면 원본(2026-11-26 분리): index.html(셸)·app.css·manual.md(이용 가이드 원문)·js/NN-화면.js 29개(js/ORDER 순서로 이어 붙임)
@@ -675,6 +698,9 @@ src/hair_platform/
   evaluation_config.py # 평가 기준 설정(Gate별 통과 기준·SLA·추론 표지·도구 범위 감점, .aoo/targets.json 호환)
   code_tests.py      # 개발 결과물의 Python·JavaScript(Jest·node:test) 코드+테스트를 네트워크 차단 Docker에서 실제 실행(test_execution)
   browser_check.py   # HTML 결과물을 Chromium(샌드박스·네트워크 차단)으로 열어 스크립트 오류·빈 화면·버튼 오류 기록(browser_execution)
+  login_guard.py     # 로그인 시도 제한(아이디별 5회·접속 주소별 20회 틀리면 15분 잠금)
+  backup.py          # 백업·복원(.tar.gz 한 파일 = DB 온라인 백업 + 지식 벡터, 자동 백업·보관 개수·초기화 전 백업)
+  system_status.py   # 시스템 상태 한눈에(서버·DB·디스크·백업·작업 큐·모델 연결) + /health
   progress.py        # 실행 중 현재 단계·경과 시간 기록(대화·워크스페이스 진행 표시)
   integrations.py    # 개인 API 키(Bearer) + 외부 알림(Slack/Teams 웹훅·메일)
   automation.py      # 파이프라인 정기 실행(매일/평일/매주) 루프(hair serve)

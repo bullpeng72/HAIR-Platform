@@ -1356,6 +1356,42 @@ async function withBusy(btn, busyLabel, fn) {
 // return;`을 `if (!(await confirmModal(msg))) return;`로만 바꾸면
 // 된다(그 함수가 async가 아니었다면 그 함수 자체도 async로 바꿔야
 // 함 — 호출부별로 직접 확인함).
+// 내 비밀번호 바꾸기(2026-11-27, 사용성 평가 13번) — 헤더의 내 계정 이름을 누르면 연다. 바꾸면 다른 브라우저·탭의
+// 로그인은 끊기고 이 탭은 새 토큰으로 이어진다.
+function openMyPasswordDialog() {
+  const overlay = document.createElement("div");
+  overlay.className = "confirm-modal-overlay";
+  overlay.id = "my-password-overlay";
+  overlay.innerHTML =
+    '<form class="confirm-modal-box" id="my-password-form" autocomplete="off">' +
+    '<h3 style="margin-top:0">비밀번호 바꾸기</h3>' +
+    '<p class="muted">바꾸면 다른 브라우저·탭에서 로그인한 곳은 모두 로그아웃됩니다.</p>' +
+    '<label style="display:block">지금 비밀번호<br><input type="password" id="mp-current" required style="width:100%" autocomplete="current-password"></label>' +
+    '<label style="display:block;margin-top:0.5rem">새 비밀번호(8자 이상)<br><input type="password" id="mp-new" required minlength="8" style="width:100%" autocomplete="new-password"></label>' +
+    '<label style="display:block;margin-top:0.5rem">새 비밀번호 확인<br><input type="password" id="mp-new2" required minlength="8" style="width:100%" autocomplete="new-password"></label>' +
+    '<p class="msg error" id="mp-msg" hidden></p>' +
+    '<div class="confirm-modal-actions"><button type="button" class="small" data-mp-cancel>취소</button>' +
+    '<button type="submit" class="small primary">바꾸기</button></div></form>';
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("[data-mp-cancel]").onclick = close;
+  overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
+  const msg = overlay.querySelector("#mp-msg");
+  overlay.querySelector("#my-password-form").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const cur = overlay.querySelector("#mp-current").value;
+    const n1 = overlay.querySelector("#mp-new").value, n2 = overlay.querySelector("#mp-new2").value;
+    if (n1 !== n2) { msg.textContent = "새 비밀번호 두 칸이 다릅니다."; msg.hidden = false; return; }
+    try {
+      const r = await api("POST", "/api/me/password", { current_password: cur, new_password: n1 });
+      try { sessionStorage.setItem("hair_token", r.token); } catch (e) { /* 쿠키 세션으로 이어짐 */ }
+      close();
+      showMsg("global-msg", "비밀번호를 바꿨습니다. 다른 곳의 로그인은 끊겼습니다.", "ok");
+    } catch (e) { msg.textContent = e.message; msg.hidden = false; }
+  };
+  overlay.querySelector("#mp-current").focus();
+}
+
 function confirmModal(message, { danger = false } = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");

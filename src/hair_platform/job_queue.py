@@ -381,12 +381,22 @@ class Worker:
                 bg_cap -= 1
             ids.append((job_id, prio))
         for job_id, prio in ids:
-            t = threading.Thread(target=run_job, args=(self.conn, job_id, self.name), name=f"hair-job-{job_id}", daemon=True)
+            t = threading.Thread(target=self._run_one, args=(job_id,), name=f"hair-job-{job_id}", daemon=True)
             t.hair_priority = prio  # type: ignore[attr-defined]
             t.start()
             self._threads.append(t)
             started += 1
         return started
+
+    def _run_one(self, job_id: int) -> None:
+        """작업 하나를 자기 DB 연결로 실행한다(2026-11-27). 예전엔 작업 스레드들이 작업 프로세스의 연결 하나를 같이 써,
+        한 스레드의 commit이 다른 스레드의 변경까지 확정하거나 실패하는 경쟁이 CI에서 간헐적으로 드러났다(작업이 '실행 중'에
+        남거나 시작이 늦음). SQLite WAL은 여러 연결을 잘 다룬다(읽기는 동시에, 쓰기는 busy_timeout만큼 기다림)."""
+        conn = self._connect(self.db_path)
+        try:
+            run_job(conn, job_id, self.name)
+        finally:
+            conn.close()
 
     def run_forever(self) -> None:
         try:

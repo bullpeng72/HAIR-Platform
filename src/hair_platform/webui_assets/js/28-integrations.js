@@ -403,10 +403,71 @@ async function renderIntegrations(content) {
   }
 }
 
+// 이용 가이드는 절 하나씩(2026-11-27, 사용성 평가 10번) — 56,000자·화면 높이 34,000px 한 페이지라 어디를 읽는지 놓치기
+// 쉬웠다. 절(h2) 목록을 옆에 두고 한 절만 보이며, 이전/다음으로 넘긴다. ❓ 도움말·🔍 메뉴 찾기·본문 안 링크(#id)는 그 절을
+// 열고 해당 위치로 간다(`openManualAt`). "전체 한 페이지로"를 켜면 예전처럼 다 보인다(이 브라우저에 기억).
+let _manualChapter = "toc";
+function _manualAll() { try { return localStorage.getItem("hair_manual_all") === "1"; } catch (e) { return false; } }
+
 async function renderManual(content) {
-  content.innerHTML = '<section class="card manual-card">' +
-    '<div class="md-content manual-content">' + _renderMarkdown(MANUAL_MARKDOWN) + '</div>' +
-    '</section>';
+  content.innerHTML = '<section class="card manual-card"><div class="manual-layout">' +
+    '<nav class="manual-toc" aria-label="이용 가이드 목차"></nav>' +
+    '<div class="manual-main"><div class="md-content manual-content">' + _renderMarkdown(MANUAL_MARKDOWN) + "</div>" +
+    '<div class="manual-pager"></div></div></div></section>';
+  const root = content.querySelector(".manual-content");
+  // h2마다 절로 묶는다(첫 h2 앞의 내용은 첫 절에 넣는다).
+  const chapters = [];
+  let cur = null;
+  [...root.childNodes].forEach(node => {
+    if (node.nodeType === 1 && node.tagName === "H2") {
+      cur = document.createElement("section");
+      cur.className = "manual-chapter";
+      cur.dataset.ch = node.id || ("ch" + chapters.length);
+      chapters.push({ id: cur.dataset.ch, title: node.textContent.trim(), el: cur });
+      root.appendChild(cur);
+    }
+    if (cur) cur.appendChild(node);
+  });
+  const toc = content.querySelector(".manual-toc");
+  toc.innerHTML = chapters.map(c => '<button type="button" class="small" data-manual-ch="' + escAttr(c.id) + '">' + esc(c.title) + "</button>").join("") +
+    '<label class="manual-all"><input type="checkbox" id="manual-all"' + (_manualAll() ? " checked" : "") + "> 전체 한 페이지로</label>";
+  const show = (id, scroll) => {
+    if (!chapters.some(c => c.id === id)) id = chapters[0] && chapters[0].id;
+    _manualChapter = id;
+    const all = content.querySelector("#manual-all").checked;
+    chapters.forEach(c => { c.el.hidden = !all && c.id !== id; });
+    toc.querySelectorAll("[data-manual-ch]").forEach(b => b.classList.toggle("active", b.dataset.manualCh === id));
+    const i = chapters.findIndex(c => c.id === id);
+    const prev = chapters[i - 1], next = chapters[i + 1];
+    content.querySelector(".manual-pager").innerHTML = all ? "" :
+      (prev ? '<button type="button" class="small" data-manual-ch="' + escAttr(prev.id) + '">← ' + esc(prev.title) + "</button>" : "<span></span>") +
+      (next ? '<button type="button" class="small primary" data-manual-ch="' + escAttr(next.id) + '">' + esc(next.title) + " →</button>" : "");
+    if (scroll) content.querySelector(".manual-card").scrollIntoView({ block: "start" });
+  };
+  window._showManualChapter = show;
+  content.addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-manual-ch]");
+    if (b) { show(b.dataset.manualCh, true); return; }
+    const a = ev.target.closest('.manual-content a[href^="#"]');
+    if (a && a.getAttribute("href").length > 1) {
+      const el = root.querySelector(a.getAttribute("href"));
+      if (el) { ev.preventDefault(); _manualReveal(el); }
+    }
+  });
+  content.querySelector("#manual-all").onchange = (ev) => {
+    try { localStorage.setItem("hair_manual_all", ev.target.checked ? "1" : "0"); } catch (e) { /* 기억 못 해도 동작 */ }
+    show(_manualChapter, false);
+  };
+  show(_manualChapter, false);
+}
+
+// 가이드 안의 한 위치를 보이게 — 그 절을 열고 스크롤해 잠깐 강조한다.
+function _manualReveal(el) {
+  const ch = el.closest(".manual-chapter");
+  if (ch && typeof window._showManualChapter === "function") window._showManualChapter(ch.dataset.ch, false);
+  el.scrollIntoView({ block: "start" });
+  el.classList.add("manual-target");
+  setTimeout(() => el.classList.remove("manual-target"), 2500);
 }
 
 boot();

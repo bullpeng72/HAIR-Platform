@@ -19,7 +19,7 @@ function renderFairnessBarSvg(r) {
       '" text-anchor="end" font-size="11" font-weight="bold">' + esc(row.label) + '</text>';
     if (row.rate === null) {
       return nameLabel + '<text x="' + (padding + 4) + '" y="' + (y + barH / 2 + 4) +
-        '" font-size="11" fill="#999">표본 없음</text>';
+        '" font-size="11" fill="#6b6b6b">표본 없음</text>';
     }
     const w = Math.round(row.rate * chartW);
     return nameLabel +
@@ -33,7 +33,7 @@ function renderFairnessBarSvg(r) {
 
   const gapNote = r.rejection_rate_gap === null ? "" :
     '<text x="' + padding + '" y="' + (height - 4) + '" font-size="10" fill="' +
-    (r.rejection_rate_gap > 0.1 ? "#d9534f" : "#888") + '">격차: ' +
+    (r.rejection_rate_gap > 0.1 ? "#c0392b" : "#6b6b6b") + '">격차: ' +
     (r.rejection_rate_gap * 100).toFixed(1) + '%p</text>';
 
   return '<svg width="' + width + '" height="' + height + '" style="max-width:100%">' + bars + gapNote + '</svg>';

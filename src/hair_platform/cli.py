@@ -72,7 +72,10 @@ _EPILOG_TOP = """\
   hair serve --port 9000 --reload         개발 중 코드 변경 자동 반영
   hair serve --no-browser                 브라우저 자동 열기 끄기(서버만 실행)
   hair bootstrap-admin -u admin -p ***    최초 관리자 계정 생성(최초 1회만)
-  hair reset-data                         운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 '초기화 시 보호' 팀만 유지)
+  hair reset-data                         운영 데이터 전부 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 '초기화 시 보호' 팀만 유지 — 지우기 전 자동 백업)
+  hair backup                             지금 데이터 백업(DB+지식 벡터, .tar.gz 한 파일 — 서버가 켜져 있어도 됨)
+  hair backup --list                      백업 목록
+  hair restore backups/hair-backup-….tar.gz   백업으로 되돌리기(서버를 끄고 실행 — 지금 데이터는 옆에 남겨 둠)
   hair eval                               Gate A/B/D/E/G 측정 1회 + HTML 리포트(results/)
 
 서브커맨드별 자세한 옵션: hair <subcommand> --help
@@ -93,6 +96,8 @@ HAIR-Platform 통합 CLI — 사람과 AI Agent를 하나의 조직도에서 관
   worker            작업 프로세스 실행(HAIR_WORKER_MODE=external — 웹 서버를 재시작해도 AI 실행 유지)
   bootstrap-admin   최초 ADMIN 계정 생성(콜드스타트 전용)
   reset-data        운영 데이터 초기화(Agent/Tool/Skill/파이프라인은 유지, 팀은 '초기화 시 보호' 팀만 유지)
+  backup            데이터 백업(.tar.gz 한 파일) · --list로 목록
+  restore           백업으로 되돌리기(서버를 끄고 실행)
   eval              Gate A/B/D/E/G 측정 1회 + HTML 리포트 생성(results/)
   reindex-vectors   지식 베이스 벡터 색인 다시 맞추기(ChromaDB)
 
@@ -353,7 +358,49 @@ def _build_parser() -> argparse.ArgumentParser:
     p_reset.add_argument(
         "--yes", action="store_true", help="확인 프롬프트 없이 바로 실행"
     )
+    p_reset.add_argument(
+        "--no-backup", action="store_true",
+        help="지우기 전 자동 백업을 건너뜀(기본은 HAIR_BACKUP_DIR 또는 DB 옆 backups/에 백업을 먼저 뜬다)",
+    )
     p_reset.set_defaults(func=_cmd_reset_data)
+
+    # 백업·복원(2026-11-27, 개선 제안 5-1 — `backup.py`)
+    p_backup = sub.add_parser(
+        "backup",
+        help="데이터 백업(DB+지식 벡터를 .tar.gz 한 파일로 — 서버가 켜져 있어도 일관된 사본)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "DB(SQLite 온라인 백업 — 쓰는 중이어도 일관된 사본)와 지식 베이스 벡터 폴더를 .tar.gz 하나로 저장한다.\n"
+            "업로드 문서·평가 리포트는 DB 안에 있어 함께 들어간다.\n\n"
+            "저장 위치: --dest, 없으면 HAIR_BACKUP_DIR, 없으면 DB 파일 옆 backups/\n"
+            "자동 백업: hair serve가 켜져 있으면 하루 한 번 뜨고 최근 HAIR_BACKUP_KEEP개(기본 7)만 남긴다(0이면 끔).\n\n"
+            "예시:\n"
+            "  hair backup\n"
+            "  hair backup --dest /mnt/nas/hair-backups\n"
+            "  hair backup --list\n"
+        ),
+    )
+    p_backup.add_argument("-d", "--db-path", default="hair.db", help="SQLite DB 파일 경로(기본: hair.db)")
+    p_backup.add_argument("--dest", help="저장 폴더(기본: HAIR_BACKUP_DIR 또는 DB 옆 backups/)")
+    p_backup.add_argument("--list", action="store_true", help="백업 목록만 보기")
+    p_backup.set_defaults(func=_cmd_backup)
+
+    p_restore = sub.add_parser(
+        "restore",
+        help="백업으로 되돌리기(서버를 끄고 실행 — 지금 데이터는 .before-restore-<시각>으로 남겨 둠)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "hair backup으로 뜬 .tar.gz로 DB와 지식 벡터를 되돌린다. hair serve·hair worker를 먼저 끄세요.\n"
+            "지금 데이터는 지우지 않고 '<db>.before-restore-<시각>'(벡터 폴더도 같은 방식)으로 옮겨 둔다.\n"
+            "백업 파일 안의 경로를 검사하고, 꺼낸 DB의 무결성을 확인한 뒤에만 바꾼다.\n\n"
+            "예시:\n"
+            "  hair restore backups/hair-backup-20261127-030000-auto.tar.gz\n"
+        ),
+    )
+    p_restore.add_argument("archive", help="백업 파일(.tar.gz)")
+    p_restore.add_argument("-d", "--db-path", default="hair.db", help="되돌릴 SQLite DB 파일 경로(기본: hair.db)")
+    p_restore.add_argument("--yes", action="store_true", help="확인 프롬프트 없이 바로 실행")
+    p_restore.set_defaults(func=_cmd_restore)
 
     p_eval = sub.add_parser(
         "eval",
@@ -566,6 +613,17 @@ def _cmd_reset_data(args: argparse.Namespace) -> int:
 
     conn = db.get_connection(args.db_path)
     db.init_schema(conn)  # 기존 DB를 재사용할 때 스키마/레퍼런스 시드를 먼저 맞춘다.
+    if not getattr(args, "no_backup", False):
+        # 되돌릴 수 없는 초기화 전에 사본부터(2026-11-27, 개선 제안 5-1).
+        from hair_platform import backup
+
+        try:
+            info = backup.create_backup(conn, reason="before-reset")
+        except (backup.BackupError, OSError) as exc:
+            conn.close()
+            print(f"초기화 전 백업에 실패해 멈췄습니다: {exc}\n백업 없이 진행하려면 --no-backup을 붙이세요.")
+            return 1
+        print(f"초기화 전 백업: {info['path']} (되돌리기: hair restore {info['path']} --db-path {args.db_path})")
     counts = data_admin.reset_to_factory_state(conn)
     conn.close()
 
@@ -577,6 +635,73 @@ def _cmd_reset_data(args: argparse.Namespace) -> int:
     print(
         f"다음 단계(필요하면): hair bootstrap-admin -u <계정명> -p <비밀번호> --db-path {args.db_path}"
     )
+    return 0
+
+
+def _fmt_size(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f}B" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{n:.1f}GB"
+
+
+def _cmd_backup(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from hair_platform import backup, db
+
+    dest = Path(args.dest).expanduser() if args.dest else backup.backup_dir(args.db_path)
+    if args.list:
+        items = backup.list_backups(dest)
+        if not items:
+            print(f"백업이 없습니다({dest}).")
+            return 0
+        print(f"백업 {len(items)}개 — {dest}")
+        for b in items:
+            print(f"  {b['created_at']}  {_fmt_size(b['size']):>8}  {b['name']}")
+        return 0
+    if not os.path.exists(args.db_path):
+        print(f"DB 파일이 없습니다: {args.db_path}")
+        return 1
+    conn = db.get_connection(args.db_path)
+    try:
+        info = backup.create_backup(conn, dest=dest)
+    except (backup.BackupError, OSError) as exc:
+        print(f"백업 실패: {exc}")
+        return 1
+    finally:
+        conn.close()
+    print(f"백업 완료: {info['path']} ({_fmt_size(info['size'])}" + (", 지식 벡터 포함" if info["vectors"] else "") + ")")
+    print(f"되돌리기(서버를 끄고): hair restore {info['path']} --db-path {args.db_path}")
+    return 0
+
+
+def _cmd_restore(args: argparse.Namespace) -> int:
+    from hair_platform import backup
+
+    try:
+        info = backup.inspect(args.archive)
+    except backup.BackupError as exc:
+        print(str(exc))
+        return 1
+    print(f"백업: {args.archive}\n  만든 시각 {info.get('created_at')} · HAIR {info.get('hair_version')} · 이유 {info.get('reason')}"
+          + (" · 지식 벡터 포함" if info.get("vectors") else ""))
+    if not args.yes:
+        answer = input(f"'{args.db_path}'를 이 백업으로 바꿉니다. hair serve·hair worker를 껐나요? 지금 데이터는 "
+                       "'.before-restore-<시각>'으로 옆에 남겨 둡니다. 계속할까요? [y/N] ")
+        if answer.strip().lower() != "y":
+            print("취소했습니다.")
+            return 1
+    try:
+        result = backup.restore_backup(args.archive, args.db_path)
+    except (backup.BackupError, OSError) as exc:
+        print(f"복원 실패: {exc}")
+        return 1
+    print(f"복원 완료: {result['restored']}")
+    for m in result["moved_aside"]:
+        print(f"  이전 데이터 보관: {m}")
+    print("서버를 다시 켜세요: hair serve")
     return 0
 
 

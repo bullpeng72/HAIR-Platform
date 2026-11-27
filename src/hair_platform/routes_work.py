@@ -313,9 +313,19 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         rows = conn.execute(
             "SELECT * FROM tasks WHERE brief_id = ? ORDER BY id", (brief_id,)
         ).fetchall()
+        # 배정 현황(2026-11-27, 사용성 평가 8번 — 업무 요청 상세의 단계 표시·"다음에 할 일"): 확정·결재 대기(requested) 수.
+        assign = {}
+        for r in conn.execute(
+            "SELECT task_id, status, COUNT(*) AS n FROM assignments WHERE task_id IN "
+            "(SELECT id FROM tasks WHERE brief_id = ?) AND status != 'cancelled' GROUP BY task_id, status",
+            (brief_id,),
+        ):
+            assign.setdefault(r["task_id"], {})[r["status"]] = r["n"]
         return [
             {
                 "id": row["id"],
+                "assigned_count": assign.get(row["id"], {}).get("confirmed", 0),
+                "assignment_pending_count": assign.get(row["id"], {}).get("requested", 0),  # 배정 결재 대기
                 "role_name": row["role_name"],
                 "required_skills": json.loads(row["required_skills"]),
                 "headcount": row["headcount"],
