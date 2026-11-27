@@ -15,6 +15,7 @@ import os
 import smtplib
 import ssl
 import time
+import uuid
 from email.message import EmailMessage
 
 import pytest
@@ -220,7 +221,8 @@ def test_inbound_mail_trigger_and_reply_action_on_real_mail_server(conn, monkeyp
     conn.execute("INSERT INTO agent_pool (role_name, skill_tags, status) VALUES ('상담원', '[]', 'active')")
     tid = pr.create_pipeline_template(conn, admin, "문의 회신")
     sid = pr.add_stage(conn, admin, tid, "회신 초안", "single", [("상담원", "")], requires_human_approval=True)
-    tag = str(int(time.time()))
+    # 초 단위 숫자는 바로 앞 테스트의 메일 제목("결재 대기 <초>")과 겹칠 수 있다(CI 실측: 이미 와 있던 메일 2건) — 고유 태그
+    tag = "inb" + uuid.uuid4().hex[:12]
     _send_test_mail(f"이전 문의 {tag}", "이미 와 있던 메일")
     with knowledge_access.as_viewer(admin):  # 이미 와 있던 메일이 검색될 때까지 기다린 뒤 트리거를 만든다
         assert _wait_for(lambda: mail_inbox.search(conn, "it_inbound", query=tag, days=1))
