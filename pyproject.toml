@@ -57,6 +57,11 @@ dependencies = [
     # provider 토크나이저 대신 cl100k_base 근사치(+Ollama 보정 배수)로
     # "한도를 넘기기 전에 미리 잘라내는" 안전장치 용도.
     "tiktoken>=0.7.0",
+    # 파일 업로드 라우트(대화 첨부·지식 자료실·워크스페이스 참고자료 — `UploadFile`/`Form`)는 FastAPI가 기동할 때
+    # python-multipart를 요구한다(2026-11-27 깨끗한 venv에 `pip install hair-platform`만 해서 확인 — 없으면 `hair serve`가
+    # "Form data requires python-multipart"로 시작조차 못 했다). 개발 환경에는 mcp·arize-phoenix의 전이 의존성으로 깔려
+    # 있어 테스트가 이 누락을 잡지 못했다.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
