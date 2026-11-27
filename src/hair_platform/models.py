@@ -250,6 +250,9 @@ class TaskItem(BaseModel):
     required_skills: list[str] = []
     headcount: int = 1
     depends_on_index: int | None = None
+    # 기한·예상 시간(2026-11-27, Resource Management Phase B) — 선택.
+    due_date: str | None = None
+    estimate_hours: float | None = None
 
 
 class TaskDecomposition(BaseModel):

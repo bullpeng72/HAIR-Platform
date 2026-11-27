@@ -155,8 +155,22 @@ def bottlenecks(conn: sqlite3.Connection) -> list[dict]:
         GROUP BY t.id
         HAVING COUNT(*) >= 2
         """).fetchall()
+    # 기한 지남(2026-11-27, Resource Management Phase B — 이제 할 일에 기한이 있다).
+    try:
+        overdue = conn.execute(
+            "SELECT id, role_name, status, priority, due_date FROM tasks "
+            "WHERE status != 'done' AND due_date IS NOT NULL AND due_date < date('now', 'localtime')").fetchall()
+    except sqlite3.OperationalError:
+        overdue = []
     result: dict[int, dict] = {}
+    for row in overdue:
+        entry = dict(row)
+        entry["reasons"] = ["overdue"]
+        result[row["id"]] = entry
     for row in blocked:
+        if row["id"] in result:
+            result[row["id"]]["reasons"].append("blocked")
+            continue
         entry = dict(row)
         entry["reasons"] = ["blocked"]
         result[row["id"]] = entry

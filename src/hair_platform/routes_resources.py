@@ -275,6 +275,22 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.put("/api/human-pool/{human_id}/weekly-hours")
+    def put_human_weekly_hours(human_id: int, payload: dict = Body(...),
+                               user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """주당 일할 수 있는 시간 — `{"weekly_hours": 20}`, null이면 기본 40(자원 운용 활용도 계산, Phase B)."""
+        from hair_platform import resource_planning
+
+        v = payload.get("weekly_hours")
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int | float)):
+            raise HTTPException(status_code=400, detail="weekly_hours_must_be_number")
+        try:
+            return resource_planning.set_weekly_hours(conn, user["id"], human_id, v)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="사람을 찾을 수 없습니다") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/resource-absences")
     def list_resource_absences(human_id: int | None = None, include_past: bool = False,
                                user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER))):

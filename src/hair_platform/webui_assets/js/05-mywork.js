@@ -15,8 +15,8 @@ async function renderMyWork(content) {
     // 결과물" 시각만 있어 지금 상태가 뭔지, 최종 결과물(승인)이 나왔는지
     // 업무를 직접 열어보기 전엔 알 수 없었다. "상태"·"최종 결과물"
     // 열을 추가한다.
-    table(["할 일 ID", "역할", "유형", "관계", "상태", "최종 결과물", "결과물 수", "최근 갱신", "동작"], rows.map(r => [
-      r.task_id, esc(r.role_name), esc(label(r.resource_type)),
+    table(["할 일 ID", "역할", "기한", "유형", "관계", "상태", "최종 결과물", "결과물 수", "최근 갱신", "동작"], rows.map(r => [
+      r.task_id, esc(r.role_name), _dueCell(r.due_date, r.estimate_hours), esc(label(r.resource_type)),
       // 2026-10-07 — "팀 Crew 그룹" 배정만 있고 개별 사람/Agent 배정이
       // 없는 task도 "내 업무"에 뜨게 된 뒤(list_my_work() 수정) 추가.
       ({
@@ -1100,6 +1100,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   detail.innerHTML =
     '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
     statusPriorityBar +
+    '<div id="ws-schedule-slot"></div>' +
     budgetCardHtml +
     humanJudgmentCardHtml +
     finalResultCard +
@@ -1481,6 +1482,8 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       renderCollabWorkspace(taskId, containerId);
     } catch (e) { showMsg("global-msg", e.message, "error"); }
   });
+
+  _renderTaskSchedule(document.getElementById("ws-schedule-slot"), taskId);
 
   document.getElementById("ws-priority-select").addEventListener("change", async (ev) => {
     try {
@@ -2084,5 +2087,39 @@ async function _renderMyAbsences(slot) {
     try { await api("DELETE", "/api/resource-absences/" + b.dataset.myabsDel); _renderMyAbsences(slot); }
     catch (e) { slot.querySelector("#myabs-msg").textContent = e.message || String(e); }
   });
+}
+
+/* ---------- 기한·예상 시간·인원(2026-11-27, Resource Management Phase B) ---------- */
+function _dueCell(due, est) {
+  if (!due) return '<span class="muted">-</span>';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const d = new Date(due + "T00:00:00");
+  const left = Math.round((d - today) / 86400000);
+  const badge = left < 0 ? ' <span class="gate-badge gate-warn">' + (-left) + "일 지남</span>"
+    : left <= 3 ? ' <span class="gate-badge gate-info">' + (left === 0 ? "오늘" : left + "일 남음") + "</span>" : "";
+  return esc(due) + badge + (est ? '<div class="muted pm-note">예상 ' + est + "시간</div>" : "");
+}
+
+async function _renderTaskSchedule(slot, taskId) {
+  if (!slot) return;
+  let s;
+  try { s = await api("GET", "/api/tasks/" + taskId + "/schedule"); } catch (_) { return; }
+  const canEdit = ME.role !== "viewer";
+  slot.innerHTML = '<div class="inline ws-schedule" style="flex-wrap:wrap;margin:0 0 0.75rem">' +
+    '<label>기한 <input type="date" id="ws-due" value="' + escAttr(s.due_date || "") + '"' + (canEdit ? "" : " disabled") + "></label>" +
+    '<label>예상 시간 <input type="number" id="ws-est" min="0.5" step="0.5" style="width:5rem" value="' + (s.estimate_hours || "") + '"' + (canEdit ? "" : " disabled") + "></label>" +
+    (canEdit ? '<button class="small" id="ws-sched-save">저장</button>' : "") +
+    (s.overdue ? ' <span class="gate-badge gate-warn">기한 ' + (-s.days_left) + "일 지남</span>" : "") +
+    ' <span class="muted">인원 ' + s.assigned + "/" + s.headcount + (s.short ? ' — <b>' + s.short + "명 부족</b>" : "") + "</span>" +
+    ' <span class="muted" id="ws-sched-msg"></span></div>';
+  const btn = slot.querySelector("#ws-sched-save");
+  if (btn) btn.onclick = async () => {
+    const est = slot.querySelector("#ws-est").value.trim();
+    try {
+      await api("PATCH", "/api/tasks/" + taskId + "/schedule", { due_date: slot.querySelector("#ws-due").value || null,
+        estimate_hours: est === "" ? null : Number(est) });
+      _renderTaskSchedule(slot, taskId);
+    } catch (e) { slot.querySelector("#ws-sched-msg").textContent = e.message || String(e); }
+  };
 }
 

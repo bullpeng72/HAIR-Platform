@@ -356,7 +356,7 @@ def list_my_work(
     rows = conn.execute(
         """
         SELECT a.id AS assignment_id, a.task_id, a.resource_type, a.resource_id,
-               t.brief_id, t.role_name,
+               t.brief_id, t.role_name, t.due_date, t.estimate_hours,
                CASE
                    WHEN a.resource_type = 'human' THEN 'assignee'
                    WHEN a.resource_type = 'agent' THEN 'requester'

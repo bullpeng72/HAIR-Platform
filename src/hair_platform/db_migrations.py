@@ -971,6 +971,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "human_pool", "max_concurrent_tasks", "INTEGER")
     from hair_platform import resource_capacity
     resource_capacity.ensure_schema(conn)
+    # 기한·예상 시간·주당 시간(2026-11-27, Resource Management Phase B — `resource_planning`).
+    from hair_platform import resource_planning
+    resource_planning.ensure_schema(conn)
     inbound.ensure_schema(conn)
     stage_actions.ensure_schema(conn)
     _sync_dev_crew_pipeline_integration(conn)

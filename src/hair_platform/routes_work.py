@@ -11,6 +11,7 @@ from functools import partial
 
 from fastapi import (
     BackgroundTasks,
+    Body,
     Depends,
     FastAPI,
     File,
@@ -244,15 +245,27 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             raise HTTPException(status_code=404, detail="브리프를 찾을 수 없습니다")
 
         created = []
+        from datetime import date as _date
+
         for item in payload.tasks:
+            due = None
+            if item.due_date:
+                try:
+                    due = _date.fromisoformat(item.due_date).isoformat()
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="due_date는 YYYY-MM-DD 형식입니다") from None
+            if item.estimate_hours is not None and not 0 < item.estimate_hours <= 2000:
+                raise HTTPException(status_code=400, detail="estimate_hours는 0보다 크고 2000 이하입니다")
             cur = conn.execute(
-                "INSERT INTO tasks (brief_id, role_name, required_skills, headcount) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO tasks (brief_id, role_name, required_skills, headcount, due_date, estimate_hours) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     brief_id,
                     item.role_name,
                     json.dumps(item.required_skills, ensure_ascii=False),
                     item.headcount,
+                    due,
+                    item.estimate_hours,
                 ),
             )
             created.append({"id": cur.lastrowid, "role_name": item.role_name})
@@ -776,6 +789,46 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 status_code=403,
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
             ) from None
+
+    # 기한·예상 시간·인원(2026-11-27, Resource Management Phase B — `resource_planning`).
+    @app.get("/api/tasks/{task_id}/schedule")
+    def get_task_schedule(task_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        from hair_platform import resource_planning
+
+        if (user["role"] not in (Role.ADMIN.value, Role.MANAGER.value)
+                and deliverables.task_participant_relationship(conn, task_id, user["id"]) is None):
+            raise HTTPException(status_code=403, detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다")
+        try:
+            return resource_planning.task_schedule_info(conn, task_id)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다") from None
+
+    @app.patch("/api/tasks/{task_id}/schedule")
+    def update_task_schedule(task_id: int, payload: dict = Body(...), user: sqlite3.Row = Depends(get_current_user)):
+        """`{"due_date": "2026-12-05" | null, "estimate_hours": 6 | null}` — 참가자·admin·manager."""
+        from hair_platform import resource_planning
+
+        if user["role"] == Role.VIEWER.value or (
+                user["role"] not in (Role.ADMIN.value, Role.MANAGER.value)
+                and deliverables.task_participant_relationship(conn, task_id, user["id"]) is None):
+            raise HTTPException(status_code=403, detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다")
+        est = payload.get("estimate_hours")
+        if est is not None and (isinstance(est, bool) or not isinstance(est, int | float)):
+            raise HTTPException(status_code=400, detail="estimate_hours_must_be_number")
+        try:
+            resource_planning.set_task_schedule(conn, user["id"], task_id, payload.get("due_date"), est)
+            return resource_planning.task_schedule_info(conn, task_id)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="할 일을 찾을 수 없습니다") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/resource-planning")
+    def get_resource_planning(user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """자원 운용 — 앞으로 4주 사람별 배분 시간/용량, 지연·임박, 인원 부족, 역할별 수요와 공급."""
+        from hair_platform import resource_planning
+
+        return resource_planning.overview(conn)
 
     @app.patch("/api/tasks/{task_id}/retry-budget")
     def update_task_retry_budget_endpoint(

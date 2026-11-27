@@ -191,6 +191,8 @@ async function _renderResourceLoad(slot) {
     r.absent_until ? '<span class="gate-badge gate-warn">부재 ~' + esc(r.absent_until) + "</span>" : (r.absent_from ? esc(r.absent_from) + "부터 부재" : '<span class="muted">-</span>'),
     '<span class="pair"><input type="number" min="1" max="50" id="rm-cap-' + r.id + '" placeholder="' + load.default_capacity + '" value="' + (r.capacity !== load.default_capacity ? r.capacity : "") + '" style="width:4.5rem" aria-label="동시 용량">' +
       '<button class="small" data-rm-cap="' + r.id + '">용량 저장</button></span> ' +
+      '<span class="pair"><input type="number" min="1" max="80" id="rm-wh-' + r.id + '" placeholder="40" style="width:4.5rem" aria-label="주당 시간">' +
+      '<button class="small" data-rm-wh="' + r.id + '">주당 시간</button></span> ' +
       '<span class="pair"><input type="date" id="rm-from-' + r.id + '" value="' + today + '" aria-label="부재 시작"><input type="date" id="rm-to-' + r.id + '" value="' + today + '" aria-label="부재 끝">' +
       '<input id="rm-why-' + r.id + '" placeholder="사유" maxlength="200" style="width:6rem"><button class="small" data-rm-abs="' + r.id + '">부재 추가</button></span>',
   ]);
@@ -222,6 +224,11 @@ async function _renderResourceLoad(slot) {
     try { await api("PUT", "/api/human-pool/" + b.dataset.rmCap + "/capacity", { max_concurrent_tasks: raw === "" ? null : Number(raw) }); _renderResourceLoad(slot); }
     catch (e) { msg("저장하지 못했습니다: " + (e.message || e)); }
   });
+  slot.querySelectorAll("[data-rm-wh]").forEach(b => b.onclick = async () => {
+    const raw = slot.querySelector("#rm-wh-" + b.dataset.rmWh).value.trim();
+    try { await api("PUT", "/api/human-pool/" + b.dataset.rmWh + "/weekly-hours", { weekly_hours: raw === "" ? null : Number(raw) }); msg("주당 시간을 저장했습니다(자원 운용 화면의 활용도에 반영)."); }
+    catch (e) { msg("저장하지 못했습니다: " + (e.message || e)); }
+  });
   slot.querySelectorAll("[data-rm-abs]").forEach(b => b.onclick = async () => {
     const id = b.dataset.rmAbs;
     try {
@@ -234,5 +241,63 @@ async function _renderResourceLoad(slot) {
     try { await api("DELETE", "/api/resource-absences/" + b.dataset.rmDel); _renderResourceLoad(slot); }
     catch (e) { msg("지우지 못했습니다: " + (e.message || e)); }
   });
+}
+
+/* ---------- 자원 운용(2026-11-27, Resource Management Phase B — 7번 활용도, 2번 기한·인원·수요) ---------- */
+async function renderResourcePlanning(content) {
+  const d = await api("GET", "/api/resource-planning");
+  const u = d.utilization, s = u.summary;
+  const pct = v => v === null || v === undefined ? "—" : Math.round(v * 100) + "%";
+  const heat = c => {
+    if (c.ratio === null) return '<td class="rp-cell muted">—</td>';
+    const r = c.ratio;
+    const cls = r > 1 ? "rp-over" : r >= u.thresholds.high ? "rp-high" : r >= u.thresholds.bench ? "rp-mid" : "rp-low";
+    return '<td class="rp-cell ' + cls + '" title="배분 ' + c.allocated_hours + "시간 / 용량 " + c.capacity_hours + "시간 · 할 일 " + c.tasks + "건" +
+      (c.absent_days ? " · 부재 " + c.absent_days + "일" : "") + '">' + Math.round(r * 100) + "%" +
+      '<div class="rp-sub">' + c.allocated_hours + "/" + c.capacity_hours + "h" + (c.absent_days ? " · 부재" + c.absent_days : "") + "</div></td>";
+  };
+  const weekLabel = w => w.slice(5).replace("-", "/") + "주";
+  const heatRows = u.people.map(p => "<tr><th scope=\"row\">" + esc(p.name) + '<div class="muted pm-note">' + esc(p.role) + " · 주 " + p.weekly_hours + "h</div></th>" +
+    p.cells.map(heat).join("") +
+    "<td>" + (p.overdue_tasks ? '<span class="gate-badge gate-warn">지연 ' + p.overdue_tasks + "</span> " : "") +
+    (p.unscheduled_tasks ? '<span class="muted">기한·추정 없음 ' + p.unscheduled_tasks + "건</span>" : "") + "</td></tr>").join("");
+  const dl = (list, overdue) => table(["할 일", "역할", "기한", "상태", "맡은 사람·Agent", "예상"], list.map(t => [
+    "#" + t.id, esc(t.role_name), esc(t.due_date) + ' <span class="gate-badge ' + (overdue ? "gate-warn" : "gate-info") + '">' +
+      (overdue ? (-t.days_left) + "일 지남" : t.days_left === 0 ? "오늘" : t.days_left + "일 남음") + "</span>",
+    esc(label(t.status)), t.assignees ? esc(t.assignees) : '<span class="gate-badge gate-warn">배정 없음</span>', t.estimate_hours ? t.estimate_hours + "h" : "-"]),
+    { empty: overdue ? "기한이 지난 할 일이 없습니다." : "7일 안에 기한인 할 일이 없습니다." });
+  content.innerHTML = '<section class="card"><h2>자원 운용</h2>' +
+    helpBox('<ul class="muted help-list">' +
+      "<li><b>활용도</b> = 앞으로 4주, 사람마다 주별로 배분된 시간 ÷ 그 주 용량. 끝나지 않은 할 일의 <b>예상 시간</b>을 배정된 사람 수로 나눠 오늘부터 <b>기한</b>까지 평일에 고르게 놓습니다. 기한이 지난 일은 이번 주에 모읍니다. 용량은 <b>주당 시간</b>(사람 인력 관리, 기본 40)에서 부재일만큼 뺍니다.</li>" +
+      "<li>기한이나 예상 시간이 없는 할 일은 달력에 놓지 않고 <b>기한·추정 없음</b>으로 따로 셉니다 — 협업 워크스페이스에서 기한·예상 시간을 넣으면 반영됩니다.</li>" +
+      "<li>색: 초록 30% 미만(여유) · 파랑 30~85% · 주황 85% 이상 · 빨강 100% 초과. 칸에 마우스를 올리면 시간·할 일 수가 보입니다.</li>" +
+      "<li><b>역할별 수요</b>의 '최근 4주 시작'은 처음 배정 요청·파이프라인 실행이 4주 안인 할 일 수(할 일에는 만든 시각이 없어 시작 기준), '정기 실행 예정'은 앞으로 4주 정기 실행이 만들 할 일 수입니다.</li>" +
+      "</ul>") +
+    '<div class="pm-tiles">' +
+      _rpTile("평균 활용도(4주)", pct(s.avg_utilization), "사람 " + s.people + "명") +
+      _rpTile("용량 초과", String(s.over_allocated_cells), "사람·주 칸 수(100% 초과)") +
+      _rpTile("지연", String(d.deadlines.overdue.length), "기한 지난 할 일") +
+      _rpTile("7일 안 기한", String(d.deadlines.due_soon.length), "임박한 할 일") +
+      _rpTile("인원 부족", String(d.headcount_gaps.length), "필요 인원보다 배정이 적은 할 일") +
+      _rpTile("여유 인력", String(s.bench.length), s.bench.length ? esc(s.bench.slice(0, 4).join(", ")) + (s.bench.length > 4 ? " 외" : "") : "앞으로 2주 30% 미만") +
+    "</div>" +
+    "<h3>사람별 활용도(앞으로 4주)</h3>" +
+    '<div class="table-wrap rp-wrap"><table class="rp-heat"><thead><tr><th>사람</th>' + u.weeks.map(w => "<th>" + weekLabel(w) + "</th>").join("") +
+      "<th>참고</th></tr></thead><tbody>" + (heatRows || '<tr><td colspan="6" class="muted">등록된 사람이 없습니다.</td></tr>') + "</tbody></table></div>" +
+    "<h3>기한 지남</h3>" + '<div class="pm-wide-sm">' + dl(d.deadlines.overdue, true) + "</div>" +
+    "<h3>7일 안 기한</h3>" + '<div class="pm-wide-sm">' + dl(d.deadlines.due_soon, false) + "</div>" +
+    "<h3>인원 부족</h3>" + '<div class="pm-wide-sm">' + table(["할 일", "역할", "필요", "확정", "요청 중", "부족", "기한"], d.headcount_gaps.map(g => [
+      "#" + g.id, esc(g.role_name), String(g.headcount || 1), String(g.assigned), String(g.requested), "<b>" + g.short + "</b>", g.due_date ? esc(g.due_date) : "-"]),
+      { empty: "인원이 모자란 할 일이 없습니다." }) + "</div>" +
+    "<h3>역할별 수요와 공급</h3>" + '<div class="pm-wide-sm">' + table(["역할", "열린 할 일", "배정 안 됨", "예상 시간 합", "최근 4주 시작(주당)", "정기 실행 예정(4주)", "가용 사람", "Agent"], d.demand.map(r => [
+      esc(r.role) + (r.no_supply ? ' <span class="gate-badge gate-warn">맡을 자원 없음</span>' : ""), String(r.open), r.unassigned ? "<b>" + r.unassigned + "</b>" : "0",
+      r.open_hours ? r.open_hours + "h" : "-", r.recent_per_week ? r.recent_per_week.toFixed(1) : "0", String(r.scheduled_next), String(r.people), String(r.agents)]),
+      { empty: "열린 할 일이 없습니다." }) + "</div>" +
+    "</section>";
+}
+
+function _rpTile(label, value, sub) {
+  return '<div class="pm-tile"><div class="pm-tile-label">' + esc(label) + '</div><div class="pm-tile-value">' + value +
+    '</div><div class="pm-tile-sub muted">' + sub + "</div></div>";
 }
 

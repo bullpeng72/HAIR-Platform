@@ -133,7 +133,7 @@ def test_agent_auto_fit_combines_gate_and_human_approvals(client_and_conn):
     aid = conn.execute("INSERT INTO agent_pool (role_name, skill_tags, status) VALUES ('작성자', '[]', 'active')").lastrowid
     task = _task(conn, role="작성자")
     member = conn.execute("SELECT id FROM users WHERE username = 'member1'").fetchone()[0]
-    for i, status in enumerate(("approved", "approved", "rejected", "approved")):
+    for status in ("approved", "approved", "rejected", "approved"):
         d = conn.execute("INSERT INTO deliverables (task_id, author_type, author_id, content, status) VALUES (?, 'agent', ?, 'x', ?)",
                          (task, aid, status)).lastrowid
         conn.execute("INSERT INTO agent_evaluations (deliverable_id, gate_scores) VALUES (?, ?)",

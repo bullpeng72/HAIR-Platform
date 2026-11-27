@@ -644,6 +644,8 @@ const TABS = [
   { id: "dashboard", label: "대시보드", group: "admin", roles: ["admin", "manager"], render: renderDashboard },
   // 프로세스 성과(2026-11-27, AI Native 분석 1단계) — 파이프라인별 리드타임 분해·한 번에 완료·자동 처리율·병목 단계.
   { id: "processmetrics", label: "프로세스 성과", group: "admin", roles: ["admin", "manager"], render: renderProcessMetrics },
+  // 자원 운용(2026-11-27, Resource Management Phase B) — 사람별 4주 활용도·기한·인원 부족·역할별 수요.
+  { id: "resourceplanning", label: "자원 운용", group: "admin", roles: ["admin", "manager"], render: renderResourcePlanning },
   { id: "cost", label: "비용", group: "admin", roles: ["admin", "manager"], render: renderCost },
   { id: "fairness", label: "공정성 지표", group: "admin", roles: ["admin", "manager"], render: renderFairness },
   { id: "audit", label: "활동 기록", group: "admin", roles: ["admin", "manager"], render: renderAudit },
@@ -760,7 +762,7 @@ const SETTINGS_GROUPS = [
 // 퍼지지 않게 두 줄 유지). 이용 가이드는 헤더의 ❓ 도움말·🔍 메뉴 찾기로, 연동 설정(개인 API 키 포함)은 헤더 "내 설정"으로 옮겼다.
 const NAV_WORK = ["home", "conversations", "briefs", "mywork", "board"];
 const NAV_REVIEW = ["inbox", "approvals", "gallery"];
-const NAV_STATUS = ["dashboard", "processmetrics", "performance", "cost", "fairness", "audit", "orgchart", "search"];
+const NAV_STATUS = ["dashboard", "processmetrics", "resourceplanning", "performance", "cost", "fairness", "audit", "orgchart", "search"];
 
 function buildNav() {
   const nav = document.getElementById("tabs");
