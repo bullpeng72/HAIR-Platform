@@ -431,7 +431,10 @@ async function renderManual(content) {
   const toc = content.querySelector(".manual-toc");
   // 목차는 짧은 제목만(2026-11-27 사용자 요청 — 왼쪽 목차가 너무 넓어 본문 폭이 좁았다). "—" 뒤 설명·괄호를 떼고 전체 제목은 툴팁으로.
   const shortTitle = t => t.split(" — ")[0].replace(/\s*\([^)]*\)/g, "").trim();
-  toc.innerHTML = chapters.map(c => '<button type="button" class="small" data-manual-ch="' + escAttr(c.id) + '" title="' + escAttr(c.title) + '">' + esc(shortTitle(c.title)) + "</button>").join("") +
+  // 1부 이용자 편 / 2부 운영자 편(2026-11-27 재구성) — 각 부의 첫 절 앞에 작은 구분 표시.
+  const partLabel = { ov: "이용자 편", agent: "운영자 편" };
+  toc.innerHTML = chapters.map(c => (partLabel[c.id] ? '<span class="manual-part">' + partLabel[c.id] + "</span>" : "") +
+    '<button type="button" class="small" data-manual-ch="' + escAttr(c.id) + '" title="' + escAttr(c.title) + '">' + esc(shortTitle(c.title)) + "</button>").join("") +
     '<label class="manual-all"><input type="checkbox" id="manual-all"' + (_manualAll() ? " checked" : "") + "> 전체 한 페이지로</label>";
   const show = (id, scroll) => {
     if (!chapters.some(c => c.id === id)) id = chapters[0] && chapters[0].id;

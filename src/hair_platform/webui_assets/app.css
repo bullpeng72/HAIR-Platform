@@ -607,6 +607,7 @@
   .manual-toc { position: sticky; top: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem; }
   .manual-toc button.small { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-color: transparent; background: none; font-size: 0.78rem; padding: 0.25rem 0.45rem; }
   .manual-toc button.small.active { background: var(--color-primary); color: #fff; }
+  .manual-part { font-size: 0.7rem; font-weight: 700; color: var(--color-muted); letter-spacing: 0.03em; margin: 0.6rem 0 0.1rem 0.45rem; }
   .manual-all { font-size: 0.74rem; color: var(--color-muted); margin-top: 0.5rem; }
   .manual-pager { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 1.2rem; padding-top: 0.8rem; border-top: 1px solid var(--color-border); flex-wrap: wrap; }
   @media (max-width: 800px) {

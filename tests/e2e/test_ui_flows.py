@@ -402,13 +402,18 @@ def test_manual_shows_one_chapter_and_help_opens_the_right_one(login):
     page.locator(".manual-pager button").first.click()  # ← 이전 절
     assert page.locator('.manual-chapter[data-ch="menu"]').is_visible()
     _tab(page, "evalconfig")
-    page.click("#screen-help-btn")  # 평가 기준 화면의 도움말 → 6절 안의 "평가 기준 설정"
+    page.click("#screen-help-btn")  # 평가 기준 화면의 도움말 → 10절(운영자 편) 안의 "평가 기준 설정"
     page.wait_for_function("() => currentTab === 'manual'")
     target = page.locator(".manual-content .manual-target")
     target.wait_for()
-    assert target.is_visible() and page.locator('.manual-chapter[data-ch="pipeline"]').is_visible()
+    assert target.is_visible() and page.locator('.manual-chapter[data-ch="design"]').is_visible()
+    _tab(page, "systemstatus")  # 2026-11-27 재구성 — 예전엔 메뉴 지도로만 가던 운영 화면도 제 절을 연다
+    page.click("#screen-help-btn")
+    page.wait_for_function("() => currentTab === 'manual'")
+    page.locator(".manual-content .manual-target").wait_for()
+    assert page.locator('.manual-chapter[data-ch="ops"]').is_visible()
     page.check("#manual-all")
-    assert page.locator(".manual-chapter:visible").count() >= 9
+    assert page.locator(".manual-chapter:visible").count() >= 15  # 목차 + 1부 8절 + 2부 6절
     page.uncheck("#manual-all")
     assert not page.errors  # type: ignore[attr-defined]
 
