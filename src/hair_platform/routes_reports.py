@@ -19,6 +19,7 @@ from hair_platform import (
     dashboard,
     fairness,
     performance,
+    process_metrics,
 )
 from hair_platform.auth import (
     Role,
@@ -115,6 +116,49 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
     ):
         """비용 조회(Admin·매니저 전용, RBAC 매트릭스)."""
         return cost.report(conn)
+
+    @app.get("/api/process-metrics")
+    def get_process_metrics(
+        days: int = process_metrics.DEFAULT_PERIOD_DAYS,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """프로세스 성과(2026-11-27) — 파이프라인별 리드타임(AI 작업·사람 대기·그 밖)·한 번에 완료 비율·재작업·
+        자동 처리율·건당 비용·기준 시간 대비, 지금 결재를 기다리는 실행, 주별 추이. `days`: 7·30·90·0(전체)."""
+        try:
+            return process_metrics.overview(conn, days)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/process-metrics/templates/{template_id}")
+    def get_process_metrics_template(
+        template_id: int,
+        days: int = process_metrics.DEFAULT_PERIOD_DAYS,
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """파이프라인 하나의 성과 + 단계별 흐름(어디서 시간을 쓰고 되돌아가는지·지금 몇 건이 걸려 있는지)."""
+        try:
+            return process_metrics.template_detail(conn, template_id, days)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/api/process-metrics/templates/{template_id}/baseline")
+    def put_process_baseline(
+        template_id: int,
+        payload: dict = Body(...),
+        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),
+    ):
+        """예전 방식으로 이 업무 한 건에 걸리던 시간(분) — `{"minutes": 120}`, 지우려면 `{"minutes": null}`."""
+        minutes = payload.get("minutes")
+        if minutes is not None and (isinstance(minutes, bool) or not isinstance(minutes, int)):
+            raise HTTPException(status_code=400, detail="baseline_minutes_must_be_integer")
+        try:
+            return process_metrics.set_baseline(conn, user["id"], template_id, minutes)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/dashboard")
     def get_dashboard(

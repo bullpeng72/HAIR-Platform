@@ -21,6 +21,7 @@ const MENU_HINTS = {
   manual: { help: "#toc", desc: "이용 가이드 전체", words: "도움말 사용법 설명서 매뉴얼 가이드" },
   integrations: { help: "사람이 누르지 않아도 돌게 하기", desc: "API 키·정기 실행·이벤트 트리거·외부 알림·저장소·사내 DB·메일·캘린더 연결", words: "API 키 정기 실행 스케줄 트리거 웹훅 Slack Teams 메일 알림 SMTP 저장소 Git 사내 DB 메일 수신함 캘린더 연동" },
   dashboard: { help: "현황 화면", desc: "팀 현황 모니터링", words: "현황 모니터링 진행률" },
+  processmetrics: { help: "프로세스 성과", desc: "파이프라인별 완료까지 걸린 시간·한 번에 완료·자동 처리율·병목 단계", words: "리드타임 소요 시간 병목 재작업 자동화 효과 절감 기준 시간 KPI 성과 측정 흐름" },
   cost: { help: "AI 사용 한도", desc: "AI 사용량과 비용, 사용 한도", words: "비용 토큰 사용량 예산 한도 단가" },
   fairness: { help: "현황 화면", desc: "배정이 한쪽으로 쏠리지 않았는지", words: "공정성 쏠림 배정 분포" },
   audit: { help: "현황 화면", desc: "누가 무엇을 했는지 기록(조회·변경·실행)", words: "감사 로그 기록 이력 조회 기록" },

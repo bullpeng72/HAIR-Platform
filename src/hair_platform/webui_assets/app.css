@@ -22,6 +22,12 @@
     /* 설명 글자(2026-11-27, 사용성 평가 12번) — #777은 흰 바탕 대비 4.48:1로 작은 글씨 기준(WCAG AA 4.5:1)에 조금
        모자랐다. #6b6b6b는 흰 바탕 5.3:1, 회색 바탕(#f5f6f8) 4.9:1. */
     --color-muted: #6b6b6b;
+    /* 프로세스 성과(2026-11-27) — 리드타임 구성 막대 3색·안내 배지. 흰 바탕에서 서로 구분되고 글자 대비 4.5:1 이상. */
+    --pm-ai: #4a90d9;
+    --pm-wait: #e8890c;
+    --pm-other: #b8bec7;
+    --pm-info-bg: #e0ecfb;
+    --pm-info-fg: #1d4f91;
     --color-border: #e2e4e8;
     --color-border-strong: #ccc;
     --color-primary: #14213d;
@@ -255,6 +261,7 @@
   .gate-badge { display: inline-block; padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.85em; }
   .gate-badge.gate-ok { background: var(--status-success-bg); color: var(--status-success-fg); }
   .gate-badge.gate-warn { background: var(--status-warn-bg); color: var(--status-warn-fg); }
+  .gate-badge.gate-info { background: var(--pm-info-bg); color: var(--pm-info-fg); }
   .gate-badge.gate-na { background: var(--status-muted-bg); color: var(--status-muted-fg); }
   /* 사용자 요청(2026-11-05, 로드맵 8번 "Crew 빌더 diff 모드") — jsdiff의
      diffLines() 청크 단위로 추가분/삭제분/변화없음을 구분. 기존
@@ -659,3 +666,34 @@
     .dashboard-grid { flex-direction: column; }
     .dashboard-grid .card { min-width: 0; }
   }
+
+  /* 프로세스 성과(2026-11-27, AI Native 분석 1단계) */
+  .pm-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; margin: 0.4rem 0 0.8rem; }
+  .pm-period { display: inline-flex; gap: 0.25rem; flex-wrap: wrap; }
+  .pm-period button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+  .pm-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: 0.6rem; margin-bottom: 0.8rem; }
+  .pm-tile { border: 1px solid var(--color-border); border-radius: 8px; padding: 0.6rem 0.75rem; background: var(--color-surface); min-width: 0; }
+  .pm-tile-label { font-size: 0.8rem; color: var(--color-muted); }
+  .pm-tile-value { font-size: 1.45rem; font-weight: 700; font-variant-numeric: tabular-nums; margin: 0.1rem 0; }
+  .pm-tile-sub { font-size: 0.75rem; line-height: 1.35; }
+  .pm-bar { display: inline-flex; width: 8rem; max-width: 100%; height: 0.7rem; border-radius: 4px; overflow: hidden; background: var(--color-border); vertical-align: middle; }
+  .pm-seg { display: inline-block; height: 100%; }
+  .pm-legend .pm-seg { width: 0.8rem; height: 0.7rem; border-radius: 2px; vertical-align: middle; margin-left: 0.6rem; }
+  .pm-legend { font-size: 0.8rem; margin-bottom: 0.4rem; }
+  .pm-ai { background: var(--pm-ai); }
+  .pm-wait { background: var(--pm-wait); }
+  .pm-other { background: var(--pm-other); }
+  .pm-signal { display: inline-block; margin: 0.1rem 0; white-space: normal; text-align: left; }
+  .pm-signals { line-height: 1.8; }
+  .pm-share { display: inline-block; width: 4rem; height: 0.55rem; background: var(--color-border); border-radius: 3px; overflow: hidden; vertical-align: middle; }
+  .pm-share span { display: block; height: 100%; background: var(--pm-wait); }
+  .pm-baseline { margin: 0.6rem 0 1rem; padding: 0.6rem 0.75rem; border: 1px dashed var(--color-border-strong); border-radius: 8px; }
+  .pm-baseline input { width: 6rem; }
+  .pm-chart { position: relative; height: 240px; max-width: 100%; }
+  .pm-domain { font-size: 0.85rem; font-weight: 400; }
+  /* 좁은 화면에서 열이 많은 표가 글자 하나씩 꺾이지 않게 — 표는 최소 폭을 지키고 상자 안에서 가로로 스크롤한다. */
+  .pm-wide table { min-width: 56rem; }
+  .pm-wide-sm table { min-width: 36rem; }
+  .pm-wide td, .pm-wide-sm td { white-space: nowrap; }
+  .pm-wide td:first-child, .pm-wide-sm td:first-child { white-space: normal; min-width: 9rem; }
+  .pm-wide td:has(.pm-signal) { white-space: normal; min-width: 16rem; }

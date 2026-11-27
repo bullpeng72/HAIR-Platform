@@ -952,6 +952,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "pipeline_runs", "engine", "TEXT NOT NULL DEFAULT 'legacy'")
     # 서버 재시작으로 중단된 실행 표시(2026-11-25, P1-6) — 이어서 실행할 수 있는 실패.
     _ensure_column(conn, "pipeline_runs", "interrupted_at", "TEXT")
+    # 프로세스 성과(2026-11-27, AI Native 분석 1단계) — 예전 방식으로 이 업무 한 건에 걸리던 시간(분, 사람이 입력).
+    _ensure_column(conn, "pipeline_templates", "baseline_minutes", "INTEGER")
+    # 같은 화면이 단계 기록 → 결재 → 결정 시각(활동 기록)을 이어 찾는다. 기록이 쌓여도 느려지지 않게 색인을 둔다.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_approvals_subject ON approvals(subject_type, subject_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_subject ON audit_log(subject_type, subject_id)")
     _sync_dev_crew_pipeline_integration(conn)
     # 사용자 요청(2026-10-29, "TF팀을 teams의 확장으로, Team 온보딩
     # 라이프사이클 도입 — 기존 활성 팀은 전부 자동 active 처리") —

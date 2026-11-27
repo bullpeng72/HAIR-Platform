@@ -191,3 +191,219 @@ async function renderDashboard(content) {
   _initCostTrendChart(d.cost_trend);
 }
 
+
+/* ---------- 프로세스 성과(2026-11-27, AI Native 분석 1단계 — 1번 성과 측정·8번 전체 흐름) ---------- */
+// 파이프라인(=업무 프로세스)마다 "얼마나 빨리·한 번에·사람 손을 얼마나 덜 거쳐" 끝나는지와, 어느 단계에서 시간을
+// 쓰고 되돌아가는지를 보여 준다. 숫자는 이미 쌓인 실행 기록에서 계산한다(`process_metrics.py`). 새로 적는 값은
+// "기준 시간"(예전 방식으로 한 건에 걸리던 시간) 하나뿐이다.
+let _pmDays = 30;
+let _pmTemplateId = null;
+let _pmChart = null;
+
+function _pmDur(sec) {
+  if (sec === null || sec === undefined) return "—";
+  const m = Math.round(sec / 60);
+  if (m < 1) return Math.round(sec) + "초";
+  if (m < 60) return m + "분";
+  const h = Math.floor(m / 60), mm = m % 60;
+  if (h < 48) return h + "시간" + (mm ? " " + mm + "분" : "");
+  return Math.round(h / 24) + "일";
+}
+
+function _pmPct(v) { return v === null || v === undefined ? "—" : Math.round(v * 100) + "%"; }
+
+function _pmCost(v, partial) {
+  if (v === null || v === undefined) return "—";
+  if (v === 0 && partial) return "단가 없음";
+  return "$" + (v < 0.01 && v > 0 ? v.toFixed(4) : v.toFixed(2)) + (partial ? "+" : "");
+}
+
+// 리드타임 구성 막대 — AI 작업 / 사람 대기 / 그 밖(작업 순서 대기 등)
+function _pmTimeBar(ai, wait, other) {
+  const a = ai || 0, w = wait || 0, o = other || 0, total = a + w + o;
+  if (!total) return '<span class="muted">—</span>';
+  const seg = (v, cls, label) => v > 0
+    ? '<span class="pm-seg ' + cls + '" style="width:' + (v / total * 100).toFixed(1) + '%" title="' + label + " " + _pmDur(v) + '"></span>' : "";
+  return '<span class="pm-bar" role="img" aria-label="AI ' + _pmDur(a) + ", 사람 대기 " + _pmDur(w) + ", 그 밖 " + _pmDur(o) + '">' +
+    seg(a, "pm-ai", "AI 작업") + seg(w, "pm-wait", "사람 대기") + seg(o, "pm-other", "그 밖") + "</span>";
+}
+
+function _pmSignals(list) {
+  if (!list || !list.length) return '<span class="muted">—</span>';
+  return list.map(s => '<span class="gate-badge ' + (s.level === "warn" ? "gate-warn" : "gate-info") + ' pm-signal">' + esc(s.text) + "</span>").join(" ");
+}
+
+function _pmTile(label, value, sub) {
+  return '<div class="pm-tile"><div class="pm-tile-label">' + esc(label) + '</div><div class="pm-tile-value">' + value +
+    "</div>" + (sub ? '<div class="pm-tile-sub muted">' + sub + "</div>" : "") + "</div>";
+}
+
+function _pmTiles(s, withBaseline) {
+  return '<div class="pm-tiles">' +
+    _pmTile("완료", String(s.completed), "실행 " + s.runs + "건 · 실패 " + s.failed + "건") +
+    _pmTile("완료까지(중앙값)", _pmDur(s.lead_median_seconds), "AI " + _pmDur(s.ai_mean_seconds) + " · 사람 대기 " + _pmDur(s.wait_mean_seconds)) +
+    _pmTile("한 번에 완료", _pmPct(s.first_pass_rate), "다시 작성·사람 검토 없이 끝난 비율") +
+    _pmTile("자동 처리율", _pmPct(s.automation_rate), "사람 결재 없이 넘어간 단계 비율") +
+    _pmTile("지금 결재 대기", String(s.waiting_for_human), "진행 중 " + s.running + "건") +
+    (withBaseline ? _pmTile("AI가 맡은 작업량", s.baseline_hours_covered ? s.baseline_hours_covered.toFixed(1) + "시간" : "—",
+      s.baseline_hours_covered ? "기준 시간 × 완료 건수(추정)" : "기준 시간을 넣으면 계산됩니다") : "") +
+    "</div>";
+}
+
+function _pmPeriodButtons() {
+  return '<div class="pm-period" role="group" aria-label="기간">' + [[7, "7일"], [30, "30일"], [90, "90일"], [0, "전체"]].map(([d, l]) =>
+    '<button class="small' + (d === _pmDays ? " active" : "") + '" data-pm-days="' + d + '" aria-pressed="' + (d === _pmDays) + '">' + l + "</button>").join("") + "</div>";
+}
+
+function _pmInitTrend(trend) {
+  const canvas = document.getElementById("pm-trend-canvas");
+  if (!canvas) return;
+  if (typeof Chart === "undefined") {
+    canvas.insertAdjacentHTML("afterend", '<p class="muted">차트 라이브러리를 불러오지 못했습니다.</p>');
+    return;
+  }
+  if (_pmChart) { try { _pmChart.destroy(); } catch (_) { /* 이미 사라진 canvas */ } }
+  _pmChart = new Chart(canvas, {
+    data: {
+      labels: trend.map(w => w.week_start.slice(5) + "주"),
+      datasets: [
+        { type: "bar", label: "완료 건수", data: trend.map(w => w.completed), backgroundColor: "rgba(74,144,217,0.55)", yAxisID: "y" },
+        { type: "line", label: "완료까지(분, 중앙값)", data: trend.map(w => w.lead_median_seconds === null ? null : Math.round(w.lead_median_seconds / 60)),
+          borderColor: "#fca311", backgroundColor: "#fca311", spanGaps: true, yAxisID: "y1" },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: "건" } },
+        y1: { beginAtZero: true, position: "right", grid: { drawOnChartArea: false }, title: { display: true, text: "분" } },
+      },
+    },
+  });
+}
+
+async function renderProcessMetrics(content) {
+  if (_pmTemplateId !== null) return renderProcessMetricsDetail(content, _pmTemplateId);
+  const d = await api("GET", "/api/process-metrics?days=" + _pmDays);
+  const t = d.total;
+  content.innerHTML =
+    '<section class="card"><h2>프로세스 성과</h2>' +
+    helpBox('<ul class="muted help-list">' +
+      "<li>파이프라인(업무 프로세스)마다 <b>얼마나 빨리, 한 번에, 사람 손을 얼마나 덜 거쳐</b> 끝나는지 보여 줍니다. 숫자는 지금까지의 실행 기록에서 계산합니다.</li>" +
+      "<li><b>완료까지</b> = 실행 시작부터 완료까지. <b>AI 작업</b>(단계가 실제로 돈 시간)·<b>사람 대기</b>(결재를 기다린 시간)·<b>그 밖</b>(작업 순서 대기·단계 사이 준비)으로 나눠 봅니다.</li>" +
+      "<li><b>한 번에 완료</b> = 품질 검사 실패로 다시 쓰거나 사람에게 넘어가지 않고 끝난 비율. <b>자동 처리율</b> = 통과한 단계 중 사람 결재 없이 넘어간 비율.</li>" +
+      "<li><b>기준 시간</b>(예전 방식으로 한 건에 걸리던 시간)을 파이프라인 자세히 화면에서 넣으면 AI가 맡은 작업량과 속도 비교가 나옵니다.</li>" +
+      "<li>완료 3건 이상 쌓이면 <b>먼저 손볼 곳</b>(실패·재작업·결재 병목 등)을 근거 숫자와 함께 알려 줍니다.</li>" +
+      "</ul>") +
+    '<div class="pm-head">' + _pmPeriodButtons() + '<span class="muted">기준 ' + esc(fmtTime(d.generated_at)) + "</span></div>" +
+    _pmTiles(t, true) +
+    '<div class="pm-legend muted"><span class="pm-seg pm-ai"></span> AI 작업 <span class="pm-seg pm-wait"></span> 사람 대기 <span class="pm-seg pm-other"></span> 그 밖</div>' +
+    "<h3>파이프라인별</h3>" +
+    '<div class="pm-wide">' + table(["파이프라인", "실행", "완료율", "완료까지", "시간 구성", "한 번에 완료", "재작업/건", "자동 처리율", "건당 비용", "기준 시간", "먼저 손볼 곳", "동작"],
+      d.templates.map(p => [
+        esc(p.name) + (p.is_active ? "" : ' <span class="muted">(비활성)</span>'),
+        String(p.runs), _pmPct(p.completion_rate), _pmDur(p.lead_median_seconds),
+        _pmTimeBar(p.ai_mean_seconds, p.wait_mean_seconds, p.other_mean_seconds),
+        _pmPct(p.first_pass_rate), p.rework_per_run === null ? "—" : p.rework_per_run.toFixed(1),
+        _pmPct(p.automation_rate), p.tokens_per_run ? _pmCost(p.cost_per_run, p.cost_partial) : "—",
+        p.baseline_minutes ? _pmDur(p.baseline_minutes * 60) : '<span class="muted">없음</span>',
+        _pmSignals(p.signals),
+        '<button class="small" data-pm-open="' + p.template_id + '">자세히</button>',
+      ]),
+      { empty: '이 기간에 실행된 파이프라인이 없습니다. <button class="small" data-go-tab="home">홈에서 AI에게 일 맡기기</button>' }) + "</div>" +
+    "<h3>지금 결재를 기다리는 실행</h3>" +
+    '<div class="pm-wide-sm">' + table(["파이프라인", "단계", "기다린 시간", "구분", "동작"],
+      d.waiting.map(w => [
+        esc(w.template_name), esc(w.stage_name), _pmDur(w.waiting_seconds),
+        w.escalated ? '<span class="gate-badge gate-warn">자동 재시도 실패 → 사람 검토</span>' : "승인 대기",
+        '<button class="small" data-go-tab="approvals">결재함</button>',
+      ]),
+      { empty: "결재를 기다리는 실행이 없습니다." }) + "</div>" +
+    "<h3>주별 추이(최근 8주)</h3>" +
+    '<div class="pm-chart"><canvas id="pm-trend-canvas"></canvas></div>' +
+    "</section>";
+  _pmBindCommon(content);
+  content.querySelectorAll("[data-pm-open]").forEach(b => b.onclick = () => { _pmTemplateId = Number(b.dataset.pmOpen); refresh(); });
+  _pmInitTrend(d.trend);
+}
+
+function _pmBindCommon(content) {
+  content.querySelectorAll("[data-pm-days]").forEach(b => b.onclick = () => { _pmDays = Number(b.dataset.pmDays); refresh(); });
+}
+
+async function renderProcessMetricsDetail(content, templateId) {
+  let d;
+  try {
+    d = await api("GET", "/api/process-metrics/templates/" + templateId + "?days=" + _pmDays);
+  } catch (e) {
+    _pmTemplateId = null;
+    return renderProcessMetrics(content);
+  }
+  const s = d.summary;
+  const flowRows = d.stages.map(f => [
+    f.seq_order + ". " + esc(f.name) + (f.requires_human_approval ? ' <span class="muted">(사람 승인)</span>' : "") +
+      (f.bottleneck ? ' <span class="gate-badge gate-warn">병목</span>' : ""),
+    String(f.runs_reached), String(f.attempts),
+    f.attempts ? f.first_try_passed + "건" : "—",
+    f.rework ? '<b>' + f.rework + "</b>건 (" + _pmPct(f.rework_rate) + ")" : "0",
+    f.human_reviews ? f.human_reviews + "건" + (f.human_rejections ? " · 반려 " + f.human_rejections : "") + (f.escalated ? " · 넘어감 " + f.escalated : "") : "0",
+    _pmDur(f.ai_mean_seconds), _pmDur(f.wait_mean_seconds),
+    f.time_share === null ? "—" : '<span class="pm-share"><span style="width:' + Math.round(f.time_share * 100) + '%"></span></span> ' + _pmPct(f.time_share),
+    (f.now_running ? "진행 " + f.now_running : "") + (f.now_running && f.now_waiting ? " · " : "") + (f.now_waiting ? '<b>대기 ' + f.now_waiting + "</b>" : "") || '<span class="muted">—</span>',
+  ]);
+  const statusName = { completed: "완료", failed: "실패", cancelled: "취소", running: "진행 중", paused_for_approval: "결재 대기" };
+  content.innerHTML =
+    '<section class="card"><p><button class="small" id="pm-back">← 프로세스 성과</button></p>' +
+    "<h2>" + esc(d.name) + ' <span class="muted pm-domain">' + esc(d.domain) + "</span></h2>" +
+    '<div class="pm-head">' + _pmPeriodButtons() + '<span class="muted">기준 ' + esc(fmtTime(d.generated_at)) + "</span></div>" +
+    _pmTiles(s, true) +
+    (s.signals.length ? '<p class="pm-signals"><b>먼저 손볼 곳</b> ' + _pmSignals(s.signals) + "</p>" : "") +
+    '<div class="pm-baseline"><label for="pm-baseline-input"><b>기준 시간</b> — 예전 방식(사람이 직접)으로 이 업무 한 건에 걸리던 시간</label> ' +
+    '<input id="pm-baseline-input" type="number" min="1" step="1" inputmode="numeric" value="' + (s.baseline_minutes || "") + '" placeholder="예: 120"> 분 ' +
+    '<button class="small" id="pm-baseline-save">저장</button> ' +
+    (s.baseline_minutes ? '<button class="small" id="pm-baseline-clear">지우기</button> ' : "") +
+    '<span class="muted" id="pm-baseline-msg">' +
+    (s.baseline_minutes && s.lead_vs_baseline !== null
+      ? "완료까지 걸린 시간(중앙값)은 기준의 " + Math.round(s.lead_vs_baseline * 100) + "%입니다" + (s.lead_vs_baseline < 1 ? " — 더 빠릅니다." : " — 더 느립니다.") +
+        " (사람이 결과를 검토한 시간은 빼지 않은 추정입니다)"
+      : "") + "</span></div>" +
+    "<h3>단계별 흐름</h3>" +
+    '<p class="muted">어느 단계에서 시간을 쓰고, 다시 쓰고, 사람에게 넘어가는지 봅니다. 시간 비중이 40% 이상인 단계는 <b>병목</b>으로 표시합니다.</p>' +
+'<div class="pm-wide">' + table(["단계", "지나간 실행", "시도", "처음에 통과", "다시 작성", "사람 검토", "AI 작업(평균)", "사람 대기(평균)", "시간 비중", "지금"], flowRows,
+      { empty: "단계가 없습니다." }) + "</div>" +
+    "<h3>최근 실행</h3>" +
+'<div class="pm-wide">' + table(["실행", "상태", "시작", "완료까지", "시간 구성", "다시 작성", "사람 결정", "토큰"],
+      d.recent_runs.map(r => [
+        "#" + r.run_id, esc(statusName[r.status] || r.status) + (r.first_pass ? ' <span class="gate-badge gate-ok">한 번에</span>' : ""),
+        esc(fmtTime(r.created_at)), _pmDur(r.lead_seconds),
+        _pmTimeBar(r.ai_seconds, r.wait_seconds, r.lead_seconds === null ? 0 : Math.max(0, r.lead_seconds - r.ai_seconds - r.wait_seconds)),
+        String(r.rework), String(r.human_decisions), r.tokens ? r.tokens.toLocaleString() : "—",
+      ]),
+      { empty: "이 기간에 실행이 없습니다." }) + "</div>" +
+    "<h3>주별 추이(최근 8주)</h3>" +
+    '<div class="pm-chart"><canvas id="pm-trend-canvas"></canvas></div>' +
+    "</section>";
+  _pmBindCommon(content);
+  document.getElementById("pm-back").onclick = () => { _pmTemplateId = null; refresh(); };
+  const save = async (minutes) => {
+    const msg = document.getElementById("pm-baseline-msg");
+    try {
+      await api("PUT", "/api/process-metrics/templates/" + templateId + "/baseline", { minutes });
+      refresh();
+    } catch (e) {
+      msg.textContent = "저장하지 못했습니다: " + (e.message || e);
+    }
+  };
+  document.getElementById("pm-baseline-save").onclick = () => {
+    const raw = document.getElementById("pm-baseline-input").value.trim();
+    const n = Number(raw);
+    if (!raw || !Number.isInteger(n) || n <= 0) {
+      document.getElementById("pm-baseline-msg").textContent = "1 이상의 분 단위 숫자를 넣으세요.";
+      return;
+    }
+    save(n);
+  };
+  const clear = document.getElementById("pm-baseline-clear");
+  if (clear) clear.onclick = () => save(null);
+  _pmInitTrend(d.trend);
+}
