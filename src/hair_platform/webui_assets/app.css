@@ -697,3 +697,15 @@
   .pm-wide td, .pm-wide-sm td { white-space: nowrap; }
   .pm-wide td:first-child, .pm-wide-sm td:first-child { white-space: normal; min-width: 9rem; }
   .pm-wide td:has(.pm-signal) { white-space: normal; min-width: 16rem; }
+  /* 배운 점·변경 기록(2026-11-27, AI Native 분석 2단계) */
+  .pm-lesson { border: 1px solid var(--color-border); border-left: 3px solid var(--pm-ai); border-radius: 6px; padding: 0.5rem 0.7rem; margin: 0.4rem 0; }
+  .pm-lesson-head { margin-bottom: 0.3rem; }
+  .pm-lesson-text { width: 100%; box-sizing: border-box; font: inherit; }
+  .pm-lesson-actions { margin-top: 0.3rem; }
+  .pm-lesson-add { margin: 0.6rem 0 1rem; display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+  .pm-lesson-add input { flex: 1 1 16rem; min-width: 0; }
+  .pm-lesson-add select { max-width: 100%; }
+  .pm-note { font-size: 0.75rem; white-space: normal; min-width: 10rem; }
+  .pm-wrap td { white-space: normal; }
+  .pm-wrap td:last-child { white-space: nowrap; }
+

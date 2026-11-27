@@ -94,12 +94,21 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(r[1] == column for r in conn.execute(f"PRAGMA table_info({table})").fetchall())
 
 
-def _load_runs(conn: sqlite3.Connection, days: int, template_id: int | None = None) -> list[dict]:
-    """기간 안에 시작한 실행과 그 단계 기록·결재 결정 시각·사용량을 한 번에 모은다."""
-    where, params = [], []
+def _load_runs(conn: sqlite3.Connection, days: int, template_id: int | None = None,
+               since: str | None = None, until: str | None = None) -> list[dict]:
+    """기간 안에 시작한 실행과 그 단계 기록·결재 결정 시각·사용량을 한 번에 모은다.
+    `since`/`until`(UTC "YYYY-MM-DD HH:MM:SS")을 주면 그 구간에 시작한 실행만(변경 전·후 비교)."""
+    where: list[str] = []
+    params: list = []
     if days:
         where.append("r.created_at >= datetime('now', ?)")
         params.append(f"-{days} days")
+    if since is not None:
+        where.append("r.created_at >= ?")
+        params.append(since)
+    if until is not None:
+        where.append("r.created_at < ?")
+        params.append(until)
     if template_id is not None:
         where.append("r.pipeline_template_id = ?")
         params.append(template_id)
@@ -440,3 +449,26 @@ def set_baseline(conn: sqlite3.Connection, actor_id: int, template_id: int, minu
                  before={"baseline_minutes": row["baseline_minutes"]}, after={"baseline_minutes": minutes})
     conn.commit()
     return {"template_id": template_id, "baseline_minutes": minutes}
+
+
+def window_summary(conn: sqlite3.Connection, template_id: int, since: str, until: str,
+                   stage_id: int | None = None) -> dict:
+    """한 구간(변경 전 또는 후)에 시작한 실행의 핵심 지표 — `process_learning.list_changes`가 전·후를 비교한다.
+    `stage_id`를 주면 그 단계의 다시 작성 비율·사람 반려 수도 함께."""
+    now = _now()
+    runs = _load_runs(conn, 0, template_id, since=since, until=until)
+    for r in runs:
+        r["m"] = _run_metrics(r, now)
+    s = _summarize(runs, None)
+    out = {
+        "since": since, "until": until, "runs": s["runs"], "completed": s["completed"],
+        "finished": s["completed"] + s["failed"], "first_pass_rate": s["first_pass_rate"],
+        "rework_per_run": s["rework_per_run"], "lead_median_seconds": s["lead_median_seconds"],
+        "automation_rate": s["automation_rate"],
+    }
+    if stage_id is not None:
+        rows = [x for r in runs for x in r["stages"] if x["stage_id"] == stage_id]
+        out["stage_attempts"] = len(rows)
+        out["stage_rework_rate"] = _rate(sum(1 for x in rows if x["status"] in _REWORK_STATUSES), len(rows))
+        out["stage_rejections"] = sum(1 for x in rows if x["status"] == "rejected")
+    return out

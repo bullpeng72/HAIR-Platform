@@ -957,6 +957,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 같은 화면이 단계 기록 → 결재 → 결정 시각(활동 기록)을 이어 찾는다. 기록이 쌓여도 느려지지 않게 색인을 둔다.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_approvals_subject ON approvals(subject_type, subject_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_subject ON audit_log(subject_type, subject_id)")
+    # 배운 점·변경 기록(2026-11-27, AI Native 분석 2단계 — `process_learning`).
+    from hair_platform import process_learning
+    process_learning.ensure_schema(conn)
     _sync_dev_crew_pipeline_integration(conn)
     # 사용자 요청(2026-10-29, "TF팀을 teams의 확장으로, Team 온보딩
     # 라이프사이클 도입 — 기존 활성 팀은 전부 자동 active 처리") —

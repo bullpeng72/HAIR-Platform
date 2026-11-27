@@ -22,6 +22,7 @@ from hair_platform import (
     deliverables,
     knowledge_submissions,
     pipeline_runtime,
+    process_learning,
 )
 from hair_platform.auth import (
     Role,
@@ -308,6 +309,9 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                         conn, subject_id, user["id"], False, payload.reason
                     )
                 elif subject_type == "pipeline_run_stage":
+                    # 배운 점 후보(2026-11-27, AI Native 분석 2단계) — 반려 사유는 이 실행의 재시도뿐 아니라
+                    # 운영자가 적용하면 같은 단계의 다음 실행들에도 들어간다(`process_learning`).
+                    process_learning.capture_rejection(conn, subject_id, payload.reason)
                     # 반려 = "다시 해와"(승인루프 스킬 안내와
                     # 일치) — 재시도 여력이 남아 있으면 파이프라인은
                     # 'running'으로 돌아가 같은 단계를 재시도한다.

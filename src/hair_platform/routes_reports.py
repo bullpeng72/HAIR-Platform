@@ -19,6 +19,7 @@ from hair_platform import (
     dashboard,
     fairness,
     performance,
+    process_learning,
     process_metrics,
 )
 from hair_platform.auth import (
@@ -125,9 +126,13 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         """프로세스 성과(2026-11-27) — 파이프라인별 리드타임(AI 작업·사람 대기·그 밖)·한 번에 완료 비율·재작업·
         자동 처리율·건당 비용·기준 시간 대비, 지금 결재를 기다리는 실행, 주별 추이. `days`: 7·30·90·0(전체)."""
         try:
-            return process_metrics.overview(conn, days)
+            result = process_metrics.overview(conn, days)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        counts = process_learning.candidate_counts(conn)  # 아직 결정 안 한 개선 제안 수(2026-11-27, 2단계)
+        for t in result["templates"]:
+            t["lesson_candidates"] = counts.get(t["template_id"], 0)
+        return result
 
     @app.get("/api/process-metrics/templates/{template_id}")
     def get_process_metrics_template(
@@ -159,6 +164,54 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # 배운 점·변경 기록(2026-11-27, AI Native 분석 2단계 — `process_learning`). Admin·매니저.
+    def _learning_call(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409 if str(exc) in (
+                "change_superseded", "change_already_reverted", "lesson_already_active") else 400,
+                detail=str(exc)) from exc
+
+    @app.get("/api/process-metrics/templates/{template_id}/lessons")
+    def get_process_lessons(template_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """단계별 개선 제안(사람 반려 사유·되풀이되는 품질 기준 미달)과 적용 중인 배운 점."""
+        return process_learning.list_lessons(conn, template_id)
+
+    @app.post("/api/process-metrics/stages/{stage_id}/lessons", status_code=201)
+    def post_process_lesson(stage_id: int, payload: dict = Body(...),
+                            user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """운영자가 직접 적는 배운 점 — 바로 적용된다. `{"text": "..."}`"""
+        return _learning_call(process_learning.add_manual_lesson, conn, user["id"], stage_id, str(payload.get("text") or ""))
+
+    @app.post("/api/process-lessons/{lesson_id}/activate")
+    def activate_process_lesson(lesson_id: int, payload: dict = Body(default={}),
+                                user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """개선 제안 적용(글을 고쳐서 적용하려면 `{"text": "..."}`) — 다음 실행부터 그 단계 지시문에 들어간다."""
+        text = payload.get("text") if isinstance(payload, dict) else None
+        return _learning_call(process_learning.activate_lesson, conn, user["id"], lesson_id,
+                              str(text) if text is not None else None)
+
+    @app.post("/api/process-lessons/{lesson_id}/dismiss")
+    def dismiss_process_lesson(lesson_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        return _learning_call(process_learning.set_lesson_status, conn, user["id"], lesson_id, "dismissed")
+
+    @app.post("/api/process-lessons/{lesson_id}/retire")
+    def retire_process_lesson(lesson_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        return _learning_call(process_learning.set_lesson_status, conn, user["id"], lesson_id, "retired")
+
+    @app.get("/api/process-metrics/templates/{template_id}/changes")
+    def get_process_changes(template_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """변경 기록과 변경마다 전(30일)·후(다음 변경까지, 최대 30일) 지표 비교."""
+        return process_learning.list_changes(conn, template_id)
+
+    @app.post("/api/process-changes/{change_id}/revert")
+    def revert_process_change(change_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """단계 설정 변경 → 바꾸기 전 값, 배운 점 적용 → 끄기. 그 뒤 다시 바뀐 값이면 409."""
+        return _learning_call(process_learning.revert_change, conn, user["id"], change_id)
 
     @app.get("/api/dashboard")
     def get_dashboard(

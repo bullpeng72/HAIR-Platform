@@ -294,12 +294,13 @@ async function renderProcessMetrics(content) {
       "<li><b>한 번에 완료</b> = 품질 검사 실패로 다시 쓰거나 사람에게 넘어가지 않고 끝난 비율. <b>자동 처리율</b> = 통과한 단계 중 사람 결재 없이 넘어간 비율.</li>" +
       "<li><b>기준 시간</b>(예전 방식으로 한 건에 걸리던 시간)을 파이프라인 자세히 화면에서 넣으면 AI가 맡은 작업량과 속도 비교가 나옵니다.</li>" +
       "<li>완료 3건 이상 쌓이면 <b>먼저 손볼 곳</b>(실패·재작업·결재 병목 등)을 근거 숫자와 함께 알려 줍니다.</li>" +
+      "<li><b>개선 제안</b> = 사람이 반려하며 적은 사유와 자주 미달하는 품질 기준에서 나온 '배운 점' 후보. 자세히 화면에서 적용하면 다음 실행부터 그 단계 지시문에 들어갑니다.</li>" +
       "</ul>") +
     '<div class="pm-head">' + _pmPeriodButtons() + '<span class="muted">기준 ' + esc(fmtTime(d.generated_at)) + "</span></div>" +
     _pmTiles(t, true) +
     '<div class="pm-legend muted"><span class="pm-seg pm-ai"></span> AI 작업 <span class="pm-seg pm-wait"></span> 사람 대기 <span class="pm-seg pm-other"></span> 그 밖</div>' +
     "<h3>파이프라인별</h3>" +
-    '<div class="pm-wide">' + table(["파이프라인", "실행", "완료율", "완료까지", "시간 구성", "한 번에 완료", "재작업/건", "자동 처리율", "건당 비용", "기준 시간", "먼저 손볼 곳", "동작"],
+    '<div class="pm-wide">' + table(["파이프라인", "실행", "완료율", "완료까지", "시간 구성", "한 번에 완료", "재작업/건", "자동 처리율", "건당 비용", "기준 시간", "먼저 손볼 곳", "개선 제안", "동작"],
       d.templates.map(p => [
         esc(p.name) + (p.is_active ? "" : ' <span class="muted">(비활성)</span>'),
         String(p.runs), _pmPct(p.completion_rate), _pmDur(p.lead_median_seconds),
@@ -308,6 +309,7 @@ async function renderProcessMetrics(content) {
         _pmPct(p.automation_rate), p.tokens_per_run ? _pmCost(p.cost_per_run, p.cost_partial) : "—",
         p.baseline_minutes ? _pmDur(p.baseline_minutes * 60) : '<span class="muted">없음</span>',
         _pmSignals(p.signals),
+        p.lesson_candidates ? '<span class="gate-badge gate-info">' + p.lesson_candidates + "건</span>" : '<span class="muted">—</span>',
         '<button class="small" data-pm-open="' + p.template_id + '">자세히</button>',
       ]),
       { empty: '이 기간에 실행된 파이프라인이 없습니다. <button class="small" data-go-tab="home">홈에서 AI에게 일 맡기기</button>' }) + "</div>" +
@@ -335,6 +337,10 @@ async function renderProcessMetricsDetail(content, templateId) {
   let d;
   try {
     d = await api("GET", "/api/process-metrics/templates/" + templateId + "?days=" + _pmDays);
+    [d.lessons, d.changes] = await Promise.all([
+      api("GET", "/api/process-metrics/templates/" + templateId + "/lessons"),
+      api("GET", "/api/process-metrics/templates/" + templateId + "/changes"),
+    ]);
   } catch (e) {
     _pmTemplateId = null;
     return renderProcessMetrics(content);
@@ -371,6 +377,8 @@ async function renderProcessMetricsDetail(content, templateId) {
     '<p class="muted">어느 단계에서 시간을 쓰고, 다시 쓰고, 사람에게 넘어가는지 봅니다. 시간 비중이 40% 이상인 단계는 <b>병목</b>으로 표시합니다.</p>' +
 '<div class="pm-wide">' + table(["단계", "지나간 실행", "시도", "처음에 통과", "다시 작성", "사람 검토", "AI 작업(평균)", "사람 대기(평균)", "시간 비중", "지금"], flowRows,
       { empty: "단계가 없습니다." }) + "</div>" +
+    _pmLessonsHtml(d) +
+    _pmChangesHtml(d.changes) +
     "<h3>최근 실행</h3>" +
 '<div class="pm-wide">' + table(["실행", "상태", "시작", "완료까지", "시간 구성", "다시 작성", "사람 결정", "토큰"],
       d.recent_runs.map(r => [
@@ -405,5 +413,94 @@ async function renderProcessMetricsDetail(content, templateId) {
   };
   const clear = document.getElementById("pm-baseline-clear");
   if (clear) clear.onclick = () => save(null);
+  _pmBindLearning(content);
   _pmInitTrend(d.trend);
+}
+
+/* ---------- 배운 점·변경 기록(2026-11-27, AI Native 분석 2단계 — 2번 학습 루프·10번 변경 효과) ---------- */
+function _pmLessonSource(l) {
+  const ev = l.evidence || {};
+  if (l.source === "human_rejection") return "사람 반려 사유" + (l.hits > 1 ? " · " + l.hits + "번" : "");
+  if (l.source === "gate_pattern") return "품질 기준 '" + esc(ev.gate_name || ev.gate || "") + "' 미달 " + (ev.failures || l.hits) + "번 / 시도 " + (ev.attempts || "?") + "번(최근 " + (ev.days || 60) + "일)";
+  return "직접 입력";
+}
+
+function _pmLessonsHtml(d) {
+  const L = d.lessons || { candidates: [], active: [] };
+  const cand = L.candidates.map(l =>
+    '<div class="pm-lesson" data-lesson="' + l.id + '"><div class="pm-lesson-head"><b>' + l.seq_order + ". " + esc(l.stage_name) + "</b> " +
+    '<span class="muted">' + _pmLessonSource(l) + "</span></div>" +
+    '<textarea class="pm-lesson-text" rows="2" maxlength="300" aria-label="적용할 글">' + esc(l.text) + "</textarea>" +
+    '<div class="pm-lesson-actions"><button class="small" data-lesson-apply="' + l.id + '">적용</button> ' +
+    '<button class="small" data-lesson-dismiss="' + l.id + '">무시</button> <span class="muted pm-lesson-msg"></span></div></div>').join("");
+  const active = L.active.map(l => [
+    l.seq_order + ". " + esc(l.stage_name), esc(l.text), _pmLessonSource(l),
+    esc(fmtTime(l.decided_at)) + (l.decided_by_name ? " · " + esc(l.decided_by_name) : ""),
+    '<button class="small" data-lesson-retire="' + l.id + '">끄기</button>',
+  ]);
+  const stageOpts = (d.stages || []).map(st => '<option value="' + st.stage_id + '">' + st.seq_order + ". " + esc(st.name) + "</option>").join("");
+  return "<h3>배운 점</h3>" +
+    '<p class="muted">사람이 반려하며 적은 사유와 자주 미달하는 품질 기준에서 <b>개선 제안</b>을 모읍니다. <b>적용</b>하면(글을 고쳐도 됩니다) 다음 실행부터 그 단계 지시문 끝에 들어가고, 아래 변경 기록에서 효과를 비교할 수 있습니다. 단계마다 ' + (L.max_active_per_stage || 8) + "개까지.</p>" +
+    (cand ? '<h4>개선 제안 <span class="gate-badge gate-info">' + L.candidates.length + "건</span></h4>" + cand
+      : '<p class="muted">아직 개선 제안이 없습니다. 결재함에서 파이프라인 단계를 반려할 때 사유를 구체적으로 적으면 여기에 모입니다.</p>') +
+    "<h4>적용 중</h4>" +
+    '<div class="pm-wide pm-wrap">' + table(["단계", "배운 점", "출처", "적용", "동작"], active, { empty: "적용 중인 배운 점이 없습니다." }) + "</div>" +
+    '<div class="pm-lesson-add"><label for="pm-lesson-stage">직접 추가</label> <select id="pm-lesson-stage">' + stageOpts + "</select> " +
+    '<input id="pm-lesson-new" maxlength="300" placeholder="예: 금액은 천 원 단위로 반올림해 표기하세요"> ' +
+    '<button class="small" id="pm-lesson-add-btn">바로 적용</button> <span class="muted" id="pm-lesson-add-msg"></span></div>';
+}
+
+function _pmWindowCell(w, withStage) {
+  if (!w || !w.runs) return '<span class="muted">실행 없음</span>';
+  return w.runs + "건 · 한 번에 " + _pmPct(w.first_pass_rate) + " · 완료까지 " + _pmDur(w.lead_median_seconds) +
+    (withStage && w.stage_attempts ? '<br><span class="muted">이 단계 다시 작성 ' + _pmPct(w.stage_rework_rate) + "</span>" : "");
+}
+
+function _pmChangesHtml(changes) {
+  const lv = { ok: "gate-ok", warn: "gate-warn", muted: "" };
+  const rows = (changes || []).map(c => [
+    esc(fmtTime(c.created_at)),
+    esc(c.summary) + (c.reverted_by ? ' <span class="muted">(되돌림)</span>' : ""),
+    esc(c.actor_name || ""),
+    _pmWindowCell(c.before, !!c.stage_id),
+    _pmWindowCell(c.after, !!c.stage_id) + (c.after_window_ends_at_next_change ? '<br><span class="muted">다음 변경 전까지</span>' : ""),
+    '<span class="gate-badge ' + (lv[c.verdict.level] || "") + '">' + esc(c.verdict.label) + "</span>" +
+      (c.verdict.note ? '<div class="muted pm-note">' + esc(c.verdict.note) + "</div>" : ""),
+    c.revertible ? '<button class="small" data-change-revert="' + c.id + '">되돌리기</button>' : '<span class="muted">—</span>',
+  ]);
+  return "<h3>변경 기록과 효과</h3>" +
+    '<p class="muted">단계 설정을 바꾸거나 배운 점을 켜고 끈 기록입니다. 변경마다 <b>그 전 30일</b>과 <b>그 뒤(다음 변경 전까지, 최대 30일)</b>에 시작한 실행을 같은 기준으로 비교합니다. 양쪽 모두 끝난 실행이 3건 이상일 때만 좋아짐·나빠짐을 판정합니다(다른 요인도 섞일 수 있는 참고값).</p>' +
+    '<div class="pm-wide pm-wrap">' + table(["시각", "변경", "누가", "전(30일)", "후", "판정", "동작"], rows,
+      { empty: "아직 변경 기록이 없습니다. 파이프라인 관리에서 단계 설정을 바꾸거나 배운 점을 적용하면 여기에 남습니다." }) + "</div>";
+}
+
+function _pmBindLearning(content) {
+  const act = async (fn, msgEl) => {
+    try { await fn(); refresh(); } catch (e) { if (msgEl) msgEl.textContent = "처리하지 못했습니다: " + (e.message || e); }
+  };
+  content.querySelectorAll("[data-lesson-apply]").forEach(b => b.onclick = () => {
+    const box = b.closest(".pm-lesson");
+    const text = box.querySelector(".pm-lesson-text").value.trim();
+    act(() => api("POST", "/api/process-lessons/" + b.dataset.lessonApply + "/activate", { text }), box.querySelector(".pm-lesson-msg"));
+  });
+  content.querySelectorAll("[data-lesson-dismiss]").forEach(b => b.onclick = () =>
+    act(() => api("POST", "/api/process-lessons/" + b.dataset.lessonDismiss + "/dismiss"), b.closest(".pm-lesson").querySelector(".pm-lesson-msg")));
+  content.querySelectorAll("[data-lesson-retire]").forEach(b => b.onclick = () =>
+    act(() => api("POST", "/api/process-lessons/" + b.dataset.lessonRetire + "/retire"), null));
+  // 되돌리기는 두 번 눌러 확정(브라우저 confirm 창 대신 — 화면 안에서 확인).
+  content.querySelectorAll("[data-change-revert]").forEach(b => b.onclick = () => {
+    if (b.dataset.confirming !== "1") {
+      b.dataset.confirming = "1";
+      b.textContent = "정말 되돌리기";
+      return;
+    }
+    act(() => api("POST", "/api/process-changes/" + b.dataset.changeRevert + "/revert"), b.parentElement);
+  });
+  const add = document.getElementById("pm-lesson-add-btn");
+  if (add) add.onclick = () => {
+    const text = document.getElementById("pm-lesson-new").value.trim();
+    const msg = document.getElementById("pm-lesson-add-msg");
+    if (text.length < 4) { msg.textContent = "네 글자 이상 적어 주세요."; return; }
+    act(() => api("POST", "/api/process-metrics/stages/" + document.getElementById("pm-lesson-stage").value + "/lessons", { text }), msg);
+  };
 }

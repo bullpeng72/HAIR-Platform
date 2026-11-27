@@ -73,6 +73,7 @@ from hair_platform import (
     evaluation_reports,  # 리포트 토큰을 저장·응답에서 뺀다(2026-11-25)
     llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
     presentation_deck,
+    process_learning,  # 배운 점·변경 기록(2026-11-27, AI Native 분석 2단계)
     requirements_traceability_llm,
 )
 
@@ -254,6 +255,7 @@ def delete_pipeline_template(
         conn.execute(
             "DELETE FROM pipeline_stage_agents WHERE stage_id = ?", (stage_id,)
         )
+    process_learning.purge_template(conn, template_id, stage_ids)
     conn.execute(
         "DELETE FROM pipeline_stages WHERE pipeline_template_id = ?", (template_id,)
     )
@@ -368,6 +370,8 @@ def add_stage(
         stage_id,
         after={"template_id": template_id, "name": name, "mode": mode},
     )
+    process_learning.record_change(conn, actor_id, template_id, stage_id, "stage_add", f"단계 추가 — {name}",
+                                   None, {"name": name, "mode": mode})
     conn.commit()
     return stage_id
 
@@ -457,6 +461,9 @@ def update_stage(
         stage_id,
         after=fields,
     )
+    # 변경 기록(2026-11-27) — 실제로 바뀐 값만, 바꾸기 전 값과 함께(효과 비교·되돌리기).
+    updated = conn.execute("SELECT * FROM pipeline_stages WHERE id = ?", (stage_id,)).fetchone()
+    process_learning.record_stage_update(conn, actor_id, row, updated)
     conn.commit()
 
 
@@ -472,6 +479,7 @@ def delete_stage(conn: sqlite3.Connection, actor_id: int, stage_id: int) -> None
     if has_runs is not None:
         raise ValueError("pipeline_stage_has_run_history")
     conn.execute("DELETE FROM pipeline_stage_agents WHERE stage_id = ?", (stage_id,))
+    process_learning.purge_stage(conn, stage_id)
     conn.execute("DELETE FROM pipeline_stages WHERE id = ?", (stage_id,))
     audit.record(
         conn,
@@ -481,6 +489,8 @@ def delete_stage(conn: sqlite3.Connection, actor_id: int, stage_id: int) -> None
         stage_id,
         before={"name": row["name"]},
     )
+    process_learning.record_change(conn, actor_id, row["pipeline_template_id"], None, "stage_delete",
+                                   f"단계 삭제 — {row['name']}", {"name": row["name"]}, None)
     conn.commit()
 
 
@@ -527,6 +537,9 @@ def reorder_stage(
         before={"seq_order": row["seq_order"]},
         after={"seq_order": neighbor["seq_order"]},
     )
+    process_learning.record_change(conn, actor_id, row["pipeline_template_id"], row["id"], "stage_reorder",
+                                   f"단계 순서 — {row['name']}: {row['seq_order']}번 → {neighbor['seq_order']}번",
+                                   {"seq_order": row["seq_order"]}, {"seq_order": neighbor["seq_order"]})
     conn.commit()
 
 
@@ -1539,7 +1552,8 @@ def _execute_stage_attempt(
             "사람에게 결재 요청이 올라갑니다."
         )
 
-    stage_instructions = stage["instructions"] + retry_feedback
+    # 배운 점(2026-11-27, AI Native 분석 2단계) — 운영자가 적용한, 이 단계의 이전 실행에서 지적·미달됐던 점.
+    stage_instructions = stage["instructions"] + process_learning.lessons_prompt(conn, stage["id"]) + retry_feedback
     combined_base = (
         f"{base_input}\n\n{stage_instructions}" if stage_instructions else base_input
     )

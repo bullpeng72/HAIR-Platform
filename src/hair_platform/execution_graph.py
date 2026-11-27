@@ -86,6 +86,7 @@ from hair_platform import (
     evaluation_reports,  # 리포트 토큰을 저장에서 뺀다(2026-11-25)
     llm_usage,  # 업무 맥락별 사용량(2026-11-23, P2-11)
     presentation_deck,
+    process_learning,  # 배운 점(2026-11-27)
 )
 from hair_platform import pipeline_runtime as pr
 
@@ -184,7 +185,9 @@ def _node_run_stage(state: PipelineGraphState, config) -> dict:
     ).fetchall()
     agent_ids = [pr._resolve_role_agent_id(conn, a["role_name"]) for a in stage_agents]
 
-    stage_instructions = stage["instructions"] + state["retry_feedback"]
+    stage_instructions = (
+        stage["instructions"] + process_learning.lessons_prompt(conn, stage["id"]) + state["retry_feedback"]
+    )
     combined_base = (
         f"{state['base_input']}\n\n{stage_instructions}"
         if stage_instructions
