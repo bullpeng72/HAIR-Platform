@@ -432,6 +432,34 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # ---------- 만약에·인사 자료 가져오기(2026-11-28 — `resource_scenarios`) ----------
+    @app.post("/api/resource-what-if")
+    def post_resource_what_if(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """`{"add_people": [{"role", "count", "weekly_hours"?}], "extra_model_slots": 0}` — 역할별 4주 활용도·파이프라인 대기 전후."""
+        from hair_platform import resource_scenarios
+
+        adds = payload.get("add_people") or []
+        if not isinstance(adds, list):
+            raise HTTPException(status_code=400, detail="add_people_must_be_list")
+        try:
+            return resource_scenarios.what_if(conn, adds, int(payload.get("extra_model_slots") or 0))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/human-pool/import")
+    def post_human_import(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """인사 자료 CSV — `{"kind": "people"|"absences", "csv": "...", "apply": false}`. apply가 거짓이면 미리 보기만."""
+        from hair_platform import resource_scenarios
+
+        kind = payload.get("kind")
+        fn = {"people": resource_scenarios.import_people, "absences": resource_scenarios.import_absences}.get(str(kind))
+        if fn is None:
+            raise HTTPException(status_code=400, detail="kind_must_be_people_or_absences")
+        try:
+            return fn(conn, user["id"], str(payload.get("csv") or ""), bool(payload.get("apply")))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/resource-absences")
     def list_resource_absences(human_id: int | None = None, include_past: bool = False,
                                user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER))):

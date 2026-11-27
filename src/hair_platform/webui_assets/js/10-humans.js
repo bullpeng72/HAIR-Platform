@@ -78,8 +78,9 @@ async function renderHumanPool(content) {
         p.performance_score === null ? "-" : p.performance_score,
         linkedAccount,
         '<div class="actions">' + middleActions + deleteAction + "</div>"];
-    })) + "</section>" + '<div id="rm-load-slot"></div>';
+    })) + "</section>" + '<div id="rm-load-slot"></div><div id="hr-import-slot"></div>';
   _renderResourceLoad(content.querySelector("#rm-load-slot"));
+  _renderHrImport(content.querySelector("#hr-import-slot"));
 
   const skillPicker = initSkillPicker("hp-skills-picker", "hp-skills", []);
   document.getElementById("hp-user-id").addEventListener("change", (ev) => {
@@ -313,8 +314,10 @@ async function renderResourcePlanning(content) {
       r.open_hours ? r.open_hours + "h" : "-", r.recent_per_week ? r.recent_per_week.toFixed(1) : "0", String(r.scheduled_next), String(r.people), String(r.agents)]),
       { empty: "열린 할 일이 없습니다." }) + "</div>" +
     '<div id="rp-cost-slot"></div>' +
+    '<div id="rp-whatif-slot"></div>' +
     "</section>";
   _renderResourceCosts(content.querySelector("#rp-cost-slot"));
+  _renderWhatIf(content.querySelector("#rp-whatif-slot"), d.demand.map(r => r.role).concat(u.people.map(p => p.role)));
 }
 
 /* ---------- 비용·예산(2026-11-27, Resource Management Phase C — 5번 시간 기반 비용) ---------- */
@@ -438,5 +441,83 @@ async function renderResourceInsights(content) {
       g.flags.length ? g.flags.map(f => '<div class="gate-badge gate-warn pm-signal">' + esc(f) + "</div>").join("") : '<span class="muted">-</span>']),
       { empty: "같은 역할의 사람이 2명 이상인 역할이 없습니다." }) + "</div>" +
     "</section>";
+}
+
+/* ---------- 만약에(2026-11-28 — Resource Management 11번, `resource_scenarios`) ---------- */
+function _renderWhatIf(slot, roles) {
+  if (!slot) return;
+  const uniq = [...new Set(roles.filter(Boolean))];
+  slot.innerHTML = "<h3>만약에</h3>" +
+    '<p class="muted">사람을 더 두거나 모델 동시 처리를 늘리면 어떻게 되는지 지금 기록으로 계산합니다 — 그 역할의 앞으로 4주 활용도(배분 시간 합 ÷ 용량 합)와 용량을 넘는 주 수, 파이프라인 시작까지 대기. 새 사람이 넘친 일을 나눠 맡는다고 가정한 추정치입니다.</p>' +
+    '<div class="inline" style="flex-wrap:wrap"><label>역할 <input id="wi-role" list="wi-roles" placeholder="예: 백엔드 개발자"></label><datalist id="wi-roles">' +
+    uniq.map(r => '<option value="' + escAttr(r) + '">').join("") + "</datalist>" +
+    '<label>사람 <input type="number" id="wi-count" min="1" max="100" value="1" style="width:4rem">명</label>' +
+    '<label>주당 <input type="number" id="wi-hours" min="1" max="80" value="40" style="width:4rem">시간</label>' +
+    '<label>모델 동시 처리 +<input type="number" id="wi-slots" min="0" max="16" value="0" style="width:4rem"></label>' +
+    '<button class="small" id="wi-run">계산</button> <span class="muted" id="wi-msg"></span></div><div id="wi-result"></div>';
+  const pct = v => v === null || v === undefined ? "—" : Math.round(v * 100) + "%";
+  slot.querySelector("#wi-run").onclick = async () => {
+    const role = slot.querySelector("#wi-role").value.trim();
+    const slots = Number(slot.querySelector("#wi-slots").value || 0);
+    const body = { add_people: role ? [{ role, count: Number(slot.querySelector("#wi-count").value), weekly_hours: Number(slot.querySelector("#wi-hours").value) }] : [],
+      extra_model_slots: slots };
+    if (!role && !slots) { slot.querySelector("#wi-msg").textContent = "역할(사람 추가) 또는 모델 동시 처리 중 하나는 정하세요."; return; }
+    try {
+      const r = await api("POST", "/api/resource-what-if", body);
+      slot.querySelector("#wi-msg").textContent = "";
+      let html = "";
+      if (r.roles.length) {
+        html += table(["역할", "사람", "4주 평균 활용도", "용량 넘는 주", "가장 바쁜 주", "주별(전 → 후)"], r.roles.map(x => [
+          esc(x.role) + (x.new_role ? ' <span class="muted">(지금 이 역할의 사람 없음)</span>' : ""),
+          x.people_before + " → " + (x.people_before + x.added),
+          pct(x.before.avg_utilization) + " → <b>" + pct(x.after.avg_utilization) + "</b>",
+          x.before.weeks_over + " → <b>" + x.after.weeks_over + "</b>",
+          pct(x.before.peak) + " → " + pct(x.after.peak),
+          esc(x.before.weekly.map(pct).join(" · ")) + "<br>→ " + esc(x.after.weekly.map(pct).join(" · ")),
+        ]));
+      }
+      if (r.queue.extra_slots) {
+        const m = s => s === null || s === undefined ? "—" : Math.round(s / 60) + "분";
+        html += "<p>파이프라인 시작까지 대기(앞에 " + r.queue.jobs_ahead + "건): " + m(r.queue.wait_before) + " → <b>" + m(r.queue.wait_after) + "</b>" +
+          (r.queue.slots ? " (동시 처리 " + r.queue.slots + " → " + (r.queue.slots + r.queue.extra_slots) + ")" : "") + "</p>" +
+          (r.queue.note ? '<p class="muted">' + esc(r.queue.note) + "</p>" : "");
+      }
+      slot.querySelector("#wi-result").innerHTML = html;
+    } catch (e) { slot.querySelector("#wi-msg").textContent = e.message || String(e); }
+  };
+}
+
+/* ---------- 인사 자료 가져오기(2026-11-28 — Resource Management 12번, admin) ---------- */
+function _renderHrImport(slot) {
+  if (!slot || ME.role !== "admin") return;
+  slot.innerHTML = '<section class="card"><h2>인사 자료 가져오기</h2>' +
+    '<p class="muted">인사 시스템에서 내보낸 <b>CSV</b>로 사람·부재를 한꺼번에 넣습니다. 먼저 <b>미리 보기</b>로 줄마다 만들기·고치기·건너뜀·오류를 확인하고, <b>적용</b>을 눌러야 저장됩니다. 사람은 사번으로 찾아 있으면 고치고 없으면 만듭니다(오프보딩된 사람은 건너뜀).</p>' +
+    '<p class="muted">사람 열: <code>employee_id,name,role,skills,weekly_hours,hourly_rate,max_concurrent_tasks,availability</code>(스킬은 ;로 구분, 빈 칸은 그대로 둠) · 부재 열: <code>employee_id,starts_on,ends_on,reason</code>(날짜 YYYY-MM-DD)</p>' +
+    '<div class="inline" style="flex-wrap:wrap"><select id="hr-kind"><option value="people">사람</option><option value="absences">부재</option></select>' +
+    '<input type="file" id="hr-file" accept=".csv,text/csv"> <button class="small" id="hr-preview">미리 보기</button> <button class="small primary" id="hr-apply" disabled>적용</button>' +
+    ' <span class="muted" id="hr-msg"></span></div><textarea id="hr-text" rows="4" style="width:100%;box-sizing:border-box;margin-top:0.4rem" placeholder="또는 CSV 내용을 붙여 넣으세요"></textarea>' +
+    '<div id="hr-result"></div></section>';
+  const $ = id => slot.querySelector("#" + id);
+  $("hr-file").onchange = () => {
+    const f = $("hr-file").files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { $("hr-text").value = String(rd.result || ""); $("hr-apply").disabled = true; };
+    rd.readAsText(f, "utf-8");
+  };
+  const run = async (apply) => {
+    try {
+      const r = await api("POST", "/api/human-pool/import", { kind: $("hr-kind").value, csv: $("hr-text").value, apply });
+      const act = { create: "만들기", update: "고치기", skip: "건너뜀", error: "오류" };
+      $("hr-result").innerHTML = '<p>' + (apply ? "적용했습니다 — " : "미리 보기 — ") + "만들기 " + r.created + " · 고치기 " + r.updated + " · 오류 " + r.errors + "</p>" +
+        table(["줄", "사번", "처리", "내용"], r.rows.map(x => [String(x.line), esc(x.employee_id || ""),
+          x.action === "error" ? '<span class="gate-badge gate-warn">오류</span>' : esc(act[x.action] || x.action), esc(x.detail || "")]));
+      $("hr-apply").disabled = apply || !(r.created + r.updated);
+      if (apply) $("hr-msg").textContent = "사람 목록은 새로 고치면 반영됩니다.";
+    } catch (e) { $("hr-msg").textContent = e.message || String(e); }
+  };
+  $("hr-preview").onclick = () => run(false);
+  $("hr-apply").onclick = () => run(true);
+  $("hr-text").oninput = () => { $("hr-apply").disabled = true; };
 }
 
