@@ -82,7 +82,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # 이미 설정된 실제 환경변수를 덮어쓰지 않는다(override=False, 기본값).
     load_dotenv()
 
-    app = FastAPI(title="HAIR-Platform")
+    # API 문서(/openapi.json)의 버전도 `hair --version`·화면 상단과 같은 설치 메타데이터에서(2026-11-27 — 예전엔 지정하지
+    # 않아 FastAPI 기본값 0.1.0으로 보였다).
+    from hair_platform import get_version
+
+    app = FastAPI(title="HAIR-Platform", version=get_version())
     # 세션 기반 인증(SessionMiddleware).
     # 코드 재점검(2026-09-26)에서 발견: "배포 시 환경변수로 교체한다"는 주석만 있고
     # 실제로 환경변수를 읽는 코드가 없어 항상 소스에 공개된 고정 키를 쓰던 오류를
