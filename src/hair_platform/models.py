@@ -311,6 +311,7 @@ class ResourceCandidate(BaseModel):
     absent_from: str | None = None           # 2주 안에 시작하는 부재의 시작일
     queue_wait_seconds: float | None = None  # Agent: 로컬 모델 줄의 지금 예상 대기
     performance_source: str | None = None    # 적합도 출처(관리자 입력 / 자동 — 근거)
+    skill_levels: dict[str, int] | None = None  # 스킬 숙련도(2026-11-28, `skill_levels` — 1 입문 ~ 4 전문)
 
 
 class AssignmentRequest(BaseModel):

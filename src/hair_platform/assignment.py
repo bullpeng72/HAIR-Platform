@@ -82,7 +82,8 @@ def _role_matches(candidate_role: str, required_role: str) -> bool:
     return a in b or b in a
 
 
-def _score(c: ResourceCandidate, pool: list[ResourceCandidate], exact_match: bool = False) -> ScoredCandidate:
+def _score(c: ResourceCandidate, pool: list[ResourceCandidate], exact_match: bool = False,
+           required_skills: list[str] | None = None) -> ScoredCandidate:
     """가중치 점수(ADR — 가용성40·적합도35·비용25, 적합도 없으면 가용성60·비용40). 가용성은 부하 정보가 있으면 남은 용량
     비율·모델 대기를 반영한다(`resource_capacity.availability_factor`, 2026-11-27 Phase A)."""
     from hair_platform import resource_capacity
@@ -100,6 +101,15 @@ def _score(c: ResourceCandidate, pool: list[ResourceCandidate], exact_match: boo
             "fit": c.performance_score * 0.35,
             "cost": cost_score * 0.25,
         }
+    # 스킬 숙련도(2026-11-28, `skill_levels`) — 수준 정보가 있는 후보에만 작은 가점(요구 스킬 평균 수준 ÷ 4 × 0.1).
+    from hair_platform import skill_levels
+
+    depth = skill_levels.depth_score(c.skill_levels, list(required_skills or []))
+    if depth is not None:
+        bonus = skill_levels.DEPTH_WEIGHT * depth
+        breakdown["skill_depth"] = bonus
+        score += bonus
+        notes = [*notes, f"요구 스킬 평균 수준 {depth * 4:.1f}/4"]
     return ScoredCandidate(candidate=c, score=score, breakdown=breakdown, exact_match=exact_match,
                            notes=notes, over_capacity=over)
 
@@ -125,7 +135,7 @@ def match_candidates(
         # 역할·스킬 모두 맞는 후보끼리는 예전엔 비용만으로 줄 세웠다(2026-11-27, Resource Management Phase A) — 용량을 다
         # 쓴 사람·성과 낮은 Agent가 싸다는 이유로 1등이 됐다. 같은 가중치 점수(가용성은 남은 용량)로 줄 세우고, 용량이
         # 꽉 찬 후보는 뒤로 보낸다. 부하 정보가 없는 후보(예전 데이터)는 예전과 같은 점수다.
-        scored = [_score(c, exact, exact_match=True) for c in exact]
+        scored = [_score(c, exact, exact_match=True, required_skills=required_skills) for c in exact]
         scored.sort(key=lambda s: (not s.over_capacity, s.score, -s.candidate.cost), reverse=True)
         return MatchResult(top=scored[:3], generate_new=False)
 
@@ -149,7 +159,7 @@ def match_candidates(
     if not role_relevant:
         return MatchResult(top=[], generate_new=True)
 
-    scored: list[ScoredCandidate] = [_score(c, role_relevant) for c in role_relevant]
+    scored: list[ScoredCandidate] = [_score(c, role_relevant, required_skills=required_skills) for c in role_relevant]
 
     # 점수 가중치(ADR — 가용성·적합도·비용)는 그대로 두고, 같은 점수면 요구 스킬을 더 많이 갖춘
     # 후보를 앞에 둔다.

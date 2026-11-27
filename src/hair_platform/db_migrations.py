@@ -980,6 +980,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # 자원 분석 — 매칭 실패 기록(2026-11-27, Phase D — `resource_insights`).
     from hair_platform import resource_insights
     resource_insights.ensure_schema(conn)
+    # 스킬 숙련도(2026-11-28 — `skill_levels`).
+    from hair_platform import skill_levels
+    skill_levels.ensure_schema(conn)
     inbound.ensure_schema(conn)
     stage_actions.ensure_schema(conn)
     _sync_dev_crew_pipeline_integration(conn)

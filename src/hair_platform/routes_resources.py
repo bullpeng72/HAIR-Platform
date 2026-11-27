@@ -394,6 +394,44 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
 
         return resource_lifecycle.cost_overview(conn)
 
+    # ---------- 스킬 숙련도(2026-11-28 — `skill_levels`) ----------
+    @app.get("/api/skill-levels/{resource_type}/{resource_id}")
+    def get_skill_levels(resource_type: str, resource_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        """스킬마다 적용 수준·출처(확인/근거/본인 기재)·근거 건수. admin·manager는 전체, 구성원은 본인 것만."""
+        from hair_platform import skill_levels
+
+        if resource_type not in ("human", "agent"):
+            raise HTTPException(status_code=404, detail="unknown_resource_type")
+        if user["role"] not in (Role.ADMIN.value, Role.MANAGER.value) and not (
+                resource_type == "human" and _can_edit_human(user, resource_id)):
+            raise HTTPException(status_code=403, detail="본인 스킬만 볼 수 있습니다")
+        try:
+            return {"levels": skill_levels.LEVELS, "skills": skill_levels.resource_levels(conn, resource_type, resource_id)}
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="자원을 찾을 수 없습니다") from exc
+
+    @app.put("/api/skill-levels/{resource_type}/{resource_id}")
+    def put_skill_level(resource_type: str, resource_id: int, payload: dict = Body(...),
+                        user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER))):
+        """`{"skill": "python", "level": 3 | null}` — admin·manager가 정하면 '확인', 구성원이 자기 것에 적으면 '본인 기재'."""
+        from hair_platform import skill_levels
+
+        if resource_type not in ("human", "agent"):
+            raise HTTPException(status_code=404, detail="unknown_resource_type")
+        is_decider = user["role"] in (Role.ADMIN.value, Role.MANAGER.value)
+        if not is_decider and not (resource_type == "human" and _can_edit_human(user, resource_id)):
+            raise HTTPException(status_code=403, detail="본인 스킬만 적을 수 있습니다")
+        level = payload.get("level")
+        if level is not None and (isinstance(level, bool) or not isinstance(level, int)):
+            raise HTTPException(status_code=400, detail="level_must_be_integer")
+        try:
+            return skill_levels.set_level(conn, user["id"], resource_type, resource_id, str(payload.get("skill") or ""),
+                                          level, "verified" if is_decider else "self")
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="자원을 찾을 수 없습니다") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/resource-absences")
     def list_resource_absences(human_id: int | None = None, include_past: bool = False,
                                user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER, Role.MEMBER))):

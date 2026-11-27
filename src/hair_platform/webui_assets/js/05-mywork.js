@@ -2070,6 +2070,13 @@ async function _renderMyAbsences(slot) {
   const me = await api("GET", "/api/human-pool/me").catch(() => null);
   if (!me || !me.id) return;  // 사람 인력에 연결되지 않은 계정
   const today = new Date().toISOString().slice(0, 10);
+  let skillBox = document.getElementById("myskill-slot");
+  if (!skillBox) {  // 부재 일정을 다시 그려도 한 번만
+    skillBox = document.createElement("div");
+    skillBox.id = "myskill-slot";
+    slot.after(skillBox);
+  }
+  _renderSkillLevels(skillBox, "human", me.id, "내 스킬 수준");
   slot.innerHTML = '<section class="card"><h3>내 부재 일정</h3><p class="muted">휴가·출장·교육처럼 일을 맡을 수 없는 기간을 적어 두면 그 기간에는 새 일이 배정 후보에서 빠지고, 2주 전부터 배정하는 사람에게 미리 알려 줍니다.</p>' +
     table(["기간", "사유", ""], mine.map(a => [esc(a.starts_on) + " ~ " + esc(a.ends_on), esc(a.reason || ""),
       '<button class="small danger" data-myabs-del="' + a.id + '">지우기</button>']), { empty: "적어 둔 부재가 없습니다." }) +
@@ -2121,5 +2128,36 @@ async function _renderTaskSchedule(slot, taskId) {
       _renderTaskSchedule(slot, taskId);
     } catch (e) { slot.querySelector("#ws-sched-msg").textContent = e.message || String(e); }
   };
+}
+
+/* ---------- 스킬 숙련도(2026-11-28 — `skill_levels`) — 사람 인력 관리(확인)·내 업무(본인 기재)가 함께 쓴다 ---------- */
+async function _renderSkillLevels(box, resourceType, resourceId, title) {
+  if (!box) return;
+  let d;
+  try { d = await api("GET", "/api/skill-levels/" + resourceType + "/" + resourceId); } catch (_) { box.innerHTML = ""; return; }
+  const decider = ["admin", "manager"].includes(ME.role);
+  const opt = (sel) => '<option value="">—</option>' + Object.entries(d.levels).map(([k, v]) =>
+    '<option value="' + k + '"' + (String(sel) === k ? " selected" : "") + ">" + k + " " + esc(v) + "</option>").join("");
+  const rows = d.skills.map(s => [
+    esc(s.skill),
+    s.level ? "<b>" + s.level + " " + esc(s.label) + "</b>" + (s.unverified ? ' <span class="gate-badge gate-info">본인 기재</span>' : "") : '<span class="muted">-</span>',
+    s.source ? esc(s.source) : '<span class="muted">-</span>',
+    s.evidence ? "승인 " + s.evidence + "건(→ " + s.evidence_level + ")" : '<span class="muted">0</span>',
+    '<select data-sl-skill="' + escAttr(s.skill) + '" aria-label="' + escAttr(s.skill) + ' 수준">' + opt(decider ? s.verified : s.self) + "</select>",
+  ]);
+  box.innerHTML = '<div class="card ab-box"><div class="ab-head"><b>' + esc(title) + "</b> " + (box.dataset.closable ? '<button class="small" data-sl-close>닫기</button>' : "") + "</div>" +
+    '<p class="muted">수준: 1 입문 · 2 실무 · 3 숙련 · 4 전문. <b>근거</b>는 그 스킬이 필요한 할 일에서 사람이 승인한 결과물 수(최근 180일 — 1~2건 실무, 3~9건 숙련, 10건 이상 전문)로 자동 계산합니다. ' +
+    (decider ? "여기서 고르는 값은 <b>확인</b> 수준입니다 — 적용 수준은 확인과 근거 중 높은 쪽." : "여기서 고르는 값은 <b>본인 기재</b>입니다 — 확인·근거가 없을 때만 쓰이고 '본인 기재'로 표시됩니다.") +
+    " 매칭은 수준이 있는 후보에 작은 가점을 줍니다.</p>" +
+    table(["스킬", "적용 수준", "출처", "근거", decider ? "확인 수준" : "본인 기재"], rows, { empty: "등록된 스킬이 없습니다." }) +
+    '<p class="muted" data-sl-msg></p></div>';
+  const closeBtn = box.querySelector("[data-sl-close]");
+  if (closeBtn) closeBtn.onclick = () => { box.innerHTML = ""; };
+  box.querySelectorAll("[data-sl-skill]").forEach(sel => sel.onchange = async () => {
+    try {
+      await api("PUT", "/api/skill-levels/" + resourceType + "/" + resourceId, { skill: sel.dataset.slSkill, level: sel.value ? Number(sel.value) : null });
+      _renderSkillLevels(box, resourceType, resourceId, title);
+    } catch (e) { box.querySelector("[data-sl-msg]").textContent = e.message || String(e); }
+  });
 }
 

@@ -47,6 +47,9 @@ def human_pool_candidates(
 
     load = resource_capacity.active_tasks(conn)
     absences = resource_capacity.absence_status(conn)
+    from hair_platform import skill_levels  # 숙련도(2026-11-28)
+
+    levels = skill_levels.Levels(conn)
     candidates = []
     for row in rows:
         skill_tags = json.loads(row["skill_tags"])
@@ -64,6 +67,7 @@ def human_pool_candidates(
                 capacity=resource_capacity.human_capacity(row),
                 absent_until=absent.get("absent_until"),
                 absent_from=absent.get("absent_from"),
+                skill_levels=levels.for_resource("human", row["id"], skill_tags) or None,
                 performance_source=("관리자 입력(본인 동의)" if row["performance_consent"] and row["performance_score"] is not None else None),
                 cost=row["cost_estimate"],
                 skill_tags=skill_tags,
@@ -102,6 +106,9 @@ def agent_pool_candidates(
 
     load = resource_capacity.active_tasks(conn)
     waits = resource_capacity.AgentWait(conn)
+    from hair_platform import skill_levels  # 숙련도(2026-11-28)
+
+    levels = skill_levels.Levels(conn)
     candidates = []
     for row in rows:
         skill_tags = json.loads(row["skill_tags"])
@@ -124,6 +131,7 @@ def agent_pool_candidates(
                                     else (auto or {}).get("source")),
                 active_tasks=load.get(("agent", row["id"]), 0),
                 queue_wait_seconds=waits.for_agent(row),
+                skill_levels=levels.for_resource("agent", row["id"], skill_tags) or None,
                 # 사용자 요청(2026-10-13, "AI Agent에도 이름을 지정") —
                 # 지정 안 했으면 None(화면에서 role로 폴백, 데이터는
                 # 솔직하게 비워둔다).

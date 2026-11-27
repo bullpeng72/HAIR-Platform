@@ -203,6 +203,7 @@ async function _renderResourceLoad(slot) {
       (ME.role === "admin" ? '<span class="pair"><input type="number" min="0" step="1" id="rm-rate-' + r.id + '" placeholder="$/h" style="width:4.5rem" aria-label="시간당 단가(USD)">' +
         '<button class="small" data-rm-rate="' + r.id + '">단가</button></span> ' : "") +
       '<button class="small" data-rm-handover="' + r.id + '">인계 점검</button> ' +
+      '<button class="small" data-rm-skills="' + r.id + '" data-name="' + escAttr(r.name || r.role) + '">스킬 수준</button> ' +
       '<span class="pair"><input type="date" id="rm-from-' + r.id + '" value="' + today + '" aria-label="부재 시작"><input type="date" id="rm-to-' + r.id + '" value="' + today + '" aria-label="부재 끝">' +
       '<input id="rm-why-' + r.id + '" placeholder="사유" maxlength="200" style="width:6rem"><button class="small" data-rm-abs="' + r.id + '">부재 추가</button></span>',
   ]);
@@ -227,13 +228,15 @@ async function _renderResourceLoad(slot) {
       '<span class="muted">맡은 할 일 ' + agents.reduce((a, r) => a + (r.active_tasks || 0), 0) + "건 · 자동 적합도 근거 있음 " +
       agents.filter(r => r.performance_score !== null && r.performance_score !== undefined).length + "개</span></summary>" +
       '<div class="pm-wide-sm">' + table(["Agent", "맡은 할 일", "모델 대기", "적합도"], aRows, { empty: "온보딩된 Agent가 없습니다." }) + "</div></details>" +
-    '<p class="muted" id="rm-msg"></p><div id="rm-handover"></div></section>';
+    '<p class="muted" id="rm-msg"></p><div id="rm-skills" data-closable="1"></div><div id="rm-handover"></div></section>';
   const msg = t => { slot.querySelector("#rm-msg").textContent = t; };
   slot.querySelectorAll("[data-rm-rate]").forEach(b => b.onclick = async () => {
     const raw = slot.querySelector("#rm-rate-" + b.dataset.rmRate).value.trim();
     try { await api("PUT", "/api/human-pool/" + b.dataset.rmRate + "/hourly-rate", { hourly_rate: raw === "" ? null : Number(raw) }); msg("시간당 단가를 저장했습니다(자원 운용의 비용·예산에 반영)."); }
     catch (e) { msg("저장하지 못했습니다: " + (e.message || e)); }
   });
+  slot.querySelectorAll("[data-rm-skills]").forEach(b => b.onclick = () =>
+    _renderSkillLevels(slot.querySelector("#rm-skills"), "human", Number(b.dataset.rmSkills), "스킬 수준 — " + b.dataset.name));
   slot.querySelectorAll("[data-rm-handover]").forEach(b => b.onclick = () => _renderHandover(slot.querySelector("#rm-handover"), Number(b.dataset.rmHandover)));
   slot.querySelectorAll("[data-rm-cap]").forEach(b => b.onclick = async () => {
     const raw = slot.querySelector("#rm-cap-" + b.dataset.rmCap).value.trim();
@@ -418,8 +421,9 @@ async function renderResourceInsights(content) {
     "<h3>채워지지 않은 수요(최근 30일)</h3>" + '<div class="pm-wide-sm">' + table(["역할", "매칭 실패", "할 일", "자주 요구된 스킬", "제안"], hv.unmet.map(u => [
       esc(u.role), String(u.misses), String(u.tasks), esc(u.skills.join(", ") || "-"), esc(u.suggestion)]),
       { empty: "매칭이 후보를 못 찾은 기록이 없습니다." }) + "</div>" +
-    "<h3>스킬 수요·공급</h3>" + '<div class="pm-wide">' + table(["스킬", "상태", "열린 할 일", "예상 시간", "사람", "Agent", "제안"], d.skills.map(s => [
+    "<h3>스킬 수요·공급</h3>" + '<div class="pm-wide">' + table(["스킬", "상태", "열린 할 일", "예상 시간", "숙련 이상", "사람", "Agent", "제안"], d.skills.map(s => [
       esc(s.skill), skillSt[s.status], String(s.open_tasks), s.hours ? s.hours + "h" : "-",
+      s.supply ? s.skilled + "/" + s.supply : '<span class="muted">-</span>',
       s.people.length ? esc(s.people.join(", ")) : '<span class="muted">-</span>', s.agents.length ? esc(s.agents.join(", ")) : '<span class="muted">-</span>',
       s.suggestion ? esc(s.suggestion) : '<span class="muted">-</span>']), { empty: "열린 할 일에 필요 스킬이 적혀 있지 않습니다." }) + "</div>" +
     "<h3>팀</h3>" + '<div class="pm-wide">' + table(["팀", "구성", "구성원 부하", "팀 열린 할 일", "Crew 실행", "겹침"], d.teams.map(t => [

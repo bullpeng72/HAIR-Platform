@@ -196,6 +196,23 @@ def skill_gaps(conn: sqlite3.Connection) -> list[dict]:
         for s in tags if isinstance(tags, list) else []:
             agents.setdefault(str(s).strip().lower(), []).append(a["n"])
     in_pool = {r[0].strip().lower() for r in conn.execute("SELECT name FROM skill_pool")}
+    # 숙련 이상(수준 3+) 공급(2026-11-28, `skill_levels`)
+    from hair_platform import skill_levels
+
+    lv = skill_levels.Levels(conn)
+    skilled: dict[str, int] = {}
+    for h in conn.execute("SELECT id, skill_tags FROM human_pool WHERE availability = 'available'").fetchall():
+        for s, v in lv.for_resource("human", h["id"], json.loads(h["skill_tags"] or "[]")).items():
+            if v >= 3:
+                skilled[str(s).strip().lower()] = skilled.get(str(s).strip().lower(), 0) + 1
+    for a in conn.execute("SELECT id, skill_tags FROM agent_pool WHERE status = 'active'").fetchall():
+        try:
+            tags = json.loads(a["skill_tags"] or "[]")
+        except ValueError:
+            tags = []
+        for s, v in lv.for_resource("agent", a["id"], tags if isinstance(tags, list) else []).items():
+            if v >= 3:
+                skilled[str(s).strip().lower()] = skilled.get(str(s).strip().lower(), 0) + 1
     out = []
     for key, d in demand.items():
         supply = len(people.get(key, [])) + len(agents.get(key, []))
@@ -205,7 +222,7 @@ def skill_gaps(conn: sqlite3.Connection) -> list[dict]:
             suggestion = ("스킬 Pool에 있음 — 맞는 Agent에 이 스킬을 붙이거나 새 Agent를 만드세요" if key in in_pool
                           else "스킬 Pool에 없음 — 사람 교육·채용, 또는 스킬 등록 후 Agent에 붙이기")
         out.append({**d, "hours": round(d["hours"], 1), "people": people.get(key, [])[:5], "agents": agents.get(key, [])[:5],
-                    "supply": supply, "status": status, "suggestion": suggestion})
+                    "supply": supply, "skilled": skilled.get(key, 0), "status": status, "suggestion": suggestion})
     order = {"none": 0, "thin": 1, "ok": 2}
     out.sort(key=lambda x: (order[x["status"]], -x["open_tasks"]))
     return out
