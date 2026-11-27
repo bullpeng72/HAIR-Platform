@@ -157,13 +157,24 @@ def _server_worker_name() -> str:
 
 # ------------------------------------------------------------------ 실행(공통)
 
+def _commit(conn: sqlite3.Connection) -> None:
+    """작업 스레드들이 연결 하나를 같이 쓴다(`db.get_connection` — 앱 전체 공유). 두 작업이 동시에 시작하면 다른 스레드의
+    `commit()`이 이 스레드의 변경까지 이미 확정해, 여기서 "no transaction is active"가 난다(CI 실측 2026-11-27 — 이 예외로
+    작업 스레드가 죽어 작업이 '실행 중'으로 영원히 남고 자리만 비었다). 변경은 이미 확정된 것이므로 성공으로 본다."""
+    try:
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        if "no transaction is active" not in str(exc):
+            raise
+
+
 def _claim(conn: sqlite3.Connection, job_id: int, worker: str) -> sqlite3.Row | None:
     cur = conn.execute(
         "UPDATE background_jobs SET status = 'running', worker = ?, attempts = attempts + 1, started_at = datetime('now') "
         "WHERE id = ? AND status = 'queued'",
         (worker, job_id),
     )
-    conn.commit()
+    _commit(conn)
     if cur.rowcount != 1:
         return None
     return conn.execute("SELECT * FROM background_jobs WHERE id = ?", (job_id,)).fetchone()
@@ -174,7 +185,7 @@ def _finish(conn: sqlite3.Connection, job_id: int, status: str, error: str | Non
         "UPDATE background_jobs SET status = ?, error = ?, finished_at = datetime('now') WHERE id = ?",
         (status, (error or None) and error[-4000:], job_id),
     )
-    conn.commit()
+    _commit(conn)
 
 
 def run_job(conn: sqlite3.Connection, job_id: int, worker: str, reraise: bool = False) -> str:

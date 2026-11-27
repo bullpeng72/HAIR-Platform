@@ -202,3 +202,30 @@ def test_worker_reserves_a_slot_for_chat_when_only_pipelines_wait(file_db, monke
     finally:
         gate.set()
         worker.stop(wait_seconds=2)
+
+
+def test_concurrent_commit_race_does_not_kill_the_job(file_db, monkeypatch):
+    """CI 실측(2026-11-27): 작업 두 개가 동시에 시작하면 공유 연결에서 다른 스레드의 commit이 먼저 확정해 이쪽 commit이
+    "cannot commit - no transaction is active"로 실패했다 — 작업이 '실행 중'으로 남고 스레드가 죽었다."""
+    import sqlite3
+
+    path, conn = file_db
+    job_id = job_queue.enqueue(conn, "pipeline.stage", 1)
+
+    class RacyConn:
+        def __init__(self, real):
+            self.real, self.fail_next = real, True
+
+        def execute(self, *a):
+            return self.real.execute(*a)
+
+        def commit(self):
+            self.real.commit()  # 다른 스레드가 이미 확정한 상황
+            if self.fail_next:
+                self.fail_next = False
+                raise sqlite3.OperationalError("cannot commit - no transaction is active")
+
+    ran = []
+    monkeypatch.setattr(job_queue, "_resolve", lambda kind: lambda conn_, *a: ran.append(a))
+    assert job_queue.run_job(RacyConn(conn), job_id, "w") == "done" and ran == [(1,)]
+    assert conn.execute("SELECT status FROM background_jobs WHERE id = ?", (job_id,)).fetchone()[0] == "done"
