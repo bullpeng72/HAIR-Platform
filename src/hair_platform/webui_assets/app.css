@@ -603,11 +603,11 @@
   .sys-item { padding: 0.45rem 0; border-bottom: 1px solid var(--color-border); overflow-wrap: anywhere; }
   .gate-badge.sys-error { background: var(--status-danger-bg); color: var(--status-danger-fg); }
   /* 이용 가이드 절 하나씩(2026-11-27, 사용성 평가 10번). */
-  .manual-layout { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 1.2rem; align-items: start; }
+  .manual-layout { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); gap: 1rem; align-items: start; }
   .manual-toc { position: sticky; top: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem; }
-  .manual-toc button.small { text-align: left; white-space: normal; border-color: transparent; background: none; }
+  .manual-toc button.small { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-color: transparent; background: none; font-size: 0.78rem; padding: 0.25rem 0.45rem; }
   .manual-toc button.small.active { background: var(--color-primary); color: #fff; }
-  .manual-all { font-size: 0.8rem; color: var(--color-muted); margin-top: 0.5rem; }
+  .manual-all { font-size: 0.74rem; color: var(--color-muted); margin-top: 0.5rem; }
   .manual-pager { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 1.2rem; padding-top: 0.8rem; border-top: 1px solid var(--color-border); flex-wrap: wrap; }
   @media (max-width: 800px) {
     .manual-layout { grid-template-columns: minmax(0, 1fr); }
