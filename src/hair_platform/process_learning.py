@@ -83,6 +83,19 @@ CREATE TABLE IF NOT EXISTS process_changes (
     reverted_by INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_process_changes_template ON process_changes(template_id, created_at);
+CREATE TABLE IF NOT EXISTS stage_examples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stage_id INTEGER NOT NULL,
+    run_stage_id INTEGER NOT NULL UNIQUE,
+    excerpt TEXT NOT NULL,
+    full_chars INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate', 'active', 'dismissed', 'retired')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    source_at TEXT,
+    decided_by INTEGER,
+    decided_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_stage_examples_stage ON stage_examples(stage_id, status);
 """
 
 
@@ -248,7 +261,11 @@ def set_lesson_status(conn: sqlite3.Connection, actor_id: int, lesson_id: int, s
 
 
 def lessons_prompt(conn: sqlite3.Connection, stage_id: int) -> str:
-    """실행 때 그 단계 지시문 끝에 붙일 글 — 적용된 배운 점이 없으면 빈 문자열."""
+    """실행 때 그 단계 지시문 끝에 붙일 글 — 적용된 배운 점과 좋은 결과 예시. 없으면 빈 문자열."""
+    return _lessons_block(conn, stage_id) + examples_prompt(conn, stage_id)
+
+
+def _lessons_block(conn: sqlite3.Connection, stage_id: int) -> str:
     try:
         rows = conn.execute(
             "SELECT text FROM stage_lessons WHERE stage_id = ? AND status = 'active' ORDER BY id", (stage_id,)
@@ -266,6 +283,121 @@ def lessons_prompt(conn: sqlite3.Connection, stage_id: int) -> str:
         used += len(line)
     return ("\n\n[이 단계의 이전 실행에서 배운 점 — 사람이 지적했거나 자주 미달했던 부분입니다. 반드시 지키세요]\n"
             + "\n".join(lines))
+
+
+# ---------------------------------------------------------------- 좋은 결과 예시(2026-11-27, 5단계 — 2번 학습 루프 3단계)
+# 사람이 승인한 결과는 그 실행에서 끝나고, 같은 단계의 다음 실행은 "어느 정도로, 어떤 형식으로" 써야 하는지 다시 짐작했다.
+# 사람이 승인했고(자동 승인 제외), 한 번에 통과했고, 품질 점검 미달이 없는 결과를 그 단계의 "좋은 결과 예시" 후보로 올린다.
+# 운영자가 고르면(단계마다 2개까지) 다음 실행부터 형식·수준 참고용으로 지시문에 붙는다.
+# **외부 데이터를 읽은 실행(고객 메일·사내 DB 등)의 결과는 후보로 올리지 않는다** — 한 고객의 내용이 다른 실행에 섞이지 않게.
+
+MAX_ACTIVE_EXAMPLES = 2
+EXAMPLE_CHARS = 1200
+EXAMPLE_LOOKBACK_DAYS = 90
+EXAMPLE_CANDIDATES_PER_STAGE = 3
+
+
+def _clean_gate(gate_scores: str | None) -> bool:
+    try:
+        scores = json.loads(gate_scores) if gate_scores else {}
+    except ValueError:
+        return False
+    for k, v in (scores or {}).items():
+        if k.startswith("_") or not isinstance(v, dict) or v.get("not_measured"):
+            continue
+        if v.get("passed") is False:
+            return False
+    return True
+
+
+def refresh_example_candidates(conn: sqlite3.Connection, template_id: int | None = None) -> None:
+    try:
+        where = "rs.status = 'approved' AND rs.attempt = 1 AND rs.output IS NOT NULL AND rs.created_at >= datetime('now', ?)"
+        params: list = [f"-{EXAMPLE_LOOKBACK_DAYS} days"]
+        if template_id is not None:
+            where += " AND s.pipeline_template_id = ?"
+            params.append(template_id)
+        rows = conn.execute(
+            "SELECT rs.id, rs.stage_id, rs.pipeline_run_id, rs.output, rs.gate_scores, rs.created_at FROM pipeline_run_stages rs "
+            f"JOIN pipeline_stages s ON s.id = rs.stage_id WHERE {where} "  # noqa: S608 — where는 내부 고정
+            "AND NOT EXISTS (SELECT 1 FROM stage_examples e WHERE e.run_stage_id = rs.id) "
+            "AND NOT EXISTS (SELECT 1 FROM tool_calls t WHERE t.pipeline_run_id = rs.pipeline_run_id AND t.external = 1) "
+            "ORDER BY rs.id DESC", params).fetchall()
+    except sqlite3.OperationalError:
+        return
+    per_stage: dict[int, int] = {}
+    for r in rows:
+        if not _clean_gate(r["gate_scores"]) or len((r["output"] or "").strip()) < 50:
+            continue
+        have = per_stage.get(r["stage_id"])
+        if have is None:
+            have = conn.execute("SELECT COUNT(*) FROM stage_examples WHERE stage_id = ? AND status = 'candidate'",
+                                (r["stage_id"],)).fetchone()[0]
+        if have >= EXAMPLE_CANDIDATES_PER_STAGE:
+            continue
+        out = r["output"].strip()
+        conn.execute("INSERT OR IGNORE INTO stage_examples (stage_id, run_stage_id, excerpt, full_chars, source_at) "
+                     "VALUES (?, ?, ?, ?, ?)", (r["stage_id"], r["id"], out[:EXAMPLE_CHARS], len(out), r["created_at"]))
+        per_stage[r["stage_id"]] = have + 1
+    conn.commit()
+
+
+def list_examples(conn: sqlite3.Connection, template_id: int) -> dict:
+    refresh_example_candidates(conn, template_id)
+    try:
+        rows = conn.execute(
+            "SELECT e.*, s.name AS stage_name, s.seq_order, u.username AS decided_by_name FROM stage_examples e "
+            "JOIN pipeline_stages s ON s.id = e.stage_id LEFT JOIN users u ON u.id = e.decided_by "
+            "WHERE s.pipeline_template_id = ? AND e.status IN ('candidate', 'active') ORDER BY s.seq_order, e.id DESC",
+            (template_id,)).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    items = [{k: r[k] for k in ("id", "stage_id", "stage_name", "seq_order", "run_stage_id", "excerpt", "full_chars", "status",
+                                "source_at", "decided_at", "decided_by_name")} for r in rows]
+    return {"candidates": [x for x in items if x["status"] == "candidate"],
+            "active": [x for x in items if x["status"] == "active"], "max_active_per_stage": MAX_ACTIVE_EXAMPLES}
+
+
+def set_example_status(conn: sqlite3.Connection, actor_id: int, example_id: int, status: str) -> dict:
+    """후보 → active(예시로 쓰기)·dismissed(무시), active → retired(끄기)."""
+    row = conn.execute("SELECT * FROM stage_examples WHERE id = ?", (example_id,)).fetchone()
+    if row is None:
+        raise LookupError("example_not_found")
+    allowed = {"active": ("candidate",), "dismissed": ("candidate",), "retired": ("active",)}
+    if status not in allowed or row["status"] not in allowed[status]:
+        raise ValueError("invalid_example_transition")
+    if status == "active":
+        n = conn.execute("SELECT COUNT(*) FROM stage_examples WHERE stage_id = ? AND status = 'active'",
+                         (row["stage_id"],)).fetchone()[0]
+        if n >= MAX_ACTIVE_EXAMPLES:
+            raise ValueError("too_many_active_examples")
+    conn.execute("UPDATE stage_examples SET status = ?, decided_by = ?, decided_at = datetime('now') WHERE id = ?",
+                 (status, actor_id, example_id))
+    if status in ("active", "retired"):
+        st = _stage(conn, row["stage_id"])
+        record_change(conn, actor_id, st["pipeline_template_id"], st["id"],
+                      "example_on" if status == "active" else "example_off",
+                      ("좋은 결과 예시 적용 — " if status == "active" else "좋은 결과 예시 끄기 — ") + st["name"],
+                      None, {"example_id": example_id, "run_stage_id": row["run_stage_id"]}, lesson_id=example_id)
+    audit.record(conn, actor_id, f"stage_example_{status}", "stage_example", example_id)
+    conn.commit()
+    return {"id": example_id, "status": status}
+
+
+def examples_prompt(conn: sqlite3.Connection, stage_id: int) -> str:
+    try:
+        rows = conn.execute("SELECT excerpt, full_chars FROM stage_examples WHERE stage_id = ? AND status = 'active' "
+                            "ORDER BY id LIMIT ?", (stage_id, MAX_ACTIVE_EXAMPLES)).fetchall()
+    except sqlite3.OperationalError:
+        return ""
+    if not rows:
+        return ""
+    parts = []
+    for i, r in enumerate(rows, start=1):
+        cut = "\n…(예시 일부)" if r["full_chars"] > len(r["excerpt"]) else ""
+        parts.append(f"--- 예시 {i} ---\n{r['excerpt']}{cut}")
+    return ("\n\n[이 단계에서 사람이 승인한 좋은 결과 예시 — 형식·구성·깊이만 참고하세요. 내용은 이번 요청에 맞게 새로 쓰고, "
+            "예시의 사실·숫자·이름을 옮겨 쓰지 마세요]\n" + "\n".join(parts))
 
 
 def list_lessons(conn: sqlite3.Connection, template_id: int) -> dict:
@@ -306,8 +438,9 @@ def candidate_counts(conn: sqlite3.Connection) -> dict[int, int]:
 # ---------------------------------------------------------------- 변경 기록
 
 def purge_stage(conn: sqlite3.Connection, stage_id: int) -> None:
-    """단계를 지울 때 그 단계의 배운 점을 함께 지운다(커밋은 호출자). 변경 기록은 이력이라 남긴다."""
+    """단계를 지울 때 그 단계의 배운 점·예시를 함께 지운다(커밋은 호출자). 변경 기록은 이력이라 남긴다."""
     try:
+        conn.execute("DE" "LETE FROM stage_examples WHERE stage_id = ?", (stage_id,))
         conn.execute("DELETE FROM stage_lessons WHERE stage_id = ?", (stage_id,))
     except sqlite3.OperationalError:
         pass
@@ -433,7 +566,7 @@ def list_changes(conn: sqlite3.Connection, template_id: int, limit: int = 30) ->
             "before_value": json.loads(r["before_value"]) if r["before_value"] else None,
             "after_value": json.loads(r["after_value"]) if r["after_value"] else None,
             "reverted_by": r["reverted_by"],
-            "revertible": r["reverted_by"] is None and r["kind"] in ("stage_update", "lesson_on", "approval_policy"),
+            "revertible": r["reverted_by"] is None and r["kind"] in ("stage_update", "lesson_on", "approval_policy", "example_on"),
             "before": before, "after": after,
             "after_window_ends_at_next_change": r["id"] in next_at and next_at[r["id"]] < at + timedelta(days=EFFECT_WINDOW_DAYS),
             "verdict": _verdict(before, after, r["stage_id"]),
@@ -450,7 +583,12 @@ def revert_change(conn: sqlite3.Connection, actor_id: int, change_id: int) -> di
         raise LookupError("change_not_found")
     if ch["reverted_by"] is not None:
         raise ValueError("change_already_reverted")
-    if ch["kind"] == "lesson_on":
+    if ch["kind"] == "example_on":
+        ex = conn.execute("SELECT status FROM stage_examples WHERE id = ?", (ch["lesson_id"],)).fetchone()
+        if ex is None or ex["status"] != "active":
+            raise ValueError("change_superseded")
+        set_example_status(conn, actor_id, ch["lesson_id"], "retired")
+    elif ch["kind"] == "lesson_on":
         lesson = conn.execute("SELECT status FROM stage_lessons WHERE id = ?", (ch["lesson_id"],)).fetchone()
         if lesson is None or lesson["status"] != "active":
             raise ValueError("change_superseded")

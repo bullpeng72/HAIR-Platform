@@ -965,7 +965,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     from hair_platform import approval_assist
     approval_assist.ensure_schema(conn)
     # 외부 입력 트리거·결재 후 실행 동작(2026-11-27, 4단계 — `inbound`·`stage_actions`).
-    from hair_platform import inbound, stage_actions
+    from hair_platform import inbound, process_metrics, stage_actions
+    process_metrics.ensure_schema(conn)  # 사람 1시간 비용(2026-11-27, 5단계)
     inbound.ensure_schema(conn)
     stage_actions.ensure_schema(conn)
     _sync_dev_crew_pipeline_integration(conn)

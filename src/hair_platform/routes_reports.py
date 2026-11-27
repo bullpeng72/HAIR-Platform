@@ -141,6 +141,17 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         result["capacity"] = cap
         return result
 
+    @app.put("/api/process-metrics/hourly-cost")
+    def put_process_hourly_cost(payload: dict = Body(...), user: sqlite3.Row = Depends(require_role(Role.ADMIN))):
+        """사람 1시간 비용(USD, admin) — 기준 시간과 곱해 건당 가치를 계산한다. `{"hourly_cost": 40}` / null이면 지움."""
+        v = payload.get("hourly_cost")
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int | float)):
+            raise HTTPException(status_code=400, detail="hourly_cost_must_be_number")
+        try:
+            return process_metrics.set_hourly_cost(conn, user["id"], v)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/process-metrics/templates/{template_id}")
     def get_process_metrics_template(
         template_id: int,
@@ -193,6 +204,20 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                             user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
         """운영자가 직접 적는 배운 점 — 바로 적용된다. `{"text": "..."}`"""
         return _learning_call(process_learning.add_manual_lesson, conn, user["id"], stage_id, str(payload.get("text") or ""))
+
+    @app.get("/api/process-metrics/templates/{template_id}/examples")
+    def get_process_examples(template_id: int, user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """좋은 결과 예시(2026-11-27, 5단계) — 사람이 승인·한 번에 통과·점검 미달 없음·외부 데이터 없음 후보와 적용 중인 예시."""
+        return process_learning.list_examples(conn, template_id)
+
+    @app.post("/api/process-examples/{example_id}/{action}")
+    def decide_process_example(example_id: int, action: str,
+                               user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER))):
+        """action: use(예시로 쓰기) · dismiss(무시) · retire(끄기)"""
+        status = {"use": "active", "dismiss": "dismissed", "retire": "retired"}.get(action)
+        if status is None:
+            raise HTTPException(status_code=404, detail="unknown_action")
+        return _learning_call(process_learning.set_example_status, conn, user["id"], example_id, status)
 
     @app.post("/api/process-lessons/{lesson_id}/activate")
     def activate_process_lesson(lesson_id: int, payload: dict = Body(default={}),

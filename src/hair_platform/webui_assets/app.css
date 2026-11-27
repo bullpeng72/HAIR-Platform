@@ -730,6 +730,10 @@
   .ab-diff { max-height: 12rem; overflow: auto; font-size: 0.8rem; background: var(--color-bg); padding: 0.4rem; border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
   .ab-add { color: var(--status-success-fg); }
   .ab-action { border-top: 1px dashed var(--color-border-strong); margin-top: 0.6rem; padding-top: 0.4rem; }
+  /* 좋은 결과 예시·사람 1시간 비용(2026-11-27, 5단계) */
+  .pm-example { border: 1px solid var(--color-border); border-radius: 6px; padding: 0.3rem 0.6rem; margin: 0.3rem 0; }
+  .pm-example summary { cursor: pointer; }
+  .pm-hourly input { width: 6rem; }
   .ab-del { color: var(--status-danger-fg, #991b1b); }
   .pm-wrap td:last-child { white-space: nowrap; }
 

@@ -214,7 +214,7 @@ def _run_metrics(run: dict, now: datetime) -> dict:
     }
 
 
-def _summarize(runs: list[dict], baseline_minutes: int | None) -> dict:
+def _summarize(runs: list[dict], baseline_minutes: int | None, hourly_cost: float | None = None) -> dict:
     """같은 묶음(템플릿 하나 또는 전체)의 실행들을 성과 지표로 요약한다."""
     completed = [r for r in runs if r["status"] == "completed"]
     failed = [r for r in runs if r["status"] == "failed"]
@@ -251,6 +251,14 @@ def _summarize(runs: list[dict], baseline_minutes: int | None) -> dict:
             (lead_median / (baseline_minutes * 60)) if baseline_minutes and lead_median is not None else None
         ),
     }
+    # 비용 대비 가치(2026-11-27, 5단계 — 11번): 사람 1시간 비용(USD)을 넣으면 건당 가치 = 기준 시간 × 시간당 비용.
+    # 사람이 결과를 검토한 시간은 빼지 않은 추정이다.
+    value = (baseline_minutes / 60 * hourly_cost) if baseline_minutes and hourly_cost else None
+    cost = out["cost_per_run"] if out["tokens_per_run"] else None
+    out["hourly_cost"] = hourly_cost
+    out["value_per_case"] = value
+    out["value_ratio"] = (value / cost) if value is not None and cost else None
+    out["net_value"] = ((value - (cost or 0)) * len(completed)) if value is not None else None
     out["signals"] = _signals(out)
     return out
 
@@ -272,6 +280,9 @@ def _signals(s: dict) -> list[dict]:
     if finished >= _MIN_SAMPLE and (s["rework_per_run"] or 0) >= _HIGH_REWORK_PER_RUN:
         signals.append({"kind": "rework", "level": "warn",
                         "text": f"실행 한 건에 평균 {s['rework_per_run']:.1f}번 다시 작성합니다"})
+    if s.get("value_ratio") is not None and s["value_ratio"] < 1 and not s.get("cost_partial"):
+        signals.append({"kind": "cost_over_value", "level": "warn",
+                        "text": "건당 AI 비용이 기준 시간으로 계산한 가치보다 큽니다 — 모델·단계 수를 검토하세요"})
     if s["baseline_minutes"] and s["lead_vs_baseline"] is not None and s["lead_vs_baseline"] > 1:
         signals.append({"kind": "slower_than_baseline", "level": "warn",
                         "text": "완료까지 걸린 시간(중앙값)이 예전 방식의 기준 시간보다 깁니다"})
@@ -358,6 +369,35 @@ def _waiting_list(conn: sqlite3.Connection, runs: list[dict], now: datetime, lim
     return out[:limit]
 
 
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS process_value_settings (id INTEGER PRIMARY KEY CHECK (id = 1), "
+                 "hourly_cost REAL, updated_by INTEGER, updated_at TEXT NOT NULL DEFAULT (datetime('now')))")
+
+
+def hourly_cost(conn: sqlite3.Connection) -> float | None:
+    try:
+        r = conn.execute("SELECT hourly_cost FROM process_value_settings WHERE id = 1").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return float(r[0]) if r and r[0] is not None else None
+
+
+def set_hourly_cost(conn: sqlite3.Connection, actor_id: int, value: float | None) -> dict:
+    """사람 1시간 비용(USD — AI 비용과 같은 단위). None이면 지운다."""
+    if value is not None:
+        value = float(value)
+        if not 0 < value <= 10000:
+            raise ValueError("hourly_cost_out_of_range")
+    before = hourly_cost(conn)
+    conn.execute("INSERT INTO process_value_settings (id, hourly_cost, updated_by) VALUES (1, ?, ?) "
+                 "ON CONFLICT(id) DO UPDATE SET hourly_cost = excluded.hourly_cost, updated_by = excluded.updated_by, "
+                 "updated_at = datetime('now')", (value, actor_id))
+    audit.record(conn, actor_id, "process_hourly_cost_set", "process_value_settings", 1,
+                 before={"hourly_cost": before}, after={"hourly_cost": value})
+    conn.commit()
+    return {"hourly_cost": value}
+
+
 def _templates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     baseline = "baseline_minutes" if _has_column(conn, "pipeline_templates", "baseline_minutes") else "NULL"
     return conn.execute(
@@ -377,11 +417,12 @@ def overview(conn: sqlite3.Connection, days: int | None = None) -> dict:
     cutoff = now - timedelta(days=days) if days else None
     in_period = [r for r in runs if cutoff is None or (_ts(r["created_at"]) or now) >= cutoff]
     templates = []
+    hc = hourly_cost(conn)
     for t in _templates(conn):
         t_runs = [r for r in in_period if r["pipeline_template_id"] == t["id"]]
         if not t_runs and not t["is_active"]:
             continue
-        summary = _summarize(t_runs, t["baseline_minutes"])
+        summary = _summarize(t_runs, t["baseline_minutes"], hc)
         templates.append({"template_id": t["id"], "name": t["name"], "domain": t["domain"],
                           "is_active": bool(t["is_active"]), **summary})
     templates.sort(key=lambda t: (-t["runs"], t["template_id"]))
@@ -389,6 +430,9 @@ def overview(conn: sqlite3.Connection, days: int | None = None) -> dict:
     covered = [t["baseline_hours_covered"] for t in templates if t["baseline_hours_covered"]]
     total["baseline_hours_covered"] = sum(covered) if covered else None
     total["templates_with_baseline"] = sum(1 for t in templates if t["baseline_minutes"])
+    nets = [t["net_value"] for t in templates if t["net_value"] is not None]
+    total["net_value"] = sum(nets) if nets else None
+    total["hourly_cost"] = hc
     return {
         "period_days": days,
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -425,7 +469,7 @@ def template_detail(conn: sqlite3.Connection, template_id: int, days: int | None
         "period_days": days,
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "template_id": t["id"], "name": t["name"], "domain": t["domain"], "is_active": bool(t["is_active"]),
-        "summary": _summarize(in_period, t["baseline_minutes"]),
+        "summary": _summarize(in_period, t["baseline_minutes"], hourly_cost(conn)),
         "stages": _stage_flow(conn, template_id, in_period),
         "trend": _weekly_trend(runs, now),
         "recent_runs": recent,

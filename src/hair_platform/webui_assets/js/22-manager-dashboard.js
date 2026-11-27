@@ -247,6 +247,8 @@ function _pmTiles(s, withBaseline) {
     _pmTile("지금 결재 대기", String(s.waiting_for_human), "진행 중 " + s.running + "건") +
     (withBaseline ? _pmTile("AI가 맡은 작업량", s.baseline_hours_covered ? s.baseline_hours_covered.toFixed(1) + "시간" : "—",
       s.baseline_hours_covered ? "기준 시간 × 완료 건수(추정)" : "기준 시간을 넣으면 계산됩니다") : "") +
+    (s.net_value !== null && s.net_value !== undefined ? _pmTile("추정 순절감", "$" + Math.round(s.net_value).toLocaleString(),
+      "(기준 시간 × 시간당 $" + s.hourly_cost + " − AI 비용) × 완료 건수") : "") +
     "</div>";
 }
 
@@ -297,6 +299,9 @@ async function renderProcessMetrics(content) {
       "<li><b>개선 제안</b> = 사람이 반려하며 적은 사유와 자주 미달하는 품질 기준에서 나온 '배운 점' 후보. 자세히 화면에서 적용하면 다음 실행부터 그 단계 지시문에 들어갑니다.</li>" +
       "</ul>") +
     '<div class="pm-head">' + _pmPeriodButtons() + '<span class="muted">기준 ' + esc(fmtTime(d.generated_at)) + "</span></div>" +
+    (ME.role === "admin" ? '<p class="pm-hourly"><label for="pm-hourly">사람 1시간 비용(USD)</label> <input id="pm-hourly" type="number" min="0" step="1" value="' +
+      (t.hourly_cost || "") + '" placeholder="예: 40"> <button class="small" id="pm-hourly-save">저장</button> <span class="muted" id="pm-hourly-msg">' +
+      "기준 시간과 곱해 건당 가치·순절감을 계산합니다(AI 비용과 같은 USD).</span></p>" : "") +
     _pmTiles(t, true) +
     '<div class="pm-legend muted"><span class="pm-seg pm-ai"></span> AI 작업 <span class="pm-seg pm-wait"></span> 사람 대기 <span class="pm-seg pm-other"></span> 그 밖</div>' +
     "<h3>파이프라인별</h3>" +
@@ -306,7 +311,8 @@ async function renderProcessMetrics(content) {
         String(p.runs), _pmPct(p.completion_rate), _pmDur(p.lead_median_seconds),
         _pmTimeBar(p.ai_mean_seconds, p.wait_mean_seconds, p.other_mean_seconds),
         _pmPct(p.first_pass_rate), p.rework_per_run === null ? "—" : p.rework_per_run.toFixed(1),
-        _pmPct(p.automation_rate), p.tokens_per_run ? _pmCost(p.cost_per_run, p.cost_partial) : "—",
+        _pmPct(p.automation_rate), (p.tokens_per_run ? _pmCost(p.cost_per_run, p.cost_partial) : "—") +
+          (p.value_ratio !== null && p.value_ratio !== undefined ? '<div class="muted pm-note">가치 ×' + (p.value_ratio >= 100 ? Math.round(p.value_ratio) : p.value_ratio.toFixed(1)) + "</div>" : ""),
         p.baseline_minutes ? _pmDur(p.baseline_minutes * 60) : '<span class="muted">없음</span>',
         _pmEstimate(p.estimate),
         _pmSignals(p.signals),
@@ -327,6 +333,14 @@ async function renderProcessMetrics(content) {
     _pmCapacityHtml(d.capacity) +
     "</section>";
   _pmBindCommon(content);
+  const hs = content.querySelector("#pm-hourly-save");
+  if (hs) hs.onclick = async () => {
+    const raw = content.querySelector("#pm-hourly").value.trim();
+    try {
+      await api("PUT", "/api/process-metrics/hourly-cost", { hourly_cost: raw === "" ? null : Number(raw) });
+      refresh();
+    } catch (e) { content.querySelector("#pm-hourly-msg").textContent = "저장하지 못했습니다: " + (e.message || e); }
+  };
   content.querySelectorAll("[data-pm-open]").forEach(b => b.onclick = () => { _pmTemplateId = Number(b.dataset.pmOpen); refresh(); });
   _pmInitTrend(d.trend);
 }
@@ -363,10 +377,11 @@ async function renderProcessMetricsDetail(content, templateId) {
   let d;
   try {
     d = await api("GET", "/api/process-metrics/templates/" + templateId + "?days=" + _pmDays);
-    [d.lessons, d.changes, d.policy] = await Promise.all([
+    [d.lessons, d.changes, d.policy, d.examples] = await Promise.all([
       api("GET", "/api/process-metrics/templates/" + templateId + "/lessons"),
       api("GET", "/api/process-metrics/templates/" + templateId + "/changes"),
       api("GET", "/api/process-metrics/templates/" + templateId + "/approval-policy"),
+      api("GET", "/api/process-metrics/templates/" + templateId + "/examples"),
     ]);
   } catch (e) {
     _pmTemplateId = null;
@@ -405,6 +420,7 @@ async function renderProcessMetricsDetail(content, templateId) {
 '<div class="pm-wide">' + table(["단계", "지나간 실행", "시도", "처음에 통과", "다시 작성", "사람 검토", "AI 작업(평균)", "사람 대기(평균)", "시간 비중", "지금"], flowRows,
       { empty: "단계가 없습니다." }) + "</div>" +
     _pmLessonsHtml(d) +
+    _pmExamplesHtml(d.examples) +
     _pmPolicyHtml(d.policy) +
     _pmChangesHtml(d.changes) +
     "<h3>최근 실행</h3>" +
@@ -442,8 +458,33 @@ async function renderProcessMetricsDetail(content, templateId) {
   const clear = document.getElementById("pm-baseline-clear");
   if (clear) clear.onclick = () => save(null);
   _pmBindLearning(content);
+  _pmBindExamples(content);
   _pmBindPolicy(content, templateId);
   _pmInitTrend(d.trend);
+}
+
+/* ---------- 좋은 결과 예시(2026-11-27, AI Native 분석 5단계 — 2번 학습 루프 3단계) ---------- */
+function _pmExamplesHtml(ex) {
+  if (!ex) return "";
+  const card = (e, actions) => '<details class="pm-example"><summary><b>' + e.seq_order + ". " + esc(e.stage_name) + "</b> " +
+    '<span class="muted">' + esc(fmtTime(e.source_at)) + " 승인 · " + e.full_chars.toLocaleString() + "자</span> " + actions + "</summary>" +
+    '<pre class="ab-diff">' + esc(e.excerpt) + (e.full_chars > e.excerpt.length ? "\n…" : "") + "</pre></details>";
+  return "<h4>좋은 결과 예시</h4>" +
+    '<p class="muted">사람이 승인했고(자동 승인 제외), 한 번에 통과했고, 품질 점검 미달이 없는 결과를 예시 후보로 올립니다. <b>예시로 쓰기</b>를 누르면(단계마다 ' +
+    ex.max_active_per_stage + "개까지) 다음 실행부터 형식·구성·깊이 참고용으로 지시문에 붙습니다(내용·숫자는 옮겨 쓰지 말라고 함). " +
+    "<b>외부 데이터(고객 메일·사내 DB 등)를 읽은 실행의 결과는 후보로 올리지 않습니다.</b></p>" +
+    (ex.active.length ? ex.active.map(e => card(e, '<span class="gate-badge gate-ok">사용 중</span> <button class="small" data-ex-act="retire" data-ex="' + e.id + '">끄기</button>')).join("") : "") +
+    (ex.candidates.length ? ex.candidates.map(e => card(e, '<button class="small" data-ex-act="use" data-ex="' + e.id + '">예시로 쓰기</button> <button class="small" data-ex-act="dismiss" data-ex="' + e.id + '">무시</button>')).join("")
+      : '<p class="muted">아직 예시 후보가 없습니다 — 사람이 승인한 결과가 쌓이면 나옵니다.</p>') +
+    '<span class="muted" id="pm-ex-msg"></span>';
+}
+
+function _pmBindExamples(content) {
+  content.querySelectorAll("[data-ex-act]").forEach(b => b.onclick = async (ev) => {
+    ev.preventDefault();  // <summary> 안의 버튼 — 접고 펴지 않게
+    try { await api("POST", "/api/process-examples/" + b.dataset.ex + "/" + b.dataset.exAct); refresh(); }
+    catch (e) { const m = content.querySelector("#pm-ex-msg"); if (m) m.textContent = "처리하지 못했습니다: " + (e.message || e); }
+  });
 }
 
 /* ---------- 결재 정책(2026-11-27, AI Native 분석 3단계 — 4번 위험 기반 결재) ---------- */
