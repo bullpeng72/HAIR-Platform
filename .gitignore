@@ -22,3 +22,8 @@ build/
 
 # 지식 베이스 벡터 DB(ChromaDB) 색인 — `<db>-vectors/` (2026-11-25, vector_backends.py)
 *.db-vectors/
+
+# 데이터 백업(hair backup·자동 백업 — 2026-11-27, backup.py). 운영 데이터라 저장소에 올리지 않는다.
+backups/
+hair-backup-*.tar.gz
+*.before-restore-*
