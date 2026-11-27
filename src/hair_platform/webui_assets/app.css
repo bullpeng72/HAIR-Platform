@@ -142,6 +142,8 @@
      1100px보다 넉넉), 읽기 힘들 만큼 줄 길이가 길어지지 않도록 상한은
      그대로 둔다. */
   main { padding: 1rem; width: min(94%, 1400px); margin: 0 auto; box-sizing: border-box; }
+  /* 공백 없이 긴 글(환경변수 이름을 ·로 이은 안내, 긴 URL 등)은 넘칠 때만 줄을 바꾼다(2026-11-27, 4-4 — 연동 설정이 폰 폭에서 167px 넘침). */
+  main { overflow-wrap: break-word; }
   section.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
   .deliverable-card { background: #f9fafb; border: 1px solid var(--color-border); border-radius: 6px; padding: 0.6rem 0.75rem; margin-bottom: 0.6rem; }
   .deliverable-card + .deliverable-card { margin-top: 0; }
@@ -333,6 +335,20 @@
   /* 2026-11-26 사용자 보고(대화 화면 provider·model 선택 상자가 붙어 보임) — 마크업에서 공백 없이 이어 붙인 선택 상자 사이에도
      버튼 사이 공백과 비슷한 간격을 준다(flex가 아닌 div.inline 줄). */
   div.inline > select + select { margin-left: 0.4rem; }
+  /* 화면 일관성(2026-11-27, 개선 계획 4-4) — 본문 버튼의 기본 모양을 하나로. 지금까지 primary·danger 말고는 브라우저 기본
+     모양(운영체제마다 다름)이라, 클래스를 빠뜨린 버튼은 옆 버튼과 크기·글자가 달랐다. `:where()`로 우선순위를 0으로 둬
+     기존의 개별 규칙(.skill-chip button·.chip button.small 등)이 그대로 이긴다. */
+  :where(main) :where(button:not(.primary, .danger)) {
+    background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border-strong);
+    border-radius: 4px; padding: 0.35rem 0.75rem; font-size: 0.85rem; font-family: inherit; cursor: pointer;
+  }
+  :where(main) :where(button:not(.primary, .danger)):hover:not(:disabled) { background: #eef0f4; }
+  :where(main) :where(button):disabled { opacity: 0.55; cursor: not-allowed; }
+  :where(main) :where(button.primary, button.danger):hover:not(:disabled) { filter: brightness(1.12); }
+  /* 좁은 화면 — 긴 모델 이름이 든 선택 상자·입력칸이 화면 밖으로 나가지 않게(실측: 파이프라인 관리·LLM 설정 최적화). */
+  select, input:not([type=checkbox]):not([type=radio]), textarea { max-width: 100%; box-sizing: border-box; }
+  /* 낱말 사이 공백 없이 이어 붙인 인라인 코드(`.pdf`·`.csv`·…)도 좁은 화면에서 줄을 바꾼다. 코드 블록(pre)은 그대로 가로 스크롤. */
+  .md-content :not(pre) > code { overflow-wrap: anywhere; }
   button.primary { background: #14213d; color: #fff; border: none; padding: 0.4rem 0.9rem; border-radius: 4px; cursor: pointer; }
   button.danger { background: #d64545; color: #fff; border: none; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; }
   button.small { padding: 0.25rem 0.5rem; font-size: 0.8rem; cursor: pointer; }

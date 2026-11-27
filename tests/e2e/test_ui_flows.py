@@ -233,3 +233,36 @@ def test_llm_optimize_marks_models_that_cannot_call_tools(login, live_server):
     assert "쓸 수 없음" in row.inner_text()
     assert page.locator(f'.optimize-apply-check[data-agent-id="{agent}"]').get_attribute("data-changed") == "1"
     assert not page.errors  # type: ignore[attr-defined]
+
+
+_LAYOUT_PROBE = r"""() => {
+  const vw = window.innerWidth, content = document.getElementById('content');
+  const visible = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  const inScroll = e => { for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) {
+    const ox = getComputedStyle(p).overflowX; if (ox === 'auto' || ox === 'scroll' || ox === 'hidden') return true; } return false; };
+  const name = e => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + ' "' + (e.innerText || '').trim().slice(0, 30) + '"';
+  return {
+    overflow: document.documentElement.scrollWidth - vw,
+    unwrappedTables: [...content.querySelectorAll('table')].filter(t => visible(t) && !inScroll(t)).map(name),
+    plainButtons: [...content.querySelectorAll('button')].filter(b => visible(b) && !b.className).map(name),
+    headerOnlyTables: [...content.querySelectorAll('table')].filter(t => visible(t) && t.querySelectorAll('tr').length <= 1).map(name),
+  };
+}"""
+
+
+def test_every_screen_fits_a_phone_and_keeps_one_look(login):
+    """화면 일관성(2026-11-27, 개선 계획 4-4) — 모든 화면을 폰 폭(390px)으로 열어 페이지가 옆으로 넘치지 않는지, 표는
+    가로 스크롤 상자 안에 있는지, 모양 클래스 없는 버튼이 없는지, 머리글만 있는 빈 표가 없는지(빈 상태 문구를 보여야 함).
+    실측: 이용 가이드가 2,282px, 연동 설정이 180px 넘쳤고 평가 기준의 빈 덮어쓰기 표는 머리글만 보였다."""
+    for role in ("admin", "member"):
+        page = login(role)
+        page.set_viewport_size({"width": 390, "height": 860})
+        tabs = page.evaluate("() => TABS.filter(t => t.roles.includes(ME.role)).map(t => t.id)")
+        problems = {}
+        for tab_id in tabs:
+            _tab(page, tab_id)
+            r = page.evaluate(_LAYOUT_PROBE)
+            bad = {k: v for k, v in r.items() if (v > 0 if k == "overflow" else v)}
+            if bad:
+                problems[tab_id] = bad
+        assert problems == {}, (role, problems)

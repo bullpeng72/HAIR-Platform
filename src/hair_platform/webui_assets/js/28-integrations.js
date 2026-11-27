@@ -140,7 +140,7 @@ async function renderIntegrations(content) {
     (isAdmin ?
       "<h3>외부 알림(admin)</h3>" +
       '<p class="muted">Slack·Teams의 수신 웹훅(Incoming Webhook) URL을 넣으면 고른 일이 생길 때마다 한 번씩 메시지를 보냅니다. 처음 저장할 때 이미 있던 일은 보내지 않습니다.</p>' +
-      '<div style="display:grid;gap:0.4rem"><input id="notify-url" type="url" placeholder="https://hooks.slack.com/services/..." style="width:100%" value="' + escAttr(notify.webhook_url || "") + '">' +
+      '<div style="display:grid;grid-template-columns:minmax(0,1fr);gap:0.4rem"><input id="notify-url" type="url" placeholder="https://hooks.slack.com/services/..." style="width:100%;box-sizing:border-box" value="' + escAttr(notify.webhook_url || "") + '">' +
       "<div>" + eventBoxes + "</div>" +
       // 메일(2026-11-24, P1-5) — 같은 이벤트를 메일로도. SMTP 접속 정보는 서버 환경변수(HAIR_SMTP_*)에서만 읽는다.
       '<label class="muted">메일로도 받을 사람(한 줄에 하나 또는 쉼표로, 최대 20명)</label>' +
@@ -149,7 +149,7 @@ async function renderIntegrations(content) {
         ? "메일 서버: " + esc(notify.smtp_host)
         : "⚠ 메일 서버가 설정되지 않았습니다 — 서버 PC에서 환경변수 HAIR_SMTP_HOST·HAIR_SMTP_PORT·HAIR_SMTP_USER·HAIR_SMTP_PASSWORD(·HAIR_SMTP_FROM, 465면 HAIR_SMTP_SSL=1)를 지정하세요(hair init으로 설정, hair check로 확인).") +
       (notify.email_last_error ? " · ⚠ " + esc(notify.email_last_error) : "") + "</span>" +
-      '<div class="inline"><button class="primary" id="notify-save">저장</button><button id="notify-test">테스트 전송</button>' +
+      '<div class="inline"><button class="primary" id="notify-save">저장</button><button class="small" id="notify-test">테스트 전송</button>' +
       '<span class="muted">' + (notify.last_sent_at ? "마지막 전송 " + fmt(notify.last_sent_at) : "") +
       (notify.last_error ? " · ⚠ " + esc(notify.last_error) : "") + "</span></div></div>" +
       "<h3>코드 저장소(admin)</h3>" +

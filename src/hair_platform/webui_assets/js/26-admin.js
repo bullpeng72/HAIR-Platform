@@ -98,7 +98,9 @@ async function renderEvaluationConfig(content) {
     '<p class="muted">특정 모델 종류나 파이프라인에서만 다른 통과 기준을 씁니다. 비운 칸은 위 기준 그대로입니다. 우선순위: 위 기준 &lt; 모델 &lt; 파이프라인. ' +
     '모델 덮어쓰기는 그 실행의 AI 호출이 <b>모두</b> 그 종류였을 때만 적용됩니다. 예: 로컬 모델은 호출 한 번이 수십 초~몇 분이라 응답 시간 Gate D가 늘 미달 → "모델: 로컬(Ollama)"의 D를 0으로.</p>' +
     '<div class="table-wrap"><table id="ec-ov-table"><thead><tr><th>대상</th><th>기본 기준</th>' +
-    data.gate_ids.map(g => "<th>" + g + "</th>").join("") + "<th></th></tr></thead><tbody>" + ovRows + "</tbody></table></div>" +
+    data.gate_ids.map(g => "<th>" + g + "</th>").join("") + "<th></th></tr></thead><tbody>" +
+    (ovRows || '<tr class="table-empty"><td colspan="' + (data.gate_ids.length + 3) + '" class="muted">덮어쓰기가 없습니다 — 모든 실행에 위 기준을 씁니다.</td></tr>') +
+    "</tbody></table></div>" +
     '<p><button type="button" class="small" id="ec-ov-add">덮어쓰기 추가</button></p>' +
     '<h3>응답 시간 SLA(Gate C·D)</h3>' +
     '<p class="muted">한 번의 AI 호출 기준입니다. 여러 호출로 이루어진 실행(파이프라인 단계·Crew)은 C·D를 재지 않습니다. 로컬 대형 모델이면 넉넉하게 잡으세요.</p>' +
@@ -110,13 +112,13 @@ async function renderEvaluationConfig(content) {
     '<h3>도구 범위 위반 감점</h3>' +
     '<p class="muted">허용 범위 밖 도구를 쓰면 해당 점수에서 이만큼 뺍니다(0~1).</p>' +
     '<input type="number" step="0.05" min="0" max="1" id="ec-penalty" value="' + cfg.scope_violation_penalty + '" style="width:7rem">' +
-    '<p><button class="primary" type="submit">저장</button> <button type="button" id="ec-reset">기본값으로 되돌리기</button></p>' +
+    '<p><button class="primary" type="submit">저장</button> <button type="button" class="small" id="ec-reset">기본값으로 되돌리기</button></p>' +
     "</form>" +
     '<h3>평가 도구 CLI와 맞추기(.aoo/targets.json)</h3>' +
     '<p class="muted">평가 도구의 <code>agent-eval gate</code>가 읽는 목표 파일 형식으로 Gate 기준을 내보내거나 가져옵니다(SLA·추론 표지·모델·파이프라인별 덮어쓰기는 포함되지 않음).</p>' +
     '<p><a class="small" href="/api/admin/evaluation-config/targets.json">targets.json 내려받기</a></p>' +
     '<textarea id="ec-targets" rows="4" style="width:100%;max-width:28rem" placeholder="targets.json 내용을 붙여 넣기"></textarea>' +
-    '<p><button type="button" id="ec-import">Gate 기준 가져오기</button></p>' +
+    '<p><button type="button" class="small" id="ec-import">Gate 기준 가져오기</button></p>' +
     '<p class="muted">기본값: 모든 Gate ' + def.gate_default + ", SLA p95 " + (def.sla_p95_ms / 1000) + "초·p99 " + (def.sla_p99_ms / 1000) + "초, 감점 " + def.scope_violation_penalty + ".</p>" +
     "</section>";
   const form = document.getElementById("ec-form");
@@ -142,6 +144,7 @@ async function renderEvaluationConfig(content) {
   const bindOvDelete = () => ovBody.querySelectorAll(".ec-ov-del").forEach(btn => { btn.onclick = () => btn.closest("tr").remove(); });
   bindOvDelete();
   document.getElementById("ec-ov-add").addEventListener("click", () => {
+    ovBody.querySelectorAll("tr.table-empty").forEach(r => r.remove());
     ovBody.insertAdjacentHTML("beforeend", _ecOverrideRowHtml({}, data.gate_ids, ecTemplates));
     bindOvDelete();
   });

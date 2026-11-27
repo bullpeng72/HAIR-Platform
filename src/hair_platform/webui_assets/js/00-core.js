@@ -174,7 +174,10 @@ function _renderMarkdown(raw) {
     // 마크다운 미리보기에서 `<style>`은 절대 앱 전체에 적용되면 안 되므로
     // 여기서 일괄 제거한다(HTML 결과물은 `contentType === "html"`의
     // 샌드박스 iframe 경로로 그대로 보인다).
-    return DOMPurify.sanitize(marked.parse(_fixBoldMarkdown(raw)), { FORBID_TAGS: ["style"] });
+    // 화면 일관성(2026-11-27, 개선 계획 4-4) — 마크다운 표도 앱의 다른 표처럼 `.table-wrap` 안에 둔다. 좁은 화면에서 표가
+    // 페이지 전체를 가로로 밀어내지 않고(실측: 이용 가이드가 폰 폭에서 2,282px 넘침) 표만 옆으로 스크롤된다.
+    return DOMPurify.sanitize(marked.parse(_fixBoldMarkdown(raw)), { FORBID_TAGS: ["style"] })
+      .replace(/<table>/g, '<div class="table-wrap"><table>').replace(/<\/table>/g, "</table></div>");
   } catch (e) {
     console.error("markdown rendering failed, falling back to plain text:", e);
     return "<p>" + esc(raw).replace(/\n/g, "<br>") + "</p>";
