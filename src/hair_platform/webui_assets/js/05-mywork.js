@@ -40,7 +40,7 @@ async function renderMyWork(content) {
       r.deliverable_count,
       r.latest_deliverable_at ? esc(fmtTime(r.latest_deliverable_at)) : "-",
       '<button class="small" data-open-workspace="' + r.task_id + '">열기</button>',
-    ]), { empty: "아직 맡은 일이 없습니다. 내가 맡긴 일과 나·내 팀에 배정된 일이 여기에 모입니다. <button class=\"small\" data-go-tab=\"home\">홈에서 AI에게 일 맡기기</button>" }) +
+    ]), { empty: "아직 맡은 일이 없습니다. 내가 맡긴 일과 나·내 팀에 배정된 일이 여기에 모입니다. " + _homeWizardLink() + "" }) +
     '<div id="mywork-detail"></div></section>' + '<div id="myabs-slot"></div>';
 
   content.querySelectorAll("[data-open-workspace]").forEach(btn => {

@@ -389,7 +389,7 @@ async function renderConversations(content) {
       (c.created_by === ME.id
         ? '<button class="small danger" data-delete-conversation="' + c.id + '">삭제</button>'
         : ''),
-    ]), { empty: "아직 대화가 없습니다. 위에 제목(선택)을 적고 <b>새 대화 시작</b>을 누른 뒤 <b>@이름</b>으로 Agent·사람을 부르세요. <button class=\"small\" data-go-tab=\"home\">홈에서 AI에게 일 맡기기</button>" }) +
+    ]), { empty: "아직 대화가 없습니다. 위에 제목(선택)을 적고 <b>새 대화 시작</b>을 누른 뒤 <b>@이름</b>으로 Agent·사람을 부르세요. " + _homeWizardLink() + "" }) +
     '<div id="conversation-detail"></div>' +
     '</section>';
 

@@ -9,6 +9,12 @@ function esc(s) {
 // esc()는 엘리먼트 콘텐츠로 쓰기엔 안전하지만 따옴표(")는 안 바꿔준다
 // (텍스트 노드엔 필요 없어서) — HTML 속성값(예: iframe srcdoc="...")에
 // 그대로 넣으면 따옴표에서 값이 끊길 수 있어 별도로 이스케이프한다.
+// 빈 목록의 "홈에서 AI에게 일 맡기기"(2026-11-28) — viewer의 홈에는 그 입력창이 없어 막다른 길이었다.
+function _homeWizardLink() {
+  return (typeof ME !== "undefined" && ME && ME.role === "viewer") ? ""
+    : '<button class="small" data-go-tab="home">홈에서 AI에게 일 맡기기</button>';
+}
+
 function escAttr(s) {
   return esc(s).replace(/"/g, "&quot;");
 }

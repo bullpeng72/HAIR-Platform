@@ -595,3 +595,15 @@ def test_conversation_poll_skips_redraw_until_new_message(login, live_server):
         assert not page.errors  # type: ignore[attr-defined]
     finally:
         conversations.delete_conversation(conn, conv["id"], member)
+
+
+def test_viewer_empty_lists_do_not_point_to_missing_home_box(login):
+    """열람자(2026-11-28) — viewer 홈에는 "AI에게 일 맡기기"가 없으니 빈 목록에서 그리로 보내는 단추도 없다. 구성원은 그대로."""
+    viewer = login("viewer")
+    for tab in ("conversations", "mywork", "briefs"):
+        _tab(viewer, tab)
+        assert viewer.locator('#content button[data-go-tab="home"]').count() == 0, tab
+    member = login("member")
+    _tab(member, "mywork")
+    assert member.locator('#content button[data-go-tab="home"]').count() >= 1
+    assert not viewer.errors and not member.errors  # type: ignore[attr-defined]

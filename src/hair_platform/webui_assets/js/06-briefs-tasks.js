@@ -44,7 +44,7 @@ async function renderBriefs(content) {
       : '<div class="muted pm-note">할 일 ' + b.task_count + '개 — 진행 보기</div>';
     return [b.id, esc(b.submitted_by_username || ("#" + b.submitted_by)), esc(b.raw_text), esc(label(b.status)) + nextHint, esc(b.stub_roles.join(", ")),
       canWrite ? '<div class="actions">' + actions + "</div>" : ""];
-  }), { empty: "아직 업무 요청이 없습니다. 홈의 \"AI에게 일 맡기기\"에 할 일을 적으면 맞는 방식을 추천받아 바로 요청할 수 있습니다(필요한 역할을 이미 알면 위 \"직접 등록(고급)\"). <button class=\"small\" data-go-tab=\"home\">홈에서 AI에게 일 맡기기</button>" });
+  }), { empty: "아직 업무 요청이 없습니다. 홈의 \"AI에게 일 맡기기\"에 할 일을 적으면 맞는 방식을 추천받아 바로 요청할 수 있습니다(필요한 역할을 이미 알면 위 \"직접 등록(고급)\"). " + _homeWizardLink() + "" });
   html += '<div id="brief-detail"></div></section>';
   content.innerHTML = html;
 
