@@ -277,6 +277,40 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         conversations.mark_conversation_read(conn, conversation_id, user["id"])
         return conversations.list_messages(conn, conversation_id)
 
+    @app.get("/api/conversations/{conversation_id}/messages/{message_id}/export.{fmt}")
+    def export_conversation_message(
+        conversation_id: int, message_id: int, fmt: str, user: sqlite3.Row = Depends(get_current_user)
+    ):
+        """대화 답변을 Word·Excel로(2026-11-28, 신입·일반 사용자 관점 Phase C) — 예전엔 결과물로 저장(갤러리)한 것만
+        Office 파일로 받을 수 있었고 대화 답변은 마크다운 다운로드뿐이었다. 대화 참가자만. Excel은 답변의 표를 시트로."""
+        from fastapi.responses import Response
+
+        from hair_platform import exports
+
+        kinds = {
+            "docx": ("to_docx", "available", "INSTALL_HINT",
+                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            "xlsx": ("to_xlsx", "xlsx_available", "XLSX_INSTALL_HINT",
+                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        }
+        if fmt not in kinds:
+            raise HTTPException(status_code=404, detail="지원하지 않는 형식입니다(docx·xlsx)")
+        if not conversations.is_participant(conn, conversation_id, user["id"]):
+            raise HTTPException(status_code=403, detail="이 대화의 참가자만 볼 수 있습니다")
+        row = conn.execute("SELECT m.content, c.title FROM conversation_messages m JOIN conversations c ON c.id = m.conversation_id "
+                           "WHERE m.id = ? AND m.conversation_id = ?", (message_id, conversation_id)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="메시지를 찾을 수 없습니다")
+        fn, check, hint, media = kinds[fmt]
+        if not getattr(exports, check)():
+            raise HTTPException(status_code=400, detail=getattr(exports, hint))
+        content = row["content"] or ""
+        head = content.lstrip()[:200].lower()
+        ctype = "html" if head.startswith("<!doctype html") or head.startswith("<html") else "markdown"  # 화면과 같은 판정
+        data = getattr(exports, fn)(content, ctype, title=row["title"] or f"대화 답변 #{message_id}")
+        return Response(content=data, media_type=media, headers={
+            "Content-Disposition": f'attachment; filename="chat-{conversation_id}-{message_id}.{fmt}"'})
+
     @app.get("/api/conversations/{conversation_id}/messages/{message_id}/evaluation-report")
     def conversation_message_evaluation_report(
         conversation_id: int, message_id: int, user: sqlite3.Row = Depends(get_current_user)

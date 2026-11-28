@@ -629,6 +629,28 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             "status": "pending_onboarding",
         }
 
+    @app.get("/api/agent-directory")
+    def get_agent_directory(user: sqlite3.Row = Depends(get_current_user)):
+        """누구에게 맡길까(2026-11-28, 신입·일반 사용자 관점) — 로그인한 누구나 볼 수 있는 활성 Agent 목록. 대화에서
+        @이름으로 부르려면 이름과 하는 일을 알아야 하는데 Agent 목록은 admin·manager 전용이었다. 이름·하는 일·스킬
+        이름만 준다(모델·비용·프롬프트 같은 설정은 주지 않는다)."""
+        import json as _json
+
+        from hair_platform import pool_catalog
+
+        dev_skills = {r[0] for r in conn.execute("SELECT name FROM skill_pool WHERE category = 'sw_dev'")}
+        out = []
+        for r in conn.execute("SELECT id, role_name, goal, skill_tags FROM agent_pool WHERE status = 'active' ORDER BY role_name"):
+            try:
+                tags = [t for t in _json.loads(r["skill_tags"] or "[]") if isinstance(t, str)]
+            except ValueError:
+                tags = []
+            # 개발 Agent — 스킬 절반 넘게 소프트웨어 개발(sw_dev)이면. 화면은 일반 업무 Agent를 먼저 보여 준다.
+            dev = bool(tags) and sum(t in dev_skills for t in tags) * 2 > len(tags)
+            out.append({"id": r["id"], "role_name": r["role_name"],
+                        "does": pool_catalog.agent_does(conn, r["goal"], tags, 160), "skills": tags[:6], "dev": dev})
+        return out
+
     @app.get("/api/agent-pool")
     def list_agent_pool(
         user: sqlite3.Row = Depends(require_role(Role.ADMIN, Role.MANAGER)),

@@ -1258,6 +1258,31 @@ def _build_transcript(
     return token_budget.fit_lines_to_budget(lines, provider, budget)
 
 
+AUTO_TITLE_MAX = 40
+
+
+def _auto_title(conn: sqlite3.Connection, conversation_id: int, content: str) -> None:
+    """제목 없는 대화는 첫 메시지로 이름 짓기(2026-11-28, 신입·일반 사용자 관점) — 대화를 열고 바로 묻는 사람이 대부분이라
+    목록이 "(제목 없음)"으로 가득 찼다. @멘션은 빼고 첫 줄 앞부분만. 사람이 붙인 제목은 건드리지 않는다."""
+    row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+    if row is None or (row["title"] or "").strip():
+        return
+    text = content or ""
+    if "@" in text:  # 띄어쓰기가 든 이름(@규정 요약가)까지 — 아는 이름을 긴 것부터 지우고, 남은 @낱말도 지운다
+        names = [r[0] for r in conn.execute(
+            "SELECT role_name FROM agent_pool UNION SELECT name FROM teams UNION SELECT username FROM users") if r[0]]
+        for n in sorted(names, key=len, reverse=True):
+            text = text.replace("@" + n, " ")
+        text = re.sub(r"@\S+", " ", text)
+    line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    line = re.sub(r"\s+", " ", line).strip(" .,·-")
+    if not line:
+        return
+    title = line if len(line) <= AUTO_TITLE_MAX else line[:AUTO_TITLE_MAX].rstrip() + "…"
+    conn.execute("UPDATE conversations SET title = ? WHERE id = ? AND (title IS NULL OR trim(title) = '')",
+                 (title, conversation_id))
+
+
 def create_message(
     conn: sqlite3.Connection,
     conversation_id: int,
@@ -1297,6 +1322,7 @@ def create_message(
     )
     message_id = cur.lastrowid
     assert message_id is not None
+    _auto_title(conn, conversation_id, content)
     audit.record(
         conn,
         actor_id,

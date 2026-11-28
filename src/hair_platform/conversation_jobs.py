@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 
 from hair_platform import (
@@ -1050,6 +1051,12 @@ def _run_default_ai_job(
                 )
             else:
                 system = _DEFAULT_SYSTEM_PROMPT
+        elif (auto_skill := auto_knowledge_skill(conn, last_human["content"] if last_human is not None else "")):
+            # 회사 자료 질문은 지식 베이스에서(2026-11-28, 신입·일반 사용자 관점 Phase D) — 기본 AI는 스킬을 고르지 않으면
+            # 지식 베이스를 전혀 찾지 않아, "출장비 규정이 어떻게 돼?"에 회사 문서 대신 일반론(또는 지어낸 답)을 냈다.
+            skill = auto_skill
+            skills_for_augmentation = [auto_skill]
+            system = deliverables.skill_grounded_system_prompt(conn, "대화 참여자", [auto_skill])
         else:
             system = _DEFAULT_SYSTEM_PROMPT
         # 대화 컨텍스트 정책(2026-11-20, `context_policy.py`) — 스킬 기본값
@@ -1291,6 +1298,27 @@ def run_agent_mention_job(
     # MCP 도구 세션(2026-11-24, P1-7 — `tool_calling.mcp_session`): 이 작업 동안 MCP 서버 접속을 열어 둔다.
     with progress.reporting(conn, "conversation_jobs", job_id), tool_calling.mcp_session():
         return _run_agent_mention_job(conn, job_id, conversation_id, agent_id, actor_id)
+
+
+# 회사 자료를 묻는 말(2026-11-28) — 규정·양식·절차·복리처럼 답이 회사 문서에 있는 질문.
+_COMPANY_Q_RE = re.compile(r"규정|사내|우리 ?회사|회사 ?(?:정책|규칙|방침)|양식|서식|템플릿|절차|정책|지침|매뉴얼|가이드|"
+                           r"출장|경비|비용 ?처리|정산|휴가|연차|복리|복지|근태|재택|보안 ?규칙|온보딩|신입")
+KNOWLEDGE_SKILL = "내부지식검색"
+
+
+def auto_knowledge_skill(conn: sqlite3.Connection, question: str) -> str | None:
+    """스킬을 고르지 않은 질문이 회사 자료를 묻는 말이고, 지식 베이스에 색인된 자료와 내부지식검색 스킬이 있으면 그 스킬.
+    보이는 범위는 검색 때 요청자 기준(`knowledge_access`)으로 그대로 걸린다."""
+    if not question or not _COMPANY_Q_RE.search(question):
+        return None
+    try:
+        if conn.execute("SELECT 1 FROM skill_pool WHERE name = ?", (KNOWLEDGE_SKILL,)).fetchone() is None:
+            return None
+        if conn.execute("SELECT 1 FROM knowledge_chunks LIMIT 1").fetchone() is None:
+            return None
+    except sqlite3.OperationalError:
+        return None
+    return KNOWLEDGE_SKILL
 
 
 @knowledge_access.viewer_from_actor  # 지식 검색 공개 범위를 요청자 기준으로(2026-11-25, P1-5)

@@ -102,7 +102,26 @@ def as_crewai_tool(conn: sqlite3.Connection):
 ROLE_SUGGESTION_MIN_SCORE = 2
 
 
+def agent_does(conn: sqlite3.Connection, goal: str | None, tags: list[str], limit: int = 120) -> str:
+    """Agent가 하는 일 한 줄(2026-11-28) — 목표가 있으면 그 첫 줄, 없으면(기본 Agent는 비어 있다) 주 스킬 설명의 첫 마디."""
+    if goal and goal.strip():
+        return goal.strip().split("\n")[0][:limit]
+    parts = []
+    for t in tags[:1]:  # 첫 스킬만 — 둘째부터는 보조 스킬이라 오히려 헷갈린다
+        r = conn.execute("SELECT description FROM skill_pool WHERE name = ?", (t,)).fetchone()
+        d = (r["description"] if r else "") or ""
+        first = re.split(r"[:—.]|\s-\s", d.replace("**", "").replace("`", ""), maxsplit=1)[0].strip()  # 마크다운 기호 빼기
+        if first:
+            parts.append(first)
+    return " · ".join(parts)[:limit]
+
+
 def suggest_roles(conn: sqlite3.Connection, request_text: str, limit: int = 6) -> list[str]:
+    """(아래 `suggest_roles_explained`의 역할 이름만 — 업무 요청 등 기존 호출부용)"""
+    return [r["role_name"] for r in suggest_roles_explained(conn, request_text, limit)]
+
+
+def suggest_roles_explained(conn: sqlite3.Connection, request_text: str, limit: int = 6) -> list[dict]:
     """업무 요청 본문과 맞는 기존 Agent 역할을 고른다 — LLM 없이(무료) 역할명·목표·보유 스킬의
     이름·설명과 요청 본문의 어간이 겹치는 정도로 점수를 매긴다(역할명·목표 일치는 2배).
     하드코딩·스텁 점검(2026-11-22) 2순위: 예전에는 요청을 줄바꿈으로 나눈 줄을 "역할 후보"로
@@ -114,7 +133,7 @@ def suggest_roles(conn: sqlite3.Connection, request_text: str, limit: int = 6) -
         r["name"]: f"{r['name']} {r['description'] or ''}"
         for r in conn.execute("SELECT name, description FROM skill_pool")
     }
-    scored: list[tuple[int, str]] = []
+    scored: list[tuple[int, str, dict]] = []
     for row in conn.execute(
         "SELECT role_name, goal, skill_tags FROM agent_pool WHERE status = 'active'"
     ):
@@ -126,8 +145,13 @@ def suggest_roles(conn: sqlite3.Connection, request_text: str, limit: int = 6) -
         tags: list[str] = [t for t in raw_tags if isinstance(t, str)] if isinstance(raw_tags, list) else []
         own = _stems(f"{row['role_name']} {row['goal'] or ''}")
         skill_text = " ".join(skills.get(t) or t for t in tags)
-        score = 2 * len(query & own) + len(query & (_stems(skill_text) - own))
+        own_hits = query & own
+        skill_hits = query & (_stems(skill_text) - own)
+        score = 2 * len(own_hits) + len(skill_hits)
         if score >= ROLE_SUGGESTION_MIN_SCORE:
-            scored.append((score, row["role_name"]))
+            # 왜 골랐는지(2026-11-28) — 추천 카드가 모두 같은 문장이었다. 겹친 낱말과 그 Agent가 하는 일을 함께 돌려준다.
+            scored.append((score, row["role_name"], {"role_name": row["role_name"], "score": score, "goal": row["goal"] or "",
+                                                    "role_hits": sorted(own_hits), "skill_hits": sorted(skill_hits),
+                                                    "skills": tags}))
     scored.sort(key=lambda x: (-x[0], x[1]))
-    return [role for _, role in scored[:limit]]
+    return [d for _, _, d in scored[:limit]]

@@ -8,6 +8,8 @@ async function renderInbox(content) {
     pipeline_failed: "파이프라인 실행 실패",
     low_gate_score: "품질 점검 미달 경고",
     completed: "✅ 완료됨",
+    assigned_to_me: "📌 새로 맡은 일",
+    due_soon: "⏰ 기한",
   };
   const cards = items.map(item => {
     if (item.type === "approval_pending") {
@@ -37,6 +39,18 @@ async function renderInbox(content) {
         (item.interrupted ? '<div class="muted">업무를 열어 "이어서 실행"을 누르면 끝난 단계는 건너뛰고 이어 갑니다(admin·manager).</div>' : "") +
         '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
     }
+    // 새로 맡은 일·기한(2026-11-28)
+    if (item.type === "due_soon") {
+      return '<div class="deliverable-card"><div><span class="gate-badge ' + (item.overdue ? "gate-warn" : "gate-info") + '">' +
+        (item.overdue ? "⏰ 기한 지남" : "⏰ 기한 임박") + "</span> · " + esc(item.role_name) + " · " + esc(item.due_date) + "</div>" +
+        '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
+    }
+    if (item.type === "assigned_to_me") {
+      return '<div class="deliverable-card"><div><b>' + labelOf[item.type] + "</b> · " + esc(item.role_name) +
+        (item.due_date ? ' <span class="muted">기한 ' + esc(item.due_date) + "</span>" : "") + "</div>" +
+        '<div class="muted">' + esc(fmtTime(item.assigned_at)) + " 배정</div>" +
+        '<button class="small" data-goto-task="' + item.task_id + '">업무 열기</button></div>';
+    }
     if (item.type === "completed") {
       // 사용자 요청(2026-11-12) — 결재가 필요 없는 성공 완료도 요청한
       // 사람이 알 수 있게 한다(지금까지 조용히 묻혔음, 위 inbox.py
@@ -54,6 +68,7 @@ async function renderInbox(content) {
     '<section class="card"><h2>내게 필요한 조치</h2>' +
     helpBox(
       '<ul class="muted help-list">' +
+      '<li>📌 새로 맡은 일(최근 3일 안에 내게 확정된 일)·⏰ 기한 지남·내일까지 기한인 내 일도 여기 뜹니다.</li>' +
       '<li>결재 대기·AI 에이전트 실행 실패·파이프라인 실패(서버 재시작 중단 포함)·품질 점검 미달 경고(승인/반려 전인 것만)·✅ 완료됨(결재가 필요 없는 성공, 최근 24시간 이내만)을 한 곳에 모았습니다.</li>' +
       '<li>브라우저 알림을 허용하면 다른 탭·창에 있어도 새 항목이 생길 때 데스크톱 알림이 뜹니다(약 20초 간격으로 확인).</li>' +
       '<li>완전한 시간순 통합은 아니고 종류별로 묶여 있습니다 — 처리는 각 항목의 원래 화면(결재/내 업무)에서 합니다.</li>' +

@@ -190,10 +190,12 @@
      넣으면 그 구간만 글자 폭이 늘어나 mirror와 실제 input의 글자 위치가
      어긋나므로(그 뒤로 입력한 글자가 캐럿과 안 맞아 보임), 폭이 안
      바뀌는 font-weight+color만 쓴다(배경/패딩 없음).*/
-  #conv-message-highlight { position: absolute; inset: 0; margin: 0; padding: 0.35rem; border: 1px solid transparent; border-radius: 4px; font-size: 0.85rem; font-family: inherit; line-height: normal; white-space: pre; overflow: hidden; box-sizing: border-box; pointer-events: none; background: #fff; z-index: 0; }
+  #conv-message-highlight { position: absolute; inset: 0; margin: 0; padding: 0.35rem; border: 1px solid transparent; border-radius: 4px; font-size: 0.85rem; font-family: inherit; line-height: 1.4; white-space: pre-wrap; overflow-wrap: break-word; overflow: hidden; box-sizing: border-box; pointer-events: none; background: #fff; z-index: 0; }
   #conv-message-highlight .mention-inline-agent { font-weight: 600; color: #6d28d9; }
   #conv-message-highlight .mention-inline-human { font-weight: 600; color: #1d4ed8; }
-  #conv-message-input { position: relative; z-index: 1; background: transparent; color: transparent; caret-color: #111; }
+  #conv-message-input { position: relative; z-index: 1; background: transparent; color: transparent; caret-color: #111; display: block; margin: 0; padding: 0.35rem; font-size: 0.85rem; font-family: inherit; line-height: 1.4; resize: vertical; min-height: 2.6rem; overflow-wrap: break-word; }
+  .conv-settings { margin: 0.25rem 0 0.75rem; }
+  .conv-settings > summary { cursor: pointer; color: var(--color-muted); font-size: 0.9rem; }
   #conv-message-input::placeholder { color: var(--color-muted); }
   .mention-dropdown { position: absolute; z-index: 20; top: 100%; left: 0; width: 100%; max-height: 10rem; overflow-y: auto; margin: 2px 0 0; padding: 0.2rem 0; list-style: none; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
   .mention-dropdown li { padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
@@ -753,3 +755,32 @@
 
 /* 활동 기록 자세히(2026-11-28) */
 .audit-detail pre { white-space: pre-wrap; word-break: break-word; max-height: 16rem; overflow: auto; margin: 0.2rem 0 0.4rem; font-size: 0.85em; }
+
+/* 오늘 내 일(2026-11-28) */
+.home-today h4 { margin: 0.6rem 0 0.3rem; }
+.home-today-list { margin: 0 0 0.4rem; padding-left: 1.1rem; }
+.home-today-list li { margin: 0.2rem 0; }
+/* 메시지 더 보기(2026-11-28) */
+.msg-more { display: inline-block; position: relative; margin-left: 0.3rem; }
+.msg-more > summary { list-style: none; cursor: pointer; padding: 0 0.4rem; border-radius: 4px; font-weight: 700; }
+.msg-more > summary::-webkit-details-marker { display: none; }
+.msg-more[open] .msg-more-menu { position: absolute; right: 0; top: 1.4rem; z-index: 5; display: flex; flex-direction: column; gap: 0.25rem; background: var(--color-surface, #fff); border: 1px solid var(--color-border, #ddd); border-radius: 6px; padding: 0.4rem; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+/* 누구에게 맡길까(2026-11-28) */
+.wizard-tip { margin: 0.6rem 0 0; padding: 0.5rem 0.7rem; border-radius: 6px; background: var(--status-muted-bg); color: var(--status-muted-fg); }
+.agent-dir { margin: 0.6rem 0; }
+.agent-dir-q { width: 100%; box-sizing: border-box; margin: 0.4rem 0; }
+.agent-dir-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 0.5rem; max-height: 28rem; overflow-y: auto; }
+.agent-dir-item { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; padding: 0.5rem 0.6rem; border: 1px solid var(--color-border); border-radius: 6px; min-width: 0; }
+.agent-dir-item > div { min-width: 0; }
+.agent-dir-skills { margin-top: 0.25rem; display: flex; flex-wrap: wrap; gap: 0.2rem; }
+.agent-dir-skills .chip { font-size: 0.75rem; }
+.agent-dir-item > button { flex-shrink: 0; white-space: nowrap; }
+/* 처음 써 보기(2026-11-28) */
+.home-firstday ol { margin: 0.3rem 0 0.5rem; padding-left: 1.2rem; }
+.home-firstday li { margin: 0.35rem 0; }
+.home-firstday li.done { color: var(--color-muted); }
+.home-firstday [data-try-prompt] { margin: 0.15rem 0.1rem; }
+/* 휴대폰 표(2026-11-28) — 한글이 글자 단위로 줄바꿈돼 "서/울"처럼 쪼개졌다. 낱말 단위로 끊고, 넓은 표는 그 안에서 가로로 민다. */
+td, th { word-break: keep-all; overflow-wrap: break-word; }
+.artifact-preview table { display: block; max-width: 100%; overflow-x: auto; }
+@media (max-width: 600px) { #conv-message-input { min-height: 4.2rem; } }

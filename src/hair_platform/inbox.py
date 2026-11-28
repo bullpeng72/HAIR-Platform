@@ -40,6 +40,10 @@ from hair_platform import agent_evaluation, deliverables
 from hair_platform import approvals as approvals_mod
 
 _COMPLETED_WINDOW_HOURS = 24
+# 새로 맡은 일·기한(2026-11-28, 신입·일반 사용자 관점) — 일이 내게 배정돼도, 기한이 다가와도 인박스에 아무것도 안 떠
+# 홈을 열어 봐야만 알았다. 사람 당사자(내가 할 일)만 — 내가 Agent에게 맡긴 일은 기한 알림 대상이 아니다.
+_ASSIGNED_WINDOW_HOURS = 72
+_DUE_SOON_DAYS = 1
 
 
 def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
@@ -71,6 +75,24 @@ def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
     ).strftime("%Y-%m-%d %H:%M:%S")
 
     my_work = deliverables.list_my_work(conn, user_id, limit=200)
+    assigned_cutoff = (datetime.now(UTC) - timedelta(hours=_ASSIGNED_WINDOW_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+    due_limit = (datetime.now(UTC) + timedelta(days=_DUE_SOON_DAYS)).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
+    assigned: list[dict] = []
+    due: list[dict] = []
+    for w in my_work:
+        if w.get("my_relationship") != "assignee" or w.get("task_status") == "done":
+            continue
+        if w.get("due_date") and w["due_date"] <= due_limit:
+            due.append({"type": "due_soon", "task_id": w["task_id"], "role_name": w["role_name"], "due_date": w["due_date"],
+                        "overdue": w["due_date"] < today})
+        confirmed = conn.execute(
+            "SELECT MAX(changed_at) FROM assignment_history WHERE assignment_id = ? AND to_status = 'confirmed'",
+            (w.get("assignment_id"),)).fetchone()[0]
+        if confirmed and confirmed > assigned_cutoff:
+            assigned.append({"type": "assigned_to_me", "task_id": w["task_id"], "role_name": w["role_name"],
+                             "assigned_at": confirmed, "due_date": w.get("due_date")})
+    due.sort(key=lambda x: x["due_date"])
     execution_failed: list[dict] = []
     low_gate_score: list[dict] = []
     completed: list[dict] = []
@@ -148,6 +170,8 @@ def get_inbox(conn: sqlite3.Connection, user_id: int, role: str) -> list[dict]:
     # list_my_work()가 이미 최근 배정순(id DESC)으로 주므로 그 순서를
     # 그대로 따른다 — 뒤집지 않는다(실측으로 발견한 버그: 처음엔
     # reversed()를 잘못 넣어 오래된 task가 먼저 나왔었다).
+    items.extend(due)  # 기한 지남·임박이 결재 다음으로 급하다
+    items.extend(assigned)
     items.extend(execution_failed)
     items.extend(pipeline_failed)
     items.extend(low_gate_score)

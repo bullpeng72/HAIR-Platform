@@ -29,9 +29,15 @@ def test_every_screen_opens_without_js_errors(login):
 def test_home_and_role_menus(login):
     admin = login("admin")
     _tab(admin, "home")
-    assert admin.locator("#content").get_by_text("처리할 일").first.is_visible()
+    # 홈 첫 블록은 "오늘 내 일", AI 운영 지표는 admin·manager에게 "AI 처리 현황"(2026-11-28)
+    assert admin.locator("#content h3", has_text="오늘 내 일").first.is_visible()
+    assert admin.locator("#content h3", has_text="AI 처리 현황").first.is_visible()
     assert admin.locator('button[data-tab="admin"]').count() == 1
     member = login("member")
+    _tab(member, "home")
+    assert member.locator("#content h3", has_text="오늘 내 일").first.is_visible()
+    assert member.locator("#content h3", has_text="AI 처리 현황").count() == 0  # 실패가 없으면 구성원에게는 숨김
+    assert member.locator("#content h3", has_text="반복 업무 자동화").count() == 0  # admin·manager 기능
     assert member.locator('button[data-tab="admin"]').count() == 0
     assert member.locator('button[data-tab="cost"]').count() == 0
 
@@ -78,6 +84,9 @@ def test_conversation_model_notice_order_and_select_spacing(login, live_server):
     _tab(page, "conversations")
     page.click(f'[data-open-conversation="{conv["id"]}"]')
     page.wait_for_selector("#conv-to-brief")
+    assert page.locator("#conv-settings").get_attribute("open") is None  # 모델 설정은 접혀 있다(2026-11-28)
+    assert page.locator("#conv-message-input").evaluate("el => el.tagName") == "TEXTAREA"  # 여러 줄 입력
+    page.click("#conv-settings summary")
     order = page.evaluate("""() => {
         const notice = [...document.querySelectorAll('p.muted')].find(p => p.textContent.includes('이 모델 설정은'));
         const brief = document.getElementById('conv-to-brief');

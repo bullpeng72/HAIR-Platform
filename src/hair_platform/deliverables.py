@@ -356,7 +356,7 @@ def list_my_work(
     rows = conn.execute(
         """
         SELECT a.id AS assignment_id, a.task_id, a.resource_type, a.resource_id,
-               t.brief_id, t.role_name, t.due_date, t.estimate_hours,
+               t.brief_id, t.role_name, t.due_date, t.estimate_hours, t.status AS task_status,
                CASE
                    WHEN a.resource_type = 'human' THEN 'assignee'
                    WHEN a.resource_type = 'agent' THEN 'requester'
@@ -398,6 +398,10 @@ def list_my_work(
                 "resource_id": row["resource_id"],
                 "assignment_id": row["assignment_id"],
                 "my_relationship": row["rel"],
+                # 기한·예상 시간·할 일 상태(2026-11-28 수정) — 쿼리는 읽었지만 응답에서 빠져 "내 업무"의 기한 칸이 늘 "-"였다.
+                "due_date": row["due_date"],
+                "estimate_hours": row["estimate_hours"],
+                "task_status": row["task_status"],
                 **summary,
             }
         )

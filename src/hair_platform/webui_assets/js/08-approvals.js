@@ -24,7 +24,7 @@ async function renderApprovals(content) {
       '<li><b>반려</b>하면 그 배정 요청은 거기서 끝나고(재사용 불가), 다시 배정하려면 "리소스 매칭/배정"에서 새로 요청해야 합니다.</li>' +
       '</ul>'
     ) +
-    approvalTable(mine, false, "approver") +
+    approvalTable(_groupApprovalChains(mine), false, "approver") +
     (isDecider ? "" : '<div id="approval-content-detail" style="margin-top:0.75rem"></div>') +
     "</section>" +
     (isDecider ? '<div id="delegation-slot"></div>' : "");
@@ -185,9 +185,12 @@ function approvalTable(rows, withActions, personColumn) {
       // pending이면 배정된 결재권자(approver_id)를 보여준다 —
       // approver_id가 비어 있으면(상사 미지정) "Admin/매니저 누구나"가
       // 처리할 수 있다는 뜻이라 그대로 알려준다.
-      if (a.status !== "pending") {
+      if (a.chain_names && a.chain_names.length > 1) {
+        // 여러 단계 결재(2026-11-28) — 결재 순서를 한 줄로, 지금 차례는 굵게
+        row.push(a.chain_names.map((n, i) => i === a.chain_current ? "<b>" + esc(n) + "</b>" : esc(n)).join(" → "));
+      } else if (a.status !== "pending" && a.status !== "waiting") {
         row.push(a.approved_by_username ? esc(a.approved_by_username) : '<span class="muted">-</span>');
-      } else if (a.approver_id != null) {
+      } else if (a.approver_id != null) {  // 대기·다음 차례는 배정된 결재권자(2026-11-28 수정 — 다음 차례가 "-"였다)
         row.push(esc(a.approver_username || ("#" + a.approver_id)));
       } else if (isKnowledge) {
         row.push('<span class="muted">Admin</span>');
@@ -254,3 +257,30 @@ async function _renderDelegations(slot) {
   };
 }
 
+
+
+/* 내가 요청한 건 — 한 건의 여러 단계를 한 줄로(2026-11-28, 신입·일반 사용자 관점). 예전엔 2단계 결재가 "대기중"과
+   "대기(이전 단계)" 두 줄로 따로 보여 같은 요청인지 알기 어려웠다. 지금 차례(대기 중인 단계, 없으면 반려된 단계, 그것도
+   없으면 마지막 단계)를 대표로, 단계는 "1/2", 결재권자는 순서대로 이어서 보여 준다. */
+function _groupApprovalChains(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    const k = r.subject_type + ":" + r.subject_id;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  }
+  const who = (r) => r.status !== "pending" && r.status !== "waiting"
+    ? (r.approved_by_username || "-")
+    : (r.approver_id != null ? (r.approver_username || "#" + r.approver_id) : "누구나");
+  const out = [];
+  for (const steps of groups.values()) {
+    steps.sort((a, b) => a.step - b.step);
+    if (steps.length === 1) { out.push(steps[0]); continue; }
+    let idx = steps.findIndex(r => r.status === "pending");
+    if (idx < 0) idx = steps.findIndex(r => r.status === "rejected");
+    if (idx < 0) idx = steps.length - 1;
+    const cur = steps[idx];
+    out.push({ ...cur, step: cur.step + "/" + steps.length, chain_names: steps.map(who), chain_current: idx });
+  }
+  return out.sort((a, b) => b.id - a.id);
+}

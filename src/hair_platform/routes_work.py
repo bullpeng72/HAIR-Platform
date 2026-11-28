@@ -151,7 +151,8 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         팀은 team_leader_id 또는 team_members 소속으로 식별)을 그대로
         따른다."""
         base_sql = (
-            "SELECT b.*, u.username AS submitted_by_username FROM briefs b "
+            "SELECT b.*, u.username AS submitted_by_username, "
+            "(SELECT COUNT(*) FROM tasks t0 WHERE t0.brief_id = b.id) AS task_count FROM briefs b "  # 진행 안내(2026-11-28)
             "LEFT JOIN users u ON u.id = b.submitted_by"
         )
         if user["role"] in (Role.ADMIN.value, Role.MANAGER.value):
@@ -192,6 +193,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 "status": row["status"],
                 "submitted_by": row["submitted_by"],
                 "submitted_by_username": row["submitted_by_username"],
+                "task_count": row["task_count"],
             }
             for row in rows
         ]
@@ -656,6 +658,17 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             for row in rows
         ]
 
+    @app.get("/api/me/getting-started")
+    def get_getting_started(user: sqlite3.Row = Depends(get_current_user)):
+        """처음 써 보기(2026-11-28, 신입·일반 사용자 관점 Phase D) — 홈의 첫날 점검표가 쓰는 두 가지. 세 번째(Word로 받기·
+        복사)는 화면이 브라우저에 기억한다."""
+        asked = conn.execute("SELECT 1 FROM conversation_messages WHERE author_type = 'human' AND author_id = ? LIMIT 1",
+                             (user["id"],)).fetchone() is not None
+        delegated = conn.execute("SELECT 1 FROM briefs WHERE submitted_by = ? LIMIT 1", (user["id"],)).fetchone() is not None or \
+            conn.execute("SELECT 1 FROM conversation_participants WHERE participant_type IN ('agent', 'team') AND invited_by = ? LIMIT 1",
+                         (user["id"],)).fetchone() is not None
+        return {"asked": asked, "delegated": delegated}
+
     @app.get("/api/my-work")
     def get_my_work(
         limit: int = 50,
@@ -702,6 +715,14 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 status_code=403,
                 detail="이 업무의 협업 워크스페이스에 접근할 권한이 없습니다",
             )
+        # 요청 내용·요청자·맡긴 사람(2026-11-28, 신입·일반 사용자 관점) — 일을 맡은 사람이 워크스페이스를 열어도 무엇을
+        # 해 달라는 건지(업무 요청 본문)와 누가 요청·배정했는지가 어디에도 없었다. 참가자 확인을 지난 뒤라 그대로 준다.
+        b = conn.execute("SELECT b.raw_text, u.username FROM briefs b LEFT JOIN users u ON u.id = b.submitted_by "
+                         "WHERE b.id = ?", (detail.get("brief_id"),)).fetchone()
+        a = conn.execute("SELECT u.username FROM assignments a JOIN users u ON u.id = a.requested_by "
+                         "WHERE a.task_id = ? AND a.status = 'confirmed' ORDER BY a.id LIMIT 1", (task_id,)).fetchone()
+        detail = {**detail, "brief_text": b["raw_text"] if b else None, "requested_by_name": b["username"] if b else None,
+                  "assigned_by_name": a["username"] if a else None}
         return detail
 
     @app.get("/api/tasks/{task_id}/budget")

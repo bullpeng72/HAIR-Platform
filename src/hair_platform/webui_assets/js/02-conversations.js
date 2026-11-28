@@ -301,7 +301,8 @@ async function _pollMyMentions() {
 // 몰랐다. 처음 불러온 목록은 "이미 있던 것"으로만 기억하고(로그인 직후 알림 폭주 방지), 그 뒤 새로 생긴 항목만 알린다.
 let _inboxSeenKeys = null;
 function _inboxItemKey(i) {
-  return i.type + ":" + (i.approval_id || i.job_id || i.run_id || i.deliverable_id || "") + ":" + (i.task_id || "") + ":" + (i.completed_at || i.failed_at || "");
+  return i.type + ":" + (i.approval_id || i.job_id || i.run_id || i.deliverable_id || "") + ":" + (i.task_id || "") + ":" +
+    (i.completed_at || i.failed_at || i.assigned_at || (i.type === "due_soon" ? (i.overdue ? "late" : "soon") : ""));
 }
 function _inboxNotifyText(i) {
   if (i.type === "approval_pending") return ["🗳 결재 대기", (i.task_role_name || i.resource_name || "새 결재 요청")];
@@ -309,6 +310,8 @@ function _inboxNotifyText(i) {
   if (i.type === "pipeline_failed") return [i.interrupted ? "⏸ 파이프라인 중단(서버 재시작)" : "⚠ 파이프라인 실패", (i.template_name || "") + " · " + (i.role_name || "")];
   if (i.type === "low_gate_score") return ["🟡 품질 점검 미달", i.role_name || ""];
   if (i.type === "completed") return ["✅ 업무 완료", i.role_name || ""];
+  if (i.type === "assigned_to_me") return ["📌 새로 맡은 일", (i.role_name || "") + (i.due_date ? " · 기한 " + i.due_date : "")];
+  if (i.type === "due_soon") return [i.overdue ? "⏰ 기한 지남" : "⏰ 기한 임박", (i.role_name || "") + " · " + (i.due_date || "")];
   return ["HAIR 알림", i.role_name || ""];
 }
 function _notifyNewInboxItems(items) {
@@ -374,11 +377,13 @@ async function renderConversations(content) {
     '<form class="inline" id="new-conversation-form">' +
     '<input id="new-conversation-title" placeholder="새 대화 제목(선택)" style="flex:1">' +
     '<button class="primary" type="submit">새 대화 시작</button>' +
+    ' <button type="button" class="small" id="agent-dir-toggle">🤖 누구에게 맡길까?</button>' +
     '</form>' +
-    table(["ID", "제목", "시작일", "동작"], list.map(c => [
-      c.id,
+    '<div id="agent-dir-slot"></div>' +
+    // 번호 칸은 빼고(사용자에게 의미 없음) 날짜는 짧게 — 휴대폰에서 제목이 한 글자씩 세로로 쪼개졌다(2026-11-28)
+    table(["제목", "시작일", "동작"], list.map(c => [
       esc(c.title || "(제목 없음)") + (c.linked_task_id ? ' <span class="muted">(업무 #' + c.linked_task_id + ')</span>' : ''),
-      esc(fmtTime(c.created_at)),
+      esc((c.created_at || "").slice(0, 10)),
       '<button class="small" data-open-conversation="' + c.id + '">열기</button> ' +
       '<button class="small danger" data-leave-conversation="' + c.id + '">나가기</button> ' +
       (c.created_by === ME.id
@@ -388,6 +393,11 @@ async function renderConversations(content) {
     '<div id="conversation-detail"></div>' +
     '</section>';
 
+  document.getElementById("agent-dir-toggle").addEventListener("click", () => {
+    const slot = document.getElementById("agent-dir-slot");
+    if (slot.innerHTML) { slot.innerHTML = ""; return; }
+    _renderAgentDirectory(slot);
+  });
   document.getElementById("new-conversation-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const title = document.getElementById("new-conversation-title").value.trim();
@@ -630,6 +640,7 @@ function setupMentionInputMirror(inputEl, mirrorEl, participants) {
   function sync() {
     mirrorEl.innerHTML = _highlightMentionsForInput(inputEl.value, participants);
     mirrorEl.scrollLeft = inputEl.scrollLeft;
+    mirrorEl.scrollTop = inputEl.scrollTop;  // 여러 줄 입력창(2026-11-28)
   }
   inputEl.addEventListener("input", sync);
   inputEl.addEventListener("keyup", sync);
@@ -719,7 +730,17 @@ function _renderConversationMessage(m, participants, conv) {
     _conversationGateBadge(m) + _conversationDelegationBadge(m) + _conversationSingleShotBadge(m) + _conversationContextBadge(m) + ' · ' + esc(fmtTime(m.created_at)) +
     // 평가 리포트(2026-11-25) — Agent-Evaluator가 만든 Gate A-G 종합 리포트(새 탭, 격리된 출처).
     (m.has_report ? ' · <a class="small" href="/api/conversations/' + m.conversation_id + '/messages/' + m.id + '/evaluation-report" target="_blank" rel="noopener" title="Agent-Evaluator가 만든 Gate A-G 종합 리포트">평가 리포트</a>' : "") +
-    saveBtn + knowledgeBtn + deleteBtn + '</div>' +
+    // AI 답변 → Word·Excel(2026-11-28, Phase C) — 표가 있을 때만 엑셀.
+    (m.author_type === "agent" && m.content
+      ? ' <button type="button" class="small" data-export-message="' + m.conversation_id + ':' + m.id + ':docx" title="이 답변을 Word 문서로 받기">Word로 받기</button>' +
+        (/^\s*\|?\s*:?-{2,}:?\s*\|/m.test(m.content) || /<table[\s>]/i.test(m.content)
+          ? ' <button type="button" class="small" data-export-message="' + m.conversation_id + ':' + m.id + ':xlsx" title="이 답변의 표를 엑셀로 받기">표를 엑셀로</button>' : '')
+      : '') +
+    // 메시지마다 버튼이 많아 본문보다 먼저 눈에 띄었다(2026-11-28) — 보내기·삭제는 "⋯" 안으로. 복사·다운로드는 본문 도구줄에 그대로.
+    (saveBtn || knowledgeBtn || deleteBtn
+      ? ' <details class="msg-more"><summary title="더 보기 — 갤러리·지식베이스로 보내기, 삭제">⋯</summary><span class="msg-more-menu">' +
+        saveBtn + knowledgeBtn + deleteBtn + '</span></details>'
+      : '') + '</div>' +
     '<div>' + renderContent(bodyContent, contentType, editTarget, m.content) + '</div>' +
     '</div>';
 }
@@ -767,7 +788,7 @@ async function renderConversationDetail(conversationId, containerId) {
 
   detail.innerHTML =
     '<section class="card">' +
-    '<h3>' + esc(conv.title || "(제목 없음)") +
+    '<h3><span id="conv-title">' + esc(conv.title || "(제목 없음)") + '</span>' +
     (conv.linked_task_id ? ' <span class="muted">업무 #' + conv.linked_task_id + ' 전용 대화</span>' : '') +
     // 사용자 요청(2026-10-10, "대화 세션 삭제/나가기 기능을 구현해줘")
     // — "삭제"(연쇄 삭제, 되돌릴 수 없음)는 만든 사람(created_by)만
@@ -782,6 +803,9 @@ async function renderConversationDetail(conversationId, containerId) {
       ? ' <button class="small danger" id="conv-delete-btn">대화 삭제</button>'
       : '') +
     '</h3>' +
+    // 신입·일반 사용자 관점 개선(2026-11-28, Phase A-1) — 대화를 열면 모델 고르기·자동응답·비용 안내·모델 규칙 설명이
+    // 메시지보다 먼저 보여 "개발 도구"처럼 보였다. 접힌 "대화 설정"으로 옮긴다(기능은 그대로, 필요한 사람만 연다).
+    '<details class="conv-settings" id="conv-settings"><summary>⚙ 대화 설정 — 모델·AI 자동응답</summary>' +
     '<div class="inline">' +
     // "AI 에이전트 관리"(provider-{id} select)와 같은 관례 — provider
     // 선택을 JS `.value =` 사후 대입이 아니라 마크업의 `selected`
@@ -814,6 +838,10 @@ async function renderConversationDetail(conversationId, containerId) {
     '<code>@Team이름</code>으로 부르면 팀 전체가 한 모델(매니저가 있는 팀은 매니저 Agent의 모델, 없으면 플랫폼 공통 기본 LLM)을 씁니다. ' +
     '다만 대화가 10건을 넘으면 오래된 메시지를 요약하는 데와 "업무 요청으로 전환"의 AI 정리에는 멘션과 관계없이 이 설정이 쓰입니다. ' +
     '각 메시지에 실제로 쓰인 모델은 메시지 작성자 줄에 표시됩니다.</p>' +
+    // 개발업무 스킬 보기(2026-11-28 — 입력줄에서 이리로: 개발자용 선택이라 대화 설정 안에)
+    '<label class="muted" style="font-size:0.85rem;white-space:nowrap">' +
+    '<input type="checkbox" id="conv-show-dev-skills"' + (_convShowDevSkills ? " checked" : "") + '> 스킬 목록에 개발업무 스킬도 보기</label>' +
+    '</details>' +
     // 대화 → 업무 요청 전환(2026-11-23, P1-4) — 대화에서 정한 일을 결재·Gate가 붙는 정식 업무로
     // 넘길 때 내용을 직접 복사하지 않게 한다. 초안은 저장하지 않고, 다듬어 제출해야 만들어진다.
     '<details class="conv-to-brief" id="conv-to-brief"><summary>📋 업무 요청으로 전환</summary>' +
@@ -838,7 +866,7 @@ async function renderConversationDetail(conversationId, containerId) {
     // 지원, 기존 이 입력창과 완전히 같은 검색·대상 범위). 그래서
     // 별도의 참가자 검색-초대 입력창은 기능이 완전히 겹쳐 제거한다
     // (아래 "대화"의 메시지창에서 "@"를 치면 같은 역할을 한다).
-    '<p class="muted">아래 메시지창에서 "@"를 입력하면 참가자 검색·초대 자동완성이 뜹니다(아직 초대 안 된 사람·Agent·Team도 검색되고, 고르면 바로 초대됩니다).</p>' +
+
     '<h4>대화</h4>' +
     '<div id="conv-messages">' + (messageCards || '<p class="muted">아직 메시지가 없습니다 — 아래에 메시지를 입력해 보세요.</p>') + '</div>' +
     // 사용자 보고(2026-10-14, 스크린샷 — 메시지를 보낸 뒤 진행 중임을
@@ -853,8 +881,7 @@ async function renderConversationDetail(conversationId, containerId) {
     // default-off 체크박스로 켜면 보이게 한다. 켜면 즉시 목록을 다시
     // 불러온다(대화 자체를 다시 열지 않아도 바로 반영 —
     // `renderConversationDetail` 재호출).
-    '<label class="muted" style="font-size:0.85rem;white-space:nowrap">' +
-    '<input type="checkbox" id="conv-show-dev-skills"' + (_convShowDevSkills ? " checked" : "") + '> 개발업무 스킬도 보기</label>' +
+
     // 사용자 보고(2026-11-16, Firefox 스크린샷 — 스킬 선택 드롭다운이
     // 화면 오른쪽 위 엉뚱한 곳에 뜨며 클릭으로 선택이 안 됨) — 네이티브
     // <select>의 팝업 위치 계산이 Firefox 엔진 자체에서 어긋나는
@@ -879,7 +906,7 @@ async function renderConversationDetail(conversationId, containerId) {
     'title="이 메시지에 대한 응답에서 이전 대화를 얼마나 참고할지 — 클릭해 바꾸기"></button>' +
     '<div class="mention-wrap" style="position:relative;flex:1;min-width:200px">' +
     '<div id="conv-message-highlight" aria-hidden="true"></div>' +
-    '<input id="conv-message-input" placeholder="메시지(@참가자이름으로 호출 가능)" style="width:100%;box-sizing:border-box" autocomplete="off">' +
+    '<textarea id="conv-message-input" rows="2" placeholder="메시지 — Enter 보내기 · Shift+Enter 줄바꿈 · @로 사람·Agent 부르기" style="width:100%;box-sizing:border-box" autocomplete="off"></textarea>' +
     '<ul class="mention-dropdown" id="conv-mention-dropdown" style="display:none"></ul>' +
     '</div>' +
     // 사용자 보고(2026-11-12, "자료 선택 시 대화입력·전송버튼 클릭
@@ -1035,6 +1062,12 @@ async function renderConversationDetail(conversationId, containerId) {
   // 첫 요청들이 전부 끝난 **뒤**라 그 사이엔 막을 게 없었음). 제출
   // 버튼을 요청이 끝날 때까지 비활성화해 막는다.
   _renderContextChip();
+  // Enter = 보내기, Shift+Enter = 줄바꿈(2026-11-28). 한글 입력 중(조합) Enter는 글자를 끝내는 것이라 보내지 않는다.
+  mentionInput.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" || ev.shiftKey || ev.isComposing || ev.keyCode === 229) return;
+    ev.preventDefault();
+    document.getElementById("conv-message-form").requestSubmit();
+  });
   let isSubmittingConvMessage = false;
   document.getElementById("conv-message-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -1070,6 +1103,13 @@ async function renderConversationDetail(conversationId, containerId) {
       document.getElementById("conv-context-select").value = "";
       _setSkillSelectDisplay("", "");
       mentionMirror.sync();
+      // 첫 메시지로 이름이 지어졌으면 머리글도 바꾼다(2026-11-28 — 서버 `_auto_title`)
+      if (!conv.title) {
+        api("GET", "/api/conversations/" + conversationId).then(c => {
+          const el = document.getElementById("conv-title");
+          if (c && c.title && el) { conv.title = c.title; el.textContent = c.title; }
+        }).catch(() => {});
+      }
       await refreshConversationMessages(conversationId, participants, conv);
       // 사용자 요청(2026-10-18, "어떤 에이전트가 어떤 동작을 하고
       // 있는지... 펼침/닫힘 UI로") — 뭉뚱그린 "N건 진행 중" 대신

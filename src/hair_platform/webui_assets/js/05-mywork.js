@@ -15,7 +15,8 @@ async function renderMyWork(content) {
     // 결과물" 시각만 있어 지금 상태가 뭔지, 최종 결과물(승인)이 나왔는지
     // 업무를 직접 열어보기 전엔 알 수 없었다. "상태"·"최종 결과물"
     // 열을 추가한다.
-    table(["할 일 ID", "역할", "기한", "유형", "관계", "상태", "최종 결과물", "결과물 수", "최근 갱신", "동작"], rows.map(r => [
+    // 머리글을 일반 사용자 말로(2026-11-28) — "할 일 ID·유형·관계·결과물 수"는 내부 이름이었다.
+    table(["번호", "할 일(역할)", "기한", "맡은 쪽", "나와의 관계", "상태", "최종 결과물", "결과물", "최근 갱신", "동작"], rows.map(r => [
       r.task_id, esc(r.role_name), _dueCell(r.due_date, r.estimate_hours), esc(label(r.resource_type)),
       // 2026-10-07 — "팀 Crew 그룹" 배정만 있고 개별 사람/Agent 배정이
       // 없는 task도 "내 업무"에 뜨게 된 뒤(list_my_work() 수정) 추가.
@@ -694,7 +695,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
       '<option value="ollama">Ollama(로컬)</option></select>' +
       modelSelectHtml("ws-model")
-    : '<span class="muted">provider/model은 매니저·관리자만 선택할 수 있습니다(기본값 사용).</span>';
+    : '';  // 구성원에게 "매니저·관리자만 고를 수 있다"는 안내는 소음이었다(2026-11-28) — 기본 모델을 쓴다
 
   // Phase 4 — 이미 생성 중인 job이 있으면 실행 버튼을 막는다(중복
   // 트리거로 같은 task에 2개의 Agent 실행이 동시에 도는 것을 방지 —
@@ -755,7 +756,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       '<option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>' +
       '<option value="ollama">Ollama(로컬)</option></select>' +
       modelSelectHtml("ws-team-crew-model")
-    : '<span class="muted">provider/model은 매니저·관리자만 선택할 수 있습니다(기본값 사용).</span>';
+    : '';  // 구성원에게 "매니저·관리자만 고를 수 있다"는 안내는 소음이었다(2026-11-28) — 기본 모델을 쓴다
   const teamCrewBtnHtml = confirmedTeams.length
     ? teamCrewPickerHtml +
       '<select id="ws-team-crew-process" style="margin-right:0.5rem">' +
@@ -1014,7 +1015,8 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 수와, 확정 배정 단가 기반 추정 비용 + 실제 토큰 사용량을 보여준다.
   // admin/manager에게만 "재시도 예산" 입력을 보여준다(거버넌스성
   // 설정이라 `priority`/`status`와 달리 참가자 전체에 안 열어둠).
-  const budgetCardHtml = budget
+  // 재시도·단가 비용·토큰은 운영 지표라 admin·manager에게만(2026-11-28 — 일을 하는 사람에게는 소음이었다)
+  const budgetCardHtml = budget && isSupervisor
     ? '<div class="card" style="margin:0.25rem 0 0.75rem">' +
       '<div class="stat-row"><span>총 재시도</span><span>' +
       budget.retries.total_retries + '회(파이프라인 ' + budget.retries.pipeline_stage_attempts +
@@ -1083,7 +1085,8 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
       '<button class="small" type="submit">선행 작업 추가</button>' +
       '</form>'
     : '<p class="muted">같은 브리프에 선행 작업으로 추가할 수 있는 다른 할 일이 없습니다.</p>';
-  const dependencySection =
+  // 선행·후행 관계도 없고 같은 요청의 다른 할 일도 없으면 네모 하나뿐인 그림이라 숨긴다(2026-11-28)
+  const dependencySection = (!depGraph.edges.length && !depCandidates.length) ? "" :
     '<section class="card">' +
     '<h4>의존관계</h4>' +
     '<p class="muted">이 업무와 연결된 선행/후행 작업을 그래프로 보여줍니다 — 테두리 색은 우선순위(빨강=긴급·주황=높음·파랑=보통·회색=낮음), 네모를 클릭하면 그 업무로 이동합니다.</p>' +
@@ -1097,8 +1100,20 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   // 뒤섞여 있어 좁은 화면에서 텍스트가 select 옆에 끼어 줄바꿈이 어색했다.
   // textarea를 독립된 줄로 분리하고, "결과물 작성"과 "AI 에이전트 실행"을
   // 서로 다른 카드로 나눠 두 행동의 성격이 다르다는 걸 시각적으로 구분한다.
+  // 요청 내용(2026-11-28, 신입·일반 사용자 관점) — 일을 맡은 사람이 열어도 무엇을 해 달라는 건지·누가 요청했는지가 없었다.
+  const briefText = (taskDetail.brief_text || "").trim();
+  const requestCard = briefText
+    ? '<section class="card ws-request"><h4>📄 요청 내용</h4>' +
+      '<p class="muted">' + (taskDetail.requested_by_name ? "요청: " + esc(taskDetail.requested_by_name) : "") +
+      (taskDetail.assigned_by_name ? " · 배정: " + esc(taskDetail.assigned_by_name) : "") + " · 업무 요청 #" + esc(taskDetail.brief_id) + "</p>" +
+      (briefText.length > 600
+        ? '<details><summary>' + esc(briefText.slice(0, 200)) + '… <b>전체 보기</b></summary><div class="ws-request-body">' + _renderMarkdown(briefText) + "</div></details>"
+        : '<div class="ws-request-body">' + _renderMarkdown(briefText) + "</div>") +
+      "</section>"
+    : "";
   detail.innerHTML =
-    '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + '</h3>' +
+    '<h3>협업 워크스페이스 — 할 일 #' + esc(taskId) + ' · ' + esc(taskDetail.role_name || "") + '</h3>' +
+    requestCard +
     statusPriorityBar +
     '<div id="ws-schedule-slot"></div>' +
     budgetCardHtml +
@@ -1136,26 +1151,32 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
     '</div>' +
     '</form>' +
     '</section>' +
-    '<section class="card">' +
-    '<h4>AI 에이전트 실행</h4>' +
-    contentTypeSelectHtml("ws-execute-content-type") + ' ' +
-    executeBtnHtml +
-    '</section>' +
+    // 실행할 수 없는 구성원에게는 숨긴다(2026-11-28) — 비활성 버튼과 권한 안내만 보였다
+    (isSupervisor || permission.eligible || hasRunningJob
+      ? '<section class="card">' +
+        '<h4>AI 에이전트 실행</h4>' +
+        contentTypeSelectHtml("ws-execute-content-type") + ' ' +
+        executeBtnHtml +
+        '</section>'
+      : '') +
     // 사용자 요청(2026-10-20, "crewai의 잠재력을 모두 끌어내고...
     // 에이전트 그룹(crew 구성)을 직관적으로") — 지금까지 여러 Agent를
     // 묶어 이 업무에 투입하려면 팀을 미리 등록·배정·승인까지 마쳐야만
     // 가능했다("팀 Agent 실행" 섹션이 confirmedTeams가 있을 때만
     // 보이는 이유). 팀 전제조건 없이 즉석으로 묶어 바로 실행하려면
     // "Crew 빌더"로 — 팀 등록 여부와 무관하게 항상 노출한다.
-    '<section class="card"><h4>여러 Agent를 즉석으로 묶어 실행</h4>' +
-    '<p class="muted">팀을 미리 등록하지 않아도 Agent를 그 자리에서 골라 바로 실행할 수 있습니다 — 결과는 이 업무의 결과물로 그대로 쌓입니다.</p>' +
-    '<button class="small" id="ws-open-crew-builder-btn">Crew 빌더에서 구성하기</button>' +
-    '</section>' +
+    // Crew 빌더는 admin·manager 화면이라 구성원에게는 열리지 않는 단추였다(2026-11-28)
+    (isSupervisor
+      ? '<section class="card"><h4>여러 Agent를 즉석으로 묶어 실행</h4>' +
+        '<p class="muted">팀을 미리 등록하지 않아도 Agent를 그 자리에서 골라 바로 실행할 수 있습니다 — 결과는 이 업무의 결과물로 그대로 쌓입니다.</p>' +
+        '<button class="small" id="ws-open-crew-builder-btn">Crew 빌더에서 구성하기</button>' +
+        '</section>'
+      : '') +
     (confirmedTeams.length
       ? '<section class="card"><h4>팀 Agent 실행(Crew)</h4>' +
         contentTypeSelectHtml("ws-team-crew-content-type") + ' ' + teamCrewBtnHtml + '</section>'
       : '') +
-    pipelineSectionHtml +
+    (isSupervisor || latestPipelineRun ? pipelineSectionHtml : '') +  // 구성원은 실행이 있을 때 진행만 본다(2026-11-28)
     '<details class="workspace-timeline-section">' +
     '<summary class="muted" style="cursor:pointer">진행 이력(중간 과정 포함)</summary>' +
     '<div id="workspace-timeline">' + timeline + '</div>' +
@@ -1593,7 +1614,7 @@ async function renderCollabWorkspace(taskId, containerId = "mywork-detail") {
   }
 
   const executeBtn = document.getElementById("ws-execute-agent-btn");
-  executeBtn.onclick = async () => {
+  if (executeBtn) executeBtn.onclick = async () => {  // 실행할 수 없는 구성원에게는 영역이 없다(2026-11-28)
     if (!(await confirmModal("이 업무에 배정된 AI 에이전트를 실행합니다(실제 LLM API 호출, 비용 발생). 계속할까요?"))) return;
     const formData = new FormData();
     formData.append("content_type", document.getElementById("ws-execute-content-type").value);
@@ -2182,9 +2203,11 @@ async function _renderSkillLevels(box, resourceType, resourceId, title) {
     '<select data-sl-skill="' + escAttr(s.skill) + '" aria-label="' + escAttr(s.skill) + ' 수준">' + opt(decider ? s.verified : s.self) + "</select>",
   ]);
   box.innerHTML = '<div class="card ab-box"><div class="ab-head"><b>' + esc(title) + "</b> " + (box.dataset.closable ? '<button class="small" data-sl-close>닫기</button>' : "") + "</div>" +
-    '<p class="muted">수준: 1 입문 · 2 실무 · 3 숙련 · 4 전문. <b>근거</b>는 그 스킬이 필요한 할 일에서 사람이 승인한 결과물 수(최근 180일 — 1~2건 실무, 3~9건 숙련, 10건 이상 전문)로 자동 계산합니다. ' +
+    // 한 문장 + 접힌 자세히(2026-11-28 — 네 줄 설명이 표보다 먼저 보였다)
+    '<p class="muted">스킬마다 1 입문 · 2 실무 · 3 숙련 · 4 전문 중 ' + (decider ? "확인한 수준을" : "내 수준을") + ' 고르세요.</p>' +
+    '<details class="muted"><summary>수준은 어떻게 정해지나요?</summary><p><b>근거</b>는 그 스킬이 필요한 할 일에서 사람이 승인한 결과물 수(최근 180일 — 1~2건 실무, 3~9건 숙련, 10건 이상 전문)로 자동 계산합니다. ' +
     (decider ? "여기서 고르는 값은 <b>확인</b> 수준입니다 — 적용 수준은 확인과 근거 중 높은 쪽." : "여기서 고르는 값은 <b>본인 기재</b>입니다 — 확인·근거가 없을 때만 쓰이고 '본인 기재'로 표시됩니다.") +
-    " 매칭은 수준이 있는 후보에 작은 가점을 줍니다.</p>" +
+    " 매칭은 수준이 있는 후보에 작은 가점을 줍니다.</p></details>" +
     table(["스킬", "적용 수준", "출처", "근거", decider ? "확인 수준" : "본인 기재"], rows, { empty: "등록된 스킬이 없습니다." }) +
     '<p class="muted" data-sl-msg></p></div>';
   const closeBtn = box.querySelector("[data-sl-close]");

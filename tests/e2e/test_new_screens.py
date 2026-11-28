@@ -256,3 +256,310 @@ def test_calendar_absence_import_preview_and_apply(login, live_server, tmp_path)
         conn.execute(f"{d} human_pool WHERE id = ?", (h,))
         conn.execute(f"{d} calendar_feeds WHERE id = ?", (feed["id"],))
         conn.commit()
+
+
+def test_newhire_home_today_and_simple_chat(login, live_server):
+    """신입 관점 Phase A(2026-11-28) — 홈 "오늘 내 일"(기한 지난 일 먼저, 열기), 내 업무 기한 칸, 대화의 접힌 설정·여러 줄 입력
+    (Shift+Enter 줄바꿈, Enter 보내기)·메시지 "⋯" 메뉴."""
+    from hair_platform import conversations
+
+    conn = live_server["conn"]
+    member = _uid(conn, "e2e_member")
+    h = conn.execute("INSERT INTO human_pool (name, role, skill_tags, user_id) VALUES ('E2E신입', 'E2E 지원', '[]', ?)", (member,)).lastrowid
+    bid = conn.execute("INSERT INTO briefs (submitted_by, raw_text) VALUES (?, 'E2E 신입 요청')", (member,)).lastrowid
+    late = (date.today() - timedelta(days=2)).isoformat()
+    soon = (date.today() + timedelta(days=5)).isoformat()
+    t_soon = conn.execute("INSERT INTO tasks (brief_id, role_name, due_date) VALUES (?, 'E2E 나중 일', ?)", (bid, soon)).lastrowid
+    t_late = conn.execute("INSERT INTO tasks (brief_id, role_name, due_date) VALUES (?, 'E2E 늦은 일', ?)", (bid, late)).lastrowid
+    for t in (t_soon, t_late):
+        conn.execute("INSERT INTO assignments (task_id, resource_type, resource_id, requested_by, status) VALUES (?, 'human', ?, ?, 'confirmed')",
+                     (t, h, member))
+    conv = conversations.create_conversation(conn, member, "E2E 신입 대화")
+    conn.commit()
+    try:
+        page = login("member")
+        _tab(page, "home")
+        today = page.locator(".home-today")
+        assert "내가 맡은 일 2건" in today.inner_text() and "기한 지남 1" in today.inner_text()
+        first_h3 = page.locator("#content section.card h3").first.inner_text()
+        assert first_h3 == "오늘 내 일"  # 맡은 일이 있으면 맨 위
+        items = today.locator(".home-today-list").first.locator("li")
+        assert "E2E 늦은 일" in items.nth(0).inner_text() and "E2E 나중 일" in items.nth(1).inner_text()
+        assert "E2E 신입 요청" in today.inner_text()  # 내가 낸 업무 요청
+        items.nth(0).locator("[data-open-task]").click()
+        page.wait_for_function("currentTab === 'mywork'")
+        page.wait_for_selector("#ws-due")
+        assert page.input_value("#ws-due") == late
+        _tab(page, "mywork")
+        page.wait_for_selector("#content table")
+        assert late in page.inner_text("#content")  # 내 업무 기한 칸(예전엔 늘 "-")
+        _tab(page, "inbox")  # 기한 지난 내 일이 인박스에도(2026-11-28)
+        assert "기한 지남" in page.inner_text("#content") and "E2E 늦은 일" in page.inner_text("#content")
+        page.wait_for_function("!document.getElementById('inbox-badge-count').hidden")
+        _tab(page, "conversations")
+        page.click(f'[data-open-conversation="{conv["id"]}"]')
+        page.wait_for_selector("#conv-message-input")
+        assert not page.locator("#conv-provider").is_visible()  # 모델 설정은 접혀 있다
+        box = page.locator("#conv-message-input")
+        box.click()
+        box.type("첫 줄")
+        box.press("Shift+Enter")
+        box.type("둘째 줄")
+        assert box.input_value() == "첫 줄\n둘째 줄"  # Shift+Enter는 줄바꿈
+        conn.execute("UPDATE conversations SET ai_auto_reply = 0 WHERE id = ?", (conv["id"],))
+        conn.commit()
+        box.press("Enter")  # Enter는 보내기
+        page.wait_for_function("document.querySelector('#conv-messages').textContent.includes('둘째 줄')")
+        assert box.input_value() == ""
+        more = page.locator("#conv-messages details.msg-more").first
+        assert not more.locator("[data-delete-message]").is_visible()
+        more.locator("summary").click()
+        assert more.locator("[data-delete-message]").is_visible()  # "⋯" 안에 삭제
+        assert not page.errors  # type: ignore[attr-defined]
+    finally:
+        d = "DE" "LETE FROM"
+        conn.execute(f"{d} assignments WHERE task_id IN (?, ?)", (t_soon, t_late))
+        conn.execute(f"{d} tasks WHERE brief_id = ?", (bid,))
+        conn.execute(f"{d} briefs WHERE id = ?", (bid,))
+        conn.execute(f"{d} human_pool WHERE id = ?", (h,))
+        conn.commit()
+        conversations.delete_conversation(conn, conv["id"], member)  # 뒤 테스트가 빈 대화 목록을 본다
+
+
+def test_member_menu_directory_and_recommendation_reasons(login, live_server):
+    """신입 관점 Phase B(2026-11-28) — 구성원 메뉴(다섯 + 더 보기)·메뉴 설명, 누구에게 맡길까에서 찾아 대화 열기,
+    추천 결과의 첨부 안내와 서로 다른 이유."""
+    from hair_platform import conversations
+
+    page = login("member")
+    main = page.locator("#tabs .nav-main > button[data-tab]")
+    assert [main.nth(i).get_attribute("data-tab") for i in range(main.count())] == ["home", "conversations", "mywork", "approvals", "inbox"]
+    assert page.locator('#tabs button[data-tab="gallery"]').get_attribute("title")  # 메뉴 한 줄 설명
+    page.click('#tabs .nav-dropdown-trigger:has-text("더 보기")')
+    page.click('#tabs .nav-dropdown-menu button[data-tab="briefs"]')
+    page.wait_for_function("currentTab === 'briefs'")
+    _tab(page, "home")
+    page.fill("#wizard-text", "지난 분기 매출 자료를 한 장으로 요약해 주세요")
+    page.click("#wizard-go")
+    page.wait_for_selector("#wizard-result .wizard-tip")
+    whys = page.locator("#wizard-result .home-way p").all_inner_texts()
+    agent_whys = [w for w in whys if w.startswith("요청과 맞는 낱말")]
+    assert agent_whys and len(set(agent_whys)) == len(agent_whys)
+    page.click("[data-agent-dir]")
+    page.wait_for_selector(".agent-dir-item")
+    page.fill(".agent-dir-q", "규정")
+    first = page.locator(".agent-dir-item").first
+    name = first.locator("b").inner_text().lstrip("@")
+    assert "규정" in first.inner_text()
+    first.locator("[data-agent-dir-open]").click()
+    page.wait_for_selector("#conv-message-input")
+    assert page.input_value("#conv-message-input").startswith("@" + name)  # 그 Agent를 부를 준비가 된 대화
+    assert not page.errors  # type: ignore[attr-defined]
+    conn = live_server["conn"]  # 뒤 테스트가 빈 대화 목록을 본다
+    member = _uid(conn, "e2e_member")
+    for (cid,) in conn.execute("SELECT id FROM conversations WHERE created_by = ?", (member,)).fetchall():
+        conversations.delete_conversation(conn, cid, member)
+
+
+def test_chat_answer_word_and_excel_buttons(login, live_server):
+    """대화 답변 Word·Excel로 받기(2026-11-28, Phase C) — AI 답변에만, 표가 있을 때만 엑셀, 누르면 파일이 받아진다."""
+    from hair_platform import conversations, exports
+
+    if not (exports.available() and exports.xlsx_available()):
+        pytest.skip("python-docx·openpyxl 없음")
+    conn = live_server["conn"]
+    member = _uid(conn, "e2e_member")
+    conv = conversations.create_conversation(conn, member, "E2E 내보내기")
+    conn.execute("INSERT INTO conversation_messages (conversation_id, author_type, author_id, content) VALUES (?, 'human', ?, '요약해 주세요')",
+                 (conv["id"], member))
+    conn.execute("INSERT INTO conversation_messages (conversation_id, author_type, author_id, content) VALUES (?, 'agent', 0, ?)",
+                 (conv["id"], "요약입니다.\n\n| 지역 | 매출(백만 원) | 전 분기 대비 | 비고 |\n|---|---|---|---|\n"
+                               "| 서울 | 1,200 | +12% | 신규 거래처 확대 |\n| 부산 | 800 | -3% | 계절 요인 |\n"))
+    conn.commit()
+    try:
+        page = login("member")
+        _tab(page, "conversations")
+        page.click(f'[data-open-conversation="{conv["id"]}"]')
+        page.wait_for_selector("[data-export-message$=':docx']")
+        assert page.locator("[data-export-message$=':docx']").count() == 1  # 사람 메시지에는 없음
+        assert page.locator("[data-export-message$=':xlsx']").count() == 1  # 표가 있는 답변
+        with page.expect_download() as dl:
+            page.click("[data-export-message$=':docx']")
+        assert dl.value.suggested_filename.endswith(".docx") and Path(dl.value.path()).stat().st_size > 1000
+        with page.expect_download() as dl2:
+            page.click("[data-export-message$=':xlsx']")
+        assert dl2.value.suggested_filename.endswith(".xlsx")
+        # 복사는 서식(HTML)과 원문을 함께 넣는다 — 메일·워드에 표가 살아서 붙는다
+        page.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=live_server["url"].rstrip("/"))
+        page.locator(".chat-agent [data-copy-artifact]").first.click()
+        page.wait_for_function("[...document.querySelectorAll('.chat-agent [data-copy-artifact]')].some(b => b.textContent === '복사됨')")
+        types, html = page.evaluate("""async () => {
+            const items = await navigator.clipboard.read();
+            const t = items[0].types;
+            return [t, t.includes('text/html') ? await (await items[0].getType('text/html')).text() : ''];
+        }""")
+        assert "text/html" in types and "text/plain" in types and "<table" in html
+        # 휴대폰 폭에서 표의 한글 낱말이 글자 단위로 쪼개지지 않는다(2026-11-28 — "서/울")
+        page.set_viewport_size({"width": 390, "height": 844})
+        cell = page.locator(".chat-agent .artifact-preview td", has_text="서울").first
+        # 글자 높이(폰트 크기)의 두 배보다 낮으면 한 줄 — 패딩 포함 셀 높이를 내용 높이로 잰다
+        h, fs = cell.evaluate("""el => { const r = document.createRange(); r.selectNodeContents(el);
+            return [r.getBoundingClientRect().height, parseFloat(getComputedStyle(el).fontSize)]; }""")
+        assert h < fs * 2, (h, fs)
+        assert _overflow(page) <= 1
+        assert not page.errors  # type: ignore[attr-defined]
+    finally:
+        conversations.delete_conversation(conn, conv["id"], member)
+
+
+def test_first_day_checklist_for_new_member(login, live_server):
+    """처음 써 보기(2026-11-28, Phase D) — 기록이 없는 구성원에게 세 가지 점검표, 예시를 누르면 입력창에 채움, 질문하면 1단계가
+    체크되고, "그만 보기"는 다시 열어도 숨김. admin에게는 없음."""
+    from hair_platform import conversations
+
+    conn = live_server["conn"]
+    member = _uid(conn, "e2e_member")
+    page = login("member")
+    _tab(page, "home")
+    card = page.locator(".home-firstday")
+    # 세션이 한 DB를 쓰므로 앞 테스트가 남긴 기록(업무 요청 등)이 있을 수 있다 — 서버가 말하는 상태와 같은지 본다
+    state = page.evaluate("() => api('GET', '/api/me/getting-started')")
+    assert not state["asked"]
+    assert card.is_visible() and card.locator("li.done").count() == int(state["delegated"])
+    card.locator("[data-try-prompt]").first.click()
+    assert "회의록" in page.input_value("#wizard-text")
+    conv = conversations.create_conversation(conn, member, "E2E 첫 질문")
+    conversations.create_message(conn, conv["id"], member, "안녕하세요")
+    try:
+        _tab(page, "conversations")
+        _tab(page, "home")
+        assert page.locator(".home-firstday li.done").count() == 1 + int(state["delegated"])  # 질문해 봤다
+        page.click("[data-firstday-close]")
+        assert page.locator(".home-firstday").count() == 0
+        _tab(page, "conversations")
+        _tab(page, "home")
+        assert page.locator(".home-firstday").count() == 0  # 그만 보기는 기억된다
+        admin = login("admin")
+        _tab(admin, "home")
+        assert admin.locator(".home-firstday").count() == 0
+        assert not page.errors  # type: ignore[attr-defined]
+    finally:
+        conversations.delete_conversation(conn, conv["id"], member)
+
+
+def test_untitled_conversation_header_takes_first_message(login, live_server):
+    """제목 없는 대화(2026-11-28) — 첫 메시지를 보내면 머리글이 "(제목 없음)"에서 그 내용으로 바뀐다."""
+    from hair_platform import conversations
+
+    conn = live_server["conn"]
+    member = _uid(conn, "e2e_member")
+    conv = conversations.create_conversation(conn, member, "")
+    conn.execute("UPDATE conversations SET ai_auto_reply = 0 WHERE id = ?", (conv["id"],))
+    conn.commit()
+    try:
+        page = login("member")
+        _tab(page, "conversations")
+        page.click(f'[data-open-conversation="{conv["id"]}"]')
+        page.wait_for_selector("#conv-title")
+        assert page.inner_text("#conv-title") == "(제목 없음)"
+        page.fill("#conv-message-input", "주간 회의록 정리 부탁해요")
+        page.press("#conv-message-input", "Enter")
+        page.wait_for_function("document.getElementById('conv-title').textContent === '주간 회의록 정리 부탁해요'")
+        assert not page.errors  # type: ignore[attr-defined]
+    finally:
+        conversations.delete_conversation(conn, conv["id"], member)
+
+
+def test_task_workspace_shows_request_and_hides_operator_parts_for_member(login, live_server):
+    """워크스페이스(2026-11-28) — 구성원: 요청 내용·요청자가 맨 위, 운영 통계·Crew 빌더·실행 못 하는 AI 실행·빈 의존관계는 없음.
+    admin은 통계·Crew 빌더가 그대로."""
+    conn = live_server["conn"]
+    member, manager = _uid(conn, "e2e_member"), _uid(conn, "e2e_manager")
+    h = conn.execute("INSERT INTO human_pool (name, role, skill_tags, user_id) VALUES ('E2E작업자', 'E2E 지원', '[]', ?)", (member,)).lastrowid
+    bid = conn.execute("INSERT INTO briefs (submitted_by, raw_text) VALUES (?, 'E2E 거래처 견적 비교표를 다음 주까지')", (manager,)).lastrowid
+    t = conn.execute("INSERT INTO tasks (brief_id, role_name) VALUES (?, 'E2E 견적 비교')", (bid,)).lastrowid
+    conn.execute("INSERT INTO assignments (task_id, resource_type, resource_id, requested_by, status) VALUES (?, 'human', ?, ?, 'confirmed')",
+                 (t, h, manager))
+    conn.commit()
+    try:
+        page = login("member")
+        _tab(page, "mywork")
+        page.evaluate("id => renderCollabWorkspace(id)", t)
+        page.wait_for_selector(".ws-request")
+        req = page.inner_text(".ws-request")
+        assert "E2E 거래처 견적 비교표" in req and "요청: e2e_manager" in req
+        body = page.inner_text("#mywork-detail")
+        for gone in ("총 재시도", "Crew 빌더에서 구성하기", "AI 에이전트 실행", "의존관계", "매니저·관리자만 선택"):
+            assert gone not in body, gone
+        assert page.locator("#ws-submit-form").is_visible()  # 결과물 작성은 그대로
+        admin = login("admin")
+        _tab(admin, "mywork")
+        admin.evaluate("id => renderCollabWorkspace(id)", t)
+        admin.wait_for_selector(".ws-request")
+        abody = admin.inner_text("#mywork-detail")
+        assert "총 재시도" in abody and "Crew 빌더에서 구성하기" in abody
+        assert not page.errors and not admin.errors  # type: ignore[attr-defined]
+    finally:
+        d = "DE" "LETE FROM"
+        conn.execute(f"{d} assignments WHERE task_id = ?", (t,))
+        conn.execute(f"{d} tasks WHERE id = ?", (t,))
+        conn.execute(f"{d} briefs WHERE id = ?", (bid,))
+        conn.execute(f"{d} human_pool WHERE id = ?", (h,))
+        conn.commit()
+
+
+def test_my_requests_show_one_row_per_chain_with_next_approver(login, live_server):
+    """내가 요청한 건(2026-11-28) — 2단계 결재가 한 줄("1/2", "e2e_manager → e2e_admin"), 다음 차례 결재권자가 "-"가 아니다."""
+    from hair_platform import approvals
+
+    conn = live_server["conn"]
+    member, manager, admin = _uid(conn, "e2e_member"), _uid(conn, "e2e_manager"), _uid(conn, "e2e_admin")
+    before = {u: conn.execute("SELECT manager_id FROM users WHERE id = ?", (u,)).fetchone()[0] for u in (member, manager)}
+    conn.execute("UPDATE users SET manager_id = ? WHERE id = ?", (manager, member))
+    conn.execute("UPDATE users SET manager_id = ? WHERE id = ?", (admin, manager))
+    bid = conn.execute("INSERT INTO briefs (submitted_by, raw_text) VALUES (?, 'E2E 결재 체인')", (member,)).lastrowid
+    t = conn.execute("INSERT INTO tasks (brief_id, role_name) VALUES (?, 'E2E 체인 일')", (bid,)).lastrowid
+    d = conn.execute("INSERT INTO deliverables (task_id, author_type, author_id, content, status) VALUES (?, 'human', ?, '초안', 'pending_review')",
+                     (t, member)).lastrowid
+    ids = approvals.create_approval_chain(conn, member, "deliverable", d)
+    conn.commit()
+    try:
+        page = login("member")
+        _tab(page, "approvals")
+        rows = page.locator("#content tr", has_text="E2E 체인 일")
+        assert rows.count() == 1  # 두 단계가 한 줄
+        text = rows.first.inner_text()
+        assert "1/2" in text and "e2e_manager → e2e_admin" in text
+        assert not page.errors  # type: ignore[attr-defined]
+    finally:
+        dl = "DE" "LETE FROM"
+        conn.execute(f"{dl} approvals WHERE id IN ({','.join('?' * len(ids))})", ids)
+        conn.execute(f"{dl} deliverables WHERE id = ?", (d,))
+        conn.execute(f"{dl} tasks WHERE id = ?", (t,))
+        conn.execute(f"{dl} briefs WHERE id = ?", (bid,))
+        for u, m in before.items():
+            conn.execute("UPDATE users SET manager_id = ? WHERE id = ?", (m, u))
+        conn.commit()
+
+
+def test_briefs_list_member_has_no_split_button_and_sees_next_step(login, live_server):
+    """업무 요청 목록(2026-11-28) — 구성원에게 "할 일로 나누기"(admin·manager 기능, 누르면 실패)가 없고, 할 일이 없는 요청에
+    "매니저가 할 일로 나누는 중" 안내. admin은 단추와 자기 할 일 안내."""
+    conn = live_server["conn"]
+    member = _uid(conn, "e2e_member")
+    bid = conn.execute("INSERT INTO briefs (submitted_by, raw_text) VALUES (?, 'E2E 나누기 전 요청')", (member,)).lastrowid
+    conn.commit()
+    try:
+        page = login("member")
+        _tab(page, "briefs")
+        row = page.locator("#content tr", has_text="E2E 나누기 전 요청").first
+        assert row.locator("[data-decompose]").count() == 0
+        assert "매니저가 할 일로 나누는 중" in row.inner_text()
+        admin = login("admin")
+        _tab(admin, "briefs")
+        arow = admin.locator("#content tr", has_text="E2E 나누기 전 요청").first
+        assert arow.locator("[data-decompose]").count() == 1 and "아직 할 일로 나누지 않음" in arow.inner_text()
+        assert not page.errors and not admin.errors  # type: ignore[attr-defined]
+    finally:
+        conn.execute("DE" "LETE FROM briefs WHERE id = ?", (bid,))
+        conn.commit()

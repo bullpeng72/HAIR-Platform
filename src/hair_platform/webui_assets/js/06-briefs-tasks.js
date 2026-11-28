@@ -32,14 +32,19 @@ async function renderBriefs(content) {
       '</ul>'
     );
   html += table(["ID", "요청자", "내용", "상태", "제안된 역할", "동작"], briefs.map(b => {
-    let actions = '<button class="small" data-decompose="' + b.id + '">할 일로 나누기</button>' +
+    // 할 일로 나누기는 admin·manager 기능이라(서버도 막는다) 구성원에게는 누르면 실패하는 단추였다(2026-11-28)
+    let actions = (["admin", "manager"].includes(ME.role) ? '<button class="small" data-decompose="' + b.id + '">할 일로 나누기</button>' : "") +
       '<button class="small" data-viewtasks="' + b.id + '">진행 보기</button>';
     if (isAdmin) {
       actions += '<button class="small danger" data-delete-brief="' + b.id + '">삭제</button>';
     }
-    return [b.id, esc(b.submitted_by_username || ("#" + b.submitted_by)), esc(b.raw_text), esc(label(b.status)), esc(b.stub_roles.join(", ")),
+    // 상태 옆에 다음 단계(2026-11-28) — "제출됨"만으로는 다음에 무슨 일이 일어나는지 알 수 없었다
+    const nextHint = !b.task_count
+      ? '<div class="muted pm-note">' + (["admin", "manager"].includes(ME.role) ? "아직 할 일로 나누지 않음" : "매니저가 할 일로 나누는 중") + "</div>"
+      : '<div class="muted pm-note">할 일 ' + b.task_count + '개 — 진행 보기</div>';
+    return [b.id, esc(b.submitted_by_username || ("#" + b.submitted_by)), esc(b.raw_text), esc(label(b.status)) + nextHint, esc(b.stub_roles.join(", ")),
       canWrite ? '<div class="actions">' + actions + "</div>" : ""];
-  }), { empty: "아직 업무 요청이 없습니다. 위 칸에 맡길 일을 적어 제출하면 할 일로 나눠 사람·Agent에게 배정할 수 있습니다. 어떤 방식이 맞는지 모르겠으면 <button class=\"small\" data-go-tab=\"home\">홈에서 AI에게 일 맡기기</button>" });
+  }), { empty: "아직 업무 요청이 없습니다. 홈의 \"AI에게 일 맡기기\"에 할 일을 적으면 맞는 방식을 추천받아 바로 요청할 수 있습니다(필요한 역할을 이미 알면 위 \"직접 등록(고급)\"). <button class=\"small\" data-go-tab=\"home\">홈에서 AI에게 일 맡기기</button>" });
   html += '<div id="brief-detail"></div></section>';
   content.innerHTML = html;
 

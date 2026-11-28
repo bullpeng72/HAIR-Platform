@@ -19,6 +19,8 @@ import re
 import sqlite3
 
 _RECURRING_RE = re.compile(r"매주|매일|매월|매달|평일마다|정기(?:적으로)?|주간 ?보고|월간 ?보고|주마다|매 ?분기|반복")
+# 자료가 있어야 제대로 되는 일(2026-11-28) — 매출 자료를 요약해 달라면서 자료를 안 붙이는 경우가 많다.
+_NEEDS_INPUT_RE = re.compile(r"자료|데이터|매출|실적|파일|엑셀|첨부|문서|보고서|계약서|회의록|견적")
 _QUESTION_RE = re.compile(r"\?|알려 ?줘|뭐야|무엇|어떻게|왜 |차이|설명해|요약해 ?줘")
 
 # 템플릿 이름의 핵심어 → 그 영역을 가리키는 낱말. 이름에 핵심어가 든 템플릿에 점수를 준다(관리자가 같은 영역의
@@ -86,19 +88,27 @@ def recommend(conn: sqlite3.Connection, text: str, role: str) -> dict:
             "note": None if can_manage else "업무 요청으로 올리면 manager가 할 일로 나눠 이 파이프라인을 실행합니다.",
         })
 
-    roles = pool_catalog.suggest_roles(conn, text, limit=3)
-    for i, role_name in enumerate(roles):
+    needs_input = _NEEDS_INPUT_RE.search(text)
+    tip = ("자료가 있어야 하는 일 같습니다 — 대화를 연 뒤 📎 자료로 파일(엑셀·PDF·워드 등)을 붙여 보내면 "
+           "훨씬 정확합니다.") if needs_input else None
+    for i, s in enumerate(pool_catalog.suggest_roles_explained(conn, text, limit=3)):
+        role_name = s["role_name"]
         agent = conn.execute(
             "SELECT id FROM agent_pool WHERE role_name = ? AND status = 'active' ORDER BY id LIMIT 1", (role_name,)
         ).fetchone()
         if agent is None:
             continue
+        hits = list(dict.fromkeys(s["role_hits"] + s["skill_hits"]))[:4]
+        does = pool_catalog.agent_does(conn, s["goal"], s["skills"])
+        why = (f"요청과 맞는 낱말: {'·'.join(hits)}" + (" (역할 이름·목표)" if s["role_hits"] else " (스킬)") + "."
+               if hits else "이 Agent의 역할·스킬이 요청과 맞습니다.")
+        if does:
+            why += f" 하는 일: {does}."
         recs.append({
             "kind": "agent", "score": 6 - i,
             "title": f"@{role_name}에게 맡기기",
-            "why": "이 Agent의 역할·스킬이 요청과 가장 잘 맞습니다 — 대화에서 바로 결과를 받고, 필요하면 업무 요청으로 "
-                   "전환해 결재를 붙일 수 있습니다.",
-            "agent_id": agent["id"], "role_name": role_name, "allowed": True,
+            "why": why + " — 대화에서 바로 결과를 받고, 필요하면 업무 요청으로 전환해 결재를 붙일 수 있습니다.",
+            "agent_id": agent["id"], "role_name": role_name, "allowed": True, "matched": hits, "does": does,
         })
 
     question = len(text) <= 80 and _QUESTION_RE.search(text)
@@ -115,4 +125,4 @@ def recommend(conn: sqlite3.Connection, text: str, role: str) -> dict:
     for i, r in enumerate(recs):
         r["recommended"] = i == 0
         r.pop("score", None)
-    return {"text": text, "recommendations": recs}
+    return {"text": text, "recommendations": recs, "tip": tip}

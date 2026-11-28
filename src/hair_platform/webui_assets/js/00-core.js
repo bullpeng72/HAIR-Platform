@@ -839,7 +839,18 @@ document.addEventListener("click", async (ev) => {
   if (copyBtn) {
     const raw = document.getElementById(copyBtn.dataset.copyArtifact + "-raw");
     if (!raw) return;
-    navigator.clipboard.writeText(raw.value).then(() => {
+    try { localStorage.setItem("hair.firstday.saved", "1"); } catch (_) { /* 홈 첫날 점검표 3단계 */ }
+    // 서식 그대로 복사(2026-11-28, Phase C) — 메일·워드에 붙이면 제목·굵게·표가 살아 있게 화면에 그린 HTML도 함께 넣는다.
+    // 메일 프로그램은 text/html을, 메모장은 text/plain을 쓴다. 지원하지 않는 브라우저·iframe 미리 보기는 예전처럼 원문만.
+    const preview = document.getElementById(copyBtn.dataset.copyArtifact + "-preview");
+    const richOk = preview && !preview.querySelector("iframe") && window.ClipboardItem && navigator.clipboard.write;
+    const writing = richOk
+      ? navigator.clipboard.write([new ClipboardItem({
+          "text/html": new Blob([preview.innerHTML], { type: "text/html" }),
+          "text/plain": new Blob([raw.value], { type: "text/plain" }),
+        })]).catch(() => navigator.clipboard.writeText(raw.value))
+      : navigator.clipboard.writeText(raw.value);
+    writing.then(() => {
       const original = copyBtn.textContent;
       copyBtn.textContent = "복사됨";
       setTimeout(() => { copyBtn.textContent = original; }, 1200);
@@ -1029,6 +1040,14 @@ document.addEventListener("click", async (ev) => {
   // innerHTML로 통째로 다시 그려지므로(`refreshConversationMessages()`),
   // 버튼마다 개별 리스너를 거는 대신 복사/전체화면 버튼과 같은 전역
   // 위임 방식을 쓴다 — 재렌더될 때마다 다시 배선할 필요가 없다.
+  // 대화 답변 Word·Excel로 받기(2026-11-28) — 첨부 파일 응답이라 화면은 그대로 남는다.
+  const exportMsgBtn = ev.target.closest("[data-export-message]");
+  if (exportMsgBtn) {
+    try { localStorage.setItem("hair.firstday.saved", "1"); } catch (_) { /* 홈 첫날 점검표 3단계 */ }
+    const [convId, msgId, fmt] = exportMsgBtn.dataset.exportMessage.split(":");
+    window.location.href = "/api/conversations/" + convId + "/messages/" + msgId + "/export." + fmt;
+    return;
+  }
   const deleteMsgBtn = ev.target.closest("[data-delete-message]");
   if (deleteMsgBtn) {
     const [convId, msgId] = deleteMsgBtn.dataset.deleteMessage.split(":");

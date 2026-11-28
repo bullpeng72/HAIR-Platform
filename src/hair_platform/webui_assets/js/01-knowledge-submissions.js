@@ -762,6 +762,18 @@ const SETTINGS_GROUPS = [
 // 메뉴 구조(2026-11-27, 사용성 평가 7번) — 역할 구분("오늘 할 일"·"설정")이 아니라 업무 흐름으로 묶는다. 한 줄에
 // 일하기 · 검토·결재 · 현황(▾)을 두고, admin·manager에게만 설정(▾) 한 줄을 더 둔다(예전 요청대로 메뉴가 아래로 넓게
 // 퍼지지 않게 두 줄 유지). 이용 가이드는 헤더의 ❓ 도움말·🔍 메뉴 찾기로, 연동 설정(개인 API 키 포함)은 헤더 "내 설정"으로 옮겼다.
+// 메뉴에 마우스를 올리면 보이는 한 줄 설명(2026-11-28, 신입·일반 사용자 관점) — 인박스·갤러리·업무 요청 같은 이름만으로는
+// 무엇을 하는 곳인지 알기 어려웠다.
+const NAV_HINTS = {
+  home: "오늘 내 일과 AI에게 일 맡기기",
+  conversations: "AI·동료에게 묻고 초안을 받는 곳 — @이름으로 Agent를 부릅니다",
+  briefs: "정식으로 맡긴 일(업무 요청)의 목록과 진행",
+  mywork: "내가 맡은 일·맡긴 일, 기한, 부재·스킬",
+  board: "할 일을 상태별 칸(백로그·대기·진행·완료)으로 보기",
+  inbox: "내가 처리해야 할 알림 — 결재·실패·완료",
+  approvals: "내가 결정할 결재와 내가 요청한 결재",
+  gallery: "AI·사람이 만든 결과물(보고서·문서) 모아 보기",
+};
 const NAV_WORK = ["home", "conversations", "briefs", "mywork", "board"];
 const NAV_REVIEW = ["inbox", "approvals", "gallery"];
 const NAV_STATUS = ["dashboard", "processmetrics", "resourceplanning", "resourceinsights", "performance", "cost", "fairness", "audit", "orgchart", "search"];
@@ -794,6 +806,7 @@ function buildNav() {
       btn.appendChild(badge);
     }
     btn.dataset.tab = t.id;
+    if (!btn.title && NAV_HINTS[t.id]) btn.title = NAV_HINTS[t.id];
     btn.onclick = () => selectTab(t.id);
     return btn;
   };
@@ -853,16 +866,30 @@ function buildNav() {
   const mainRow = document.createElement("div");
   mainRow.className = "nav-group nav-main";
   const work = visible(NAV_WORK), review = visible(NAV_REVIEW), status = visible(NAV_STATUS);
-  if (work.length) { mainRow.appendChild(label("일하기")); work.forEach(t => mainRow.appendChild(makeButton(t))); }
-  if (review.length) {
-    const sep = document.createElement("span"); sep.className = "nav-divider"; mainRow.appendChild(sep);
-    mainRow.appendChild(label("검토·결재")); review.forEach(t => mainRow.appendChild(makeButton(t)));
+  // 구성원·열람자 메뉴(2026-11-28, 신입·일반 사용자 관점 Phase B-6) — 탭 10개+현황이 휴대폰에서 메뉴만 네 줄이었다.
+  // 매일 쓰는 다섯(홈·대화·내 업무·결재·인박스)만 앞에 두고 나머지는 "더 보기"로. admin·manager 메뉴는 그대로.
+  if (!["admin", "manager"].includes(ME.role)) {
+    const primaryIds = ["home", "conversations", "mywork", "approvals", "inbox"];
+    visible(primaryIds).forEach(t => mainRow.appendChild(makeButton(t)));
+    const rest = [...work, ...review].filter(t => !primaryIds.includes(t.id));
+    const more = [...rest, ...(rest.length && status.length ? ["__divider__"] : []), ...status];
+    if (more.length) {
+      const sep = document.createElement("span"); sep.className = "nav-divider"; mainRow.appendChild(sep);
+      mainRow.appendChild(makeDropdown("더 보기", more));
+    }
+    nav.appendChild(mainRow);
+  } else {
+    if (work.length) { mainRow.appendChild(label("일하기")); work.forEach(t => mainRow.appendChild(makeButton(t))); }
+    if (review.length) {
+      const sep = document.createElement("span"); sep.className = "nav-divider"; mainRow.appendChild(sep);
+      mainRow.appendChild(label("검토·결재")); review.forEach(t => mainRow.appendChild(makeButton(t)));
+    }
+    if (status.length) {
+      const sep = document.createElement("span"); sep.className = "nav-divider"; mainRow.appendChild(sep);
+      mainRow.appendChild(makeDropdown("현황", status));
+    }
+    nav.appendChild(mainRow);
   }
-  if (status.length) {
-    const sep = document.createElement("span"); sep.className = "nav-divider"; mainRow.appendChild(sep);
-    mainRow.appendChild(makeDropdown("현황", status));
-  }
-  nav.appendChild(mainRow);
 
   // 헤더 "내 설정"(연동 설정 — 개인 API 키·정기 실행·외부 알림). 볼 수 없는 역할(viewer)에는 숨긴다.
   const mySettings = document.getElementById("my-settings-btn");
