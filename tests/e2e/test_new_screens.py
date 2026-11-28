@@ -293,6 +293,7 @@ def test_newhire_home_today_and_simple_chat(login, live_server):
         _tab(page, "mywork")
         page.wait_for_selector("#content table")
         assert late in page.inner_text("#content")  # 내 업무 기한 칸(예전엔 늘 "-")
+        assert "평소 업무는 혼자 처리한다" in page.inner_text(".sl-legend")  # 스킬 수준 범례(2026-11-28)
         _tab(page, "inbox")  # 기한 지난 내 일이 인박스에도(2026-11-28)
         assert "기한 지남" in page.inner_text("#content") and "E2E 늦은 일" in page.inner_text("#content")
         page.wait_for_function("!document.getElementById('inbox-badge-count').hidden")
@@ -530,6 +531,9 @@ def test_my_requests_show_one_row_per_chain_with_next_approver(login, live_serve
         assert rows.count() == 1  # 두 단계가 한 줄
         text = rows.first.inner_text()
         assert "1/2" in text and "e2e_manager → e2e_admin" in text
+        rows.first.locator("[data-approval-content-toggle]").click()  # 본문은 누를 때 받는다(2026-11-28)
+        page.wait_for_selector("#approval-content-detail .card")
+        assert "초안" in page.inner_text("#approval-content-detail")
         assert not page.errors  # type: ignore[attr-defined]
     finally:
         dl = "DE" "LETE FROM"
@@ -563,3 +567,31 @@ def test_briefs_list_member_has_no_split_button_and_sees_next_step(login, live_s
     finally:
         conn.execute("DE" "LETE FROM briefs WHERE id = ?", (bid,))
         conn.commit()
+
+
+def test_conversation_poll_skips_redraw_until_new_message(login, live_server):
+    """대화 새로고침(2026-11-28) — 바뀐 게 없으면 6초 새로고침이 다시 그리지 않고(서버는 304), 새 메시지가 오면 그린다."""
+    from hair_platform import conversations
+
+    conn = live_server["conn"]
+    member = _uid(conn, "e2e_member")
+    conv = conversations.create_conversation(conn, member, "E2E 새로고침")
+    conn.execute("UPDATE conversations SET ai_auto_reply = 0 WHERE id = ?", (conv["id"],))
+    conn.execute("INSERT INTO conversation_messages (conversation_id, author_type, author_id, content) VALUES (?, 'agent', 0, '첫 답변')",
+                 (conv["id"],))
+    conn.commit()
+    try:
+        page = login("member")
+        _tab(page, "conversations")
+        page.click(f'[data-open-conversation="{conv["id"]}"]')
+        page.wait_for_selector("#conv-messages .deliverable-card")
+        page.evaluate("document.querySelector('#conv-messages .deliverable-card').dataset.marker = 'kept'")
+        page.wait_for_timeout(6800)  # 새로고침 한 번
+        assert page.evaluate("document.querySelector('#conv-messages .deliverable-card').dataset.marker") == "kept"
+        conn.execute("INSERT INTO conversation_messages (conversation_id, author_type, author_id, content) VALUES (?, 'agent', 0, '새 답변 도착')",
+                     (conv["id"],))
+        conn.commit()
+        page.wait_for_function("document.getElementById('conv-messages').textContent.includes('새 답변 도착')", timeout=10000)
+        assert not page.errors  # type: ignore[attr-defined]
+    finally:
+        conversations.delete_conversation(conn, conv["id"], member)

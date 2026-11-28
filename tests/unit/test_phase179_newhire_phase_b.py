@@ -42,3 +42,14 @@ def test_agent_directory_for_any_logged_in_user_without_settings(client_and_conn
     assert set(rows[0]) == {"id", "role_name", "does", "skills", "dev"}  # 모델·비용·프롬프트는 주지 않는다
     assert any(r["dev"] for r in rows) and any(not r["dev"] for r in rows)  # 개발 Agent 구분
     assert sum(1 for r in rows if r["does"]) > len(rows) // 2  # 기본 Agent도 하는 일이 보인다(스킬 설명에서)
+
+
+def test_skill_levels_come_with_plain_descriptions(client_and_conn):
+    """스킬 수준 설명(2026-11-28) — 본인 기재 때 수준마다 무엇을 할 수 있는지."""
+    client, conn = client_and_conn
+    member = conn.execute("SELECT id FROM users WHERE username = 'member1'").fetchone()[0]
+    h = conn.execute("INSERT INTO human_pool (name, role, skill_tags, user_id) VALUES ('본인', 'QA', '[\"excel\"]', ?)", (member,)).lastrowid
+    conn.commit()
+    client.post("/login", json={"username": "member1", "password": "memberpass"})
+    d = client.get(f"/api/skill-levels/human/{h}").json()
+    assert set(d["level_hints"]) == {"1", "2", "3", "4"} and "혼자" in d["level_hints"]["2"]

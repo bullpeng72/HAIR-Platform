@@ -999,6 +999,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("idx_deliverables_author", "deliverables", "author_type, author_id, status"),
         ("idx_audit_log_action", "audit_log", "action"),  # 활동 기록 동작 필터·목록(2026-11-28)
         ("idx_audit_log_actor", "audit_log", "actor_id"),
+        ("idx_briefs_submitted_by", "briefs", "submitted_by"),  # 홈 "내가 낸 업무 요청"(2026-11-28)
+        ("idx_approvals_requested_by", "approvals", "requested_by, subject_type, subject_id"),  # 내가 요청한 건
     ):
         conn.execute(f"CREATE INDEX IF NOT EXISTS {_idx} ON {_table}({_cols})")
     inbound.ensure_schema(conn)

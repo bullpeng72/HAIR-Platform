@@ -41,6 +41,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
     @app.get("/api/approvals")
     def list_approvals(
         scope: str = "inbox",
+        limit: int = 100,
         user: sqlite3.Row = Depends(get_current_user),
     ):
         """코드 재점검(2026-09-26)에서 발견한 누락 보완 — 승인권자가 자신에게 무엇이
@@ -73,18 +74,23 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 "LEFT JOIN users ru ON ru.id = a.requested_by "
                 "LEFT JOIN users apv ON apv.id = a.approver_id "
                 "LEFT JOIN users adu ON adu.id = a.approved_by "
+                # 열린 건 전부 + 최근 `limit`개 대상(2026-11-28) — 예전엔 요청 이력 전체를 결과물 본문까지 붙여 줬다(실측: 2만 건
+                # 27.7MB·1초). 한 대상의 단계는 함께 둔다(화면이 결재 체인을 한 줄로 묶는다).
+                "JOIN (SELECT subject_type AS st, subject_id AS sid FROM approvals WHERE requested_by = ? "
+                "      GROUP BY subject_type, subject_id "
+                "      ORDER BY MAX(status IN ('pending', 'waiting')) DESC, MAX(id) DESC LIMIT ?) pick "
+                "  ON pick.st = a.subject_type AND pick.sid = a.subject_id "
                 "WHERE a.requested_by = ? ORDER BY a.id DESC",
-                (user["id"],),
+                (user["id"], max(1, min(int(limit), 500)), user["id"]),
             ).fetchall()
-            return [
-                {
-                    **dict(row),
-                    **approvals_mod.describe_subject(
-                        conn, row["subject_type"], row["subject_id"]
-                    ),
-                }
-                for row in rows
-            ]
+            out = []
+            for row in rows:
+                d = approvals_mod.describe_subject(conn, row["subject_type"], row["subject_id"])
+                # 본문은 목록에 싣지 않는다 — "내용 보기"가 `/api/approvals/{id}/content`로 그때 받는다
+                d["has_content"] = bool(d.pop("content", None))
+                d.pop("content_type", None)
+                out.append({**dict(row), **d})
+            return out
         if scope != "inbox":
             raise HTTPException(
                 status_code=400, detail="scope는 inbox 또는 mine이어야 합니다"
@@ -103,6 +109,19 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             }
             for row in approvals_mod.list_inbox(conn, user["id"], user["role"])
         ]
+
+    @app.get("/api/approvals/{approval_id}/content")
+    def get_approval_content(approval_id: int, user: sqlite3.Row = Depends(get_current_user)):
+        """결재 대상 본문(2026-11-28) — "내가 요청한 건" 목록이 본문을 싣지 않게 되면서 "내용 보기"가 그때 받는다.
+        요청자 본인과 결정할 수 있는 Admin·매니저만(결재 도우미와 같은 범위)."""
+        row = conn.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="결재를 찾을 수 없습니다")
+        if row["requested_by"] != user["id"] and user["role"] not in (Role.ADMIN.value, Role.MANAGER.value):
+            raise HTTPException(status_code=403, detail="이 결재의 내용을 볼 권한이 없습니다")
+        d = approvals_mod.describe_subject(conn, row["subject_type"], row["subject_id"])
+        return {"id": approval_id, "content": d.get("content"), "content_type": d.get("content_type"),
+                "resource_name": d.get("resource_name"), "subject_type": row["subject_type"]}
 
     @app.get("/api/approvals/{approval_id}/brief")
     def get_approval_brief(approval_id: int, user: sqlite3.Row = Depends(get_current_user)):

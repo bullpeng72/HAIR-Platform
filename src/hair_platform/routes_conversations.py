@@ -13,6 +13,7 @@ from fastapi import (
     Depends,
     FastAPI,
     HTTPException,
+    Request,
     UploadFile,
 )
 
@@ -264,7 +265,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
 
     @app.get("/api/conversations/{conversation_id}/messages")
     def list_conversation_messages_endpoint(
-        conversation_id: int, user: sqlite3.Row = Depends(get_current_user)
+        conversation_id: int, request: Request, user: sqlite3.Row = Depends(get_current_user)
     ):
         if not conversations.is_participant(conn, conversation_id, user["id"]):
             raise HTTPException(
@@ -275,7 +276,20 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
         # 폴링의 안 읽음 판정 기준). 조회수 집계가 아니라 사람이 직접
         # 연 화면이므로 매번 갱신해도 괜찮다.
         conversations.mark_conversation_read(conn, conversation_id, user["id"])
-        return conversations.list_messages(conn, conversation_id)
+        # 바뀐 게 없으면 304(2026-11-28) — 대화 화면이 6초마다 전체 목록을 다시 받는다(실측: 600개 756KB). 목록 전체로 만든
+        # ETag가 같으면 본문 없이 304를 돌려 브라우저가 가진 것을 쓰게 한다(수정·품질 점수 등 어떤 변화든 지문이 바뀐다).
+        import hashlib
+        import json as _json
+
+        from fastapi.encoders import jsonable_encoder
+        from fastapi.responses import JSONResponse, Response
+
+        body = jsonable_encoder(conversations.list_messages(conn, conversation_id))
+        etag = '"' + hashlib.sha1(_json.dumps(body, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:20] + '"'
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return JSONResponse(content=body, headers=headers)
 
     @app.get("/api/conversations/{conversation_id}/messages/{message_id}/export.{fmt}")
     def export_conversation_message(

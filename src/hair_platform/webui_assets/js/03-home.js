@@ -10,7 +10,7 @@ async function renderHome(content) {
     role === "admin" ? api("GET", "/api/admin/worker-status").catch(() => null) : Promise.resolve(null),  // P1-6 2단계
     role === "admin" ? api("GET", "/api/admin/connection-status").catch(() => null) : Promise.resolve(null),  // 연결 상태(2026-11-26, 2-3)
     api("GET", "/api/my-work").catch(() => []),  // 오늘 내 일(2026-11-28)
-    api("GET", "/api/briefs").catch(() => []),
+    api("GET", "/api/briefs?mine=true&limit=4").catch(() => []),  // 내가 낸 요청 네 건만(2026-11-28 — 예전엔 전체 목록)
     role === "member" ? api("GET", "/api/me/getting-started").catch(() => null) : Promise.resolve(null),  // 첫날 점검표는 구성원에게
   ]);
   const count = type => inbox.filter(i => i.type === type).length;

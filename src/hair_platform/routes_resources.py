@@ -418,7 +418,8 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
                 resource_type == "human" and _can_edit_human(user, resource_id)):
             raise HTTPException(status_code=403, detail="본인 스킬만 볼 수 있습니다")
         try:
-            return {"levels": skill_levels.LEVELS, "skills": skill_levels.resource_levels(conn, resource_type, resource_id)}
+            return {"levels": skill_levels.LEVELS, "level_hints": skill_levels.LEVEL_HINTS,
+                    "skills": skill_levels.resource_levels(conn, resource_type, resource_id)}
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="자원을 찾을 수 없습니다") from exc
 

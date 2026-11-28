@@ -2193,8 +2193,14 @@ async function _renderSkillLevels(box, resourceType, resourceId, title) {
   let d;
   try { d = await api("GET", "/api/skill-levels/" + resourceType + "/" + resourceId); } catch (_) { box.innerHTML = ""; return; }
   const decider = ["admin", "manager"].includes(ME.role);
+  const hints = d.level_hints || {};
   const opt = (sel) => '<option value="">—</option>' + Object.entries(d.levels).map(([k, v]) =>
-    '<option value="' + k + '"' + (String(sel) === k ? " selected" : "") + ">" + k + " " + esc(v) + "</option>").join("");
+    '<option value="' + k + '"' + (String(sel) === k ? " selected" : "") + (hints[k] ? ' title="' + escAttr(hints[k]) + '"' : "") + ">" +
+    k + " " + esc(v) + "</option>").join("");
+  // 수준 범례(2026-11-28) — 본인 기재 때 수준마다 무엇을 할 수 있는지
+  const legend = Object.keys(hints).length
+    ? '<ul class="muted sl-legend">' + Object.entries(hints).map(([k, h]) => "<li><b>" + k + "</b> " + esc(h) + "</li>").join("") + "</ul>"
+    : "";
   const rows = d.skills.map(s => [
     esc(s.skill),
     s.level ? "<b>" + s.level + " " + esc(s.label) + "</b>" + (s.unverified ? ' <span class="gate-badge gate-info">본인 기재</span>' : "") : '<span class="muted">-</span>',
@@ -2209,6 +2215,7 @@ async function _renderSkillLevels(box, resourceType, resourceId, title) {
     (decider ? "여기서 고르는 값은 <b>확인</b> 수준입니다 — 적용 수준은 확인과 근거 중 높은 쪽." : "여기서 고르는 값은 <b>본인 기재</b>입니다 — 확인·근거가 없을 때만 쓰이고 '본인 기재'로 표시됩니다.") +
     " 매칭은 수준이 있는 후보에 작은 가점을 줍니다.</p></details>" +
     table(["스킬", "적용 수준", "출처", "근거", decider ? "확인 수준" : "본인 기재"], rows, { empty: "등록된 스킬이 없습니다." }) +
+    legend +
     '<p class="muted" data-sl-msg></p></div>';
   const closeBtn = box.querySelector("[data-sl-close]");
   if (closeBtn) closeBtn.onclick = () => { box.innerHTML = ""; };

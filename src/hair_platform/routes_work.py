@@ -127,7 +127,7 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             raise HTTPException(status_code=400, detail="맡길 일을 한 문장 이상 적어 주세요") from exc
 
     @app.get("/api/briefs")
-    def list_briefs(user: sqlite3.Row = Depends(get_current_user)):
+    def list_briefs(mine: bool = False, limit: int | None = None, user: sqlite3.Row = Depends(get_current_user)):
         """Web UI가 브리프 목록을 브라우징할 수 있어야 Task 분해 화면으로
         이어갈 수 있다 — 지금까지는 생성 응답의 id를 기억해야만 했다.
 
@@ -155,8 +155,14 @@ def register(app: FastAPI, conn: sqlite3.Connection) -> None:
             "(SELECT COUNT(*) FROM tasks t0 WHERE t0.brief_id = b.id) AS task_count FROM briefs b "  # 진행 안내(2026-11-28)
             "LEFT JOIN users u ON u.id = b.submitted_by"
         )
-        if user["role"] in (Role.ADMIN.value, Role.MANAGER.value):
-            rows = conn.execute(base_sql + " ORDER BY b.id DESC").fetchall()
+        # `mine=true`(+`limit`) — 홈 "내가 낸 업무 요청"용(2026-11-28). admin·manager는 전체 목록이 기본이라 홈이 요청 수천 건
+        # (실측 2만 건 → 2.7MB)을 받아 자기 것 네 건만 골랐다.
+        lim = max(1, min(int(limit), 500)) if limit else None
+        if mine:
+            rows = conn.execute(base_sql + " WHERE b.submitted_by = ? ORDER BY b.id DESC" + (" LIMIT ?" if lim else ""),
+                                (user["id"], lim) if lim else (user["id"],)).fetchall()
+        elif user["role"] in (Role.ADMIN.value, Role.MANAGER.value):
+            rows = conn.execute(base_sql + " ORDER BY b.id DESC" + (" LIMIT ?" if lim else ""), (lim,) if lim else ()).fetchall()
         else:
             rows = conn.execute(
                 base_sql + """

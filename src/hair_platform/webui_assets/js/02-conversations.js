@@ -438,6 +438,7 @@ async function renderConversations(content) {
   });
 }
 
+let _convLastSig = null;  // 마지막으로 그린 메시지 목록(2026-11-28)
 async function refreshConversationMessages(conversationId, participants, conv) {
   const box = document.getElementById("conv-messages");
   if (!box) return;
@@ -456,6 +457,12 @@ async function refreshConversationMessages(conversationId, participants, conv) {
   if (openEdit) return;
   try {
     const messages = await api("GET", "/api/conversations/" + conversationId + "/messages");
+    // 바뀐 게 없으면 다시 그리지 않는다(2026-11-28) — 6초마다 메시지 전체(마크다운·표)를 다시 그렸다. 서버도 ETag로 304를
+    // 돌려 받는 양을 줄인다. 비교는 목록 전체(수정·품질 점수 변화도 잡힌다).
+    const sig = conversationId + ":" + JSON.stringify(messages);
+    if (box.dataset.renderedConv === String(conversationId) && _convLastSig === sig) return;
+    _convLastSig = sig;
+    box.dataset.renderedConv = String(conversationId);
     box.innerHTML = messages.length ? messages.map(m => _renderConversationMessage(m, participants, conv)).join("")
       : '<p class="muted">아직 메시지가 없습니다 — 아래에 메시지를 입력해 보세요.</p>';
   } catch (e) {
@@ -934,6 +941,9 @@ async function renderConversationDetail(conversationId, containerId) {
   // JS로 뒤늦게 `.value =`를 대입하면 모델 목록이 빈 문자열(기본
   // 옵션) 기준으로 만들어져 항상 비어 보이는 게 원래 버그였다.
   wireProviderModelSelect("conv-provider", "conv-model", modelsByProvider, conv.llm_model);
+  // 처음 그린 목록을 기억한다 — 첫 6초 새로고침이 같은 목록을 다시 그리지 않게(2026-11-28)
+  _convLastSig = conversationId + ":" + JSON.stringify(messages);
+  document.getElementById("conv-messages").dataset.renderedConv = String(conversationId);
 
   const mentionInput = document.getElementById("conv-message-input");
   const mentionDropdown = document.getElementById("conv-mention-dropdown");

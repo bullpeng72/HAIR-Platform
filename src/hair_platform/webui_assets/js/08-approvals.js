@@ -53,6 +53,10 @@ async function renderApprovals(content) {
     btn.onclick = async () => {
       const a = contentById[Number(btn.dataset.approvalContentToggle)];
       if (!a || !detailPanel) return;
+      if (!a.content && a.has_content) {  // 목록에 본문을 싣지 않으므로 그때 받는다(2026-11-28)
+        try { Object.assign(a, await api("GET", "/api/approvals/" + a.id + "/content")); }
+        catch (e) { showMsg("global-msg", e.message, "error"); return; }
+      }
       detailPanel.innerHTML =
         '<div class="card" style="background:var(--bg-alt,#f7f7f7)">' +
         '<div class="actions" style="justify-content:space-between"><b>#' + a.id + " " +
@@ -174,7 +178,7 @@ function approvalTable(rows, withActions, personColumn) {
       : a.resource_name
         ? esc(label(a.subject_type)) + ": " + esc(label(a.resource_type)) + " " + esc(a.resource_name)
         : esc(label(a.subject_type));
-    const contentCell = a.content
+    const contentCell = (a.content || a.has_content)  // "내가 요청한 건"은 본문 없이 표시만 온다(2026-11-28)
       ? '<button type="button" class="small" data-approval-content-toggle="' + a.id + '">내용 보기</button>'
       : '<span class="muted">-</span>';
     const row = [a.id, taskCell, resourceCell];

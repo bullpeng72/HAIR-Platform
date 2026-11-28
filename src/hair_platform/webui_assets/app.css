@@ -784,3 +784,5 @@
 td, th { word-break: keep-all; overflow-wrap: break-word; }
 .artifact-preview table { display: block; max-width: 100%; overflow-x: auto; }
 @media (max-width: 600px) { #conv-message-input { min-height: 4.2rem; } }
+.sl-legend { margin: 0.4rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; }
+.sl-legend li { margin: 0.1rem 0; }
